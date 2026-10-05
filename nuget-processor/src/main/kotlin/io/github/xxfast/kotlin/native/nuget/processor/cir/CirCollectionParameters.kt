@@ -6,6 +6,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParameterShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyNames
+import io.github.xxfast.kotlin.native.nuget.processor.forward.managedExceptionTextCs
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyNullableScalarArgument
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyOptionalArgument
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyParameterShapes
@@ -238,6 +239,15 @@ private fun legacyRouteParameter(
         )
       }
     }
+
+    // ADR-201 amendment: the sync route's wire, one `string` slot of managed-exception text.
+    is ForwardLegacyParameterShape.ManagedException -> CirParameter(
+      name,
+      type = if (shape.nullable) "global::System.Exception?" else "global::System.Exception",
+      nativeType = if (shape.nullable) "string?" else "string",
+      isReferenceType = true,
+      nativeArgumentExpression = managedExceptionTextCs(name, shape.nullable),
+    )
 
     // An exported enum crosses by ordinal, as it does on the plan route (ADR-080).
     is ForwardLegacyParameterShape.Enum -> CirParameter(

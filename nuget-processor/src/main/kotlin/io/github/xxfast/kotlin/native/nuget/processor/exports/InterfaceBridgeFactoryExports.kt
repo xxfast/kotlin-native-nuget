@@ -11,6 +11,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeSlot
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeWire
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinWire
+import io.github.xxfast.kotlin.native.nuget.processor.forward.managedExceptionLowering
 
 /**
  * ADR-084 stage 1: the per-interface bridge factory export (`pet_bridge_create`).
@@ -118,7 +119,19 @@ internal fun StringBuilder.appendSlotOverride(slot: ForwardBridgeSlot) {
   slot.parameters.forEachIndexed { index, parameter ->
     if (parameter.type.wire == ForwardBridgeWire.OBJECT) {
       val reference: String = parameter.name.kotlinIdentifier()
-      appendLine("      val arg${index}Ref = NugetHandles.retain($reference as Any)")
+      // ADR-201 amendment: a Throwable crosses as its ADR-107 envelope, which C# reads (and
+      // disposes) with `BuildException`. A null argument crosses as the null pointer, for a
+      // String as for a Throwable (`null as Any` threw before C# was ever called).
+      val boxed: (String) -> String = { value ->
+        if (parameter.type.throwable != null) "buildError($value, ::nugetMappedType)"
+        else "$value as Any"
+      }
+      val line: String = if (parameter.type.nullable) {
+        "$reference?.let { NugetHandles.retain(${boxed("it")}) }"
+      } else {
+        "NugetHandles.retain(${boxed(reference)})"
+      }
+      appendLine("      val arg${index}Ref = $line")
     }
   }
   appendResultMarshalling(slot, call, "      ")
@@ -160,7 +173,13 @@ private fun StringBuilder.appendResultMarshalling(
       }
       appendLine("${indent}val value = ref.asStableRef<String>().get()")
       appendLine("${indent}NugetHandles.release(ref)")
-      appendLine("${indent}return value")
+      // ADR-201 amendment: a Throwable result is the managed-exception text C# boxed.
+      val returned: String = if (slot.result.throwable != null) {
+        managedExceptionLowering("value", nullable = false)
+      } else {
+        "value"
+      }
+      appendLine("${indent}return $returned")
     }
 
     ForwardBridgeWire.BOOLEAN -> appendLine("${indent}return $call != 0.toByte()")

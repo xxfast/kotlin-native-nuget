@@ -177,4 +177,46 @@ class Tier1ValueClassNullableResultTest {
     )
     assertContains(cs, "public global::Interop.Vcnullable.IPet OwnPet()")
   }
+
+  /**
+   * A GENERIC value class's own member with a `T?` result. The open point the nullable-result arms
+   * left: whether such a member is planned at all, and if so whether it binds or skips by name.
+   * It must never reach the C# renderer's no-arm `error(...)`.
+   */
+  @Test
+  fun `a generic value class member with a nullable type-parameter result never crashes`() {
+    val generic: Tier1Result = Tier1Harness.run(
+      """
+      package tier1.vcgeneric
+
+      @JvmInline
+      value class Box<T>(val item: T) {
+        fun maybe(): T? = item
+        fun label(): String? = null
+      }
+
+      fun box(): Box<String> = Box("Mylo")
+      """.trimIndent(),
+      processorOptions = mapOf("nuget.rootPackage" to "tier1"),
+    )
+
+    assertTrue(generic.kspSucceeded, "expected KSP to succeed; got: ${generic.kspErrors}")
+    assertTrue(generic.compiledClean, "expected a clean compile; got: ${generic.compileErrors}")
+    val cs: String = generic.generatedCSharp
+    // Answered: not planned at all. A value class over a bare `T` has no value-class wire, so the
+    // whole class skips by name before any member is planned, and nothing reaches the renderer.
+    assertTrue(
+      !Regex("""public [^\n]* Maybe\(""").containsMatchIn(cs),
+      "expected no Box.Maybe member; generated=$cs",
+    )
+    assertTrue(
+      generic.kspWarnings.any {
+        it.contains("Skipping tier1.vcgeneric.Box:") && it.contains("no value-class wire")
+      },
+      "expected the generic value class to skip by name; kspWarnings=${generic.kspWarnings}",
+    )
+    Tier1CSharpCompile.assertCompiles(
+      generic, "public static class Consumer { }", allowUnsafe = true,
+    )
+  }
 }

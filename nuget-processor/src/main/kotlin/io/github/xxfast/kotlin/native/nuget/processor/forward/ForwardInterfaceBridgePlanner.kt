@@ -48,6 +48,11 @@ internal data class ForwardBridgeType(
   /** C# source text for the implementing member, e.g. `string?`. */
   val csharp: String,
   val nullable: Boolean = false,
+  /**
+   * ADR-201 amendment: set when the slot type is a `Throwable` (an [ForwardBridgeWire.OBJECT]
+   * slot): a parameter crosses as the ADR-107 envelope, a result as the managed-exception text.
+   */
+  val throwable: BridgeType.Throwable? = null,
 )
 
 internal data class ForwardBridgeParameter(
@@ -160,6 +165,9 @@ internal object ForwardInterfaceBridgePlanner {
     classifier: ForwardBridgeTypeClassifier,
     /** ADR-163: the one symbol table. */
     symbols: ForwardSymbolTable,
+    // ADR-201 amendment: plan as if a narrower Throwable result could hold what C# sends, which is
+    // how [throwableRefusal] tells that refusal apart from every other reason a plan is null.
+    allowNarrowThrowable: Boolean = false,
   ): ForwardBridgeInterfacePlan? {
     if (iface.classKind != ClassKind.INTERFACE) return null
     if (iface.typeParameters.isNotEmpty()) return null
@@ -170,7 +178,9 @@ internal object ForwardInterfaceBridgePlanner {
     iface.getAllProperties()
       .filter { property -> property.getVisibility() == Visibility.PUBLIC }
       .filter { property -> !property.isCompilerOwnedMember(iface) }
-      .forEach { property -> slots.add(slotOf(property, classifier) ?: return null) }
+      .forEach { property ->
+        slots.add(slotOf(property, classifier, allowNarrowThrowable) ?: return null)
+      }
     // ADR-090 amendment (2026-09-26): two same-name function slots declared `speakPtr` twice in
     // the factory signature (a Kotlin `Conflicting declarations` compile error), whether both
     // overloads are declared here or one is inherited from a super-interface.
@@ -179,7 +189,8 @@ internal object ForwardInterfaceBridgePlanner {
       .filter { function -> function.getVisibility() == Visibility.PUBLIC }
       .filter { function -> !function.isCompilerOwnedMember(iface) }
       .forEach { function ->
-        val slot: ForwardBridgeSlot = slotOf(function, classifier) ?: return null
+        val slot: ForwardBridgeSlot =
+          slotOf(function, classifier, allowNarrowThrowable) ?: return null
         val occurrence: Int = occurrences.merge(slot.name, 1, Int::plus)!!
         slots.add(if (occurrence == 1) slot else slot.copy(overloadSuffix = "_$occurrence"))
       }
@@ -217,6 +228,7 @@ internal object ForwardInterfaceBridgePlanner {
   internal fun slotOf(
     property: KSPropertyDeclaration,
     classifier: ForwardBridgeTypeClassifier,
+    allowNarrowThrowable: Boolean = false,
   ): ForwardBridgeSlot? {
     // `var` properties would need a second (setter) slot each: deferred by the ADR's scope.
     if (property.isMutable) return null
@@ -224,6 +236,7 @@ internal object ForwardInterfaceBridgePlanner {
     if (!property.hasBridgeableName()) return null
     val result: ForwardBridgeType =
       bridgeType(property.type.resolve().expandAliases(), classifier) ?: return null
+    if (!allowNarrowThrowable && result.refusesManagedException()) return null
     if (result.wire == ForwardBridgeWire.UNIT) return null
     val name: String = property.simpleName.asString()
     return ForwardBridgeSlot(
@@ -238,6 +251,7 @@ internal object ForwardInterfaceBridgePlanner {
   private fun slotOf(
     function: KSFunctionDeclaration,
     classifier: ForwardBridgeTypeClassifier,
+    allowNarrowThrowable: Boolean,
   ): ForwardBridgeSlot? {
     if (function.modifiers.any { modifier -> modifier.name == "SUSPEND" }) return null
     if (!function.hasBridgeableName()) return null
@@ -245,6 +259,7 @@ internal object ForwardInterfaceBridgePlanner {
     if (function.parameters.size > 2) return null
     val returnType: KSType = function.returnType?.resolve()?.expandAliases() ?: return null
     val result: ForwardBridgeType = bridgeType(returnType, classifier) ?: return null
+    if (!allowNarrowThrowable && result.refusesManagedException()) return null
     val parameters: List<ForwardBridgeParameter> = function.parameters.mapIndexed { index, parameter ->
       val type: ForwardBridgeType =
         bridgeType(parameter.type.resolve().expandAliases(), classifier) ?: return null
@@ -261,12 +276,67 @@ internal object ForwardInterfaceBridgePlanner {
     )
   }
 
+  /**
+   * ADR-201 amendment: a slot RESULT is a value C# hands Kotlin, which arrives as a
+   * `NugetManagedException`; a result declared narrower than `RuntimeException` cannot hold one.
+   */
+  private fun ForwardBridgeType.refusesManagedException(): Boolean =
+    throwable?.acceptsManagedException == false
+
+  /**
+   * ADR-201 amendment: the member whose narrower `Throwable` result alone keeps [iface] from
+   * planning a bridge, as `member` to its declared spelling (`last` to `IllegalStateException?`),
+   * or null. Read where a null [plan] is otherwise silent, so this refusal is named.
+   */
+  internal fun throwableRefusal(
+    iface: KSClassDeclaration,
+    classifier: ForwardBridgeTypeClassifier,
+    symbols: ForwardSymbolTable,
+  ): Pair<String, String>? {
+    // Only when the Throwable result is the whole reason: a `var`, a suspend member or any other
+    // out-of-vocabulary slot is a different (pre-existing) refusal this does not name.
+    if (plan(iface, classifier, symbols, allowNarrowThrowable = true) == null) return null
+    val results: List<Pair<String, KSType?>> =
+      iface.getAllProperties()
+        .filter { property -> property.getVisibility() == Visibility.PUBLIC }
+        .map { property -> property.simpleName.asString() to property.type.resolve() }.toList() +
+        iface.getAllFunctions()
+          .filter { function -> function.getVisibility() == Visibility.PUBLIC }
+          .filter { function -> !function.isCompilerOwnedMember(iface) }
+          .map { function -> function.simpleName.asString() to function.returnType?.resolve() }
+          .toList()
+    return results.firstNotNullOfOrNull { (member, type) ->
+      val bridged: ForwardBridgeType = type?.expandAliases()?.let { resolved ->
+        bridgeType(resolved, classifier)
+      } ?: return@firstNotNullOfOrNull null
+      val throwable: BridgeType.Throwable =
+        bridged.throwable?.takeIf { bridged.refusesManagedException() }
+          ?: return@firstNotNullOfOrNull null
+      member to throwable.kotlinType.substringAfterLast('.') + if (bridged.nullable) "?" else ""
+    }
+  }
+
   private fun bridgeType(
     type: KSType,
     classifier: ForwardBridgeTypeClassifier,
   ): ForwardBridgeType? {
     val qualifiedName: String = type.declaration.qualifiedName?.asString() ?: return null
     val nullable: Boolean = type.isMarkedNullable
+    // ADR-201 amendment: a `Throwable` rides the OBJECT wire: the envelope out of Kotlin, the
+    // managed-exception text into it. Asked of the classifier, so an exported exception class keeps
+    // its handle classification (and stays out of this vocabulary).
+    val throwable: BridgeType.Throwable? =
+      classifier.classify(type).let { if (it is BridgeType.Nullable) it.type else it } as?
+        BridgeType.Throwable
+    if (throwable != null) {
+      return ForwardBridgeType(
+        ForwardBridgeWire.OBJECT,
+        if (nullable) "$qualifiedName?" else qualifiedName,
+        if (nullable) "global::System.Exception?" else "global::System.Exception",
+        nullable,
+        throwable,
+      )
+    }
     val isEnum: Boolean = (type.declaration as? KSClassDeclaration)?.classKind == ClassKind.ENUM_CLASS
     if (isEnum) {
       // A nullable enum has no sentinel on an `int` wire; only the non-null shape is in scope.

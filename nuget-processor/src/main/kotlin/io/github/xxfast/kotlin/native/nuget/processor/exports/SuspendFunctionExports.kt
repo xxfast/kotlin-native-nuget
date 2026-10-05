@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementEnvelope
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinIdentifier
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.forward.importIfDefaultPackage
@@ -13,6 +14,7 @@ import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.BOOLEAN
+import com.squareup.kotlinpoet.STRING
 import com.squareup.kotlinpoet.INT
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyInvocation
@@ -302,6 +304,8 @@ private fun legacyBoxedResult(shape: ForwardLegacyReturnShape): String = when (s
   // reads with `FromHandle<int>` and casts. Inside `resultRefExpression`'s null test, so a
   // nullable enum is smart-cast by then.
   is ForwardLegacyReturnShape.Enum -> "result.ordinal"
+  // ADR-201 amendment: the ADR-107 envelope, which the C# completion reads with `BuildException`.
+  is ForwardLegacyReturnShape.Envelope -> "buildError(result, ::nugetMappedType)"
   else -> "result"
 }
 
@@ -357,6 +361,10 @@ internal fun FunSpec.Builder.addLegacyScalarParameter(
 ): FunSpec.Builder {
   if (isSet != null) addParameter(isSet, BOOLEAN)
   if (hasValue != null) addParameter(hasValue, BOOLEAN)
+  // ADR-201 amendment: a Throwable parameter crosses as its managed-exception text.
+  if (shape is ForwardLegacyParameterShape.ManagedException) {
+    return addParameter(name, STRING.copy(nullable = shape.nullable))
+  }
   val nullable: Boolean = shape is ForwardLegacyParameterShape.NullableScalar && !shape.fansOut
   // An enum crosses as its ordinal (ADR-080), nullable or not.
   val enum: Boolean = shape is ForwardLegacyParameterShape.Enum ||
@@ -378,7 +386,9 @@ private fun FileSpec.Builder.addAcquiredFlowCollectExport(
     element.toBridgeTypeName(),
   )
   val collection: BridgeType.Collection? = classifier.legacyFlowElementCollection(returnType)
-  val boxed: String = itemBoxExpr(element.isMarkedNullable, collection)
+  val boxed: String = itemBoxExpr(
+    element.isMarkedNullable, collection, classifier.legacyFlowElementEnvelope(returnType),
+  )
   val export: FunSpec = FunSpec.builder("export_${prefix}_collect")
     .addAnnotation(cNameAnnotation("${prefix}_collect", ownedBy(method)))
     .addParameter("flowHandle", cOpaquePointer)

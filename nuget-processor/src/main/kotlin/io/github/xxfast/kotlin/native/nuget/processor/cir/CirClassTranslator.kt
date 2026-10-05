@@ -147,6 +147,10 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyGenericSeale
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBytesCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBytesElementReadArgument
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBytesRead
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyEnvelopeCsharpType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyEnvelopeRead
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyEnvelopeElementReadArgument
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementEnvelope
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementReadArgument
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedFlowElement
@@ -1940,10 +1944,13 @@ internal fun flowProperty(
   val flowElementBytes: Boolean =
     classifier.legacyFlowElementShape(flowElementTypeResolved) is
         ForwardLegacyFlowElementShape.Bytes
+  // ADR-201 amendment: a bare Throwable element is `Exception`, read as its ADR-107 envelope.
+  val flowElementEnvelope: Boolean = classifier.legacyFlowElementEnvelope(propTypeResolved)
   if (flowElementBytes) tracker.needsBytes = true
   val flowElementType: String? = when {
     flowElementCollection != null -> flowElementCollection.forwardPublicCsharpType()
     flowElementBytes -> legacyBytesCsharpType(isNullableElement)
+    flowElementEnvelope -> legacyEnvelopeCsharpType(isNullableElement)
     flowElementInterface != null ->
       flowElementInterface.csharpType + if (isNullableElement) "?" else ""
     // ADR-066: qualified, not by simple name: an admitted dependency-module element type is
@@ -1959,6 +1966,7 @@ internal fun flowProperty(
     ?: flowElementInterface
       ?.let { iface -> legacyInterfaceElementReadArgument(iface, isNullableElement) }
     ?: legacyBytesElementReadArgument(isNullableElement).takeIf { flowElementBytes }
+    ?: legacyEnvelopeElementReadArgument(isNullableElement).takeIf { flowElementEnvelope }
   if (isFlowType || isStateFlowType) {
     tracker.needsFlow = true
     tracker.needsAsync = true
@@ -2147,10 +2155,13 @@ internal fun flowMembers(
     val flowElementBytes: Boolean =
       classifier.legacyFlowElementShape(flowElementTypeResolved) is
           ForwardLegacyFlowElementShape.Bytes
+    // ADR-201 amendment: the sibling property branch's envelope arm.
+    val flowElementEnvelope: Boolean = classifier.legacyFlowElementEnvelope(returnType)
     if (flowElementBytes) tracker.needsBytes = true
     // ADR-066: qualified, not by simple name, see the sibling property branch above for why.
     val flowCsElementType: String = flowElementCollection?.forwardPublicCsharpType()
       ?: legacyBytesCsharpType(isNullableElement).takeIf { flowElementBytes }
+      ?: legacyEnvelopeCsharpType(isNullableElement).takeIf { flowElementEnvelope }
       ?: flowElementInterface?.let { it.csharpType + if (isNullableElement) "?" else "" }
       ?: classifier.legacyGenericSealedElement(flowElementTypeResolved, isNullableElement)
       ?: qualifiedElementCsType(flowElementTypeResolved, context, isNullableElement)
@@ -2159,6 +2170,7 @@ internal fun flowMembers(
       ?: flowElementInterface
         ?.let { iface -> legacyInterfaceElementReadArgument(iface, isNullableElement) }
       ?: legacyBytesElementReadArgument(isNullableElement).takeIf { flowElementBytes }
+      ?: legacyEnvelopeElementReadArgument(isNullableElement).takeIf { flowElementEnvelope }
 
     // ADR-114: a collection parameter takes the public collection type with an IntPtr native
     // slot; every other parameter keeps mapParamType's shipped spelling.
@@ -2409,6 +2421,8 @@ internal fun suspendMembers(
       returnShape is ForwardLegacyReturnShape.Marshalled -> returnShape.declaredCsharpType()
       returnShape is ForwardLegacyReturnShape.Bytes ->
         legacyBytesCsharpType(returnShape.nullable)
+      returnShape is ForwardLegacyReturnShape.Envelope ->
+        legacyEnvelopeCsharpType(returnShape.nullable)
       // ADR-040: the projected interface, already `global::`-qualified and owner-chained by the
       // classifier. `nestedCsName()` below would spell the backing wrapper here.
       returnShape is ForwardLegacyReturnShape.Interface -> returnShape.declaredCsharpType()
@@ -2495,6 +2509,9 @@ internal fun suspendMembers(
         // `new byte[](resultPtr)`.
         is ForwardLegacyReturnShape.Bytes ->
           legacyBytesRead("resultPtr", returnShape.nullable)
+        // ADR-201 amendment: the awaited envelope, rebuilt and disposed by `BuildException`.
+        is ForwardLegacyReturnShape.Envelope ->
+          legacyEnvelopeRead("resultPtr", returnShape.nullable)
 
         // `Refused` already returned above; `Plain` keeps the renderer's shipped spelling.
         // ROADMAP Phase 4 line 23: the qualified handle constructor, and `NugetUnbox` for a value
@@ -2630,14 +2647,19 @@ internal fun suspendStateFlowElement(
     val iface = classifier.legacyFlowElementInterface(element)
     val bytes = classifier.legacyFlowElementShape(element) is ForwardLegacyFlowElementShape.Bytes
     if (bytes && tracker != null) tracker.needsBytes = true
+    // ADR-201 amendment: an acquired `Flow<Throwable>` reads each item as its envelope.
+    val envelope = classifier.legacyFlowElementShape(element) is
+      ForwardLegacyFlowElementShape.Envelope
     val cs = collection?.forwardPublicCsharpType()
       ?: legacyBytesCsharpType(nullable).takeIf { bytes }
+      ?: legacyEnvelopeCsharpType(nullable).takeIf { envelope }
       ?: iface?.let { it.csharpType + if (nullable) "?" else "" }
       ?: classifier.legacyGenericSealedElement(element, nullable)
       ?: qualifiedElementCsType(element, context, nullable)
     val read = collection?.let { legacyFlowElementReadArgument(it) }
       ?: iface?.let { legacyInterfaceElementReadArgument(it, nullable) }
       ?: legacyBytesElementReadArgument(nullable).takeIf { bytes }
+      ?: legacyEnvelopeElementReadArgument(nullable).takeIf { envelope }
     return SuspendStateFlowElement("KotlinFlow<$cs>", read)
   }
 
@@ -5205,7 +5227,7 @@ private fun translateInterfaceBridgeMethod(
         InterfaceBridgeWire.ORDINAL -> "Int"
         InterfaceBridgeWire.BOOL -> "Bool"
         InterfaceBridgeWire.BY_VALUE -> pSimple
-        InterfaceBridgeWire.HANDLE -> "Object"
+        InterfaceBridgeWire.HANDLE, InterfaceBridgeWire.ENVELOPE -> "Object"
       }
     }
     val delegateName: String = "Nuget${argSuffixes.joinToString("")}VoidCallback"
@@ -5220,7 +5242,7 @@ private fun translateInterfaceBridgeMethod(
           InterfaceBridgeWire.ORDINAL -> "int arg${i}Ord"
           InterfaceBridgeWire.BOOL -> "byte arg${i}"
           InterfaceBridgeWire.BY_VALUE -> "${byValueCsType(pSimple)} arg${i}"
-          InterfaceBridgeWire.HANDLE -> "IntPtr arg${i}Ptr"
+          InterfaceBridgeWire.HANDLE, InterfaceBridgeWire.ENVELOPE -> "IntPtr arg${i}Ptr"
         }
       }.joinToString(", ")
       "($argParams, IntPtr _)"
@@ -5244,6 +5266,10 @@ private fun translateInterfaceBridgeMethod(
           InterfaceBridgeWire.BY_VALUE -> {
             /* arg is already the right type, no unmarshal needed */
           }
+
+          // ADR-201 amendment: the ADR-107 envelope, rebuilt (and disposed) by `BuildException`.
+          InterfaceBridgeWire.ENVELOPE ->
+            append("global::System.Exception arg$i = NugetErrorNative.BuildException(arg${i}Ptr); ")
 
           // ADR-036 amendment (2026-09-11): see the stored-callback route above; `FromHandle` is
           // the owner, so there is no second dispose here.

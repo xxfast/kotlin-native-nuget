@@ -964,12 +964,17 @@ internal class ForwardBridgeTypeClassifier(
     // `NugetFactory<T>` slot (`FromHandle<Outcome<int>>`); it alone carries a [kotlinReadType].
     is BridgeType.ObjectHandle -> !viaDiscriminator || kotlinReadType != null
     is BridgeType.Interface -> true
+    // ADR-201 amendment: the ADR-107 envelope, read (and disposed) by `BuildException`.
+    is BridgeType.Throwable -> true
     else -> false
   }
 
   /** The result shapes both callback halves lower, out. See [callbackType]. */
   private fun BridgeType.isCallbackResult(): Boolean = when (this) {
     BridgeType.Unit, is BridgeType.Primitive, BridgeType.String -> true
+    // ADR-201 amendment: the managed-exception text over the `String` result box, so only a
+    // declaration that can hold a `NugetManagedException`.
+    is BridgeType.Throwable -> acceptsManagedException
     else -> false
   }
 

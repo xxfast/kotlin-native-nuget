@@ -116,7 +116,7 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
             InterfaceBridgeWire.BOOL -> append("Byte, ")
             InterfaceBridgeWire.ORDINAL -> append("Int, ")
             InterfaceBridgeWire.BY_VALUE -> append("$pSimple, ")
-            InterfaceBridgeWire.HANDLE -> append("COpaquePointer?, ")
+            InterfaceBridgeWire.HANDLE, InterfaceBridgeWire.ENVELOPE -> append("COpaquePointer?, ")
           }
         }
         // ADR-161: ctx, then the trailing error slot.
@@ -153,6 +153,10 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
           }
           InterfaceBridgeWire.HANDLE ->
             appendLine("      val arg${i}Ref = NugetHandles.retain($pName as Any)")
+          // ADR-201 amendment: the ADR-107 envelope, which C# reads with `BuildException`.
+          InterfaceBridgeWire.ENVELOPE -> appendLine(
+            "      val arg${i}Ref = NugetHandles.retain(buildError($pName, ::nugetMappedType))",
+          )
         }
       }
 
@@ -162,7 +166,7 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
           when (param.wire(classifier)) {
             InterfaceBridgeWire.BOOL, InterfaceBridgeWire.ORDINAL -> append("arg${i}Val, ")
             InterfaceBridgeWire.BY_VALUE -> append("$pName, ")
-            InterfaceBridgeWire.HANDLE -> append("arg${i}Ref, ")
+            InterfaceBridgeWire.HANDLE, InterfaceBridgeWire.ENVELOPE -> append("arg${i}Ref, ")
           }
         }
         append("${mName}Ctx, nugetErr")
