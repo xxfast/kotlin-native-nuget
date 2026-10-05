@@ -5260,7 +5260,7 @@ private fun nugetKotlinErrorsActual(): String = """
   |import io.github.xxfast.kotlin.native.nuget.runtime.awaitForKotlin
   |import io.github.xxfast.kotlin.native.nuget.runtime.NugetHandles
   |import io.github.xxfast.kotlin.native.nuget.runtime.buildError
-  |import io.github.xxfast.kotlin.native.nuget.runtime.nugetStdlibMappedType
+  |import io.github.xxfast.kotlin.native.nuget.generated.nugetMappedType
   |import io.github.xxfast.kotlin.native.nuget.runtime.flowForKotlin
   |import kotlinx.coroutines.flow.Flow
   |import kotlin.experimental.ExperimentalNativeApi
@@ -5269,8 +5269,10 @@ private fun nugetKotlinErrorsActual(): String = """
   |import kotlinx.cinterop.asStableRef
   |import kotlinx.cinterop.invoke
   |
+  |// ADR-203: classified with the module's own KSP-generated nugetMappedType (same compilation,
+  |// leaf source set), so a reverse slot maps the optional rows exactly as a forward call does.
   |internal actual fun nugetKotlinError(t: Throwable): COpaquePointer =
-  |  StableRef.create(buildError(t, ::nugetStdlibMappedType)).asCPointer()
+  |  StableRef.create(buildError(t, ::nugetMappedType)).asCPointer()
   |
   |// ADR-158: the counted half of a bridge/delegate ctx (see the `expect` for why it is counted and
   |// why it must stay paired with the release inside nuget_kotlin_release below).
@@ -5387,6 +5389,14 @@ private fun nugetKotlinErrorsActual(): String = """
   |@CName("nuget_kotlin_error_cause_stacktrace")
   |fun nuget_kotlin_error_cause_stacktrace(handle: COpaquePointer, index: Int): COpaquePointer? =
   |  nugetKotlinString(handle.error().at(index).stackTrace)
+  |
+  |// ADR-203: the ADR-177 row the node matched, a null pointer (C# reads "") for none; index 0
+  |// is the top node, mirroring the forward nuget_error_cause_mapped_type. The C# shim keys the
+  |// shared mapper on it.
+  |@OptIn(ExperimentalNativeApi::class)
+  |@CName("nuget_kotlin_error_cause_mapped_type")
+  |fun nuget_kotlin_error_cause_mapped_type(handle: COpaquePointer, index: Int): COpaquePointer? =
+  |  nugetKotlinString(handle.error().at(index).mappedType)
   |
   |@OptIn(ExperimentalNativeApi::class)
   |@CName("nuget_kotlin_error_free")

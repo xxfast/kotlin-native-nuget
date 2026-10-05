@@ -1304,16 +1304,41 @@ class NugetKotlinBridgeGenerationTest {
     assertContains(file.content, "EntryPoint = \"nuget_kotlin_error_type\")]")
     assertContains(file.content, "EntryPoint = \"nuget_kotlin_error_cause_count\")]")
     assertContains(file.content, "EntryPoint = \"nuget_kotlin_error_free\")]")
-    // ADR-029's map, qualified onto the FORWARD public hierarchy: one catch for both directions.
+    // ADR-203: the matched row travels with the envelope, and the ONE mapper (the shared
+    // contract's, the same one a forward call uses) turns it into the thrown type.
+    assertContains(file.content, "EntryPoint = \"nuget_kotlin_error_cause_mapped_type\")]")
     assertContains(
       file.content,
-      "\"kotlin.IllegalStateException\" => new " +
-          "global::Kotlin.Native.Interop.KotlinInvalidOperationException(kotlinType, message, stackTrace, inner),",
+      "global::Kotlin.Native.Interop.KotlinException.CreateMapped(" +
+          "kotlinType, mappedType, message, stackTrace, inner);",
     )
+    assertContains(file.content, "string mappedType = Read(Native_causeMappedType(errorPtr, 0));")
+    assertFalse(
+      file.content.contains("private static Exception Map("),
+      "the reverse copy of the exception switch must be gone",
+    )
+    assertFalse(file.content.contains("kotlinType switch"), file.content)
+    // ADR-129 amendment: the reverse twin of the forward error trace, on the shim's own channel.
     assertContains(
       file.content,
-      "_ => global::Kotlin.Native.Interop.KotlinException.Create(kotlinType, message, stackTrace, inner)",
+      "NugetTrace.Write(\$\"error {kotlinType} -> {built.GetType().Name} (row {row}): {text}\");",
     )
+  }
+
+  @Test
+  fun `a bind-only project's shim maps through the shared contract too`() {
+    // No `publish {}`: no forward Interop.cs exists, and the mapper needs none.
+    val file: GeneratedFile =
+      generateCSharpShims(rir, "TestLibraryNative", errorNamespace = "")
+        .single { it.relativePath == "NugetRuntimeRegistration.cs" }
+
+    assertContains(
+      file.content,
+      "global::Kotlin.Native.Interop.KotlinException.CreateMapped(" +
+          "kotlinType, mappedType, message, stackTrace, inner);",
+    )
+    // A call into the forward helper would be CS0103 here: a bind-only assembly has no Interop.cs.
+    assertFalse(file.content.contains("NugetErrorNative."), file.content)
   }
 
   @Test

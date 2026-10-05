@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.test.menagerie
 
 import io.github.xxfast.kotlin.native.nuget.internal.nugetKotlinReleaseCount
+import kotlinx.io.IOException
 import test.menagerie.Ferret
 import test.menagerie.IFeedable
 import test.menagerie.IKeeper
@@ -413,6 +414,37 @@ fun kotlinNoVacancyLegsOnly(): Int {
   val sanctuary = Sanctuary()
   return sanctuary.legsOnly(NoVacancy())
 }
+
+// ADR-203: a Kotlin slot throws, and C# (Sanctuary.describeFault) catches it in place and reports
+// the type the reverse shim built, so the reverse mapping is observable without the ADR-104
+// re-wrap the four-hop round trip above goes through.
+private class SplitBagException(message: String) : IllegalStateException(message)
+
+private class TreatJarJammed(message: String) : Exception(message)
+
+private class Clumsy(private val fault: Throwable) : IFeedable {
+  override fun describe(): String = throw fault
+
+  override val legs: Int get() = 4
+
+  override fun feed(food: String) {
+    // Not exercised; present only so the IFeedable contract is fully satisfied.
+  }
+
+  override var nickname: String? = null
+}
+
+/** A module-mapped row (kotlinx-io), which the stdlib-only classifier used to miss. */
+fun kotlinOreoSpillsTheBagFault(): String =
+  Sanctuary().describeFault(Clumsy(IOException("Oreo spilled the bag")))
+
+/** A Kotlin subclass of a mapped row maps to that row (ADR-177 hierarchy matching). */
+fun kotlinMyloSplitsTheBagFault(): String =
+  Sanctuary().describeFault(Clumsy(SplitBagException("Mylo split the bag")))
+
+/** No row matches: still the bare KotlinException. */
+fun kotlinOreoJamsTheTreatJarFault(): String =
+  Sanctuary().describeFault(Clumsy(TreatJarJammed("Oreo jammed the treat jar")))
 
 // Phase 13 Wave 3, item 1: bridge reuse per Kotlin object. Today `nugetMintBridge` mints a fresh
 // bridge on EVERY crossing, so two crossings of the SAME Kotlin object give C# two distinct

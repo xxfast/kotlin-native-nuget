@@ -312,3 +312,53 @@ const-only module now also gets `NugetMarshal` and the public `KotlinException`/
 types, declared but unused. `Tier1RuntimeVersionTest`'s enum-only fixture, which used to assert
 `NugetMarshal` absent, is re-pinned to assert it present, alongside the same cell in
 `Tier1CoreHelpersAlwaysEmittedTest.kt`.
+
+### 2026-10-05 amendment (forward error trace)
+
+`NUGET_INTEROP_TRACE` now also covers errors on the forward bridge, on the channel this ADR put
+`NugetRuntime.TraceLoaded` on (prefix `[nuget:interop] `, same two variables, same sink). It lives
+here and not in [ADR-054](054-reverse-bridge-registration-observability.md) because the line is
+written by the forward `Interop.cs` helper this ADR introduced; ADR-054 keeps the reverse
+registration trace and the `[nuget:shim]` prefix.
+
+For each Kotlin exception that crosses the forward bridge, `NugetErrorNative.BuildException` calls
+`NugetRuntime.TraceError`, which writes one line, written C#-side where the envelope becomes an
+exception:
+
+```
+[nuget:interop] error <member>: <kotlinType> -> <.NET type name> (row <mappedType or none>): <message>
+```
+
+The real line pinned by `IntegrationTests/ForwardErrorTraceTests.cs`:
+
+```
+[nuget:interop] error Rake: io.github.xxfast.kotlin.native.nuget.test.cat.LitterBoxJammedException -> KotlinIOException (row kotlinx.io.IOException): Oreo buried the rake
+```
+
+Rules:
+
+- `<member>` is filled by `[CallerMemberName]` on a new trailing parameter of `BuildException` and
+  `Check<T>`; no generated call site changed. A call made inside a generated helper or lambda reports
+  the enclosing generated method, not the consumer's member.
+- The variables are read per error, not cached, as `TraceLoaded` already does. A successful call
+  never reaches the helper, so it pays nothing; the error path adds one environment read beside an
+  exception that already cost several P/Invokes. Newlines in the message become spaces. The write is
+  serialised and wrapped in a catch, so a trace that cannot be written never replaces the exception
+  being thrown.
+- `NUGET_INTEROP_TRACEFILE` is honoured (append mode, as for the other lines).
+- A `Throwable` that Kotlin returns rather than throws (the [ADR-107](107-throwable-property-mapping.md)
+  and [ADR-201](201-throwable-beyond-the-property-getter.md) envelope) goes through the same builder,
+  so it prints an `error` line too when tracing is on, although nothing is thrown; so does a `Result`
+  failure returned through a `TryX` twin. The ADR-161
+  managed-rethrow branch prints the same format with the rethrown exception's type.
+- The reverse shim writes the twin line `[nuget:shim] error <kotlinType> -> <type> (row <row>):
+  <message>` with no member name ([ADR-203](203-reverse-envelope-shared-exception-mapper.md)).
+
+C#-only: no `@CName`, so `NUGET_RUNTIME_EXPORTS`, `NugetRuntimeAbi1` and the ADR-054 contract hash
+are untouched. The "gate before P/Invoke" rule for `TraceLoaded` is unchanged.
+
+Verified: `IntegrationTests/ForwardErrorTraceTests.cs` (non-parallel `EnvVars` collection; trace on
+writes exactly one `error Rake` line to the trace file, trace off writes none) and
+`Tier1ForwardErrorTraceTest` (the `caller` parameter on `BuildException` and `Check`, the call into
+`TraceError`, and that the traced builder compiles against the shared contract). Not covered: the
+Kotlin export name, which is the last frame of `KotlinStackTrace` and is not repeated in the line.

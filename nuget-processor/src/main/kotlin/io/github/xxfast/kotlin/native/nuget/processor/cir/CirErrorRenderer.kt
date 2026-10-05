@@ -23,9 +23,10 @@ internal data class KotlinExceptionRow(
 )
 
 /**
- * ADR-150 / ADR-177: the Kotlin-exception to C#-exception table, shared by the `BuildMapped` switch
- * this file renders, the generated `nugetMappedType` classifier and the `<exception cref>` an
- * author's `@throws` becomes. One table, so the documented exception is always the one the consumer
+ * ADR-150 / ADR-177: the Kotlin-exception to C#-exception table, shared by the generated
+ * `nugetMappedType` classifier and the `<exception cref>` an author's `@throws` becomes. ADR-203:
+ * the C# half of the table is the shared contract's `KotlinException.CreateMapped` switch, which a
+ * processor test pins to these rows, so the documented exception is always the one the consumer
  * actually catches. Order is the Kotlin side's match order, most specific first (NFE before IAE,
  * CancellationException before ISE, its Kotlin/Native superclass). Anything absent is a
  * `KotlinException`.
@@ -153,7 +154,13 @@ internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
   appendLine("            return fault;")
   appendLine("        }")
   appendLine()
-  appendLine("        internal static Exception BuildException(IntPtr errorPtr)")
+  // ADR-129 amendment: `caller` is filled by the compiler at every generated call site, so the
+  // forward error trace names the C# member without any call site changing. Spelled fully
+  // qualified for the same reason `CirRuntimeRenderer` spells `ModuleInitializer` that way.
+  appendLine(
+    "        internal static Exception BuildException(IntPtr errorPtr, " +
+        "[System.Runtime.CompilerServices.CallerMemberName] string caller = \"\")"
+  )
   appendLine("        {")
   appendLine("            int causeCount = CauseCount(errorPtr);")
   appendLine("            Exception? inner = null;")
@@ -163,7 +170,8 @@ internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
   appendLine("                string causeMsg = CauseMessage(errorPtr, i);")
   appendLine("                string causeStack = CauseStackTrace(errorPtr, i);")
   appendLine("                string causeMapped = CauseMappedType(errorPtr, i);")
-  appendLine("                inner = BuildMapped(causeType, causeMapped, causeMsg, causeStack, inner);")
+  // ADR-203: the one mapper lives in the shared contract; the reverse shim calls the same one.
+  appendLine("                inner = global::Kotlin.Native.Interop.KotlinException.CreateMapped(causeType, causeMapped, causeMsg, causeStack, inner);")
   appendLine("            }")
   appendLine("            string kotlinType = Type(errorPtr);")
   appendLine("            string msg = Message(errorPtr);")
@@ -175,28 +183,28 @@ internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
   // `Assert.Throws<InvalidOperationException>` works on `cat.DescribeWith(_ => throw ...)`.
   // Anything else, including a Kotlin author's own wrapper around it, keeps the ordinary mapping.
   appendLine("            Exception? original = TakeOriginalManagedFault(kotlinType, msg);")
-  appendLine("            if (original != null) return original;")
-  appendLine("            return BuildMapped(kotlinType, mappedType, msg, stackTrace, inner);")
+  appendLine("            if (original != null)")
+  appendLine("            {")
+  appendLine("                NugetRuntime.TraceError(caller, kotlinType, mappedType, msg, original);")
+  appendLine("                return original;")
+  appendLine("            }")
+  // ADR-177 / ADR-203: keyed on the row the Kotlin side matched with `is`, not the concrete
+  // class, so a subclass of a row maps to that row. The switch is the shared contract's
+  // `KotlinException.CreateMapped`, whose rows a processor test pins to KOTLIN_EXCEPTION_TYPES.
+  appendLine("            Exception built = global::Kotlin.Native.Interop.KotlinException.CreateMapped(kotlinType, mappedType, msg, stackTrace, inner);")
+  appendLine("            NugetRuntime.TraceError(caller, kotlinType, mappedType, msg, built);")
+  appendLine("            return built;")
   appendLine("        }")
   appendLine()
-  appendLine("        internal static T Check<T>(T result, IntPtr error)")
+  appendLine(
+    "        internal static T Check<T>(T result, IntPtr error, " +
+        "[System.Runtime.CompilerServices.CallerMemberName] string caller = \"\")"
+  )
   appendLine("        {")
-  appendLine("            if (error != IntPtr.Zero) throw BuildException(error);")
+  // The caller is forwarded explicitly: left to the attribute, every `Check` site reports "Check".
+  appendLine("            if (error != IntPtr.Zero) throw BuildException(error, caller);")
   appendLine("            return result;")
   appendLine("        }")
-  appendLine()
-  appendLine("        private static Exception BuildMapped(string kotlinType, string mappedType, string message, string stackTrace, Exception? inner) =>")
-  // ADR-177: keyed on the row the Kotlin side matched with `is`, not the concrete class, so a
-  // subclass of a row maps to that row. Every row is rendered, optional ones included: the string
-  // only ever arrives when the module's `nugetMappedType` carries the row.
-  appendLine("            mappedType switch")
-  appendLine("            {")
-  KOTLIN_EXCEPTION_TYPES.forEach { row ->
-    appendLine("                \"${row.kotlinType}\" =>")
-    appendLine("                    new global::Kotlin.Native.Interop.${row.csharpType}(kotlinType, message, stackTrace, inner),")
-  }
-  appendLine("                _ => global::Kotlin.Native.Interop.KotlinException.Create(kotlinType, message, stackTrace, inner)")
-  appendLine("            };")
   appendLine("    }")
   appendLine()
 }

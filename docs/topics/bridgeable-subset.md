@@ -325,11 +325,11 @@ member indirectly through an ordinary reverse-bound method, it surfaces in Kotli
 <code>NugetManagedException</code> instead. The two channels aren't unified into one exception type
 at that crossing yet.</p>
 
-<p>On the C# side of that call, only an exception whose exact class is one of the standard-library
-rows in <a href="exceptions.md#catching-a-specific-exception-type">Exceptions</a> is mapped: a
-Kotlin subclass of a mapped type, a <code>NullPointerException</code> and an <code>IOException</code>
-arrive as <code>KotlinException</code> here. With no Kotlin message, <code>Message</code> is the
-Kotlin class name.</p>
+<p>On the C# side of that call the exception is mapped exactly as for a forward call, by the table in
+<a href="exceptions.md#catching-a-specific-exception-type">Exceptions</a>: a Kotlin subclass of a
+mapped type, a <code>NullPointerException</code> and a <code>kotlinx.io.IOException</code> arrive as
+their mapped types, and only an unmapped exception is a bare <code>KotlinException</code>. With no
+Kotlin message, <code>Message</code> is the Kotlin class name.</p>
 </note>
 
 ## Unsupported members show up as build warnings {id="unsupported-members-show-up-as-build-warnings"}

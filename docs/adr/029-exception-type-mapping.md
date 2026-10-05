@@ -453,4 +453,11 @@ text is left as written.
 
 This widens the breaking change this ADR already recorded: `catch (KotlinException)` no longer
 catches a subclass of a mapped type, a `NullPointerException`, a `CancellationException` or an
-`IOException`. Runtime-owned routes and the reverse envelope keep exact stdlib names only.
+`IOException`. The runtime-owned routes followed in ADR-202 and the reverse envelope in ADR-203 (see the 2026-10-05 pointer below).
+
+## Pointer 2026-10-05: one shared mapper
+
+The `BuildMapped` switch is deleted from the generated forward code. [ADR-203](203-reverse-envelope-shared-exception-mapper.md)
+moved it into `Kotlin.Native.Interop.KotlinException.CreateMapped`, keyed on the ADR-177 row, and
+both the forward `NugetErrorNative.BuildException` and the reverse shim call it. The reverse
+envelope now maps by hierarchy as well.

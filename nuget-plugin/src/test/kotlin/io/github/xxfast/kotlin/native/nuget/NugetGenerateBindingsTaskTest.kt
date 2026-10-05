@@ -2292,7 +2292,20 @@ class NugetGenerateBindingsTaskTest {
       )
       assertContains(
         file.content,
-        "StableRef.create(buildError(t, ::nugetStdlibMappedType)).asCPointer()",
+        "StableRef.create(buildError(t, ::nugetMappedType)).asCPointer()",
+      )
+      // ADR-203: the module's own KSP-generated classifier, so a reverse slot maps the optional
+      // rows (kotlinx-io) exactly as a forward call does, not the runtime's stdlib rows only.
+      assertContains(
+        file.content,
+        "import io.github.xxfast.kotlin.native.nuget.generated.nugetMappedType",
+      )
+      assertFalse(file.content.contains("nugetStdlibMappedType"), file.content)
+      // ...and the C# side reads the matched row back, top node at index 0.
+      assertContains(file.content, "@CName(\"nuget_kotlin_error_cause_mapped_type\")")
+      assertContains(
+        file.content,
+        "nugetKotlinString(handle.error().at(index).mappedType)",
       )
       // ADR-130 "Allocation, pinned": not NugetHandles.retain, so nuget_live_handles and the
       // LeakTests baselines do not move.
@@ -2301,11 +2314,11 @@ class NugetGenerateBindingsTaskTest {
         "the envelope must NOT be counted in nuget_live_handles",
       )
 
-      // The C# NugetKotlinErrors shim's contract, unchanged by the fold.
+      // The C# NugetKotlinErrors shim's contract: ADR-130's eight plus ADR-203's mapped type.
       assertEquals(
-        8,
+        9,
         file.content.split("@CName(\"nuget_kotlin_error_").size - 1,
-        "all eight accessors ride along to the per-target file",
+        "all nine accessors ride along to the per-target file",
       )
       assertContains(file.content, "handle.asStableRef<NugetError>().dispose()")
       assertFalse(

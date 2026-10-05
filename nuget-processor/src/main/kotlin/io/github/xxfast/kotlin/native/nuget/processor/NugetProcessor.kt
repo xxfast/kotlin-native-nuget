@@ -1955,10 +1955,30 @@ internal class NugetProcessor(
         interfaces.isEmpty() && sealedClasses.isEmpty() && objects.isEmpty() &&
         properties.isEmpty() && constProperties.isEmpty() && valueClassCandidates.isEmpty() &&
         suspendFunctions.isEmpty()
+    // ADR-177: the optional mapping rows (kotlinx-io) whose class KSP resolved on the classpath.
+    val presentOptionalExceptionRows: List<KotlinExceptionRow> =
+      KOTLIN_EXCEPTION_TYPES.filter { row ->
+        row.optional && expects.classByName(row.kotlinType) != null
+      }
+
     if (hasNothingToProcess) {
       // Issue #55: the diagnostics file is what `nugetReportDiagnostics` re-emits, so the
       // SKIPPED_ALL_DECLARATIONS warning above has to reach it even though nothing else is written.
       writeForwardDiagnostics(Dependencies.ALL_FILES)
+      // ADR-203: the plugin-generated reverse envelope (`nugetKotlinError`) classifies with this
+      // module's `nugetMappedType`, so a module that exports nothing but binds a NuGet package
+      // still needs the classifier. Only the classifier: no export, no `Interop.cs`.
+      FileSpec
+        .builder("io.github.xxfast.kotlin.native.nuget.generated", "CNameExports")
+        .addImport(NUGET_RUNTIME_PACKAGE, "nugetStdlibMappedType")
+        .addAnnotation(
+          AnnotationSpec.builder(ClassName("kotlin", "OptIn"))
+            .addMember("%T::class", ClassName(NUGET_RUNTIME_PACKAGE, "NugetRuntimeApi"))
+            .build()
+        )
+        .addFunction(nugetMappedTypeFunction(presentOptionalExceptionRows))
+        .build()
+        .writeTo(codeGenerator, Dependencies.ALL_FILES)
       return emptyList()
     }
 
@@ -2462,9 +2482,7 @@ internal class NugetProcessor(
       classes, enums, sealedClasses, objects, properties,
       valueClasses, suspendFunctions, callableCatalog, deps, reachableInterfaces,
       exportedObjectHandles, forwardClassifier,
-      KOTLIN_EXCEPTION_TYPES.filter { row ->
-        row.optional && expects.classByName(row.kotlinType) != null
-      },
+      presentOptionalExceptionRows,
       candidateDeclarations
         .filter { declaration -> declaration is KSClassDeclaration || declaration is KSTypeAlias }
         .filter { declaration -> declaration.packageName.asString().isEmpty() }

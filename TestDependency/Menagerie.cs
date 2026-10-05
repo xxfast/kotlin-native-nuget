@@ -224,6 +224,23 @@ public class Sanctuary
     public int LegsOnly(IFeedable feedable) => feedable.Legs;
 
     /// <summary>
+    /// ADR-203 probe: catches what <see cref="IFeedable.Describe"/> throws HERE, inside C#, so the
+    /// type the reverse shim built is observable. Without the catch the exception would leave
+    /// through the ADR-104 thunk channel and be re-wrapped on the way back to the test.
+    /// </summary>
+    public string DescribeFault(IFeedable feedable)
+    {
+        try
+        {
+            return feedable.Describe();
+        }
+        catch (Exception e)
+        {
+            return e.GetType().FullName + "|" + e.Message;
+        }
+    }
+
+    /// <summary>
     /// ADR-086 fixture (Phase 13 Wave 2, item 2): drives every <see cref="IKeeper"/> crossing from
     /// the C# side of a Kotlin-implemented object/interface slot. <paramref name="pet"/> is a
     /// C#-created <see cref="Ferret"/>, so the bound-object param+return identity check

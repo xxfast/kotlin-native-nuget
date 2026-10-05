@@ -81,8 +81,10 @@ type, for a <code>NullPointerException</code>, a <code>CancellationException</co
 
 The `IOException` row exists only in a library that has `kotlinx-io` on its compile classpath, for
 example through Ktor. It applies on every route. That includes a Kotlin `suspend` lambda you invoke
-from C# and a `StateFlow` you collect, held or awaited: an `IOException` thrown there arrives as
-`KotlinIOException` like any other.
+from C# and a `StateFlow` you collect, held or awaited, and a Kotlin implementation of a C#
+interface that C# calls: an `IOException` thrown there arrives as `KotlinIOException` like any
+other. To see which exception crossed and how it was mapped, set `NUGET_INTEROP_TRACE=1`; see
+[Tracing exceptions](registration-diagnostics.md#tracing-exceptions).
 
 ```kotlin
 class CatFeeder(val catName: String) {

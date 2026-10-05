@@ -111,6 +111,19 @@ class NugetCompileGeneratedKotlinTest {
     val written: WrittenSources = writeSources(files, dir, actual)
     check(written.common.isNotEmpty()) { "generator emitted no nativeMain files" }
     check(written.platform.isNotEmpty()) { "generator emitted no $actual files" }
+    // ADR-203: the reverse envelope classifies with the module's KSP-generated `nugetMappedType`.
+    // This compile has no KSP, so a stand-in occupies the processor's place in the leaf source set
+    // (the real reference is proved by `:test-library`'s build in scripts/verify.sh).
+    val classifier: File = File(dir, "$actual/NugetMappedTypeStandIn.kt")
+    classifier.parentFile.mkdirs()
+    classifier.writeText(
+      "@file:OptIn(io.github.xxfast.kotlin.native.nuget.runtime.NugetRuntimeApi::class)\n" +
+        "\n" +
+        "package io.github.xxfast.kotlin.native.nuget.generated\n" +
+        "\n" +
+        "internal fun nugetMappedType(t: Throwable): String? =\n" +
+        "  io.github.xxfast.kotlin.native.nuget.runtime.nugetStdlibMappedType(t)\n",
+    )
 
     val annotation: File = File(property("nuget.annotationSource"))
     check(annotation.isFile) { "annotation source not found: ${annotation.absolutePath}" }
@@ -118,6 +131,7 @@ class NugetCompileGeneratedKotlinTest {
     val sources: MutableList<File> = mutableListOf()
     sources.addAll(written.common)
     sources.addAll(written.platform)
+    sources.add(classifier)
     sources.add(annotation)
     val common: MutableList<File> = mutableListOf()
     common.addAll(written.common)
