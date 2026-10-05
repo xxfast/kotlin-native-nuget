@@ -103,6 +103,27 @@ public interface IKotlinException
 }
 ```
 
+`KotlinStackTrace` holds Kotlin frames only: the Kotlin exception's `toString()` line, then one
+`at` line per frame, from where it was thrown down to the bridge's `kn_<hex>_...` export function.
+The .NET and OS frames of your own process below that are not included; the C# exception's
+`StackTrace` has the .NET half. The raw native stack has dozens of those frames, printed as
+`0x0 + <address>` or as a nearby symbol with an offset in the millions, which reads like a C++
+crash. The bridge cuts them before the trace crosses:
+
+```
+kotlin.IllegalArgumentException: Oreo is on a diet!
+    at 0   ???   7ff8cd7b1bd4   kfun:io.github.xxfast.kotlin.native.nuget.test.cat#feedCatTreat(kotlin.String){}kotlin.String + 196
+    at 1   ???   7ff8cd8b5c99   _konan_function_535 + 169
+    at 2   ???   7ff8cdb2617c   kn_746573746c696272617279_cat__feedCatTreat + 156
+    at 3   ???   7ff8cf4901be   _ZSt25__throw_bad_function_callv + 24839742   <- cut
+    at 4   ???   7ff8cf29f5de   0x0 + 140706604250590                         <- cut
+    at 5   ???   7ff994d6caec   _ZSt25__throw_bad_function_callv + 3339243372 <- cut
+```
+
+A `suspend` or `Flow` body throws on a Kotlin worker thread, so its trace has no `kn_<hex>_...`
+frame and ends at the last Kotlin frame instead. If a trace on macOS or Linux still shows `0x0` or
+huge-offset frames, report it.
+
 Use it as a catch filter to handle any Kotlin exception the same way, mapped or not:
 
 ```C#
@@ -113,7 +134,9 @@ catch (Exception ex) when (ex is IKotlinException ke)
 ```
 
 `Exception.InnerException` follows Kotlin's `cause` chain, one exception per link, each mapped (or
-falling back to `KotlinException`) independently:
+falling back to `KotlinException`) independently. Each exception carries its own trace, and the
+outer `KotlinStackTrace` has no `Caused by:` section, so read causes through `InnerException`
+(Kotlin `Suppressed` exceptions do not cross at all):
 
 ```kotlin
 fun groomCat(catName: String): String {
