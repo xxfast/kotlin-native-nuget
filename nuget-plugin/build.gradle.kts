@@ -248,6 +248,17 @@ gradlePlugin {
         "Packages a Kotlin/Native library as a NuGet package with generated C# bindings, and consumes C# NuGet packages from Kotlin"
       tags.set(listOf("kotlin", "kotlin-native", "nuget", "csharp", "dotnet", "interop"))
     }
+
+    // Issue #464: for a dependency module that does not apply the main plugin but still needs
+    // `@CSharpName` (ADR-179). The main plugin applies it too.
+    create("nugetAnnotations") {
+      id = "io.github.xxfast.kotlin.native.nuget.annotations"
+      implementationClass = "io.github.xxfast.kotlin.native.nuget.NugetAnnotationsPlugin"
+      displayName = "Kotlin/Native NuGet annotations"
+      description =
+        "Adds the Kotlin/Native NuGet annotations, such as @CSharpName, to a Kotlin Multiplatform module that does not apply the main plugin"
+      tags.set(listOf("kotlin", "kotlin-native", "nuget", "csharp", "dotnet", "interop"))
+    }
   }
 }
 

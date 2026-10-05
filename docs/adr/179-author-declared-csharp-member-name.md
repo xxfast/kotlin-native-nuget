@@ -423,3 +423,28 @@ no handle kind or marshalling path is new.
 
 Dead code noticed and left alone: `translateCompanionProperty` and `translateCompanionFunction` in
 `cir/CirClassTranslator.kt` have no callers.
+
+## Amendment 2026-10-05: an annotations-only plugin for dependency modules (issue #464)
+
+**Problem.** A `@CSharpName` collision often sits in a dependency module that the cross-module
+export closure walks and that does not apply the main plugin. Alternative 4 (the author adds the
+dependency by hand) was the only route there: `api("io.github.xxfast:nuget-annotations:<version>")`,
+with the version kept in step with the plugin manually.
+
+**Decision.** A second plugin id in the existing `nuget-plugin` artifact,
+`io.github.xxfast.kotlin.native.nuget.annotations` (`NugetAnnotationsPlugin`). On a Kotlin
+Multiplatform module it adds `nuget-annotations` to `commonMainApi` at the plugin's own version and
+does nothing else: no `nuget {}` extension, no KSP, no tasks. The main plugin applies it internally,
+so a module that applies the main plugin behaves as before. Verified: `NugetPluginAnnotationsWiringTest`
+covers the plugin alone and both together, and `test-models` applies it for a real `@CSharpName`
+that `DependencyCSharpNameTests` calls from C#.
+
+**Why the plugin reuses `PLUGIN_VERSION`.** It takes the generated `PLUGIN_VERSION` the main plugin
+already uses, so the annotation and the generator cannot skew. Verified: the smoke test resolves `nuget-annotations` by coordinate at that version.
+
+**Rejected: publishing a version catalog.** One more artifact to release, and the consumer still has
+to wire it in `settings.gradle.kts`. The plugin id needs no catalog and no hardcoded version line.
+
+**Collision hint.** The `ERROR_CSHARP_NAME_COLLISION` hint for an owner declared in a dependency
+module now names the annotations plugin as the fix, and says the main plugin adds `nuget-annotations`
+only to the module that applies it.

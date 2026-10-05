@@ -58,7 +58,8 @@ jobs:
             :nuget-runtime:publishAllPublicationsToLocalTestRepository \
             :nuget-annotations:publishAllPublicationsToLocalTestRepository \
             :nuget-plugin:publishAllPublicationsToLocalTestRepository
-          ./gradlew -p smoke-test verifyProcessorResolvesByCoordinate verifyRuntimeResolvesByCoordinate
+          ./gradlew -p smoke-test verifyProcessorResolvesByCoordinate verifyRuntimeResolvesByCoordinate \
+            verifyAnnotationsPluginResolvesByCoordinate
 
       # No automaticRelease: every deployment waits for a manual "Publish" at central.sonatype.com.
       # `nuget-plugin` is an included build, so it is a separate Central deployment from

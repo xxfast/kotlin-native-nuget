@@ -35,7 +35,8 @@ if [ "$RUN_PLUGIN" = true ]; then
   # Exercises the maven-coordinate fallback in NugetPlugin that this repo's own builds skip,
   # because here `findProject(":nuget-processor")` always resolves.
   echo "==> Published artifacts: resolve by coordinate (smoke-test)"
-  ./gradlew -p smoke-test verifyProcessorResolvesByCoordinate verifyRuntimeResolvesByCoordinate
+  ./gradlew -p smoke-test verifyProcessorResolvesByCoordinate verifyRuntimeResolvesByCoordinate \
+    verifyAnnotationsPluginResolvesByCoordinate
 fi
 
 echo "==> Purge the fixed-version local contract cache"

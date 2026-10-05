@@ -24,6 +24,7 @@ pluginManagement {
 
   plugins {
     id("io.github.xxfast.kotlin.native.nuget") version pluginVersion
+    id("io.github.xxfast.kotlin.native.nuget.annotations") version pluginVersion
   }
 }
 

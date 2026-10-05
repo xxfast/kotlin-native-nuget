@@ -6,6 +6,7 @@ import java.util.Properties
 plugins {
   alias(libs.plugins.kotlinMultiplatform) apply false
   id("io.github.xxfast.kotlin.native.nuget") apply false
+  id("io.github.xxfast.kotlin.native.nuget.annotations") apply false
 }
 
 // The repo root's `gradle.properties` gives every project its coordinates. This root does not

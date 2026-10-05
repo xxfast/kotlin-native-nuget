@@ -300,6 +300,7 @@ jobs:
           ./gradlew -p smoke-test
           verifyProcessorResolvesByCoordinate
           verifyRuntimeResolvesByCoordinate
+          verifyAnnotationsPluginResolvesByCoordinate
           linkDebugSharedMacosArm64
           -Psmoke.kotlin=${{ matrix.kotlin }}
 

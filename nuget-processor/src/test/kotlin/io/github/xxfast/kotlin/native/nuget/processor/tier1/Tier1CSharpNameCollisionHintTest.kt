@@ -10,8 +10,9 @@ import kotlin.test.assertTrue
 /**
  * Issue #464: `ERROR_CSHARP_NAME_COLLISION` offers `@CSharpName` (ADR-179) as the alternative to a
  * Kotlin rename, and when the declaration that would carry it was read from a dependency
- * ([Tier1DependencyLibrary], `containingFile == null`) it says that module needs the annotations
- * artifact itself, since the plugin adds it only to the module that applies it.
+ * ([Tier1DependencyLibrary], `containingFile == null`) it says that module needs the
+ * annotations-only plugin, since the main plugin adds `nuget-annotations` only to the module that
+ * applies it.
  */
 class Tier1CSharpNameCollisionHintTest {
 
@@ -80,7 +81,7 @@ class Tier1CSharpNameCollisionHintTest {
   }
 
   @Test
-  fun `a collision on a dependency interface says that module needs the annotations artifact`() {
+  fun `a collision on a dependency interface says that module needs the annotations plugin`() {
     val result = runAgainstDependency(
       """
       package tier1.icv
@@ -97,8 +98,12 @@ class Tier1CSharpNameCollisionHintTest {
       "rename the Kotlin function 'manufacturerData' or the property it collides with, or give " +
           "it a different `@CSharpName`",
     )
-    assertContains(error, "dep.ble.Advertisement is declared in a dependency module")
-    assertContains(error, "`io.github.xxfast:nuget-annotations` on its own `commonMain`")
+    assertContains(
+      error,
+      "dep.ble.Advertisement is declared in a dependency module, which needs the " +
+          "`io.github.xxfast.kotlin.native.nuget.annotations` plugin to use the annotation (the " +
+          "main plugin adds `nuget-annotations` only to the module that applies it)",
+    )
   }
 
   @Test
