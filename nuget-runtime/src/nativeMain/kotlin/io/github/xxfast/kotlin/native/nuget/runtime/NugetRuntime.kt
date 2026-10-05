@@ -593,8 +593,8 @@ public fun buildError(e: Throwable, mappedType: (Throwable) -> String?): NugetEr
   return build(e)!!
 }
 
-/** ADR-200: a `kn_<hex>_...` module export or a `nuget_...` runtime export, `_` on Mach-O. */
-private val NUGET_EXPORT_FRAME: Regex = Regex("""\s_?(kn_[0-9a-f]+_|nuget_)\S* \+ \d+""")
+/** ADR-200: a `kn_<stem>_...` module export or a `nuget_...` runtime export, `_` on Mach-O. */
+private val NUGET_EXPORT_FRAME: Regex = Regex("""\s_?(kn_[a-z0-9_]+_|nuget_)\S* \+ \d+""")
 
 private val FRAME_SYMBOL_OFFSET: Regex = Regex("""\s(\S+) \+ (\d+)(?=\s|\(|$)""")
 

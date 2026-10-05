@@ -27,7 +27,7 @@ Facts the design rests on, **verified** on mingwX64, Kotlin 2.4.10, inside an xu
   host.
 - User code prints as `kfun:...`. The generated `export_*` wrapper prints as `_konan_function_<n>`
   in a release build. The export frame is the C symbol itself,
-  `kn_<hex of package id>_<path>__<name> + <offset>`. Real Kotlin offsets are small (15 to 1706);
+  `kn_<package id stem>_<path>__<name> + <offset>`. Real Kotlin offsets are small (15 to 1706);
   host offsets start at 22 million. Below the export, JIT code prints as `0x0 + <address>`.
 - A `suspend` body throws on a coroutine worker whose stack has no export frame at all, only Kotlin
   runtime frames and then thread-start frames (`_ZN6Worker19processQueueElementEb`,
@@ -67,7 +67,7 @@ Rejected.
 
 ### 5. Pass the module's export prefix into `buildError`
 
-Changes a signature used at 28 generated sites for no gain over the generic `kn_[0-9a-f]+_`
+Changes a signature used at 28 generated sites for no gain over the generic `kn_[a-z0-9_]+_`
 pattern. Rejected.
 
 ## Decision
@@ -78,7 +78,7 @@ rule would empty is returned unchanged, so a trace never loses all its frames.
 
 `nugetTrimFrames` keeps a prefix of the frames:
 
-1. **Export anchor.** If a frame matches `\s_?(kn_[0-9a-f]+_|nuget_)\S* \+ \d+`, keep frames up to
+1. **Export anchor.** If a frame matches `\s_?(kn_[a-z0-9_]+_|nuget_)\S* \+ \d+`, keep frames up to
    and including the first such frame. The `_?` allows the Mach-O leading underscore; `nuget_`
    covers a runtime-owned export.
 2. **Host cut, always.** Within that range, and on every trace whether or not an anchor was found,
@@ -86,7 +86,7 @@ rule would empty is returned unchanged, so a trace never loses all its frames.
    Running this rule on every trace, not only when the anchor misses, means a host whose frame text
    defeats the anchor still loses its CLR frames.
 
-A trace therefore ends at the last Kotlin-symbolized frame: the `kn_<hex>_...` export on a route
+A trace therefore ends at the last Kotlin-symbolized frame: the `kn_<stem>_...` export on a route
 whose throw site is on the calling thread, and the last Kotlin runtime frame on a suspend or `Flow`
 route, which throws on a worker.
 
@@ -132,7 +132,7 @@ reason: nothing in the bridge carries `suppressedExceptions` (deliberate; no fix
 **Inferred**, not verified on a macosArm64 or linuxX64 build:
 
 - Frame text there is `N  <module>  0x<addr>  <symbol> + <offset> [(file:line:col)]`, with a real
-  module column (`libkn_<hex>.dylib`, `libcoreclr.dylib`), the export printed as `kn_<hex>_...`
+  module column (`libkn_<stem>.dylib`, `libcoreclr.dylib`), the export printed as `kn_<stem>_...`
   (possibly with a leading `_` on Mach-O), and host frames symbolized honestly, so the offset rule
   would not fire there and the anchor is the only rule that trims them. The `StackTraceTrimTest`
   macOS and linux fixture lines are written from this reading, not captured.

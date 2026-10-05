@@ -21,7 +21,7 @@ class StackTraceTrimTest {
       "kotlin.String + 196 ",
     "1   ???                                 7ff8cd8b5c99       _konan_function_535 + 169 ",
     "2   ???                                 7ff8cdb2617c       " +
-      "kn_746573746c696272617279_cat__feedCatTreat + 156 ",
+      "kn_testlibrary_cat__feedCatTreat + 156 ",
     "3   ???                                 7ff8cf4901be       " +
       "_ZSt25__throw_bad_function_callv + 24839742 ",
     "4   ???                                 7ff8cf29f5de       0x0 + 140706604250590 ",
@@ -103,12 +103,12 @@ class StackTraceTrimTest {
   @Test
   fun `a macOS shaped trace with file positions is cut at the export frame`() {
     val frames: Array<String> = arrayOf(
-      "0   libkn_746573746c696272617279.dylib  0x0000000104a31bd4 " +
+      "0   libkn_testlibrary.dylib  0x0000000104a31bd4 " +
         "kfun:io.github.xxfast.kotlin.native.nuget.test.cat#feedCatTreat(kotlin.String){}" +
         "kotlin.String + 196 (/src/Cat.kt:12:5)",
-      "1   libkn_746573746c696272617279.dylib  0x0000000104b35c99 _konan_function_535 + 169",
-      "2   libkn_746573746c696272617279.dylib  0x0000000104da617c " +
-        "_kn_746573746c696272617279_cat__feedCatTreat + 156",
+      "1   libkn_testlibrary.dylib  0x0000000104b35c99 _konan_function_535 + 169",
+      "2   libkn_testlibrary.dylib  0x0000000104da617c " +
+        "_kn_testlibrary_cat__feedCatTreat + 156",
       "3   libcoreclr.dylib                    0x0000000105a1f5de CallDescrWorkerInternal + 84",
       "4   libcoreclr.dylib                    0x0000000105a1f7aa MethodDescCallSite + 360",
     )
@@ -118,7 +118,7 @@ class StackTraceTrimTest {
   @Test
   fun `a macOS shaped trace with honest host symbols and no anchor is never emptied`() {
     val frames: Array<String> = arrayOf(
-      "0   libkn_746573746c696272617279.dylib  0x0000000104a31bd4 " +
+      "0   libkn_testlibrary.dylib  0x0000000104a31bd4 " +
         "kfun:io.github.xxfast.kotlin.native.nuget.test.cat#feedCatTreat(kotlin.String){}" +
         "kotlin.String + 196",
       "1   libcoreclr.dylib                    0x0000000105a1f5de CallDescrWorkerInternal + 84",
@@ -131,9 +131,9 @@ class StackTraceTrimTest {
   @Test
   fun `a linux shaped trace with a nuget runtime export is cut there`() {
     val frames: Array<String> = arrayOf(
-      "0   libkn_746573746c696272617279.so     0x00007f3a91c31bd4 " +
+      "0   libkn_testlibrary.so     0x00007f3a91c31bd4 " +
         "kfun:io.github.xxfast.kotlin.native.nuget.runtime#collect(){} + 44",
-      "1   libkn_746573746c696272617279.so     0x00007f3a91d35c99 nuget_flow_collect + 12",
+      "1   libkn_testlibrary.so     0x00007f3a91d35c99 nuget_flow_collect + 12",
       "2   libcoreclr.so                       0x00007f3a93a1f5de <unknown> + 0",
     )
     assertEquals(frames.take(2), nugetTrimFrames(frames))
