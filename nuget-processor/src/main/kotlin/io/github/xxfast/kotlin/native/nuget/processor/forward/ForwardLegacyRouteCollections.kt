@@ -426,7 +426,13 @@ internal sealed interface ForwardLegacyReturnShape {
   data class Discriminated(
     val handle: BridgeType.ObjectHandle,
     val nullable: Boolean,
-  ) : ForwardLegacyReturnShape
+    // ADR-204: a sealed interface over its declared arms, declared as `I<Name>`, which the
+    // routes' `nestedCsName()` fallback cannot spell. Spelled from [handle] instead.
+    val isInterface: Boolean = false,
+  ) : ForwardLegacyReturnShape {
+    /** ADR-204: the declared `I<Name>` spelling, carrying the `?`. */
+    fun declaredCsharpType(): String = if (nullable) "${handle.csharpType}?" else handle.csharpType
+  }
 
   /**
    * ADR-040 at a suspend return: an interface that is in the exported set. The wire is unchanged
@@ -617,7 +623,14 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
       if (it is BridgeType.Nullable) it.type else it
     }
     return if (unwrapped is BridgeType.ObjectHandle && unwrapped.viaDiscriminator) {
-      ForwardLegacyReturnShape.Discriminated(unwrapped, expanded.isMarkedNullable)
+      val declaration: KSClassDeclaration = expanded.declaration as KSClassDeclaration
+      val isInterface: Boolean =
+        declaration.classKind == ClassKind.INTERFACE && !declaration.isEligibleSealedInterface()
+      ForwardLegacyReturnShape.Discriminated(
+        unwrapped,
+        expanded.isMarkedNullable,
+        isInterface = isInterface,
+      )
     } else {
       ForwardLegacyReturnShape.Refused(expanded.legacyDescription())
     }
@@ -845,6 +858,19 @@ internal fun ForwardBridgeTypeClassifier.legacyFlowElementShape(
       expanded.legacyDescription(),
       legacyDependencyRefusal(classified),
     )
+  }
+
+  // A sealed element with no discriminator (an ineligible sealed interface ADR-204 cannot admit,
+  // an out-of-scope sealed class) has nothing to materialise through: the erased read would find
+  // no `Factories` entry, and the bare name used to be spelled as a type nothing declares. Refused
+  // by name, as at every other position.
+  val isSealedHelper: Boolean = classified is BridgeType.SpecializedProtocol &&
+      classified.name.startsWith(SEALED_HELPER_PREFIX)
+  val hasNoDiscriminator: Boolean = classified is BridgeType.SpecializedProtocol &&
+      classified.sealedHandle == null &&
+      classified.sealedRefusal == null
+  if (isSealedHelper && hasNoDiscriminator) {
+    return ForwardLegacyFlowElementShape.Refused(expanded.legacyDescription())
   }
 
   // ADR-199: a closed generic sealed element reads through its `Factories` entry, spelled by

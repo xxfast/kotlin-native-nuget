@@ -100,7 +100,11 @@ internal object ForwardAbiLegacyRoutes {
 
       // ADR-174: the interface's own async members ride its backing wrapper, a `CirClass`; the
       // interface block itself only owns the types declared inside it (ADR-134).
-      is CirInterface -> addNested(declaration.nestedDeclarations)
+      // ADR-204: a sealed interface over its declared arms owns the sealed discriminator extern.
+      is CirInterface -> {
+        if (declaration.discriminator != null) add(ForwardAbiLegacyRoute.SEALED_CLASS)
+        addNested(declaration.nestedDeclarations)
+      }
 
       is CirBridgeHelper -> add(ForwardAbiLegacyRoute.INTERFACE_BRIDGE_FACTORY)
       is CirSealedClass -> {

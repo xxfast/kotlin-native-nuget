@@ -255,6 +255,11 @@ internal fun sealedSubclassBlock(
   appendLine("            {")
   appendLine("            }")
   appendLine()
+  // ADR-204: the arm is also an arm of a sealed interface over declared arms.
+  subclass.handleInterfaces.forEach { iface ->
+    appendLine("            NugetKotlinHandle $iface._handle => _handle;")
+    appendLine()
+  }
   // ADR-199: a generic arm fills its own `NugetFactory<T>` slot, as the generic base does.
   subclass.selfFactory?.let { factory ->
     appendLine("            static ${subclass.name}()")

@@ -23,6 +23,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticS
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyReceiver
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedInterface
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedInterface
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.isUnderPackage
 
@@ -517,7 +518,17 @@ internal fun qualifiedElementCsType(type: KSType?, context: NugetContext): Strin
   // Enclosing scope included ([nestedCsName]): this route spells a *sealed subclass* property's
   // type (`CirClassTranslator`) and an ADR-067 flow element, either of which can be a class nested
   // in its sealed base and so declared as a nested C# class.
-  val nestedName: String = classDeclaration.nestedCsName()
+  // ADR-204: an ineligible sealed interface is declared only as `I<Name>` (the eligible one is the
+  // ADR-112 abstract class, spelled by its bare name). Spelling the bare name named a type nothing
+  // declares (CS0234). The member is still refused upstream unless the interface has a
+  // discriminator (`legacyFlowElementShape`).
+  val nestedName: String = if (
+    classDeclaration.isSealedInterface() && !classDeclaration.isEligibleSealedInterface()
+  ) {
+    classDeclaration.nestedInterfaceCsName()
+  } else {
+    classDeclaration.nestedCsName()
+  }
   if (context.rootNamespace.isEmpty()) return nestedName
   val kotlinPackage: String = classDeclaration.packageName.asString()
   // ADR-123: this is the *user-type* speller. A Kotlin builtin reaching it is a defect at every

@@ -297,7 +297,8 @@ route (**verified by reading** `SealedClassExports.kt`).
   (`cir/CirMarshalRenderer.kt:114-117`, verified by reading); `Flow<Kind>` stays inside that
   backlog item's sealed-base hole. `docs/backlog/tier1-interface-bridge-factory-nested-enum-stale.md`
   concerns the interface-bridge factory and is unrelated.
-- Deferred: arms that extend another class (out of scope per the issue), enum properties projected
+- Deferred: arms that extend another class (out of scope per the issue; since bound as `I<Name>` by
+  [ADR-204](204-sealed-interface-over-declared-arms.md), which still refuses an enum arm), enum properties projected
   onto the box, `Value` caching, implicit conversion, nullable `Kind?` inputs (already a separate
   `SEALED_POSITION` reading at `ForwardCallablePlanner.kt:3490`).
 

@@ -75,6 +75,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.NUGET_RUNTIME_MEMB
 import io.github.xxfast.kotlin.native.nuget.processor.exports.NUGET_RUNTIME_PACKAGE
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addPropertyExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addSealedClassExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addSealedDiscriminatorExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addSuspendClassMethodExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addSuspendFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addValueClassExports
@@ -124,6 +125,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceBr
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardReachabilityBucket
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isArmOfIneligibleSealedInterface
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedInterfaceOverDeclaredArms
+import io.github.xxfast.kotlin.native.nuget.processor.forward.declaredArmsIneligibility
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.intermediateGenericSealedArms
@@ -1871,43 +1874,6 @@ internal class NugetProcessor(
     val interfaces: List<KSClassDeclaration> =
       declaredInterfaces + nestedDeclared.filter { it.classKind == ClassKind.INTERFACE }
 
-    // ADR-112: an ineligible sealed interface is still declared as `I<Name>`, and every member
-    // typed with it still skips as SKIPPED_SEALED_POSITION, but that skip can only say there is no
-    // discriminator -- never why. Named here, once, at the declaration, with the disqualifying
-    // reason, before the `hasNothingToProcess` early return so it reaches NugetDiagnostics.json
-    // even in a module that generates nothing else.
-    ForwardDiagnosticSink.emit(
-      interfaces
-        .filter { it.isSealedInterface() }
-        .mapNotNull { iface ->
-          val reason: String = iface.sealedInterfaceIneligibility() ?: return@mapNotNull null
-          val name: String = iface.qualifiedName?.asString() ?: iface.simpleName.asString()
-          ForwardDiagnostic(
-            kind = ForwardDiagnosticKind.SKIPPED_INELIGIBLE_SEALED_INTERFACE,
-            // ADR-066, verified: a klib declaration has no containing file.
-            symbol = iface.takeIf { it.containingFile != null },
-            declaration = name,
-            reason = "sealed interface `$name` is declared as " +
-                "`I${iface.simpleName.asString()}` but cannot be reconstructed in C#: $reason",
-            // ADR-125: the reason now always names a C# constraint, so the hint names the
-            // constraints too. It used to ask for every subclass to be nested, which is a style
-            // rule the renderer never needed and a breaking change for a library whose subtypes
-            // are public API on other platforms.
-            // ADR-157 drops the enum clause: an `enum class` arm is admitted now, boxed as
-            // `{Enum}Arm`. The clause was also being printed on hierarchies whose real problem was
-            // a second superclass, which sent the author looking for an enum that was not there.
-            hint = "every subclass must be a class or object, or an enum class (boxed as " +
-                "`{Enum}Arm`, ADR-157), declared in the interface or beside it, with no other " +
-                "superclass, no sub-interface and no second sealed interface. Or declare it as a " +
-                "sealed class",
-            // The interface IS declared (as `I<Name>`); what is missing is the discriminator, and
-            // every member typed with it is named on its own owner by its own position skip.
-            owner = null,
-          )
-        },
-      logger,
-    )
-
     // ADR-174 ruling 3: a generic interface's async members stay off `IFeed<T>`, named once each at
     // the member. A sealed interface is excluded silently (ruling 2: its arms bind the members).
     ForwardDiagnosticSink.emit(
@@ -2005,6 +1971,44 @@ internal class NugetProcessor(
       }
       objects.forEach { obj -> obj.qualifiedName?.asString()?.let(::add) }
     }
+
+    // ADR-112: an ineligible sealed interface is still declared as `I<Name>`, and every member
+    // typed with it still skips as SKIPPED_SEALED_POSITION, but that skip can only say there is no
+    // discriminator -- never why. Named here, once, at the declaration, with the disqualifying
+    // reason. ADR-204: after the export set, because whether the arms are declared handle classes
+    // is answered against it, and the classifier and translator answer against the same set; an
+    // ineligible sealed interface is in `interfaces`, so `hasNothingToProcess` never returns first.
+    ForwardDiagnosticSink.emit(
+      interfaces
+        .filter { it.isSealedInterface() }
+        .mapNotNull { iface ->
+          val reason: String = iface.sealedInterfaceIneligibility() ?: return@mapNotNull null
+          val overArms: String =
+            iface.declaredArmsIneligibility(exportedObjectHandles) ?: return@mapNotNull null
+          val name: String = iface.qualifiedName?.asString() ?: iface.simpleName.asString()
+          ForwardDiagnostic(
+            kind = ForwardDiagnosticKind.SKIPPED_INELIGIBLE_SEALED_INTERFACE,
+            // ADR-066, verified: a klib declaration has no containing file.
+            symbol = iface.takeIf { it.containingFile != null },
+            declaration = name,
+            reason = "sealed interface `$name` is declared as " +
+                "`I${iface.simpleName.asString()}` but cannot be reconstructed in C#: it is not " +
+                "an abstract class because $reason; and not over its declared arms because " +
+                overArms,
+            // ADR-125: the reason now always names a C# constraint, so the hint names the
+            // constraints too. ADR-204: two shapes bind, so the hint names both.
+            hint = "either every subclass is a class or object, or an enum class (boxed as " +
+                "`{Enum}Arm`, ADR-157), with no other superclass, no sub-interface and no second " +
+                "sealed interface; or every subclass is an exported, non-abstract, non-generic " +
+                "top-level class or an arm of a non-generic sealed class, none extending " +
+                "another. Or declare it as a sealed class",
+            // The interface IS declared (as `I<Name>`); what is missing is the discriminator, and
+            // every member typed with it is named on its own owner by its own position skip.
+            owner = null,
+          )
+        },
+      logger,
+    )
     // ADR-134: the value classes the renderer declares, nested ones included. Kept out of
     // `exportedObjectHandles` above: a record struct is not a handle, and that set answers a
     // different question for `forwardSuperClass` and the legacy `csTypeArguments` route.
@@ -2488,6 +2492,7 @@ internal class NugetProcessor(
         .filter { declaration -> declaration.packageName.asString().isEmpty() }
         .map { declaration -> declaration.simpleName.asString() }
         .toSet(),
+      interfaces.filter { it.isSealedInterfaceOverDeclaredArms(exportedObjectHandles) },
     )
     val bindings: CsharpBindings = generateCSharpBindings(
       functions, genericFunctions, extensionFunctions, extensionProperties,
@@ -2823,6 +2828,8 @@ internal class NugetProcessor(
     // ROADMAP Phase 4: the simple names of the DEFAULT-package class-like declarations (and
     // typealiases) in this module, which the generated file can only reference through an import.
     rootPackageTypes: Set<String>,
+    // ADR-204: the sealed interfaces reconstructed over their declared arms.
+    discriminatedInterfaces: List<KSClassDeclaration>,
   ): FileSpec {
     val builder: FileSpec.Builder = FileSpec
       .builder("io.github.xxfast.kotlin.native.nuget.generated", "CNameExports")
@@ -2934,6 +2941,16 @@ internal class NugetProcessor(
     reachableInterfaces.forEach { iface ->
       guardDeclaration(iface) {
         builder.addInterfaceExports(iface, callableCatalog, context.symbols, forwardClassifier)
+      }
+    }
+    // ADR-204: a sealed interface over its declared arms exports only its discriminator. It never
+    // joins `reachableInterfaces` (it never classifies as `BridgeType.Interface`), so it has no
+    // backing wrapper, bridge plan or interface exports.
+    discriminatedInterfaces.forEach { iface ->
+      guardDeclaration(iface) {
+        builder.addSealedDiscriminatorExport(
+          iface, iface.nativePrefix(context.symbols), iface.getSealedSubclasses().toList(),
+        )
       }
     }
     // ADR-084 stage 1: the per-interface bridge factory, projected from the same slot plan the C#

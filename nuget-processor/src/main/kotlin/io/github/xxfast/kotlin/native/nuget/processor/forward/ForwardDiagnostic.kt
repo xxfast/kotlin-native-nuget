@@ -1436,7 +1436,9 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
         "an eligible sealed type inside the export scope gets one (ADR-009, ADR-112), and that " +
         "binds at every position (ADR-105); export it from an included package, make every " +
         "subclass a class or object (in the sealed type or beside it) with no other superclass " +
-        "and no second sealed interface (ADR-125), or accept a concrete subclass"
+        "and no second sealed interface (ADR-125), make every subclass of a sealed interface an " +
+        "exported, non-abstract, non-generic class none of which extends another (ADR-204), or " +
+        "accept a concrete subclass"
   }
 
   // Names the enum, because the reason line cannot: `warnDroppedForwardCallables` builds it from

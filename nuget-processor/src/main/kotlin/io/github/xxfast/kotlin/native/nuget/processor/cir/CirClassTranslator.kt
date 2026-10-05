@@ -81,6 +81,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ENUM_ARM_VALUE_MEM
 import io.github.xxfast.kotlin.native.nuget.processor.forward.enumArmName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEnumArm
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedInterfaceOverDeclaredArms
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPlanProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPropertyProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.enumMembersOf
@@ -722,6 +723,24 @@ private fun forwardInterfaceList(
     }
     .toList()
 }
+
+/**
+ * ADR-204: the sealed interfaces over declared arms that [cls] lists directly, spelled exactly as
+ * [forwardInterfaceList] spells them in its base list, so the explicit `_handle` line names the
+ * same type.
+ */
+internal fun forwardHandleInterfaces(
+  cls: KSClassDeclaration,
+  exportedTypes: Set<String>,
+  classifier: ForwardBridgeTypeClassifier,
+): List<String> = cls.superTypes
+  .map { it.resolve() }
+  .filter { type ->
+    val declaration: KSClassDeclaration? = type.declaration as? KSClassDeclaration
+    declaration?.isSealedInterfaceOverDeclaredArms(exportedTypes) == true
+  }
+  .mapNotNull { type -> forwardSuperInterfaceSpelling(type, classifier, from = cls) }
+  .toList()
 
 /**
  * ADR-101 amendment (2026-09-11): the C# base list entry for [base], with its type arguments
@@ -1674,6 +1693,7 @@ internal fun translateClass(
     storedCallbackMethods = storedCallbackMembers,
     interfaceBridgeMethods = interfaceBridgeMembers,
     interfaces = interfaces,
+    handleInterfaces = forwardHandleInterfaces(cls, exportedTypes, classifier),
     superClass = superClass,
     isDataClass = isDataClass,
     isAbstract = isAbstract,
@@ -2426,6 +2446,9 @@ internal fun suspendMembers(
       // ADR-040: the projected interface, already `global::`-qualified and owner-chained by the
       // classifier. `nestedCsName()` below would spell the backing wrapper here.
       returnShape is ForwardLegacyReturnShape.Interface -> returnShape.declaredCsharpType()
+      // ADR-204: `I<Name>`, which `nestedCsName()` below cannot spell.
+      returnShape is ForwardLegacyReturnShape.Discriminated && returnShape.isInterface ->
+        returnShape.declaredCsharpType()
       // ROADMAP Phase 4 line 23: `global::`-qualified, so a dependency type in another namespace
       // resolves; a value class is the record struct `NugetUnbox` returns.
       returnShape is ForwardLegacyReturnShape.Handle -> returnShape.declaredCsharpType()
@@ -3215,6 +3238,7 @@ internal fun translateSealedClass(
         isOpen = isOpenArm,
         backingName = backingName,
         interfaces = armInterfaces,
+        handleInterfaces = forwardHandleInterfaces(subclass, exportedTypes, classifier),
         // ADR-134: the arm is an owner in its own right (`Purr.On.Trace`).
         nestedDeclarations = nestedOf(subclass),
       ).genericArmOf(cls, subclass, baseTypeParameters, classifier, logger, context)
@@ -4175,11 +4199,33 @@ internal fun translateInterface(
     }
   }
 
+  // ADR-204: a sealed interface over its declared arms switches to each arm's own class, spelled as
+  // the classifier spells that arm at any other position, in the Kotlin `get_type` export's order.
+  val discriminator: CirInterfaceDiscriminator? =
+    if (context != null && iface.isSealedInterfaceOverDeclaredArms(exportedTypes)) {
+      val arms: List<String> = iface
+        .getSealedSubclasses()
+        .map { arm ->
+          val handle: BridgeType.ObjectHandle? =
+            classifier.classify(arm.asStarProjectedType()) as? BridgeType.ObjectHandle
+          checkNotNull(handle) {
+            "ADR-204: arm ${arm.qualifiedName?.asString()} of ${iface.qualifiedName?.asString()} " +
+                "was admitted but does not classify as a handle"
+          }
+          handle.csharpType
+        }
+        .toList()
+      CirInterfaceDiscriminator(context.libraryName, iface.nativePrefix(context.symbols), arms)
+    } else {
+      null
+    }
+
   return CirInterface(
     interfaceName, typeParams, properties + asyncProperties, methods + asyncMethods,
     doc = iface.forwardKdoc(expects)?.toCirDoc(),
     superInterfaces = superInterfaces,
     isAsyncDisposable = context != null && iface.forwardInterfaceDeclaresScopeMember(classifier),
+    discriminator = discriminator,
   )
 }
 

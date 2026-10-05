@@ -11,7 +11,8 @@ a C# `abstract class` whose subclasses share one inherited `_handle`, and `seale
 | `abstract class` | `abstract class` | `_handle` inherited by every subclass; a value typed as the class comes back as an internal subclass |
 | `sealed class` | `abstract class` | each subtype its own class, nested inside the base or declared beside it, reconstructed through a generated `FromHandle`; a generic `sealed class` binds as `Outcome<T>` with arms on a non-generic `Outcome` holder (`Outcome.Ok<T>`) |
 | eligible `sealed interface` (every subclass a `class`/`object` or `enum class`, no other superclass, no sub-interface, no second sealed-interface parent) | `abstract class` | same shape as `sealed class`; no C# interface is declared for it; an `enum class` arm binds as a boxed `{Enum}Arm` |
-| ineligible `sealed interface` | `interface` (`I`-prefixed) | stays on the ordinary interface route; every member typed with it is skipped |
+| `sealed interface` whose arms extend a class or implement a second sealed interface, every arm an exported class | `interface` (`I`-prefixed) | binds at every sealed position; a returned value is the concrete arm; see [A sealed interface whose arms extend a class](#sealed-interface-over-arms) |
+| any other `sealed interface` | `interface` (`I`-prefixed) | stays on the ordinary interface route; every member typed with it is skipped, named |
 
 ## Interfaces
 
@@ -1075,11 +1076,111 @@ Assert.IsType<Pulse.Flat>(current);
 ```
 
 An **ineligible** sealed interface, one whose arm extends another class, implements a second sealed
-interface, or is a sub-interface arm, stays on the ordinary interface route instead: it keeps its
-plain `IFoo` declaration, and every function, property, or parameter typed with it is skipped,
-named on a build warning. There is no partial binding for an ineligible sealed interface: make
-every arm a plain `class`/`object`/`enum class` with no other superclass, or use a `sealed class`
-instead.
+interface, or is a sub-interface arm, keeps its plain `IFoo` declaration instead of becoming an
+abstract class. When every arm is a class C# can construct, it still binds, through a discriminator
+on the interface itself: see [A sealed interface whose arms extend a
+class](#sealed-interface-over-arms). When any arm is not, every function, property, or parameter
+typed with it is skipped, named on a build warning. There is no partial binding: fix the arm the
+warning names, or use a `sealed class` instead.
+
+### A sealed interface whose arms extend a class {id="sealed-interface-over-arms"}
+
+A `sealed interface` whose arms already extend a class, typically the arms of a `sealed class`,
+binds as the C# interface `I<Name>` rather than an abstract class. Any arm passes where the
+interface is expected, and a returned value is the concrete arm, so it pattern matches and is also an
+instance of its class base:
+
+```kotlin
+sealed class EvidenceDevice
+
+sealed interface ConnectableDevice { val address: String }
+sealed interface Chargeable { val battery: Int }
+
+data class NearbyDevice(val name: String, override val address: String) :
+  EvidenceDevice(), ConnectableDevice
+
+data class RemoteDevice(val host: String, override val battery: Int) :
+  EvidenceDevice(), ConnectableDevice, Chargeable {
+  override val address: String get() = "remote://$host"
+}
+
+data object SavedDevice : EvidenceDevice(), ConnectableDevice {
+  override val address: String get() = "saved"
+}
+
+fun connect(device: ConnectableDevice): EvidenceDevice = when (device) {
+  is NearbyDevice -> device
+  is RemoteDevice -> device
+  SavedDevice -> SavedDevice
+}
+
+fun preferred(): ConnectableDevice = NearbyDevice(name = "desk", address = "aa:bb")
+```
+
+The interface keeps its `I` declaration, and each arm keeps its class base and lists the interface:
+
+```C#
+public interface IConnectableDevice : IDisposable
+{
+    string Address { get; }
+    internal NugetKotlinHandle _handle { get; }
+    // internal static IConnectableDevice FromHandle(...) picks the arm class
+}
+
+public sealed class NearbyDevice : EvidenceDevice, IConnectableDevice { /* ... */ }
+public sealed class RemoteDevice : EvidenceDevice, IConnectableDevice, IChargeable { /* ... */ }
+```
+
+```C#
+using var nearby = new NearbyDevice("desk", "aa:bb");
+using EvidenceDevice connected = Devices.Connect(nearby);   // any arm where the interface is expected
+
+using IConnectableDevice picked = Devices.Preferred();      // the concrete arm comes back
+string label = picked switch
+{
+    NearbyDevice n => $"nearby {n.Address}",
+    RemoteDevice r => $"remote {r.Address}",
+    SavedDevice s => $"saved {s.Address}",
+    _ => throw new InvalidOperationException(),
+};
+bool alsoEvidence = picked is EvidenceDevice;               // true
+```
+
+It binds wherever a sealed class does: a parameter, return, nullable return, `val`/`var` property,
+`List`/`Set`/`Map` component, constructor parameter, `suspend` parameter and result, `Flow` and
+`StateFlow` item on a class member, and a member of an arm. Every returned value is a fresh,
+owned arm: dispose it. The `switch` needs a discard arm, since C# cannot check a hierarchy for
+exhaustiveness.
+
+**Which arms bind.** Every arm must be a class C# can construct, and one refused arm refuses the
+whole interface, with a `SKIPPED_INELIGIBLE_SEALED_INTERFACE` warning that names it:
+
+| An arm that is | Binds |
+|---|---|
+| a class or `data object` of a non-generic `sealed class` | yes |
+| an exported, top-level, non-abstract, non-generic class, with or without a superclass | yes |
+| a class that also implements a second sealed interface of this kind | yes |
+| a bare `object`, an `enum class`, a sub-interface | no |
+| generic, or an arm of a generic sealed class, or the interface is generic | no |
+| abstract, or an intermediate `sealed class` | no |
+| nested in the interface with no sealed class base | no: declare it beside the interface |
+| a subclass of another arm of the same interface | no |
+| not exported | no |
+
+**What to know before relying on it:**
+
+- The C# shape follows the arms. Giving one arm of an eligible sealed interface a superclass flips
+  it from `abstract class Pulse` to `interface IPulse`, which breaks C# consumers at compile time.
+- A class that implements two such interfaces, like `RemoteDevice` above or `data class Both :
+  Left, Right`, binds as both `ILeft` and `IRight` over the one class. It was refused before.
+- Do not implement `I<Name>` in C#. An ordinary implementation fails to compile (CS0535 on the
+  internal `_handle` member); an implementer that works around it is unsupported, and nothing
+  checks for it at run time.
+- A callback payload of the interface type is not bound, the same as for a sealed class. A nullable
+  parameter of it binds, as for a sealed class.
+- A sealed type with no discriminator at a `Flow` method or `StateFlow` property item, such as a
+  refused sealed interface, skips with a named warning. It used to emit a C# name nothing declares
+  and break the whole package build.
 
 ### An `enum class` arm {id="an-enum-class-arm"}
 
@@ -1115,13 +1216,15 @@ arm; `new PatchArm(Patch.Socks)` without `using` holds a handle to a permanent K
 until you dispose it or the GC finalizes it, the same as an unboxed arm constructor. There is no implicit conversion from the C# enum to the
 sealed base (`Marking m = Patch.Bib` does not compile): it would mint a handle the caller never sees
 and cannot dispose. A declared type already named `{Enum}Arm` in the same namespace refuses the
-interface, naming the collision, rather than colliding silently. An arm that extends another class
-in addition to being an enum is still out of scope.
+interface, naming the collision, rather than colliding silently. An `enum class` arm cannot
+join a sealed interface whose other arms extend a class: [that route](#sealed-interface-over-arms)
+refuses enum arms, so the whole interface is skipped, named.
 
 ### Sealed types as property types {id="sealed-types-as-property-types"}
 
 A property whose type is a sealed class or an eligible sealed interface binds as the sealed
-**base**, materialized through `FromHandle` (see `Monitor.Current` above). This covers the bare
+**base**, materialized through `FromHandle` (see `Monitor.Current` above); a [sealed interface whose
+arms extend a class](#sealed-interface-over-arms) binds the same way, as `I<Name>`. This covers the bare
 type, a nullable sealed type, and a `List`/`Map`/`Set` component, read-only or `var`; a mutable
 collection of a sealed type gets a real setter, not just a getter. Because the getter always hands
 back a genuine subclass instance, pattern matching works immediately with no extra cast:
@@ -1516,9 +1619,10 @@ like the same member on any [generic class](generics.md#limitations).
 - Object identity is not preserved across two reads of a **Kotlin-backed** interface property: each
   read is a distinct C# wrapper over the same Kotlin object. A stored **C#-implemented** object is
   the exception: it always resolves back to the original instance.
-- An ineligible sealed interface, an arm with another superclass, a sub-interface arm, or an arm
-  implementing a second sealed interface, has no binding at all: every function, property, or
-  parameter typed with it is skipped.
+- A sealed interface with an arm that no route can construct (a bare `object`, an `enum class`
+  beside arms with a superclass, a sub-interface, an abstract or generic arm, and the other rows of
+  [the arm table](#sealed-interface-over-arms)) has no binding at all: every function, property, or
+  parameter typed with it is skipped, named.
 - An `enum class` arm's boxed constructor and `Value` getter cost a handle and a P/Invoke each; see
   [An `enum class` arm](#an-enum-class-arm) for the disposal obligation and the missing implicit
   conversion.

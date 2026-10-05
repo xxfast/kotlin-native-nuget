@@ -114,6 +114,87 @@ private fun KSClassDeclaration.sealedInterfaceSupertypes(): Int = superTypes
   .filterIsInstance<KSClassDeclaration>()
   .count { it.isSealedInterface() }
 
+/**
+ * ADR-204: a sealed interface ADR-112 refuses whose every arm is already declared, by its own
+ * route, as an instantiable C# handle class that lists `I<Name>`. Such an interface keeps its
+ * `I<Name>` declaration and gains a discriminator over those arm classes.
+ *
+ * Read by the classifier, the interface translator, the arm translators (for the explicit
+ * `_handle` line) and the diagnostic only. [isEligibleSealedType], [isSealedSubclass] and the root
+ * buckets keep answering as they did: flipping any of them removes the arms from their own routes
+ * or renders the interface a second time (CS0101).
+ *
+ * [exported] is the round's export set, the same one every reader passes, so the classifier and
+ * the translator cannot disagree about which arms exist.
+ */
+internal fun KSClassDeclaration.isSealedInterfaceOverDeclaredArms(exported: Set<String>): Boolean {
+  val isRefusedSealedInterface: Boolean = isSealedInterface() && !isEligibleSealedInterface()
+  val armsAreDeclared: Boolean = declaredArmsIneligibility(exported) == null
+  return isRefusedSealedInterface && armsAreDeclared
+}
+
+/**
+ * ADR-204: why this ineligible sealed interface cannot be reconstructed over its declared arms, or
+ * `null` if it can. Every refusing arm is named, `; `-joined, as [sealedInterfaceIneligibility]
+ * does.
+ */
+internal fun KSClassDeclaration.declaredArmsIneligibility(exported: Set<String>): String? {
+  if (typeParameters.isNotEmpty()) {
+    return "the interface is generic, so there is no closed type to construct (ADR-199)"
+  }
+  val arms: List<KSClassDeclaration> = getSealedSubclasses().toList()
+  val armNames: Set<String> = arms.mapNotNull { it.qualifiedName?.asString() }.toSet()
+  val reasons: List<String> = arms
+    .mapNotNull { arm -> arm.declaredArmIneligibility(armNames, exported) }
+  return reasons.takeIf { it.isNotEmpty() }?.joinToString("; ")
+}
+
+/** ADR-204: one arm's refusal, the first that applies, or `null` when its C# class can be built. */
+private fun KSClassDeclaration.declaredArmIneligibility(
+  arms: Set<String>,
+  exported: Set<String>,
+): String? {
+  val name: String = simpleName.asString()
+  if (classKind == ClassKind.INTERFACE) {
+    return "subclass `$name` is an interface, so there is no single class to construct"
+  }
+  if (classKind == ClassKind.ENUM_CLASS) {
+    return "subclass `$name` is an enum class, which has no handle class to construct here"
+  }
+  if (typeParameters.isNotEmpty()) {
+    return "subclass `$name` is generic, so there is no closed type to construct (ADR-199)"
+  }
+  if (Modifier.SEALED in modifiers) {
+    return "subclass `$name` is itself a sealed class, which C# cannot construct directly"
+  }
+  if (Modifier.ABSTRACT in modifiers) {
+    return "subclass `$name` is abstract, which C# cannot construct directly"
+  }
+  val sealedBase: KSClassDeclaration? =
+    declaredSuperClass()?.takeIf { Modifier.SEALED in it.modifiers }
+  if (sealedBase != null && sealedBase.typeParameters.isNotEmpty()) {
+    return "subclass `$name` is an arm of the generic sealed class " +
+        "`${sealedBase.simpleName.asString()}`, so there is no closed type to construct (ADR-199)"
+  }
+  if (sealedBase == null && classKind == ClassKind.OBJECT) {
+    return "subclass `$name` is an object, which C# declares as a static class"
+  }
+  if (sealedBase == null && parentDeclaration != null) {
+    return "subclass `$name` is nested in `${parentDeclaration?.simpleName?.asString()}` with " +
+        "no sealed class base, so no route declares a C# class for it"
+  }
+  val ancestor: KSClassDeclaration? =
+    declaredBaseChain().firstOrNull { base -> base.qualifiedName?.asString() in arms }
+  if (ancestor != null) {
+    return "subclass `$name` extends `${ancestor.simpleName.asString()}`, another subclass of " +
+        "the same interface, so the discriminator could not tell them apart"
+  }
+  if (qualifiedName?.asString() !in exported) {
+    return "subclass `$name` is not exported, so there is no C# class to construct"
+  }
+  return null
+}
+
 /** A `sealed interface`, eligible or not. */
 internal fun KSClassDeclaration.isSealedInterface(): Boolean =
   classKind == ClassKind.INTERFACE && modifiers.contains(Modifier.SEALED)

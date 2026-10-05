@@ -120,7 +120,20 @@ internal data class CirInterface(
   // ADR-174 ruling 5: `IAsyncDisposable` beside `IDisposable`, when the interface projects a
   // scope-using member.
   val isAsyncDisposable: Boolean = false,
+  // ADR-204: a sealed interface reconstructed over its declared arms carries an internal `_handle`,
+  // the `get_type` extern and a `FromHandle` switching to each arm's own class. Null otherwise.
+  val discriminator: CirInterfaceDiscriminator? = null,
 ) : CirDeclaration
+
+/**
+ * ADR-204: the discriminator a sealed interface over declared arms carries. [arms] are the C#
+ * spellings of the arm classes, in the Kotlin `get_type` export's own order.
+ */
+internal data class CirInterfaceDiscriminator(
+  val libraryName: String,
+  val nativePrefix: String,
+  val arms: List<String>,
+)
 
 internal data class CirInterfaceProperty(
   val name: String,
@@ -263,6 +276,9 @@ internal data class CirClass(
   // The abstract members this class inherits still unimplemented from abstract bases above it,
   // grouped by the base whose call-through exports the wrapper calls (`translateClass`).
   val backingInherited: List<CirBackingInherited> = emptyList(),
+  // ADR-204: the sealed interfaces over declared arms this class is an arm of, spelled as its base
+  // list spells them. Each takes an explicit `NugetKotlinHandle I<Name>._handle => _handle;`.
+  val handleInterfaces: List<String> = emptyList(),
 ) : CirDeclaration
 
 internal data class CirValueClass(
@@ -588,6 +604,8 @@ internal data class CirSealedSubclass(
    * instantiation only the consumer chose still materialises. Null for a closed arm.
    */
   val selfFactory: String? = null,
+  // ADR-204: as [CirClass.handleInterfaces], for a sealed-class arm.
+  val handleInterfaces: List<String> = emptyList(),
 )
 
 internal data class CirObject(

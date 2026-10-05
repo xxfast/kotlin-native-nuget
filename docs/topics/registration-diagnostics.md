@@ -204,6 +204,16 @@ lends it to Kotlin at a parameter. `LeakTests/LiveHandleTests.cs`'s
 names (`Hamper<Outcome<long>>`), read back through a second handle to the same Kotlin object that you
 dispose as well.
 
+A [sealed interface whose arms extend a class](interfaces-abstract-sealed.md#sealed-interface-over-arms)
+follows the same rule: an `I<Name>` Kotlin hands back is the arm wrapper, owns one handle, and its
+`Dispose` is the only release, for each element of a returned list too. A C#-built arm passed at a
+parameter lends its handle and mints nothing. `LeakTests/LiveHandleTests.cs` rows 1c-iface
+(`SealedInterfaceOverDeclaredArms_Returns_ReturnToBaseline`), 1c-iface-in
+(`SealedInterfaceOverDeclaredArms_Parameters_ReturnToBaseline`) and 9-iface
+(`SealedInterfaceOverDeclaredArms_Suspend_TightLoop_ReturnsToBaseline`, a `suspend` return that can
+complete before the call that started it returns) pin the returns, the parameters and the `suspend`
+route.
+
 A class-typed [enum member property](enums.md) getter counts here too: every read mints a fresh
 owned wrapper the caller must dispose, the same as any other class-typed property getter.
 `LeakTests/LiveHandleTests.cs` row 1h,

@@ -1326,6 +1326,11 @@ private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry
 
     is CirEnum -> listOf(CirFactoryEntry("$path.$name", viaEnumOrdinal = true))
 
+    // ADR-204: a sealed interface over its declared arms reconstructs through its own `FromHandle`.
+    is CirInterface -> listOfNotNull(
+      discriminator?.let { CirFactoryEntry("$path.$name", viaFromHandle = true) },
+    )
+
     else -> emptyList()
   }
 

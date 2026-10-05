@@ -5344,8 +5344,13 @@ private fun BridgeType.isSealedProtocol(): Boolean =
 internal fun BridgeType.sealedTypeDetail(): String? {
   val unwrapped: BridgeType = unwrapNullable()
   val candidate: BridgeType = when (unwrapped) {
+    // The component that IS the sealed type: `Map<String, Sealed>` used to pick the `String` key
+    // first, so the hint read "sealed type `the sealed type`" with nothing to name (issue #463).
     is BridgeType.Collection ->
-      (unwrapped.element ?: unwrapped.key ?: unwrapped.value)?.unwrapNullable() ?: unwrapped
+      listOfNotNull(unwrapped.element, unwrapped.key, unwrapped.value)
+        .map { component -> component.unwrapNullable() }
+        .firstOrNull { component -> component.isSealedProtocol() }
+        ?: unwrapped
 
     else -> unwrapped
   }
