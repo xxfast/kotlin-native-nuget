@@ -33,9 +33,10 @@ internal data class ForwardDroppedPropertySetter(
   val componentDescription: String,
   /**
    * ADR-107: the sentence explaining the refusal, when the ADR-075 collection wording ("cannot be
-   * written into a Kotlin collection") does not apply. A `var error: Throwable?` is refused
-   * because C# cannot mint a typed Kotlin `Throwable` at all, not because a component failed to
-   * box; the property still survives read-only, which is what this record means.
+   * written into a Kotlin collection") does not apply. A `var error: IllegalStateException?` is
+   * refused because C# can only hand Kotlin a `NugetManagedException` (ADR-201), not because a
+   * component failed to box; the property still survives read-only, which is what this record
+   * means.
    */
   val reason: String? = null,
   /**
@@ -999,7 +1000,7 @@ internal class ForwardPropertyPlanner(
     // has no carrier to hang off; refused as it is today.
     // ADR-151: a `ByteArray` receiver is still refused -- it is not in the ADR-132 function-route
     // receiver set either, so admitting it here would be a new position, not parity.
-    BridgeType.ByteArray, BridgeType.Unit, BridgeType.Throwable,
+    BridgeType.ByteArray, BridgeType.Unit, is BridgeType.Throwable,
     is BridgeType.SpecializedProtocol, is BridgeType.RawKSType, is BridgeType.Unsupported,
     is BridgeType.TypeParameter, is BridgeType.RawCollection -> false
   }
@@ -1167,10 +1168,10 @@ internal class ForwardPropertyPlanner(
       )
       return null
     }
-    // ADR-107: `var error: Throwable?` binds get-only. C# has no way to mint a typed Kotlin
-    // Throwable (the envelope carries text, not the type), so the setter is refused here, before
-    // `valueParameter` would ask for an INTO_KOTLIN conversion that does not exist.
-    if (type.unwrapNullable() == BridgeType.Throwable) {
+    // ADR-107 / ADR-201: `var error: Throwable?` takes a C# exception as a `NugetManagedException`
+    // (a `RuntimeException`), so a narrower declared type cannot hold it and binds get-only,
+    // named here before `valueParameter` would build a setter that does not compile.
+    if ((type.unwrapNullable() as? BridgeType.Throwable)?.acceptsManagedException == false) {
       droppedSetters.add(
         ForwardDroppedPropertySetter(
           symbol = symbol,
@@ -1178,8 +1179,9 @@ internal class ForwardPropertyPlanner(
           publicName = publicName,
           owner = ownerScope,
           componentDescription = type.diagnosticTypeName(),
-          reason = "C# cannot construct a Kotlin ${type.diagnosticTypeName()}; the error " +
-              "envelope carries a snapshot out of Kotlin only",
+          reason = "C# hands Kotlin a NugetManagedException (a RuntimeException), which a " +
+              "property declared narrower than RuntimeException cannot hold; declare it " +
+              "Throwable, Exception or RuntimeException to make it writable",
         ),
       )
       return null
@@ -1485,7 +1487,7 @@ internal class ForwardPropertyPlanner(
 
     // ADR-107: a Throwable property reads as the same error envelope a throw writes; the getter is
     // the only shape (the setter is refused in `collectionSetterOrNull`).
-    BridgeType.Throwable -> true
+    is BridgeType.Throwable -> true
 
     // ADR-106: a Uuid property rides the String property shapes verbatim (getter, setter, and the
     // `Uuid?` null-pointer spelling), with the text conversion composed on each side.
@@ -1529,6 +1531,8 @@ internal class ForwardPropertyPlanner(
     // ROADMAP Phase 4: the `Set` element and `Map` KEY slots a `ByteArray` is declined at, the same
     // rule `isBridgeableComponent` applies -- identity equality against a copied array.
     if (declinesByteArrayComponent()) return false
+    // ADR-201: and the same two slots a `Throwable` is declined at.
+    if (declinesThrowableComponent()) return false
     // ADR-083 amendment (boundary nullability part B): the read side is the position ADR-083 left
     // open. `val tallies: Map<Int?, String>` rendered `IReadOnlyDictionary<int?, string>` over
     // `NugetMarshal.ReadMap<int?, string>`, whose `where TKey : notnull` made the generated file
@@ -1559,12 +1563,14 @@ internal class ForwardPropertyPlanner(
     is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,
     is BridgeType.Interface -> true
 
-    is BridgeType.ValueClass -> underlying.isReadableComponent()
+    // ADR-201: a value class over `Throwable` stays deferred, as `isBridgeableComponent` says.
+    is BridgeType.ValueClass ->
+      underlying !is BridgeType.Throwable && underlying.isReadableComponent()
     is BridgeType.Nullable -> type.isReadableComponent()
     is BridgeType.Collection -> isReadable()
-    // ADR-107: a Throwable binds as a whole property, never as a collection component --
-    // `List<Throwable>` skips named rather than crashing the projection (issue #52's rule).
-    BridgeType.Throwable -> false
+    // ADR-201: a Throwable component reads back as its own envelope through
+    // `NugetErrorNative.BuildException`, the same per-element box `isBridgeableComponent` admits.
+    is BridgeType.Throwable -> true
     // ADR-106: `List<Uuid>` is deferred for the same reason, and skips named here.
     BridgeType.Uuid -> false
     // ROADMAP Phase 4 (ADR-151 amendment): a `ByteArray` component reads back through
@@ -1590,7 +1596,7 @@ internal class ForwardPropertyPlanner(
 
     // ADR-107: the pointer to the `StableRef<NugetError>` envelope `buildError` produced, exactly
     // the value an `errorOut` slot carries.
-    BridgeType.Throwable -> ForwardAbiWireType.POINTER
+    is BridgeType.Throwable -> ForwardAbiWireType.POINTER
 
     // ADR-088 / ADR-132 (2026-09-20): a bound C# interface receiver crosses as the transfer
     // GCHandle pointer, the same POINTER slot the callable route's bound-interface parameter uses.
@@ -1630,7 +1636,8 @@ internal class ForwardPropertyPlanner(
 
   private fun BridgeType.inputWireType(): ForwardAbiWireType = when (val type = unwrapNullable()) {
     // ADR-106: a Uuid setter takes the same STRING slot a String setter does.
-    BridgeType.String, BridgeType.Uuid -> ForwardAbiWireType.STRING
+    // ADR-201: and so does a Throwable setter, over the `"{FullName}: {Message}"` text.
+    BridgeType.String, BridgeType.Uuid, is BridgeType.Throwable -> ForwardAbiWireType.STRING
     is BridgeType.ValueClass -> type.underlying.inputWireType()
     else -> wireType()
   }
@@ -1714,11 +1721,10 @@ internal fun BridgeType.conversion(flow: ForwardFlow): ForwardConversion? = when
     ForwardConversion.STABLE_REF_TO_HANDLE
   }
 
-  // ADR-107: out only. The INTO_KOTLIN direction is unreachable -- `collectionSetterOrNull`
-  // refuses the setter before a value parameter is ever built -- and would be a lie if reached,
-  // since the envelope cannot reconstruct a typed Kotlin Throwable.
-  BridgeType.Throwable -> if (flow == ForwardFlow.INTO_KOTLIN) {
-    error("Forward property planner cannot marshal a Throwable into Kotlin")
+  // ADR-107 / ADR-201: the envelope out; in, the managed-exception text, which only a setter
+  // whose declared type can hold a `NugetManagedException` reaches (`collectionSetterOrNull`).
+  is BridgeType.Throwable -> if (flow == ForwardFlow.INTO_KOTLIN) {
+    ForwardConversion.STRING_TO_MANAGED_EXCEPTION
   } else {
     ForwardConversion.STABLE_REF_TO_HANDLE
   }

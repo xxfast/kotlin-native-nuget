@@ -3,6 +3,9 @@
 ## Status
 Accepted
 
+Extended by [ADR-201](201-throwable-beyond-the-property-getter.md): return, collection-component,
+module-local-subclass and parameter positions bind there, and it supersedes decision 4 below.
+
 **As shipped, corrections to this ADR's prose:**
 
 - The fixture sealed class is `Issue56LoadState`, not `LoadState`: a second `LoadState` in another
@@ -17,7 +20,8 @@ Accepted
   written into a Kotlin collection'") was wrong for a `Throwable` setter: `ForwardDroppedPropertySetter`
   gained an optional `reason` field instead, carrying a `Throwable`-specific sentence
   (`ForwardPropertyPlanner.kt:19-30`, `:301-315`).
-- Deviation from the Decision's classifier arm: `isStdlibThrowable()`'s supertype walk is gated on
+- Deviation from the Decision's classifier arm (the klib-origin gate was removed by
+  [ADR-201](201-throwable-beyond-the-property-getter.md)): `isStdlibThrowable()`'s supertype walk is gated on
   `containingFile == null` (klib/stdlib origin only, `ForwardBridgeTypeClassifier.kt:320-334`), so a
   module-local, non-exported `class MyError : Exception()` keeps its prior classification and skips
   named rather than mapping to `Throwable`. `classifyActualTypeAliasTarget` also maps a `Throwable`
@@ -129,7 +133,8 @@ sealed-subclass route.
 3. Exported user exception classes (`class LookupError : Exception()` in the export set) stay
    plain handle classes for now.
 4. A Kotlin-only-constructible `Failure` (constructor skipped because of its `Throwable`
-   parameter) is accepted.
+   parameter) is accepted. *Superseded by [ADR-201](201-throwable-beyond-the-property-getter.md):
+   the constructor and `copy` now bind.*
 
 ### Consumer API
 
@@ -316,7 +321,8 @@ export. The sealed route's existing `Throwable?` Kotlin export changes body (raw
   (**inferred**: K/N fills the trace at construction, so an unthrown Throwable still has one);
   ROADMAP line 65's host-frame noise applies to it too. A null `message` surfaces as
   `"Kotlin error"`, inherited from `buildError`.
-- **The data-class constructor is not bound**: `Failure(String, Throwable?)` has a `Throwable`
+- **The data-class constructor is not bound** *(no longer true: [ADR-201](201-throwable-beyond-the-property-getter.md)
+  binds it)*: `Failure(String, Throwable?)` has a `Throwable`
   parameter, so the constructor and `copy` skip through the existing input-skip path and
   `Failure` is Kotlin-constructible only (**inferred** from the ADR-105 spike, where a class
   survived with `_handle` getters while members skipped). Fixtures need a Kotlin factory.
@@ -324,7 +330,8 @@ export. The sealed route's existing `Throwable?` Kotlin export changes body (raw
   Exception()` inside the exported package is already an ordinary `ObjectHandle` and binds as a
   plain handle class, not as an `Exception`. Unifying that is a separate decision.
 - `var error: Throwable?` binds get-only; a setter would need C# → Kotlin Throwable
-  construction, which the envelope cannot express (type would be lost).
+  construction, which the envelope cannot express (type would be lost). *ADR-201 binds the setter
+  for a declared `Throwable`, `Exception` or `RuntimeException`, accepting that loss.*
 
 ### Amendment (2026-09-07)
 
@@ -345,14 +352,17 @@ issue's motivating state-machine shape to bind. Extension-property getters bind 
 planner path (**inferred**). Value class over `Throwable`: not planned (the `ValueClass`
 underlying whitelist is unchanged).
 
-**As-shipped limitation, not in the original Decision**: the classifier's `Throwable` supertype
+**As-shipped limitation, not in the original Decision** *(the module-local half is lifted by
+[ADR-201](201-throwable-beyond-the-property-getter.md); the actual-typealias skip stays)*: the classifier's `Throwable` supertype
 walk only fires for a klib/stdlib-origin declaration (`containingFile == null`). A module-local,
 non-exported `class MyError : Exception()` therefore keeps its prior classification and a property
 typed with it skips named rather than mapping to `Throwable`; and `classifyActualTypeAliasTarget`
 deliberately maps a `Throwable` target back to `Unsupported` so an `expect`/`actual` pair keeps
 ADR-074's skip rather than silently becoming a `System.Exception`.
 
-**Deferred, separate work (not free)**: method/function **return** `fun cause(): Throwable?`
+**Deferred, separate work (not free)** *(shipped by
+[ADR-201](201-throwable-beyond-the-property-getter.md), which also lifts the module-local limitation
+above)*: method/function **return** `fun cause(): Throwable?`
 needs arms in `ForwardCallablePlanner` (`skipReason`, `shapeOrNull`, wire/conversion),
 `ForwardKotlinPlanEmitter`, and `ForwardCirPlanProjection` (`~:808/:890`); the reconstruction
 expression is identical, the plumbing is not. Collection components `List<Throwable>` (skip

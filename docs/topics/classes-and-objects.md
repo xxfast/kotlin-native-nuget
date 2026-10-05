@@ -346,33 +346,35 @@ A signature that would otherwise collide with another constructor still fails ge
 ## No public constructor
 
 A class whose every public constructor is skipped, for example because a constructor parameter
-has an unsupported type, is still exported: it just has no public C# constructor, only the
-internal one every handle class carries. C# code obtains an instance from a Kotlin factory
-function or property that returns one. The build warns, naming the skipped constructor and the
-reason, and the same detail appears as an XML `<remarks>` comment on the generated class, so it
-shows up as an IDE tooltip too.
+has an opt-in-marked or otherwise unsupported type, is still exported: it just has no public C#
+constructor, only the internal one every handle class carries. C# code obtains an instance from a
+Kotlin factory function or property that returns one. The build warns, naming the skipped
+constructor and the reason, and the same detail appears as an XML `<remarks>` comment on the
+generated class, so it shows up as an IDE tooltip too.
 
 ```kotlin
-data class Issue56Failure(
-  val reason: String,
-  val error: Throwable?,
-  val fatal: Throwable,
+@OptIn(CatteryInternalApi::class)
+data class GroomingPlan(
+  val name: String = "Oreo",
+  val grooming: Grooming = Grooming.DAILY,   // Grooming is opt-in-marked
 )
 
-fun quietMishap(): Issue56Failure = Issue56Failure(/* ... */)
+@OptIn(CatteryInternalApi::class)
+fun plan(): GroomingPlan = GroomingPlan()
 ```
 
 ```C#
 /// <remarks>
-/// Cannot be constructed from C#: every Kotlin constructor of Issue56Failure was skipped by the
-/// bridge. Instances come from Kotlin factories that return this type.
+/// Cannot be constructed from C#: every Kotlin constructor of GroomingPlan was skipped by the
+/// bridge (&lt;init&gt;: OPT_IN_MARKER_TYPE). Instances come from Kotlin factories that return
+/// this type.
 /// </remarks>
-public class Issue56Failure : IDisposable, INugetHandle
+public class GroomingPlan : IDisposable, INugetHandle
 {
-    internal Issue56Failure(IntPtr handle, out NugetHandleTag tag) { tag = default; _handle = handle; }
+    internal GroomingPlan(IntPtr handle, out NugetHandleTag tag) { tag = default; _handle = handle; }
 }
 
-var mishap = Issue56Sample.QuietMishap(); // the only way to obtain one
+using GroomingPlan plan = Issue128Sample.Plan(); // the only way to obtain one
 ```
 
 ## Classes declared in a dependency module

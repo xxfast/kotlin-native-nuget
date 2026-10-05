@@ -35,6 +35,7 @@ using Litterbox = TestLibrary.Litterbox;
 using TestLibrary.Listenerprops;
 using TestLibrary.Lounge;
 using TestLibrary.Metronome;
+using TestLibrary.Mishaps;
 using TestLibrary.Models;
 using TestLibrary.Nested;
 using TestLibrary.Objectprops;
@@ -707,6 +708,73 @@ public class LiveHandleTests
             using var service = ResultSample.Service();
             Assert.Throws<KotlinInvalidOperationException>(
                 () => service.TryWeigh("Ghost", out _, out _));
+        });
+    }
+
+    // ADR-201 rows. Every Throwable read out of Kotlin is one fresh ADR-107 envelope handle that
+    // `NugetErrorNative.BuildException` disposes while reading, so the count must not move: at a
+    // property getter (the ADR-107 position, unmeasured until now), at a sync return, null and
+    // non-null, on the return route's throw path, and per element of a List and a Map value (each
+    // element box is the envelope; `ReadList`/`ReadMap` dispose the container). A Throwable
+    // parameter or setter crosses as one string, so it mints nothing at all.
+    [Fact]
+    public void ThrowableProperty_Read_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var failure = TestLibrary.Issue56.Issue56Sample.DietViolation();
+            Assert.Equal("Oreo is on a diet!", failure.Error!.Message);
+            Assert.Equal("the treat jar is empty", failure.Fatal.Message);
+        });
+    }
+
+    [Fact]
+    public void ThrowableReturn_NullAndNonNull_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var log = new MishapLog();
+            Assert.Null(log.Latest());
+            Assert.Equal("Oreo ate the plant", log.Worst().Message);
+            Assert.Equal("Mochi, 3am", log.Hairball().Message);
+        });
+    }
+
+    [Fact]
+    public void ThrowableReturn_ThrowPath_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var log = new MishapLog();
+            Assert.Throws<KotlinInvalidOperationException>(() => log.WorstOrThrow(true));
+        });
+    }
+
+    [Fact]
+    public void ThrowableList_ReadEveryElement_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var log = new MishapLog();
+            log.Report(new InvalidOperationException("the bowl is empty"));
+            Assert.Single(log.All);
+            IReadOnlyList<Exception?> timeline = log.Timeline();
+            Assert.Null(timeline[1]);
+            Assert.Equal(2, log.ByCat().Count);
+        });
+    }
+
+    [Fact]
+    public void ThrowableParameter_ReportAndSet_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var log = new MishapLog();
+            log.Report(new ArgumentException("Oreo ate the plant"));
+            Assert.True(log.ReportOrSkip(new TimeoutException("Mylo is late")));
+            Assert.False(log.ReportOrSkip(null));
+            log.LastMishap = new InvalidOperationException("the bowl is empty");
+            log.LastMishap = null;
         });
     }
 

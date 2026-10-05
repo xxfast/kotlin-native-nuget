@@ -244,7 +244,7 @@ internal data class ForwardPropertyPlan(
 
       // ADR-107: valid at a property, getter-only (the setter is refused in the planner, so a
       // plan carrying one never reaches here).
-      BridgeType.Throwable -> Unit
+      is BridgeType.Throwable -> Unit
 
       // ADR-106: valid at a property, getter and setter alike, over the String wire.
       BridgeType.Uuid -> Unit

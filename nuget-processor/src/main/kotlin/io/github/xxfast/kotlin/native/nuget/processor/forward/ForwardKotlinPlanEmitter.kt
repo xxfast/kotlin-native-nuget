@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import io.github.xxfast.kotlin.native.nuget.processor.cir.NUGET_MANAGED_EXCEPTION_TYPE
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
@@ -176,6 +177,17 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
       builder.returns(cOpaquePointer.copy(nullable = true))
       builder.addCode(
         handleResultBody(boxed, error.name), nugetHandles, cOpaquePointerVar, nugetHandles,
+      )
+    }
+
+    // ADR-201: the ADR-107 envelope, built unconditionally and minted like any handle result.
+    is BridgeType.Throwable -> {
+      builder.returns(cOpaquePointer.copy(nullable = true))
+      builder.addCode(
+        handleResultBody("buildError($invocation, ::nugetMappedType)", error.name),
+        nugetHandles,
+        cOpaquePointerVar,
+        nugetHandles,
       )
     }
 
@@ -414,6 +426,19 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
       )
     }
 
+    // ADR-201: the ordinary route's envelope result, with or without an error slot.
+    is BridgeType.Throwable -> {
+      val envelope = "buildError($invocation, ::nugetMappedType)"
+      builder.returns(cOpaquePointer.copy(nullable = true))
+      if (error != null) {
+        builder.addCode(
+          handleResultBody(envelope, error.name), nugetHandles, cOpaquePointerVar, nugetHandles,
+        )
+      } else {
+        builder.addStatement("return %T.retain(%L)", nugetHandles, envelope)
+      }
+    }
+
     else -> error("Value-class Kotlin emitter has no result route for $result")
   }
 
@@ -610,6 +635,12 @@ private fun componentRaising(name: String, type: BridgeType, depth: Int = 0): St
   if (type is BridgeType.Collection) return collectionResultProjection(name, type, depth = depth)
   // ADR-097: a bare enum leaves as its int ordinal, so the C# side reads `FromHandle<int>` and
   // casts back. Boxing the `Mood` itself is what bound-and-threw before this ADR.
+  // ADR-201: a Throwable leaves as its own ADR-107 envelope, which C# rebuilds per element with
+  // `NugetErrorNative.BuildException`; a null element stays the null pointer.
+  if (((type as? BridgeType.Nullable)?.type ?: type) is BridgeType.Throwable) {
+    return if (type is BridgeType.Nullable) "$name?.let { buildError(it, ::nugetMappedType) }"
+    else "buildError($name, ::nugetMappedType)"
+  }
   if (type.componentEnum() != null) return "$name${dot}ordinal"
   val valueClass: BridgeType.ValueClass = type.componentValueClass() ?: return name
   return "$name$dot${valueClass.underlyingPropertyName}" +
@@ -655,6 +686,20 @@ private fun addNullableResult(
       builder.returns(cOpaquePointer.copy(nullable = true))
       builder.addCode(
         nullableHandleResultBody(boxed, errorName),
+        nugetHandles,
+        cOpaquePointerVar,
+        nugetHandles,
+      )
+    }
+
+    // ADR-201: the ADR-107 nullable getter body verbatim -- the envelope is built only for a
+    // non-null value, and a null result ships the null pointer.
+    is BridgeType.Throwable -> {
+      builder.returns(cOpaquePointer.copy(nullable = true))
+      builder.addCode(
+        nullableHandleResultBody(
+          "$invocation?.let { buildError(it, ::nugetMappedType) }", errorName,
+        ),
         nugetHandles,
         cOpaquePointerVar,
         nugetHandles,
@@ -1395,7 +1440,8 @@ private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): Typ
   BridgeType.Instant, BridgeType.Duration -> kotlinResultType(wireType)
 
   // ADR-106: a Uuid parameter arrives as its hex-dash text, parsed by `loweredArgument`.
-  BridgeType.String, BridgeType.Uuid -> kotlinType("String")
+  // ADR-201: a Throwable parameter arrives as the managed `"{FullName}: {Message}"` text.
+  BridgeType.String, BridgeType.Uuid, is BridgeType.Throwable -> kotlinType("String")
   // ADR-147: the boxed handle `NugetMarshal.Wrap<T>` minted.
   // ADR-151: the handle `NugetMarshal.CreateBytes` minted.
   is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
@@ -1410,7 +1456,8 @@ private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): Typ
   // parameter is typed as the underlying (String today) and `loweredArgument` re-wraps it.
   is BridgeType.ValueClass -> kotlinInputType(type.underlying, wireType)
   is BridgeType.Nullable -> when (val inner = type.type) {
-    BridgeType.String, BridgeType.Uuid -> kotlinType("String").copy(nullable = true)
+    BridgeType.String, BridgeType.Uuid, is BridgeType.Throwable ->
+      kotlinType("String").copy(nullable = true)
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
     BridgeType.ByteArray, is BridgeType.TypeParameter -> cOpaquePointer.copy(nullable = true)
 
@@ -1599,6 +1646,8 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
     // ADR-106: parse the canonical text back into a Uuid. Spelled fully qualified so the generated
     // file needs no `import kotlin.uuid.Uuid`.
     BridgeType.Uuid -> "kotlin.uuid.Uuid.parse(${parameter.ref})"
+    // ADR-201: the managed exception, as the ADR-161 runtime type a C# callback throw becomes.
+    is BridgeType.Throwable -> managedExceptionLowering(parameter.ref, nullable = false)
     is BridgeType.Enum -> "${type.qualifiedName}.entries[${parameter.ref}]"
     // ADR-076: the wire value is a raw INT64 of ticks; convert it back to an Instant.
     BridgeType.Instant -> "instantFromDotNetTicks(${parameter.ref})"
@@ -1645,6 +1694,8 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
       BridgeType.String -> parameter.ref
       // ADR-106: a null incoming pointer stays null; only a real string is parsed.
       BridgeType.Uuid -> "${parameter.ref}?.let(kotlin.uuid.Uuid::parse)"
+      // ADR-201: a C# null arrives as the null string pointer and stays null.
+      is BridgeType.Throwable -> managedExceptionLowering(parameter.ref, nullable = true)
       is BridgeType.ObjectHandle ->
         "${parameter.ref}?.asStableRef<${inner.kotlinReadType ?: inner.qualifiedName}>()?.get()"
 
@@ -1891,3 +1942,16 @@ private fun keyParameter(depth: Int): String = if (depth <= 1) "k" else "k$depth
 private fun valueParameter(depth: Int): String = if (depth <= 1) "v" else "v$depth"
 
 private fun letParameter(depth: Int): String = if (depth <= 1) "v" else "v$depth"
+
+/**
+ * ADR-201: the Kotlin value of a `Throwable` input (parameter or setter), from the
+ * `"{FullName}: {Message}"` text the C# wrapper sends. Split at the FIRST `": "`: a CLR full name
+ * never contains one, while the message may. The result is the ADR-161 `NugetManagedException`, a
+ * `RuntimeException` whose own message is that same text, so `e.message` round-trips verbatim.
+ */
+internal fun managedExceptionLowering(ref: String, nullable: Boolean): String {
+  val build: (String) -> String = { text ->
+    "$NUGET_MANAGED_EXCEPTION_TYPE($text.substringBefore(\": \"), $text.substringAfter(\": \"))"
+  }
+  return if (nullable) "$ref?.let { ${build("it")} }" else build(ref)
+}

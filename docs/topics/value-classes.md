@@ -86,6 +86,10 @@ patient.BackupChart = null;
 patient.TransferTo(null); // "no transfer" -- Kotlin sees a genuine null, not ChartId("")
 ```
 
+A method or getter declared on the value class itself cannot return a nullable (`String?`, `Int?`,
+`Throwable?`): that one member is skipped with `SKIPPED_UNSUPPORTED_RETURN` and the rest of the
+class still binds. Return a non-null value from the member instead.
+
 ### Primitive- and enum-underlying nullables {id="nullable-over-primitive-and-enum-underlyings"}
 
 `Dosage?` and `Temperament?` (value classes wrapping a `Double` and an enum) behave the same as

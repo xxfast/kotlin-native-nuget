@@ -365,7 +365,7 @@ public class XmlDocTests
             typeof(ClawStrip).GetProperty("LastTumble")
             ?? throw new Xunit.Sdk.XunitException("LastTumble must survive get-only, not vanish");
         Assert.True(property.CanRead);
-        Assert.False(property.CanWrite, "ADR-107 refuses the setter; the getter is the survivor");
+        Assert.False(property.CanWrite, "ADR-201 refuses the setter; the getter is the survivor");
 
         XElement remarks = Remarks($"P:{SkipNs}.ClawStrip.LastTumble");
         Assert.Contains("lastTumble", remarks.Value);

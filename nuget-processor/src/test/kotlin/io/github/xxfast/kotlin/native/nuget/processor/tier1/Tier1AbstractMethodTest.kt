@@ -202,7 +202,8 @@ class Tier1AbstractMethodTest {
    * The three arms the class cells above do not reach: a collection (today `List Items()`, which
    * is CS0246/CS0305), a class's own type parameter (ADR-147 made `T` a real name on the generic
    * carrier, and the carrier is exactly where this walk renders), and an unspellable type at a
-   * PARAMETER, whose skip is a separate branch from the return's.
+   * PARAMETER (a narrower `Throwable`, which ADR-201 still refuses), whose skip is a separate
+   * branch from the return's.
    */
   @Test
   fun `an abstract method spells a collection and a carrier type parameter and refuses a parameter`() {
@@ -213,7 +214,7 @@ class Tier1AbstractMethodTest {
       abstract class Crate<T>(val id: String) {
         abstract fun tag(): T
         abstract fun items(): List<String>
-        abstract fun log(error: Throwable)
+        abstract fun log(error: IllegalStateException)
       }
       """.trimIndent(),
       fileName = "AbstractSpellings.kt",
@@ -238,7 +239,7 @@ class Tier1AbstractMethodTest {
     )
     assertFalse(
       "Log(" in csharp,
-      "expected the Throwable-typed parameter to drop the member; generatedCSharp:\n$csharp",
+      "expected the narrower Throwable parameter to drop the member; generatedCSharp:\n$csharp",
     )
     // Named by the plan the owner still tries for its own abstract member (the refusal every
     // subclass's override gets too), so exactly once.

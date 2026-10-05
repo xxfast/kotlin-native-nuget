@@ -22,6 +22,9 @@ internal fun BridgeType.forwardPublicCsharpType(): String = when (this) {
   BridgeType.Duration -> "global::System.TimeSpan"
   // ADR-106: System.Guid, over the RFC 9562 hex-dash text wire.
   BridgeType.Uuid -> "global::System.Guid"
+  // ADR-107 / ADR-201: the envelope reads back as a constructed, unthrown System.Exception, and
+  // a System.Exception is what an input position accepts.
+  is BridgeType.Throwable -> "global::System.Exception"
   // ADR-066: the classifier already computed the correctly-qualified public spelling (bare
   // simple name in this class's own namespace, `global::Namespace.Name` otherwise).
   is BridgeType.ObjectHandle -> csharpType
@@ -109,6 +112,7 @@ internal fun BridgeType.isPubliclySpellable(
   BridgeType.Duration,
   BridgeType.Uuid,
   BridgeType.ByteArray,
+  is BridgeType.Throwable,
   is BridgeType.ObjectHandle,
   is BridgeType.Interface,
   is BridgeType.Enum,
@@ -122,7 +126,6 @@ internal fun BridgeType.isPubliclySpellable(
   is BridgeType.ReturnedLambda -> unnameableTypeArgument() == null
   is BridgeType.TypeParameter -> name in typeParametersInScope
 
-  BridgeType.Throwable,
   is BridgeType.BoundInterface,
   is BridgeType.SpecializedProtocol,
   is BridgeType.RawCollection,
@@ -151,7 +154,7 @@ internal fun BridgeType.isPubliclySpellable(
  */
 internal fun BridgeType.isNullableStringWire(): Boolean {
   val inner: BridgeType = (this as? BridgeType.Nullable)?.type ?: return false
-  return inner == BridgeType.String || inner == BridgeType.Uuid ||
+  return inner == BridgeType.String || inner == BridgeType.Uuid || inner is BridgeType.Throwable ||
       (inner as? BridgeType.ValueClass)?.underlying == BridgeType.String
 }
 
@@ -213,4 +216,16 @@ private fun BridgeType.isLambdaTypeArgument(isResult: Boolean): Boolean = when (
   is BridgeType.ValueClass -> typeArguments.isEmpty() && hasErasedCrossing()
   is BridgeType.Nullable -> type != BridgeType.Unit && type.isLambdaTypeArgument(isResult = false)
   else -> false
+}
+
+/**
+ * ADR-201: the C# argument a `Throwable` input crosses as, `"{FullName}: {Message}"`, which the
+ * Kotlin export splits back into a `NugetManagedException`. The same join `BuildException`'s
+ * ADR-161 `TakeOriginalManagedFault` compares against, so a passed exception the Kotlin side
+ * rethrows unchanged comes back to its C# caller as itself. A null [nullable] value is the null
+ * string pointer.
+ */
+internal fun managedExceptionTextCs(name: String, nullable: Boolean): String {
+  val text = "($name.GetType().FullName ?? \"System.Exception\") + \": \" + $name.Message"
+  return if (nullable) "$name == null ? null : $text" else text
 }

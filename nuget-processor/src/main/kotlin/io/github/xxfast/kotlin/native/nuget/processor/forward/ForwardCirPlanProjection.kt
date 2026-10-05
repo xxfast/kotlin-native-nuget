@@ -220,6 +220,11 @@ internal object ForwardCirPlanProjection {
         Triple(ret, native, "(${result.csharpType()})$call")
       }
 
+      // ADR-201: the ADR-107 envelope, rebuilt (and disposed) by `BuildException`. The member has
+      // no error slot (ADR-014), so the whole read is the one expression.
+      is BridgeType.Throwable ->
+        Triple(result.csharpType(), "IntPtr", "NugetErrorNative.BuildException($call)")
+
       else -> Triple(result.csharpType(), wireType.csharpType(), call)
     }
   }
@@ -772,6 +777,9 @@ internal object ForwardCirPlanProjection {
       // ADR-106: the default "D" format is the lowercase hex-dash text `Uuid.parse` reads. Never
       // pass a format string here: "N" would still parse, "B"/"P"/"X" would not.
       BridgeType.Uuid -> listOf("${parameter.csharpName}.ToString()")
+      // ADR-201: the managed type name and message, joined the way ADR-161 joins them.
+      is BridgeType.Throwable ->
+        listOf(managedExceptionTextCs(parameter.csharpName, nullable = false))
       is BridgeType.Enum -> listOf("(int)${parameter.csharpName}")
       // ADR-076: UtcTicks is load-bearing (verified) -- a consumer holding a non-UTC
       // DateTimeOffset must not send its wall-clock ticks.
@@ -817,6 +825,9 @@ internal object ForwardCirPlanProjection {
         BridgeType.String -> listOf(parameter.csharpName)
         // ADR-106: `Guid?` -- a null stays a null string, so the wire's null pointer is the null.
         BridgeType.Uuid -> listOf("${parameter.csharpName}?.ToString()")
+        // ADR-201: a C# null crosses as the null string pointer.
+        is BridgeType.Throwable ->
+          listOf(managedExceptionTextCs(parameter.csharpName, nullable = true))
         is BridgeType.ObjectHandle ->
           listOf("${parameter.csharpName}?._handle ?? NugetKotlinHandle.Null")
         is BridgeType.Interface -> listOf("${parameter.csharpLocal}Handle")
@@ -1263,6 +1274,21 @@ internal object ForwardCirPlanProjection {
         body = checkedBytesBody(nativeName, callArguments, prelude, cleanup, exit = exit),
       )
 
+      // ADR-201: the ADR-107 envelope, rebuilt as an unthrown exception by `BuildException`, which
+      // disposes the handle.
+      is BridgeType.Throwable -> CirResultProjection(
+        returnType = result.csharpType(),
+        nativeReturnType = "IntPtr",
+        body = checkedPointerBody(
+          nativeName,
+          callArguments,
+          exit.returning("NugetErrorNative.BuildException(nativeResult)"),
+          prelude,
+          cleanup,
+          exit,
+        ),
+      )
+
       // ADR-014 (ordinary position, ADR-066's fixture gap): always a custom body, regardless of
       // `needsCustomParams` — a value class's zero-parameter own getter (`Newsroom.Code()`) would
       // otherwise fall through to the generic pass-through renderer, which has no wrap-in-struct
@@ -1505,6 +1531,22 @@ internal object ForwardCirPlanProjection {
           nativeReturnType = "IntPtr",
           body = checkedBytesBody(
             nativeName, callArguments, prelude, cleanup, nullable = true, exit = exit,
+          ),
+        )
+
+        // ADR-201: a null pointer is the null; anything else is the envelope.
+        is BridgeType.Throwable -> CirResultProjection(
+          returnType = "${type.csharpType()}?",
+          nativeReturnType = "IntPtr",
+          body = checkedPointerBody(
+            nativeName,
+            callArguments,
+            exit.returning(
+              "nativeResult == IntPtr.Zero ? null : NugetErrorNative.BuildException(nativeResult)",
+            ),
+            prelude,
+            cleanup,
+            exit,
           ),
         )
 
@@ -1849,6 +1891,8 @@ internal object ForwardCirPlanProjection {
     // ADR-151: `byte[]` is a C# array, a reference type, so `ByteArray?` renders `byte[]?`.
     BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface,
     is BridgeType.BoundInterface, is BridgeType.Collection, BridgeType.ByteArray,
+    // ADR-201: `System.Exception` is a class.
+    is BridgeType.Throwable,
       // ADR-160: `Action<>`/`Func<>` are delegate types, which are C# reference types.
     is BridgeType.Callback -> true
     // ADR-076: DateTimeOffset is a C# value type, same as Enum/ValueClass.

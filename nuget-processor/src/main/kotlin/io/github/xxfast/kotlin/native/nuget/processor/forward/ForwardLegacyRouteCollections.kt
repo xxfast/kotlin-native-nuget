@@ -610,6 +610,14 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
     return ForwardLegacyReturnShape.Bytes(expanded.isMarkedNullable)
   }
 
+  // ADR-201: a bare `Throwable` reached the same `Plain` fall-through and rendered
+  // `Task<Throwable?>` over `new Throwable(resultPtr, out _)`, a C# type nothing declares. The
+  // envelope is a sync-result shape with no suspend completion arm, so it is refused by name;
+  // `suspend fun f(): List<Throwable>` binds through the collection shape below.
+  if (classified is BridgeType.Throwable) {
+    return ForwardLegacyReturnShape.Refused(expanded.legacyDescription())
+  }
+
   // ROADMAP Phase 4 line 23: `Plain` means "spell it", so a type the classifier refused (an
   // out-of-scope dependency type above all) was spelled as a C# type nothing declares. Refused
   // by name instead, carrying the dependency refusal for the `admit(...)` hint.
@@ -774,6 +782,11 @@ internal fun ForwardBridgeTypeClassifier.legacyFlowElementShape(
   }
   if (classified == BridgeType.ByteArray) {
     return ForwardLegacyFlowElementShape.Bytes(expanded.isMarkedNullable)
+  }
+  // ADR-201: the same crash for a bare `Throwable` element, which has no Flow route (the envelope
+  // is a sync-result shape); refused by name instead. `Flow<List<Throwable>>` binds below.
+  if (classified is BridgeType.Throwable) {
+    return ForwardLegacyFlowElementShape.Refused(expanded.legacyDescription())
   }
 
   // ROADMAP Phase 4 line 23: an element the classifier refused (an out-of-scope dependency type

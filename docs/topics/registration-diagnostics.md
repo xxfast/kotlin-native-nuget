@@ -371,6 +371,15 @@ failing call, and hands the exception back instead of throwing it. `LeakTests/Li
 that owns a `Cat`, and `ResultTry_ThrownException_ReturnsToBaseline` covers a body that throws, so
 both exits release the error handle.
 
+A [`Throwable` read out of Kotlin](exceptions.md#throwable-values) is one error handle that C#
+releases as it builds the exception, so a getter, a return, each `List` element and each `Map` value
+leave the count where it was. `LeakTests/LiveHandleTests.cs`'s
+`ThrowableProperty_Read_ReturnsToBaseline`, `ThrowableReturn_NullAndNonNull_ReturnsToBaseline`,
+`ThrowableReturn_ThrowPath_ReturnsToBaseline` and `ThrowableList_ReadEveryElement_ReturnsToBaseline`
+pin it. An exception passed in crosses as one string and mints no handle:
+`ThrowableParameter_ReportAndSet_ReturnsToBaseline` covers a parameter, a nullable parameter and a
+setter.
+
 ### Dropped wrappers are released by the GC
 
 A wrapper dropped without `Dispose()` returns `LiveHandles` to baseline once the .NET GC finalizes it

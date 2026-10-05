@@ -14,8 +14,11 @@ namespace IntegrationTests;
 /// generated <see cref="Issue56Failure"/>. These tests cannot compile until the feature ships.
 /// </para>
 /// <para>
-/// The constructor is <em>expected</em> to stay unbound (a <c>Throwable</c> parameter is out of
-/// ADR-107's scope), which is why every value below comes from a Kotlin factory.
+/// ADR-201 supersedes ADR-107 decision 4: the constructor and the <c>LastError</c> setter now
+/// bind, taking any <c>System.Exception</c>, which Kotlin receives as a
+/// <c>NugetManagedException</c> (type name and message only). The values the getter cells read
+/// still come from the Kotlin factories, so the mapping and cause-chain cells keep observing real
+/// Kotlin exceptions.
 /// </para>
 /// </summary>
 public class Issue56Tests
@@ -177,7 +180,7 @@ public class Issue56Tests
         Assert.False(ReferenceEquals(first, second));
     }
 
-    // --- A `var Throwable?` binds get-only ---
+    // --- A `var Throwable?`: readable, and (ADR-201) writable ---
 
     [Fact]
     public void LastError_VarThrowableProperty_IsReadable()
@@ -190,15 +193,31 @@ public class Issue56Tests
     }
 
     [Fact]
-    public void LastError_VarThrowableProperty_HasNoSetter()
+    public void LastError_VarThrowableProperty_WritesAManagedException()
     {
-        // C# cannot mint a typed Kotlin Throwable, so ADR-107 binds the setter away. Asserting the
-        // property is present first means this goes green on the feature, not on a total drop.
-        var property = typeof(Issue56Failure).GetProperty("LastError");
+        // ADR-201: Kotlin receives a NugetManagedException, so the read-back carries the managed
+        // type name in its message rather than an ADR-029 mapping.
+        using var failure = Issue56Sample.DietViolation();
 
-        Assert.NotNull(property);
-        Assert.True(property!.CanRead);
-        Assert.False(property.CanWrite);
+        failure.LastError = new InvalidOperationException("the water bowl is empty");
+
+        Assert.Equal(
+            "System.InvalidOperationException: the water bowl is empty",
+            failure.LastError!.Message);
+    }
+
+    // --- ADR-201: the constructor binds ---
+
+    [Fact]
+    public void Constructor_ThrowableParameters_AreConstructibleFromCSharp()
+    {
+        using var failure = new Issue56Failure(
+            "Mylo knocked the water bowl over",
+            null,
+            new ArgumentException("the floor is a lake"));
+
+        Assert.Null(failure.Error);
+        Assert.Equal("System.ArgumentException: the floor is a lake", failure.Fatal.Message);
     }
 
     // --- The sealed-subclass arm (the legacy ADR-009 renderer, a separate code path) ---

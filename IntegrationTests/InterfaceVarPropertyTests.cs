@@ -7,8 +7,8 @@ namespace IntegrationTests;
 /// ROADMAP line 28 / ADR-113: a `var` on an exported Kotlin interface must render
 /// `{ get; set; }` on the generated C# interface, not `{ get; }`. `Tally` declares four plannable
 /// `var`s, one per setter shape (a value, a string, a nullable exported handle, a collection), and
-/// one `var lastSlip: Throwable?` whose setter ADR-107 refuses, so `ITally.LastSlip` must stay
-/// `{ get; }` while the rest widen.
+/// one `var lastSlip: IllegalStateException?` whose setter ADR-201 refuses, so `ITally.LastSlip`
+/// must stay `{ get; }` while the rest widen.
 ///
 /// Three Kotlin-implemented doors reach the same setters:
 /// <list type="bullet">

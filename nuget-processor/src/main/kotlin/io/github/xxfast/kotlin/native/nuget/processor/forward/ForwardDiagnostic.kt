@@ -695,7 +695,7 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(
   ForwardPlanSkipReason.HANDLE,
   ForwardPlanSkipReason.INSTANT,
   ForwardPlanSkipReason.DURATION,
-    // ADR-107: a genuine drop (v1 binds Throwable only at a property getter), so the same
+    // ADR-107 / ADR-201: a genuine drop (a narrower input, a Set element or Map key), so the same
     // "type combination is not supported" bucket the other ordinary types use.
   ForwardPlanSkipReason.THROWABLE,
     // ADR-106: defensive, like INSTANT/DURATION.
@@ -821,7 +821,8 @@ internal fun ForwardPlanSkipReason.ownsSentence(detail: String?): Boolean =
  *   arms, which name the offending type, and by [ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED],
  *   where it carries the member kind ("suspend", "Flow", ...).
  * @param parameter the same slot [diagnosticHint] documents; read here only by
- *   [ForwardPlanSkipReason.NULLABLE], and only when the offending input is a named parameter.
+ *   [ForwardPlanSkipReason.NULLABLE] and (ADR-201) [ForwardPlanSkipReason.THROWABLE], and only
+ *   when the offending input is a named parameter.
  * @param returnType the same slot [diagnosticHint] documents; read only by
  *   [ForwardPlanSkipReason.NULLABLE] when [parameter] is null.
  */
@@ -1049,6 +1050,18 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
           "nullable spelling as one type, so it cannot declare the member twice (CS0102); " +
           "neither is a safe survivor, because dropping either would change the value one " +
           "receiver type reads ($name)"
+
+    // ADR-201: an input refused for its declared throwable type names that type, never the reason
+    // constant. Only the callable input route fills the detail, so any other THROWABLE skip (a
+    // `Set` element, a `Map` key) keeps the generic sentence.
+    ForwardPlanSkipReason.THROWABLE -> when {
+      detail == null -> generic
+      parameter != null ->
+        "its parameter `$parameter` is declared `$detail`, which cannot hold the " +
+            "`NugetManagedException` a C# exception arrives as"
+      else -> "its extension receiver is declared `$detail`, and a Kotlin throwable binds as a " +
+          "value, never as a receiver"
+    }
 
     // Issue #131 names the parameter at an input position; the ADR-064 2026-09-29 amendment names
     // the declared type at a return. With neither, the shipped generic sentence stands.
@@ -1540,6 +1553,17 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
     "rename one of them in Kotlin (`@CSharpName` cannot separate them: both derive one C entry " +
         "point from the Kotlin name)"
 
+  // ADR-201: the reason line names the type; the hint says which declarations do bind, and why a
+  // narrower one cannot: C# hands Kotlin a `NugetManagedException`, a `RuntimeException`.
+  ForwardPlanSkipReason.THROWABLE ->
+    "a C# exception reaches Kotlin as a `NugetManagedException` (a `RuntimeException` carrying " +
+        "the managed type name and message), so a Throwable parameter or setter binds only when " +
+        "declared `Throwable`, `Exception` or `RuntimeException`, and never as an extension " +
+        "receiver or inside a collection; " +
+        "a Throwable cannot be a `Set` element or a `Map` key either, since each crossing builds " +
+        "a fresh `System.Exception` that compares by reference. a Throwable binds at a return, " +
+        "a getter, a `List` element and a `Map` value"
+
   // ROADMAP Phase 4 (ADR-151 amendment): since a `ByteArray` binds as a `List` element and as a
   // `Map` VALUE, the only shapes that still reach this reason are the two DECLINED equality slots,
   // so the hint says WHY rather than sending the author to write an adapter that would behave
@@ -1600,7 +1624,7 @@ internal fun BridgeType.diagnosticTypeName(): String = when (this) {
   BridgeType.String -> "String"
   BridgeType.Instant -> "Instant"
   BridgeType.Duration -> "Duration"
-  BridgeType.Throwable -> "Throwable"
+  is BridgeType.Throwable -> "Throwable"
   BridgeType.Uuid -> "Uuid"
   BridgeType.ByteArray -> "ByteArray"
   is BridgeType.Primitive -> kind.name.lowercase().replaceFirstChar { it.uppercase() }

@@ -10,13 +10,13 @@ import kotlin.test.assertTrue
  * on. Two separate routes have to learn it: the planner route (ordinary classes) and the legacy
  * ADR-009 sealed-subclass route, which never consults `ForwardPropertyPlanner`.
  *
- * The absence cells matter as much as the binding ones: every position ADR-107 defers (method
- * return, parameter, collection component, setter) must stay a *named* skip, because
- * `BridgeType.Throwable` now reaches every classifier caller, not just the property planner.
+ * The absence cells matter as much as the binding ones. ADR-201 since binds the return, `List`
+ * element and managed-assignable input positions (`Tier1ThrowablePositionsTest`); what is left
+ * here is the narrower input and `Set` element, which must stay *named* skips.
  */
 class Tier1ThrowablePropertyTest {
 
-  /** Planner route: nullable getter, non-null getter, and a `var` that binds get-only. */
+  /** Planner route: nullable getter, non-null getter, and a `var` getter. */
   @Test
   fun `class properties typed Throwable bind as System Exception getters`() {
     val result = Tier1Harness.run(
@@ -61,17 +61,19 @@ class Tier1ThrowablePropertyTest {
   }
 
   /**
-   * The `var` is get-only: C# cannot mint a typed Kotlin `Throwable`, so no setter export and no
-   * C# setter, named by the existing read-only diagnostic rather than dropped silently.
+   * ADR-201 narrowed this cell: a `var` declared narrower than `RuntimeException` is get-only,
+   * since the setter receives a `NugetManagedException` it could not hold; named by the existing
+   * read-only diagnostic rather than dropped silently. (`var lastError: Throwable?` now binds a
+   * setter: `Tier1ThrowablePositionsTest`.)
    */
   @Test
-  fun `var Throwable property binds get-only with a named read-only diagnostic`() {
+  fun `var narrower than RuntimeException binds get-only with a named read-only diagnostic`() {
     val result = Tier1Harness.run(
       """
       package tier1.throwablesetter
 
       class Failure(val reason: String) {
-        var lastError: Throwable? = null
+        var lastError: IllegalStateException? = null
       }
       """.trimIndent()
     )
@@ -79,6 +81,10 @@ class Tier1ThrowablePropertyTest {
     assertTrue(
       result.compiledClean,
       "expected the generated getter to compile; got: ${result.compileErrors}",
+    )
+    assertTrue(
+      "failure_get_lastError" in result.generated,
+      "expected the getter export; generated=${result.generated}",
     )
     assertTrue(
       "failure_set_lastError" !in result.generated,
@@ -138,49 +144,20 @@ class Tier1ThrowablePropertyTest {
     )
   }
 
-  /**
-   * Absence cell: `Throwable` at a **method return** is explicitly deferred by ADR-107, so it must
-   * skip with a named diagnostic rather than plan a shape the emitters have no arm for.
-   */
-  @Test
-  fun `method returning Throwable fires a named skip and is omitted`() {
-    val result = Tier1Harness.run(
-      """
-      package tier1.throwablereturn
-
-      class Failure(val reason: String) {
-        fun cause(): Throwable? = null
-      }
-      """.trimIndent()
-    )
-
-    assertTrue(
-      result.compiledClean,
-      "expected no broken source for the Throwable return; got: ${result.compileErrors}",
-    )
-    assertTrue(
-      "export_failure_cause" !in result.generated,
-      "expected the method to be absent; generated=${result.generated}",
-    )
-    assertTrue(
-      result.kspWarnings.any { it.contains("SKIPPED_") && it.contains("cause") },
-      "expected a named skip for Failure.cause; kspWarnings=${result.kspWarnings}",
-    )
-  }
 
   /**
-   * Absence cell: a `Throwable` **parameter** (the shape the fixture's data-class constructor
-   * has) is out of scope entirely — C# cannot construct a Kotlin Throwable — so the callable
-   * skips named and the surrounding class still survives.
+   * ADR-201 narrowed this cell: a method return now binds (`Tier1ThrowablePositionsTest`), and a
+   * **parameter** binds only when its declared type can hold the `NugetManagedException` C# hands
+   * Kotlin. A narrower one skips named and the surrounding class still survives.
    */
   @Test
-  fun `method with a Throwable parameter fires a named skip and is omitted`() {
+  fun `method with a parameter narrower than RuntimeException fires a named skip and is omitted`() {
     val result = Tier1Harness.run(
       """
       package tier1.throwableparameter
 
       class Failure(val reason: String) {
-        fun record(error: Throwable): Int = error.hashCode()
+        fun record(error: IllegalStateException): Int = error.hashCode()
       }
       """.trimIndent()
     )
@@ -190,7 +167,7 @@ class Tier1ThrowablePropertyTest {
       "expected no broken source for the Throwable parameter; got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_failure_record" !in result.generated,
+      "failure_record" !in result.generated,
       "expected the method to be absent; generated=${result.generated}",
     )
     assertTrue(
@@ -200,23 +177,23 @@ class Tier1ThrowablePropertyTest {
   }
 
   /**
-   * Absence cell: `List<Throwable>` is deferred (the component would have to box through
-   * `nuget_wrap_*`, which has no envelope arm), so it skips named — issue #52's rule — rather
-   * than crashing the projection.
+   * ADR-201 narrowed this cell: `List<Throwable>` now reads back element by element, but a `Set`
+   * element stays refused (each crossing builds a fresh `System.Exception`, which compares by
+   * reference), so it skips named -- issue #52's rule -- rather than crashing the projection.
    */
   @Test
-  fun `List of Throwable property fires SKIPPED_UNSUPPORTED_PROPERTY and is omitted`() {
+  fun `Set of Throwable property fires SKIPPED_UNSUPPORTED_PROPERTY and is omitted`() {
     val result = Tier1Harness.run(
       """
       package tier1.throwablelist
 
-      class Failure(val reason: String, val errors: List<Throwable>)
+      class Failure(val reason: String, val errors: Set<Throwable>)
       """.trimIndent()
     )
 
     assertTrue(
       result.compiledClean,
-      "expected no broken source for the List<Throwable> property; got: ${result.compileErrors}",
+      "expected no broken source for the Set<Throwable> property; got: ${result.compileErrors}",
     )
     assertTrue(
       "failure_get_errors" !in result.generated,

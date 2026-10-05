@@ -204,35 +204,88 @@ see [The bridgeable subset](bridgeable-subset.md). The reverse direction, a C# l
 that throws while Kotlin is calling it, is a separate channel; see
 [Exceptions from a callback](lambdas-and-callbacks.md#exceptions-from-a-callback).
 
-## Throwable properties
+## Throwable values {id="throwable-values"}
 
-A property declared `Throwable`, `Throwable?`, or a stdlib subtype reads from C# as a plain,
-unthrown `Exception` (or `Exception?`), constructed with the same type mapping and cause chain a
-thrown exception gets, not something you catch:
+A `Throwable`, `Throwable?` or stdlib subtype that Kotlin returns reads in C# as a plain, unthrown
+`Exception` (or `Exception?`), built with the same type mapping and cause chain a thrown exception
+gets. It is something you inspect, not something you catch. This applies to a return from any
+exported type or a top-level function, a property getter, a `List` element (nullable
+included) and a `Map` value. A `Result<Throwable>` return binds too, with its `TryX` twin.
 
 ```kotlin
-data class Issue56Failure(
-  val reason: String,
-  val error: Throwable?,
-  val fatal: Throwable,
-)
+class MishapLog {
+  private val seen: MutableList<Throwable> = mutableListOf()
+
+  fun worst(): Throwable =
+    IllegalArgumentException("Oreo ate the plant", RuntimeException("the door was left open"))
+
+  val all: List<Throwable> get() = seen.toList()
+  fun timeline(): List<Throwable?> = /* ... */
+}
 ```
 
 ```C#
-using var failure = Issue56Sample.DietViolation();
-Assert.IsType<KotlinArgumentException>(failure.Error);
+using var log = new MishapLog();
+
+Exception worst = log.Worst();                  // KotlinArgumentException
+Exception cause = worst.InnerException!;        // KotlinException: RuntimeException is not mapped
+IReadOnlyList<Exception> all = log.All;
+IReadOnlyList<Exception?> timeline = log.Timeline();
 ```
 
-It binds get-only, even for a `var` in Kotlin, since C# has no way to construct a typed Kotlin
-`Throwable` to satisfy a setter, and each read allocates a new `Exception` instance: compare
-`Message` and type, not references. It works the same way on a sealed subclass's property.
+Each read builds a new `Exception`, so compare `Message` and type, not references. There is nothing
+to dispose. A class in your module that extends `Exception` but is not exported binds the same way:
+it arrives mapped through its nearest mapped base, with `KotlinType` naming the class. An exported
+exception class stays an ordinary exported class instead.
 
-A class whose constructor or `copy()` takes a `Throwable` parameter (like `Issue56Failure` above)
-gets no generated C# constructor or `Copy` at all; construct it in Kotlin and expose it through a
-factory function, as `Issue56Sample.DietViolation()` does here.
+### Passing an exception to Kotlin
 
-Only a property getter is supported today. A method return, a parameter, `List<Throwable>`, and a
-module-local `class MyError : Exception()` that is not itself exported all keep their existing skip.
+A parameter, `var` property, constructor parameter or data class `copy` declared exactly
+`Throwable`, `Exception` or `RuntimeException`, nullable or not, accepts any `System.Exception`:
+
+```kotlin
+fun report(mishap: Throwable) { seen += mishap }
+fun describeLast(): String = seen.last().let { "${it::class.simpleName}: ${it.message}" }
+```
+
+```C#
+log.Report(new InvalidOperationException("the bowl is empty"));
+string kotlinView = log.DescribeLast();   // "NugetManagedException: System.InvalidOperationException: ..."
+string text = log.All[0].Message;           // "System.InvalidOperationException: the bowl is empty"
+```
+
+<warning>
+<p><b>The input is lossy.</b> Kotlin receives a <code>NugetManagedException</code> carrying only
+the C# type's full name and message: no <code>InnerException</code> chain, no stack trace, and
+Kotlin <code>is IllegalArgumentException</code> is false for a passed <code>ArgumentException</code>.
+An exception that came from Kotlin and is passed back is not the original object either; Kotlin
+sees a new one named after the C# type. Do not rely on Kotlin code branching on the exception's
+class.</p>
+</warning>
+
+Because a data class's constructor and `copy` now accept an exception, a class such as
+`data class Issue56Failure(val reason: String, val error: Throwable?, val fatal: Throwable)` is
+constructible from C#:
+
+```C#
+using var failure = new Issue56Failure("Mylo knocked the water bowl over", null,
+    new ArgumentException("the floor is a lake"));
+```
+
+### What is not bound
+
+A declaration with one of these shapes is left out of the generated C# with a build warning that
+names it:
+
+- an input declared narrower than `RuntimeException`, such as `IllegalStateException` or your own
+  exception class; declare it `Exception` to bind it
+- a `List<Throwable>` parameter, a `Set<Throwable>` or a `Map` with `Throwable` keys, and a
+  `Throwable` extension receiver
+- a bare `suspend` result or bare `Flow`/`StateFlow` element typed `Throwable`; a
+  `suspend fun f(): List<Throwable>` and `Flow<List<Throwable>>` do bind
+- a `suspend` or `Flow` parameter, a lambda payload, and a C#-implemented interface member typed
+  `Throwable`
+- a value class over `Throwable`
 
 ## Result return values
 

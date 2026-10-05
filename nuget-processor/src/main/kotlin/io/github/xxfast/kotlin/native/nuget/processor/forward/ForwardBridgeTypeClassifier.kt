@@ -263,14 +263,6 @@ internal class ForwardBridgeTypeClassifier(
         reason = "a lazy Sequence has no bridge shape; expose a List instead",
       )
     }
-    // ADR-107: kotlin.Throwable and every stdlib subtype of it (Exception, IllegalStateException,
-    // ...). Supertype-aware, because the declared property type is usually a subtype; ahead of the
-    // exportedObjectHandles membership test below, so a stdlib throwable stops being an
-    // "unexported dependency". A user exception class that IS in the export set keeps its
-    // ObjectHandle binding (decision 3), which is why the membership test guards this line.
-    if (qualifiedName !in context.exportedObjectHandles && classDeclaration.isStdlibThrowable()) {
-      return BridgeType.Throwable
-    }
     // ADR-160: a plain Kotlin function type whose payload and result are both shapes the plan's
     // two callback lowerings implement becomes a first-class [BridgeType.Callback]. Ahead of
     // `specializedProtocol`, which is what every other (and every non-parameter) function-type
@@ -292,6 +284,16 @@ internal class ForwardBridgeTypeClassifier(
         "marked with the opt-in marker `$marker`, so no C# type is declared for it",
         optInMarker = marker,
       )
+    }
+    // ADR-107: kotlin.Throwable and every subtype of it (Exception, IllegalStateException, ...).
+    // ADR-201: any origin, a module-local unexported class included; after the ADR-115 marker gate
+    // above, so a marked exception still skips under its marker. Supertype-aware, because the
+    // declared type is usually a subtype; ahead of the exportedObjectHandles membership test
+    // below, so a throwable stops being an "unexported dependency". A user exception class that
+    // IS in the export set keeps its ObjectHandle binding (decision 3), which is why the
+    // membership test guards this line.
+    if (qualifiedName !in context.exportedObjectHandles && classDeclaration.isThrowable()) {
+      return BridgeType.Throwable(qualifiedName)
     }
 
     if (classDeclaration.classKind == ClassKind.ENUM_CLASS) {
@@ -506,12 +508,13 @@ internal class ForwardBridgeTypeClassifier(
     }
     val classified: BridgeType = classifyNonNullable(target.asStarProjectedType())
     // ADR-107 does not extend to an `expect class` actualized onto a stdlib throwable: the
-    // envelope binds a Throwable-typed *property*, not a whole type, so this stays ADR-074's
+    // envelope binds a Throwable-typed *value* (ADR-201), not a whole type, so this stays ADR-074's
     // named actual-typealias-target skip rather than silently becoming a System.Exception.
-    if (classified == BridgeType.Throwable) {
+    if (classified is BridgeType.Throwable) {
       return BridgeType.Unsupported(
         targetQualifiedName,
-        "actual typealias target is a Kotlin throwable, which binds only at a property position",
+        "actual typealias target is a Kotlin throwable, which binds only as a value, never as a " +
+            "declared C# type",
         isActualTypeAliasTarget = true,
         actualTypeAliasExpectName = expectQualifiedName,
       )
@@ -741,18 +744,15 @@ internal class ForwardBridgeTypeClassifier(
   }
 
   /**
-   * ADR-107: whether this declaration is `kotlin.Throwable` or inherits from it. `getAllSuperTypes`
-   * resolves for klib-origin stdlib declarations; a failure to resolve leaves the old behaviour
-   * (the type falls through to the exportedObjectHandles test) rather than mis-binding.
+   * ADR-107 / ADR-201: whether this declaration is `kotlin.Throwable` or inherits from it, from
+   * the stdlib, a dependency klib or this module alike. Only asked of a type outside
+   * `exportedObjectHandles` (the caller's guard), so an exported user exception class keeps its
+   * ObjectHandle binding (ADR-107 decision 3) and a module-local unexported one binds as the
+   * envelope instead of skipping as an undeclared type. A failure to resolve leaves the type on
+   * the membership test below rather than mis-binding.
    */
-  private fun KSClassDeclaration.isStdlibThrowable(): Boolean {
+  private fun KSClassDeclaration.isThrowable(): Boolean {
     if (qualifiedName?.asString() == "kotlin.Throwable") return true
-    // The supertype walk is restricted to klib-origin declarations (`containingFile == null`, the
-    // same cross-module signal ADR-066 uses), which is what "stdlib subtype" means here:
-    // `Exception`, `IllegalStateException`, ... A module-local exception class keeps its existing
-    // classification, and an exported one keeps its ObjectHandle binding (decision 3). It also
-    // keeps the classifier from asking every ordinary class for its supertypes.
-    if (containingFile != null) return false
     return getAllSuperTypes().any { supertype ->
       supertype.declaration.qualifiedName?.asString() == "kotlin.Throwable"
     }

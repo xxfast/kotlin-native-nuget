@@ -16,9 +16,9 @@ package io.github.xxfast.kotlin.native.nuget.test.perchvar
  *
  * The members cross one setter shape each, so the explicit setter cannot be shaped around a
  * value type: [Tally.count] a value, [Tally.label] a string, [Tally.toy] a nullable exported
- * handle, [Tally.names] a collection. [Tally.lastSlip] is the refused-setter cell (ADR-107: C#
- * cannot mint a Kotlin `Throwable`), so it stays `{ get; }` on `ITally` and case D must not
- * invent an explicit member for it.
+ * handle, [Tally.names] a collection. [Tally.lastSlip] is the refused-setter cell (ADR-201: C#
+ * hands Kotlin a `NugetManagedException`, which an `IllegalStateException?` cannot hold), so it
+ * stays `{ get; }` on `ITally` and case D must not invent an explicit member for it.
  *
  * Mylo is doing clicker training. Oreo keeps knocking the clicker off the desk.
  */
@@ -27,7 +27,7 @@ interface Tally {
   var label: String
   var toy: Pompom?
   var names: List<String>
-  var lastSlip: Throwable?
+  var lastSlip: IllegalStateException?
 }
 
 /** The toy crossed at [Tally.toy]: an exported class, so its setter hands over a handle. */
@@ -43,7 +43,7 @@ open class Scoreboard {
   open val label: String = "scoreboard"
   open val toy: Pompom? = null
   open val names: List<String> = emptyList()
-  open val lastSlip: Throwable? = null
+  open val lastSlip: IllegalStateException? = null
 
   fun describe(): String =
     "$label: $count clicks for ${names.joinToString()} with ${toy?.colour ?: "no"} pompom"
@@ -57,7 +57,7 @@ class TrainingClicker : Scoreboard(), Tally {
   override var label: String = "clicker"
   override var toy: Pompom? = null
   override var names: List<String> = listOf("Mylo")
-  override var lastSlip: Throwable? = null
+  override var lastSlip: IllegalStateException? = null
 
   /** Makes [lastSlip] non-null from Kotlin, so its get-only binding is provably live. */
   fun slip() {
@@ -80,7 +80,7 @@ class Abacus : Tally {
   override var label: String = "abacus"
   override var toy: Pompom? = null
   override var names: List<String> = listOf("Oreo")
-  override var lastSlip: Throwable? = null
+  override var lastSlip: IllegalStateException? = null
 
   fun describe(): String =
     "$label: $count clicks for ${names.joinToString()} with ${toy?.colour ?: "no"} pompom"
