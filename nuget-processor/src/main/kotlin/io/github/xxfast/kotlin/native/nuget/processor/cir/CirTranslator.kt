@@ -480,7 +480,9 @@ internal fun translate(
     // members already export under the whole chain (`nativePrefix()`) and every type position
     // already spelled `Owner.Tag`; only the declaration was missing (CS0426 until now).
     valueClasses.filter { isOwnedBy(owner, it) }.forEach { cls ->
-      add(translateValueClass(cls, context.libraryName, logger, context, callableCatalog, expects))
+      add(translateValueClass(
+        cls, context.libraryName, logger, context, callableCatalog, expects, tracker,
+      ))
     }
     interfaces.filter { isOwnedBy(owner, it) }.forEach { iface ->
       add(
@@ -536,7 +538,9 @@ internal fun translate(
   // namespace-level twin would be CS0101 against it (the issue #54/#110 lesson).
   valueClasses.filter { !it.isNestedDeclaration() }.forEach { cls ->
     val declaration: CirDeclaration = guarded(cls.forwardGuardName(), cls, logger) {
-      translateValueClass(cls, context.libraryName, logger, context, callableCatalog, expects)
+      translateValueClass(
+        cls, context.libraryName, logger, context, callableCatalog, expects, tracker,
+      )
     } ?: return@forEach
     namespaces.addDeclaration(namespaceOf(cls.packageName.asString()), declaration)
   }

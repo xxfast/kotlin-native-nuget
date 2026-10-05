@@ -137,17 +137,17 @@ internal object ForwardCirPlanProjection {
     }
     val nativeName: String = "Native_Get${plan.publicSignature.name}"
     val propName: String = plan.invocation.symbol.substringAfterLast('.').asCSymbol()
-    val (returnType, nativeReturnType, expression) = valueClassMemberExpression(
-      plan = plan,
+    val member: ValueClassMemberBody = plan.valueClassMemberExpression(
       nativeName = nativeName,
       callArguments = nativeReceiverArg,
     )
     return CirProperty(
       name = plan.publicSignature.name,
-      type = returnType,
-      nativeReturnType = nativeReturnType,
+      type = member.returnType,
+      nativeReturnType = member.nativeReturnType,
       nativeName = propName,
-      getter = expression,
+      getter = member.body,
+      nativeOutParameters = member.nativeOuts,
       doc = plan.publicSignature.cirDoc(),
     )
   }
@@ -166,66 +166,145 @@ internal object ForwardCirPlanProjection {
     // same extern twice (CS0111). Unsuffixed members render exactly as before.
     val methodName: String = plan.invocation.symbol.substringAfterLast('.').asCSymbol()
     val nativeName: String = "Native_${methodName.replaceFirstChar { it.uppercase() }}"
-    val (returnType, nativeReturnType, expression) = valueClassMemberExpression(
-      plan = plan,
+    val member: ValueClassMemberBody = plan.valueClassMemberExpression(
       nativeName = nativeName,
       callArguments = argumentList.joinToString(", "),
     )
-    val needsCustomParams: Boolean =
-      plan.publicSignature.parameters.any { parameter -> !parameter.type.isTrivialInput() }
+    val needsCustomParams: Boolean = member.nativeOuts.isNotEmpty() ||
+        plan.publicSignature.parameters.any { parameter -> !parameter.type.isTrivialInput() }
     val nativeParams: List<CirParameter>? = if (needsCustomParams) {
       plan.nativeInCirParameters(
         plan.nativeExports.single().parameters.filter { parameter ->
           parameter.role == ForwardAbiRole.USER &&
               parameter.direction == ForwardAbiDirection.IN
         },
-      )
+      ) + member.nativeOuts
     } else {
       null
     }
     return CirMethod(
       name = plan.publicSignature.name,
-      returnType = returnType,
-      nativeReturnType = nativeReturnType,
+      returnType = member.returnType,
+      nativeReturnType = member.nativeReturnType,
       nativeName = methodName,
       parameters = publicParams,
-      body = expression,
+      body = member.body,
       isSyncErrorCheckEnabled = plan.errorSlot != null,
       nativeParameters = nativeParams,
       doc = plan.publicSignature.cirDoc(),
     )
   }
 
-  private fun valueClassMemberExpression(
-    plan: ForwardCallablePlan,
+  /**
+   * A value-class member's public type, `DllImport` return type, and body: one expression, or a
+   * statement block (when the native result is held to be tested and then read) that the renderer
+   * emits as a block body. [nativeOuts] are the `DllImport`'s trailing out slots: the has-value
+   * `valueOut` of a nullable value-type result.
+   */
+  private data class ValueClassMemberBody(
+    val returnType: String,
+    val nativeReturnType: String,
+    val body: String,
+    val nativeOuts: List<CirParameter> = emptyList(),
+  )
+
+  /**
+   * The value-class member route has no error slot (ADR-014), so a result is read straight off the
+   * native call on the ordinary member route's own wire per family: the reconstruction a handle,
+   * collection, bytes, time, Uuid or value-class result takes there; the null pointer for a
+   * nullable reference result (held in `nativeResult` and tested); and the `bool` result plus the
+   * `valueOut` out slot for a nullable value-type result.
+   */
+  private fun ForwardCallablePlan.valueClassMemberExpression(
     nativeName: String,
     callArguments: String,
-  ): Triple<String, String, String> {
-    val result: BridgeType = plan.publicSignature.result
-    val wireType: ForwardAbiWireType = plan.result.wireType
-    val call = "$nativeName($callArguments)"
+  ): ValueClassMemberBody {
+    val result: BridgeType = publicSignature.result
+    val valueOut: ForwardAbiParameter? = nativeExports.single().parameters
+      .firstOrNull { parameter -> parameter.role == ForwardAbiRole.VALUE_OUT }
+    val outs: List<CirParameter> = listOfNotNull(valueOut).map { parameter ->
+      val outType: String = parameter.transfer.type.csharpType()
+      CirParameter(parameter.csharpName, outType, "out $outType")
+    }
+    val outArguments: List<String> = outs.map { out -> "${out.nativeType} ${out.name}" }
+    val call = "$nativeName(${(listOf(callArguments) + outArguments).joinToString(", ")})"
+    val type: String = result.csharpType()
+
+    // Held, because the handle is read twice: a null test, or `TryResolveCSharp` then a backing.
+    fun held(read: String): ValueClassMemberBody = ValueClassMemberBody(
+      returnType = type,
+      nativeReturnType = "IntPtr",
+      body = "            IntPtr nativeResult = $call;\n            return $read;",
+    )
+
+    fun hasValue(lift: (String) -> String): ValueClassMemberBody {
+      val slot: String = requireNotNull(valueOut) { "Value-class $result result has no valueOut" }
+        .csharpName
+      val inner: String = (result as BridgeType.Nullable).type.csharpType()
+      return ValueClassMemberBody(type, "bool", "$call ? ${lift(slot)} : ($inner?)null", outs)
+    }
+
     return when (result) {
-      BridgeType.Unit -> Triple("void", "void", call)
-      BridgeType.String -> Triple(
-        "string",
-        "IntPtr",
-        "Marshal.PtrToStringUTF8($call)!",
+      BridgeType.Unit -> ValueClassMemberBody("void", "void", call)
+      BridgeType.String ->
+        ValueClassMemberBody("string", "IntPtr", "Marshal.PtrToStringUTF8($call)!")
+      is BridgeType.Enum -> ValueClassMemberBody(type, "int", "($type)$call")
+      // ADR-201: the ADR-107 envelope, rebuilt (and disposed) by `BuildException`.
+      is BridgeType.Throwable ->
+        ValueClassMemberBody(type, "IntPtr", "NugetErrorNative.BuildException($call)")
+      BridgeType.Instant -> ValueClassMemberBody(type, "long", instantLiftCs(call))
+      BridgeType.Duration -> ValueClassMemberBody(type, "long", durationLiftCs(call))
+      BridgeType.Uuid -> ValueClassMemberBody(
+        type, "IntPtr", "global::System.Guid.Parse(Marshal.PtrToStringUTF8($call)!)",
+      )
+      is BridgeType.ObjectHandle ->
+        ValueClassMemberBody(type, "IntPtr", result.handleReconstruction(call))
+      is BridgeType.Interface -> held(interfaceReturnExpression(type, result.backingType))
+      is BridgeType.Collection -> ValueClassMemberBody(
+        type, "IntPtr", componentCollectionRead(call, result, csharpType = { it.csharpType() }),
+      )
+      BridgeType.ByteArray ->
+        ValueClassMemberBody(type, "IntPtr", "NugetMarshal.ReadBytes($call)")
+      is BridgeType.ValueClass -> ValueClassMemberBody(
+        type,
+        valueClassUnderlyingWireCs(result.underlying),
+        valueClassReconstructionCs(result, call),
       )
 
-      is BridgeType.Enum -> Triple(
-        result.csharpType(),
-        "int",
-        "($call)", // ordinal returned; public type cast applied at call site if needed
-      ).let { (ret, native, _) ->
-        Triple(ret, native, "(${result.csharpType()})$call")
+      is BridgeType.Nullable -> {
+        val present = "nativeResult == IntPtr.Zero ? null : "
+        when (val inner: BridgeType = result.type) {
+          BridgeType.String ->
+            ValueClassMemberBody(type, "IntPtr", "Marshal.PtrToStringUTF8($call)")
+          BridgeType.Uuid ->
+            held(present + "global::System.Guid.Parse(Marshal.PtrToStringUTF8(nativeResult)!)")
+          is BridgeType.ObjectHandle -> held(present + inner.handleReconstruction())
+          is BridgeType.Interface ->
+            held(present + interfaceReturnExpression(inner.csharpType(), inner.backingType))
+          is BridgeType.Collection -> held(
+            present +
+                componentCollectionRead("nativeResult", inner, csharpType = { it.csharpType() }),
+          )
+          BridgeType.ByteArray -> held(present + "NugetMarshal.ReadBytes(nativeResult)")
+          is BridgeType.Throwable ->
+            held(present + "NugetErrorNative.BuildException(nativeResult)")
+          is BridgeType.Primitive -> hasValue { slot -> slot }
+          is BridgeType.Enum -> hasValue { slot -> "(${inner.csharpType()})$slot" }
+          BridgeType.Char -> hasValue { slot -> "(char)$slot" }
+          BridgeType.Instant -> hasValue(::instantLiftCs)
+          BridgeType.Duration -> hasValue(::durationLiftCs)
+          is BridgeType.ValueClass ->
+            if (inner.underlying is BridgeType.Primitive || inner.underlying is BridgeType.Enum) {
+              hasValue { slot -> valueClassReconstructionCs(inner, slot) }
+            } else {
+              held(present + valueClassReconstructionCs(inner, "nativeResult"))
+            }
+
+          else -> error("Forward CIR value-class member has no nullable result for $inner")
+        }
       }
 
-      // ADR-201: the ADR-107 envelope, rebuilt (and disposed) by `BuildException`. The member has
-      // no error slot (ADR-014), so the whole read is the one expression.
-      is BridgeType.Throwable ->
-        Triple(result.csharpType(), "IntPtr", "NugetErrorNative.BuildException($call)")
-
-      else -> Triple(result.csharpType(), wireType.csharpType(), call)
+      else -> ValueClassMemberBody(type, this.result.wireType.csharpType(), call)
     }
   }
 

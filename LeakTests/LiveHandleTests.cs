@@ -778,6 +778,47 @@ public class LiveHandleTests
         });
     }
 
+    // A value class's own members returning a handle-minting result, one row per arm: an object
+    // (the wrapper owns the handle), a list (`ReadList` disposes it) and a `Throwable`
+    // (`BuildException` disposes the ADR-107 envelope). The null half mints nothing; the object
+    // and list rows also read the non-null twins, which used to hand back the raw handle.
+    [Fact]
+    public void ValueClassMemberObjectResult_NullAndNonNull_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            var mylo = new TestLibrary.Collartag.CollarTag("Mylo");
+            using (TestLibrary.Collartag.Bell? bell = mylo.Bell()) Assert.NotNull(bell);
+            Assert.Null(new TestLibrary.Collartag.CollarTag("").Bell());
+            using (TestLibrary.Collartag.Bell own = mylo.OwnBell())
+            {
+                Assert.Equal("Mylo-dong", own.Tone);
+            }
+        });
+    }
+
+    [Fact]
+    public void ValueClassMemberListResult_NullAndNonNull_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            var mylo = new TestLibrary.Collartag.CollarTag("Mylo");
+            Assert.Equal(2, mylo.Names()!.Count);
+            Assert.Null(new TestLibrary.Collartag.CollarTag("").Names());
+            Assert.Single(mylo.AllNames());
+        });
+    }
+
+    [Fact]
+    public void ValueClassMemberThrowableResult_NullAndNonNull_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            Assert.NotNull(new TestLibrary.Collartag.CollarTag("Mylo").Mishap());
+            Assert.Null(new TestLibrary.Collartag.CollarTag("").Mishap());
+        });
+    }
+
     // Row 1j. Row 1d one level down: an inner class owning an inner class
     // (`hearth_sunbather_paw_create(outer, toes, error)`). The borrowed receiver is itself an inner
     // handle, and the intermediate Sunbather is disposed BEFORE the Paw, so a release order that

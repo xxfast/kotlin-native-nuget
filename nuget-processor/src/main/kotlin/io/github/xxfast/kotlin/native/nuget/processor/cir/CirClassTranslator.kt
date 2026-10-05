@@ -4641,6 +4641,10 @@ internal fun translateValueClass(
   // ADR-150: the expect index. A bare `forwardKdoc()` here cannot reach the `expect` half,
   // so a documented `expect` declaration of this family rendered with no summary at all.
   expects: ExpectIndex = ExpectIndex(),
+  // A member's collection result or parameter needs the file's `System.Collections.Generic` and
+  // collection helpers like any other route's (CS0246 on `IReadOnlyList<>` otherwise); null for a
+  // unit caller.
+  tracker: CollectionHelperTracker? = null,
 ): CirValueClass {
   val name: String = cls.simpleName.asString()
   val qualifiedName: String = cls.qualifiedName?.asString() ?: name
@@ -4695,9 +4699,11 @@ internal fun translateValueClass(
   // `addValueClassExports` for why (overload numbering makes the symbol per-declaration
   // underivable here, and the two halves must not drift).
   val properties: List<CirProperty> = callableCatalog.valueClassProperties(qualifiedName)
+    .onEach { plan -> tracker?.trackPlan(plan) }
     .map { plan -> ForwardCirPlanProjection.valueClassProperty(plan, nativeArg) }
 
   val methods: List<CirMethod> = callableCatalog.valueClassMethods(qualifiedName)
+    .onEach { plan -> tracker?.trackPlan(plan) }
     .map { plan -> ForwardCirPlanProjection.valueClassMethod(plan, nativeArg) }
 
   // C# cannot declare two methods whose parameter types are identical (ADR-034). Value-class

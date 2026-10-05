@@ -229,7 +229,7 @@ private fun addValueClassOrdinaryResult(
   type: BridgeType.ValueClass,
   invocation: String,
   nativeResult: ForwardAbiWireType,
-  errorName: String,
+  errorName: String?,
 ) {
   val unboxed = "$invocation.${type.underlyingPropertyName}"
   when (val underlying: BridgeType = type.underlying) {
@@ -240,8 +240,7 @@ private fun addValueClassOrdinaryResult(
       builder.returns(kotlinType("String"))
       builder.addCode(
         errorHandlingValueBody(unboxed, errorName, "\"\""),
-        cOpaquePointerVar,
-        nugetHandles,
+        *errorTypes(errorName),
       )
     }
 
@@ -250,8 +249,7 @@ private fun addValueClassOrdinaryResult(
       builder.returns(kotlinResultType(nativeResult))
       builder.addCode(
         errorHandlingValueBody(unboxed, errorName, defaultResult(underlying)),
-        cOpaquePointerVar,
-        nugetHandles,
+        *errorTypes(errorName),
       )
     }
 
@@ -259,15 +257,14 @@ private fun addValueClassOrdinaryResult(
       builder.returns(kotlinType("Int"))
       builder.addCode(
         errorHandlingValueBody("$unboxed.ordinal", errorName, "0"),
-        cOpaquePointerVar,
-        nugetHandles,
+        *errorTypes(errorName),
       )
     }
 
     is BridgeType.ObjectHandle -> {
       builder.returns(cOpaquePointer.copy(nullable = true))
       builder.addCode(
-        handleResultBody(unboxed, errorName), nugetHandles, cOpaquePointerVar, nugetHandles,
+        handleResultBody(unboxed, errorName), nugetHandles, *errorTypes(errorName),
       )
     }
 
@@ -398,7 +395,9 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
     }
 
     // ADR-151: the byte array is retained whole, with no per-element projection.
-    is BridgeType.ObjectHandle, is BridgeType.Collection, BridgeType.ByteArray -> {
+    // An interface result is the same `NugetHandles.retain` mint the ordinary route uses.
+    is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
+    BridgeType.ByteArray -> {
       // ADR-081: same projected-copy boxing as the ordinary result route above.
       val boxed: String =
         if (result is BridgeType.Collection) collectionResultProjection(invocation, result)
@@ -413,18 +412,36 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
       }
     }
 
-    is BridgeType.Nullable -> {
-      require(error != null) {
-        "Value-class nullable results require an error slot: ${plan.invocation.symbol}"
-      }
-      addNullableResult(
-        builder = builder,
-        type = result.type,
-        invocation = invocation,
-        call = call,
-        errorName = error.name,
+    // A member or getter has no error slot (ADR-014), so the ordinary route's nullable arm renders
+    // its `run` form: the same wire per family (the null pointer, or `bool` plus `valueOut`).
+    is BridgeType.Nullable -> addNullableResult(
+      builder = builder,
+      type = result.type,
+      invocation = invocation,
+      call = call,
+      errorName = error?.name,
+    )
+
+    // The ordinary route's own wires, with or without an error slot: ticks for a time, the
+    // RFC 9562 text for a Uuid, the unboxed underlying for a value class.
+    BridgeType.Instant, BridgeType.Duration -> {
+      builder.returns(kotlinType("Long"))
+      builder.addCode(
+        errorHandlingValueBody("$invocation.toDotNetTicks()", error?.name, "0L"),
+        *errorTypes(error?.name),
       )
     }
+
+    BridgeType.Uuid -> {
+      builder.returns(kotlinType("String"))
+      builder.addCode(
+        errorHandlingValueBody("$invocation.toString()", error?.name, "\"\""),
+        *errorTypes(error?.name),
+      )
+    }
+
+    is BridgeType.ValueClass ->
+      addValueClassOrdinaryResult(builder, result, invocation, call.result, error?.name)
 
     // ADR-201: the ordinary route's envelope result, with or without an error slot.
     is BridgeType.Throwable -> {
@@ -666,7 +683,7 @@ private fun addNullableResult(
   type: BridgeType,
   invocation: String,
   call: ForwardNativeCall,
-  errorName: String,
+  errorName: String?,
 ) {
   when (type) {
     // ADR-061 (2026-09-16 amendment): a nullable collection rides the nullable-handle body too --
@@ -687,8 +704,7 @@ private fun addNullableResult(
       builder.addCode(
         nullableHandleResultBody(boxed, errorName),
         nugetHandles,
-        cOpaquePointerVar,
-        nugetHandles,
+        *errorTypes(errorName),
       )
     }
 
@@ -701,8 +717,7 @@ private fun addNullableResult(
           "$invocation?.let { buildError(it, ::nugetMappedType) }", errorName,
         ),
         nugetHandles,
-        cOpaquePointerVar,
-        nugetHandles,
+        *errorTypes(errorName),
       )
     }
 
@@ -712,7 +727,7 @@ private fun addNullableResult(
       }
       builder.returns(kotlinType("String").copy(nullable = true))
       builder.addCode(
-        errorHandlingValueBody(invocation, errorName, "null"), cOpaquePointerVar, nugetHandles,
+        errorHandlingValueBody(invocation, errorName, "null"), *errorTypes(errorName),
       )
     }
 
@@ -725,8 +740,7 @@ private fun addNullableResult(
       builder.returns(kotlinType("String").copy(nullable = true))
       builder.addCode(
         errorHandlingValueBody("$invocation?.toString()", errorName, "null"),
-        cOpaquePointerVar,
-        nugetHandles,
+        *errorTypes(errorName),
       )
     }
 
@@ -753,8 +767,7 @@ private fun addNullableResult(
         builder.addCode(
           nullablePrimitiveResultBody(invocation, valueOut.name, errorName, written),
           cVarType(kind),
-          cOpaquePointerVar,
-          nugetHandles,
+          *errorTypes(errorName),
         )
         return
       }
@@ -767,15 +780,13 @@ private fun addNullableResult(
         builder.addCode(
           nullableHandleResultBody(unboxed, errorName),
           nugetHandles,
-          cOpaquePointerVar,
-          nugetHandles,
+          *errorTypes(errorName),
         )
       } else {
         builder.returns(kotlinType("String").copy(nullable = true))
         builder.addCode(
           errorHandlingValueBody(unboxed, errorName, "null"),
-          cOpaquePointerVar,
-          nugetHandles,
+          *errorTypes(errorName),
         )
       }
     }
@@ -791,8 +802,7 @@ private fun addNullableResult(
       builder.addCode(
         nullablePrimitiveResultBody(invocation, valueOut.name, errorName),
         cVarType(type.kind),
-        cOpaquePointerVar,
-        nugetHandles,
+        *errorTypes(errorName),
       )
     }
 
@@ -808,8 +818,7 @@ private fun addNullableResult(
       builder.addCode(
         nullablePrimitiveResultBody(invocation, valueOut.name, errorName, "result.ordinal"),
         cVarType(PrimitiveKind.INT),
-        cOpaquePointerVar,
-        nugetHandles,
+        *errorTypes(errorName),
       )
     }
 
@@ -828,8 +837,7 @@ private fun addNullableResult(
       builder.addCode(
         nullablePrimitiveResultBody(invocation, valueOut.name, errorName, "result.code.toUShort()"),
         cVarType(PrimitiveKind.USHORT),
-        cOpaquePointerVar,
-        nugetHandles,
+        *errorTypes(errorName),
       )
     }
 
@@ -847,8 +855,7 @@ private fun addNullableResult(
       builder.addCode(
         nullableInstantResultBody(invocation, valueOut.name, errorName),
         cVarType(PrimitiveKind.LONG),
-        cOpaquePointerVar,
-        nugetHandles,
+        *errorTypes(errorName),
       )
     }
 
@@ -1523,49 +1530,48 @@ private fun BridgeType.BoundInterface.handleOutExpression(invocation: String): S
   "${qualifiedName.substringBeforeLast('.')}." +
       "nuget${qualifiedName.substringAfterLast('.')}HandleOut($invocation)"
 
+/**
+ * The one result-body skeleton every helper below fills in: `return try { [block] } catch ...`,
+ * where the `catch` writes the ADR-024 envelope into [errorName] and evaluates to [fallback]. A
+ * value-class member keeps ADR-014's no-errorOut ABI, so with a null [errorName] the same block is
+ * `return run { [block] }` and a throw propagates exactly as it always has on that route. The
+ * `catch` carries two `%T` placeholders, so a caller passes [errorTypes] after its own.
+ */
+private fun guardedBody(block: List<String>, errorName: String?, fallback: String): String =
+  buildString {
+    appendLine(if (errorName == null) "return run {" else "return try {")
+    block.forEach { line -> appendLine("  $line") }
+    if (errorName != null) {
+      appendLine("} catch (e: Throwable) {")
+      appendLine("  if ($errorName != null) {")
+      appendLine("    $errorName.reinterpret<%T>().pointed.value = %T.retain(")
+      appendLine("      buildError(e, ::nugetMappedType)")
+      appendLine("    )")
+      appendLine("  }")
+      appendLine("  $fallback")
+    }
+    append("}")
+  }
+
+/** The `%T` arguments [guardedBody]'s `catch` consumes: none without an error slot. */
+private fun errorTypes(errorName: String?): Array<Any> =
+  if (errorName == null) emptyArray() else arrayOf(cOpaquePointerVar, nugetHandles)
+
 private fun errorHandlingValueBody(
   invocation: String,
-  errorName: String,
+  errorName: String?,
   default: String,
-): String = buildString {
-  appendLine("return try {")
-  appendLine("  $invocation")
-  appendLine("} catch (e: Throwable) {")
-  appendLine("  if ($errorName != null) {")
-  appendLine("    $errorName.reinterpret<%T>().pointed.value = %T.retain(")
-  appendLine("      buildError(e, ::nugetMappedType)")
-  appendLine("    )")
-  appendLine("  }")
-  appendLine("  $default")
-  append("}")
-}
+): String = guardedBody(listOf(invocation), errorName, default)
 
-private fun handleResultBody(invocation: String, errorName: String): String = buildString {
-  appendLine("return try {")
-  appendLine("  %T.retain($invocation)")
-  appendLine("} catch (e: Throwable) {")
-  appendLine("  if ($errorName != null) {")
-  appendLine("    $errorName.reinterpret<%T>().pointed.value = %T.retain(")
-  appendLine("      buildError(e, ::nugetMappedType)")
-  appendLine("    )")
-  appendLine("  }")
-  appendLine("  null")
-  append("}")
-}
+private fun handleResultBody(invocation: String, errorName: String?): String =
+  guardedBody(listOf("%T.retain($invocation)"), errorName, "null")
 
-private fun nullableHandleResultBody(invocation: String, errorName: String): String = buildString {
-  appendLine("return try {")
-  appendLine("  val result = $invocation")
-  appendLine("  if (result == null) null else %T.retain(result)")
-  appendLine("} catch (e: Throwable) {")
-  appendLine("  if ($errorName != null) {")
-  appendLine("    $errorName.reinterpret<%T>().pointed.value = %T.retain(")
-  appendLine("      buildError(e, ::nugetMappedType)")
-  appendLine("    )")
-  appendLine("  }")
-  appendLine("  null")
-  append("}")
-}
+private fun nullableHandleResultBody(invocation: String, errorName: String?): String =
+  guardedBody(
+    listOf("val result = $invocation", "if (result == null) null else %T.retain(result)"),
+    errorName,
+    "null",
+  )
 
 /** [valueExpression] is what gets written into [valueOutName] once `result` is known non-null; it
  *  is `result` itself for a bare primitive and, per ADR-079, the unboxed underlying
@@ -1573,24 +1579,19 @@ private fun nullableHandleResultBody(invocation: String, errorName: String): Str
 private fun nullablePrimitiveResultBody(
   invocation: String,
   valueOutName: String,
-  errorName: String,
+  errorName: String?,
   valueExpression: String = "result",
-): String = buildString {
-  appendLine("return try {")
-  appendLine("  val result = $invocation")
-  appendLine("  if (result != null && $valueOutName != null) {")
-  appendLine("    $valueOutName.reinterpret<%T>().pointed.value = $valueExpression")
-  appendLine("  }")
-  appendLine("  result != null")
-  appendLine("} catch (e: Throwable) {")
-  appendLine("  if ($errorName != null) {")
-  appendLine("    $errorName.reinterpret<%T>().pointed.value = %T.retain(")
-  appendLine("      buildError(e, ::nugetMappedType)")
-  appendLine("    )")
-  appendLine("  }")
-  appendLine("  false")
-  append("}")
-}
+): String = guardedBody(
+  listOf(
+    "val result = $invocation",
+    "if (result != null && $valueOutName != null) {",
+    "  $valueOutName.reinterpret<%T>().pointed.value = $valueExpression",
+    "}",
+    "result != null",
+  ),
+  errorName,
+  "false",
+)
 
 /** ADR-076: same shape as [nullablePrimitiveResultBody], except the Kotlin `Instant` result is
  *  converted to ticks (via the generated `toDotNetTicks()` helper) before it is written into
@@ -1598,23 +1599,10 @@ private fun nullablePrimitiveResultBody(
 private fun nullableInstantResultBody(
   invocation: String,
   valueOutName: String,
-  errorName: String,
-): String = buildString {
-  appendLine("return try {")
-  appendLine("  val result = $invocation")
-  appendLine("  if (result != null && $valueOutName != null) {")
-  appendLine("    $valueOutName.reinterpret<%T>().pointed.value = result.toDotNetTicks()")
-  appendLine("  }")
-  appendLine("  result != null")
-  appendLine("} catch (e: Throwable) {")
-  appendLine("  if ($errorName != null) {")
-  appendLine("    $errorName.reinterpret<%T>().pointed.value = %T.retain(")
-  appendLine("      buildError(e, ::nugetMappedType)")
-  appendLine("    )")
-  appendLine("  }")
-  appendLine("  false")
-  append("}")
-}
+  errorName: String?,
+): String = nullablePrimitiveResultBody(
+  invocation, valueOutName, errorName, valueExpression = "result.toDotNetTicks()",
+)
 
 private fun defaultResult(type: BridgeType): String = when (type) {
   BridgeType.Char -> "'\\u0000'"
