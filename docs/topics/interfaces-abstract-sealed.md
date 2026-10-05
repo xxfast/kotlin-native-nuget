@@ -372,7 +372,10 @@ oreo.ClosestFriend().Speak(); // "Woof!" - Kotlin actually called into `dog`
 ```
 
 Only a limited set of member shapes can cross this bridge: `val` getters, and methods of arity 0-2
-returning `Unit`, a primitive, `Boolean`, an enum, or `String`/`String?`. An interface with a `var`
+returning `Unit`, a primitive, `Boolean`, an enum, or `String`/`String?`. A `Throwable`,
+`Exception` or `RuntimeException` parameter or result crosses too, as a `System.Exception` (see
+[Throwable values](exceptions.md#throwable-values)); a result declared narrower than
+`RuntimeException` is named on a build warning. An interface with a `var`
 property, an object- or collection-typed member, a `suspend` member, or a generic member has **no
 bridge at all**: passing an implementation of it throws `NotSupportedException`, naming the C#
 type, the first time it crosses, not at build time. A marker interface with no members bridges too:
@@ -1496,7 +1499,8 @@ like the same member on any [generic class](generics.md#limitations).
 ## Limitations {id="limitations"}
 
 - A C#-implemented interface's bridge only supports `val` getters and arity 0-2 methods returning
-  `Unit`, a primitive, `Boolean`, an enum, or `String`/`String?`. Anything else (a `var` property,
+  `Unit`, a primitive, `Boolean`, an enum, `String`/`String?`, or a `Throwable`/`Exception`/
+  `RuntimeException` as a `System.Exception`. Anything else (a `var` property,
   an object- or collection-typed member, `suspend`, generics) throws `NotSupportedException` the
   first time an implementation is passed, naming the C# type, with nothing at build time naming
   which member disqualified it.

@@ -7,6 +7,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeWire
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpWire
 import io.github.xxfast.kotlin.native.nuget.processor.forward.delegateName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.delegateParamList
+import io.github.xxfast.kotlin.native.nuget.processor.forward.managedExceptionTextCs
 import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
 
 /**
@@ -188,8 +189,15 @@ internal fun slotBody(slot: ForwardBridgeSlot, receiver: String): String {
   val body: StringBuilder = StringBuilder()
   slot.parameters.forEachIndexed { index, parameter ->
     when (parameter.type.wire) {
+      // ADR-201 amendment: the ADR-107 envelope, rebuilt (and disposed) by `BuildException`; a
+      // null argument is the null pointer.
       // FromHandle disposes the StableRef the Kotlin side minted; that side deliberately does not.
-      ForwardBridgeWire.OBJECT ->
+      ForwardBridgeWire.OBJECT -> if (parameter.type.throwable != null) {
+        val read = "NugetErrorNative.BuildException(arg$index)"
+        val value: String =
+          if (parameter.type.nullable) "arg$index == IntPtr.Zero ? null : $read" else read
+        body.append("${parameter.type.csharp} value$index = $value; ")
+      } else
         body.append(
           "${parameter.type.csharp} value$index = NugetMarshal.FromHandle<${
             parameter.type.csharp.removeSuffix(
@@ -214,10 +222,16 @@ internal fun slotBody(slot: ForwardBridgeSlot, receiver: String): String {
     ForwardBridgeWire.UNIT -> body.append("$access;")
     ForwardBridgeWire.OBJECT -> {
       body.append("${slot.result.csharp} result = $access; ")
-      if (slot.result.nullable) {
-        body.append("return result is null ? IntPtr.Zero : NugetMarshal.WrapString(result);")
+      // ADR-201 amendment: a Throwable result crosses as its managed-exception text.
+      val text: String = if (slot.result.throwable != null) {
+        managedExceptionTextCs("result", nullable = false)
       } else {
-        body.append("return NugetMarshal.WrapString(result);")
+        "result"
+      }
+      if (slot.result.nullable) {
+        body.append("return result is null ? IntPtr.Zero : NugetMarshal.WrapString($text);")
+      } else {
+        body.append("return NugetMarshal.WrapString($text);")
       }
     }
 

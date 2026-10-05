@@ -778,6 +778,170 @@ public class LiveHandleTests
         });
     }
 
+    // ADR-201 amendment, group A: a Throwable List element or Map value at an input. C# boxes each
+    // element's text with `Wrap<string>` and the fill loop disposes every box it owns, on the
+    // happy path, when Kotlin throws after receiving the list, and when the per-element projection
+    // itself throws mid-fill (an exception whose `Message` throws).
+    [Fact]
+    public void ThrowableListInput_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var stream = new MishapStream();
+            stream.ReportAll(new Exception[] { new("a"), new InvalidOperationException("b") });
+            Assert.Equal(1, stream.ReportSome(new Exception?[] { null, new("c") }));
+            stream.ReportByCat(new Dictionary<string, Exception> { ["Oreo"] = new("d") });
+            stream.Pending = new List<Exception> { new("e") };
+            Assert.Single(stream.Pending);
+        });
+    }
+
+    private sealed class SilentMishap() : Exception
+    {
+        public override string Message => throw new InvalidOperationException("no comment");
+    }
+
+    [Fact]
+    public void ThrowableListInput_ThrowPaths_ReturnToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var stream = new MishapStream();
+            Assert.Throws<KotlinInvalidOperationException>(
+                () => stream.ReportAllOrThrow(new Exception[] { new("a"), new("b") }, true));
+            Assert.Throws<InvalidOperationException>(
+                () => stream.ReportAll(new Exception[] { new("a"), new SilentMishap(), new("c") }));
+        });
+    }
+
+    // ADR-201 amendment, group E: a C#-implemented interface slot. The parameter crosses out as one
+    // ADR-107 envelope that the slot body's `BuildException` disposes before the C# member runs, so
+    // a member that then throws leaves nothing behind; the result crosses in as one string box
+    // Kotlin releases after reading.
+    private sealed class MishapBin(bool throwOnAccept) : IMishapSink
+    {
+        public void Accept(Exception mishap)
+        {
+            if (throwOnAccept) throw new InvalidOperationException("the bin is full");
+        }
+
+        public Exception? Last() => new TimeoutException("Mylo is late");
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void ThrowableBridgeSlot_AcceptAndLast_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var stream = new MishapStream();
+            Assert.Equal("System.TimeoutException: Mylo is late", stream.DrainTo(new MishapBin(false)));
+            Assert.Throws<InvalidOperationException>(() => stream.DrainTo(new MishapBin(true)));
+        });
+    }
+
+    // ADR-201 amendment, group B: a suspend parameter crosses as text and mints no handle; the
+    // `maybeLater` row completes before the P/Invoke returns (no suspension point), the
+    // `reportLater` one after a `yield`.
+    [Fact]
+    public async Task ThrowableSuspendParameter_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var stream = new MishapStream();
+            Assert.True(await stream.MaybeLaterAsync(new Exception("fever")));
+            Assert.False(await stream.MaybeLaterAsync(null));
+            await stream.ReportLaterAsync(new Exception("fleas"));
+        });
+    }
+
+    // ADR-201 amendment, group D: a synchronous lambda payload is one ADR-107 envelope the thunk's
+    // `BuildException` disposes before the C# lambda runs, so a lambda that throws leaves nothing;
+    // a lambda result is one string box Kotlin releases; a listener call is one envelope per
+    // listener, disposed the same way.
+    [Fact]
+    public void ThrowableCallbackPayload_InvokedAndThrowing_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var stream = new MishapStream();
+            stream.OnMishap(_ => { });
+            Assert.Throws<InvalidOperationException>(
+                () => stream.OnMishap(_ => throw new InvalidOperationException("not now")));
+            stream.Recover(() => new Exception("fever"));
+        });
+    }
+
+    private sealed class QuietListener : IMishapListener
+    {
+        public void OnMishap(Exception mishap) { }
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void ThrowableListenerParameter_Announce_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var stream = new MishapStream();
+            using IDisposable sub = stream.AddMishapListener(new QuietListener());
+            Assert.Equal(1, stream.Announce());
+        });
+    }
+
+    // ADR-201 amendment, group C: a bare suspend result is one envelope per completion, disposed by
+    // the completion's `BuildException`. `LatestLater` has no suspension point, so its body
+    // completes before the P/Invoke returns (the tight loop); `WorstLater` resumes after a `yield`;
+    // the throw path mints the error envelope only.
+    [Fact]
+    public async Task ThrowableSuspendResult_NullAndNonNull_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var stream = new MishapStream();
+            Assert.Null(await stream.LatestLaterAsync());
+            stream.Record(new Exception("fever"));
+            Assert.NotNull(await stream.LatestLaterAsync());
+            Assert.NotNull(await stream.WorstLaterAsync());
+            await Assert.ThrowsAsync<KotlinInvalidOperationException>(
+                () => stream.WorstOrThrowLaterAsync(true));
+        });
+    }
+
+    // Group C, the Flow route: one envelope per item, read and disposed per item, on a full drain,
+    // a nullable element, an early break (the remaining items are never minted), and a flow that
+    // fails after its first item.
+    [Fact]
+    public async Task ThrowableFlow_CollectEveryItem_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var stream = new MishapStream();
+            await foreach (Exception _ in stream.Each()) { }
+            await foreach (Exception? _ in stream.MaybeEach()) { }
+            await foreach (Exception _ in stream.Each()) break;
+            await Assert.ThrowsAnyAsync<Exception>(async () =>
+            {
+                await foreach (Exception _ in stream.EachThenFail()) { }
+            });
+            using KotlinFlow<Exception> later = await stream.StreamLaterAsync();
+            await foreach (Exception _ in later) { }
+        });
+    }
+
+    // Group C, the StateFlow route: each `.Value` read is one envelope, disposed by the read.
+    [Fact]
+    public void ThrowableStateFlow_ValueReads_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var stream = new MishapStream();
+            Assert.Null(stream.Current.Value);
+            stream.Record(new Exception("fever"));
+            Assert.NotNull(stream.Current.Value);
+        });
+    }
+
     // A value class's own members returning a handle-minting result, one row per arm: an object
     // (the wrapper owns the handle), a list (`ReadList` disposes it) and a `Throwable`
     // (`BuildException` disposes the ADR-107 envelope). The null half mints nothing; the object

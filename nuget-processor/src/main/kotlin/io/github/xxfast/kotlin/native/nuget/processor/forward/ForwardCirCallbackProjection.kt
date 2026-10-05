@@ -27,7 +27,9 @@ internal fun BridgeType.Callback.forwardCallbackDelegate(): CirCallbackDelegate 
 /** `Nuget{Arg}..{Result}Callback`, the shipped ADR-036 naming, minted off the wire. */
 internal fun BridgeType.Callback.forwardCallbackDelegateName(): String {
   val suffixes: String = parameters.joinToString("") { parameter -> parameter.wireSuffix() }
-  return "Nuget$suffixes${result.wireSuffix()}Callback"
+  // ADR-201 amendment: a Throwable RESULT is a `String` box on the wire, a payload an envelope.
+  val resultSuffix: String = if (result is BridgeType.Throwable) "String" else result.wireSuffix()
+  return "Nuget$suffixes${resultSuffix}Callback"
 }
 
 internal fun BridgeType.Callback.forwardCallbackDelegateReturnType(): String =
@@ -86,6 +88,13 @@ internal fun forwardCallbackPrelude(
     // `WrapString` mints a StableRef box over the managed string; the Kotlin side reads it and
     // releases it (ADR-036's return-box rule, unchanged by ADR-160).
     BridgeType.String -> "return NugetMarshal.WrapString($call);"
+    // ADR-201 amendment: the managed-exception text over the same box, held once so the user's
+    // lambda runs exactly once.
+    is BridgeType.Throwable -> {
+      val held: String = freshName("mishap", (lambdaNames + name.removePrefix("@")).toSet())
+      val text: String = managedExceptionTextCs(held, nullable = false)
+      "var $held = $call; return NugetMarshal.WrapString($text);"
+    }
     is BridgeType.Primitive -> if (result.kind == PrimitiveKind.BOOLEAN) {
       "return $call ? (byte)1 : (byte)0;"
     } else {
@@ -139,6 +148,8 @@ private fun BridgeType.callbackArgumentExpression(slot: String): String = when (
   BridgeType.String -> "NugetMarshal.FromHandle<string>($slot)"
   is BridgeType.ObjectHandle -> "NugetMarshal.FromHandle<$csharpType>($slot)"
   is BridgeType.Interface -> "NugetMarshal.FromHandle<$csharpType>($slot)"
+  // ADR-201 amendment: the ADR-107 envelope; `BuildException` disposes it as it reads.
+  is BridgeType.Throwable -> "NugetErrorNative.BuildException($slot)"
   else -> error("Forward CIR callback projection has no payload lowering for $this")
 }
 
@@ -150,7 +161,8 @@ private fun BridgeType.callbackWireCsharpType(): String = when (this) {
     if (kind == PrimitiveKind.BOOLEAN) "byte" else kind.forwardPublicCsharpType()
 
   is BridgeType.Enum -> "int"
-  BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface -> "IntPtr"
+  BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface,
+  is BridgeType.Throwable -> "IntPtr"
   else -> error("Forward CIR callback projection has no wire type for $this")
 }
 
@@ -167,6 +179,6 @@ private fun BridgeType.wireSuffix(): String = when (this) {
 
   is BridgeType.Enum -> "Int"
   BridgeType.String -> "String"
-  is BridgeType.ObjectHandle, is BridgeType.Interface -> "Object"
+  is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Throwable -> "Object"
   else -> error("Forward CIR callback projection has no delegate name segment for $this")
 }

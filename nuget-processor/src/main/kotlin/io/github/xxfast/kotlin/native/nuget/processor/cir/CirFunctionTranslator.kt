@@ -31,6 +31,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyRetur
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBytesCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBytesRead
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyEnvelopeCsharpType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyEnvelopeRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyMarshalledRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyDiscriminatedRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
@@ -755,6 +757,8 @@ internal fun translateSuspendFunction(
     returnShape is ForwardLegacyReturnShape.Marshalled -> returnShape.declaredCsharpType()
     // ROADMAP Phase 4: `Task<byte[]>`, the class route's own line.
     returnShape is ForwardLegacyReturnShape.Bytes -> legacyBytesCsharpType(returnShape.nullable)
+    returnShape is ForwardLegacyReturnShape.Envelope ->
+      legacyEnvelopeCsharpType(returnShape.nullable)
     // ADR-040: the class route's own line -- the projected interface, not the backing wrapper
     // `nestedCsName()` would spell below. `strayPetLater()` is `Task<IPet>`, ADR-040's own example.
     returnShape is ForwardLegacyReturnShape.Interface -> returnShape.declaredCsharpType()
@@ -826,6 +830,8 @@ internal fun translateSuspendFunction(
 
       // ROADMAP Phase 4: `NugetMarshal.ReadBytes(resultPtr)`, the class route's own line.
       is ForwardLegacyReturnShape.Bytes -> legacyBytesRead("resultPtr", returnShape.nullable)
+      // ADR-201 amendment: the awaited envelope, rebuilt and disposed by `BuildException`.
+      is ForwardLegacyReturnShape.Envelope -> legacyEnvelopeRead("resultPtr", returnShape.nullable)
 
       // ROADMAP Phase 4 line 23: the qualified handle constructor, and `NugetUnbox` for a value
       // class.

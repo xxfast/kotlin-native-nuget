@@ -166,6 +166,8 @@ private fun componentWireCsharpType(
   // `owned = false` instead, and a present value still reaches the `IntPtr` branch through
   // `Nullable.GetUnderlyingType`.
   if (component.unwrapNullable() == BridgeType.ByteArray) return "IntPtr$suffix"
+  // ADR-201 amendment: an input `Throwable` component crosses as its managed-exception text.
+  if (component.unwrapNullable() is BridgeType.Throwable) return "string$suffix"
   if (component.componentEnum() != null) return "int$suffix"
   val valueClass: BridgeType.ValueClass =
     component.componentValueClass() ?: return csharpType(component)
@@ -200,6 +202,10 @@ private fun componentWireExpression(
     } else {
       "NugetMarshal.CreateBytes($access)"
     }
+  }
+  // ADR-201 amendment: the parameter encoding, per element; a null element stays the null text.
+  if (component.unwrapNullable() is BridgeType.Throwable) {
+    return managedExceptionTextCs(access, nullable = component is BridgeType.Nullable)
   }
   if (component.componentEnum() != null) {
     return if (component is BridgeType.Nullable) {

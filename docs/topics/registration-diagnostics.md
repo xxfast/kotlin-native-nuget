@@ -412,6 +412,18 @@ pin it. An exception passed in crosses as one string and mints no handle:
 `ThrowableParameter_ReportAndSet_ReturnsToBaseline` covers a parameter, a nullable parameter and a
 setter.
 
+The async, callback and interface-slot positions use the same two encodings and also leave the
+count where it was. `LeakTests/LiveHandleTests.cs` pins each:
+`ThrowableListInput_ReturnsToBaseline` and `ThrowableListInput_ThrowPaths_ReturnToBaseline` for a
+`List` input, `ThrowableBridgeSlot_AcceptAndLast_ReturnsToBaseline` for a C#-implemented interface
+slot, `ThrowableSuspendParameter_ReturnsToBaseline` for a `suspend` parameter,
+`ThrowableCallbackPayload_InvokedAndThrowing_ReturnsToBaseline` and
+`ThrowableListenerParameter_Announce_ReturnsToBaseline` for a lambda payload and a listener
+parameter, `ThrowableSuspendResult_NullAndNonNull_ReturnsToBaseline` for a `suspend` result
+(including a member that never suspends, in a tight loop),
+`ThrowableFlow_CollectEveryItem_ReturnsToBaseline` for a `Flow` element (an early break and a
+throw path too) and `ThrowableStateFlow_ValueReads_ReturnsToBaseline` for a `StateFlow` element.
+
 A [value class's own member](value-classes.md#nullable) that returns an object, a `List` or a
 `Throwable` mints one handle that C# releases or hands to you, null or not.
 `LeakTests/LiveHandleTests.cs`'s `ValueClassMemberObjectResult_NullAndNonNull_ReturnsToBaseline`,

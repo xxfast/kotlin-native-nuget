@@ -672,7 +672,8 @@ Any other generic parameter (`Pair<A, B>`, `Array<T>`, a lambda), `Instant`/`Dur
 value class or an interface is not supported at these positions and is skipped with a diagnostic
 naming the member. Pass a class/object/sealed handle (nullable or not), a `List`/`Set`/`Map`, an
 enum, or a primitive/`String` (nullable or not) instead, or split the parameter across separate
-members.
+members. A `Throwable`, `Exception` or `RuntimeException` parameter does bind, as a
+`System.Exception` (see [Throwable values](exceptions.md#throwable-values)).
 
 ## Limitations
 
@@ -702,6 +703,9 @@ members.
   of one, or split it onto a separate ordinary member.
 - `suspend fun (): StateFlow<ByteArray>` has no binding: the shared `nuget_stateflow_value` export
   has no per-member projection seam for a `ByteArray`. A `StateFlow<ByteArray>` **property** binds.
+- `suspend fun (): StateFlow<Throwable>` and any `MutableStateFlow<Throwable>` have no binding, for
+  the same shared-export reason. A read-only `StateFlow<Throwable>` property or method binds; see
+  [Throwable values](exceptions.md#throwable-values).
 
 `Flow`, `StateFlow`, and `suspend` dispatch are AOT- and trim-safe; see
 [Publishing Kotlin to C#: AOT and trimming](forward-overview.md#aot-and-trimming).

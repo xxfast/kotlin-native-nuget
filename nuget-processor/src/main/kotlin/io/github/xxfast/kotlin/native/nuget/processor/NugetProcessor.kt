@@ -2945,6 +2945,33 @@ internal class NugetProcessor(
         }
       }
     bridgePlans.forEach { plan -> builder.addInterfaceBridgeFactoryExport(plan) }
+    // ADR-201 amendment: a null bridge plan is silent (a C# implementation then fails at runtime
+    // in `NugetMarshal.HandleOf`), so the one refusal this route owns for a Throwable is named: a
+    // slot result declared narrower than `RuntimeException`.
+    val plannedBridges: Set<String> = bridgePlans.map { plan -> plan.qualifiedName }.toSet()
+    ForwardDiagnosticSink.emit(
+      reachableInterfaces
+        .filter { iface -> iface.qualifiedName?.asString() !in plannedBridges }
+        .mapNotNull { iface ->
+          val (member, declared) =
+            ForwardInterfaceBridgePlanner.throwableRefusal(
+              iface, forwardClassifier, context.symbols,
+            )
+              ?: return@mapNotNull null
+          ForwardDiagnostic(
+            kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
+            symbol = iface,
+            declaration = "${iface.qualifiedName?.asString()}.$member",
+            reason = "a C# implementation of it cannot be handed to Kotlin: its result is " +
+                "declared `$declared`, which cannot hold the `NugetManagedException` a C# " +
+                "exception arrives as",
+            hint = "declare the result Throwable, Exception or RuntimeException so a C# class " +
+                "can implement the interface; Kotlin-backed implementations are unaffected",
+            owner = null,
+          )
+        },
+      logger,
+    )
     // ADR-127: `nuget_gc_collect`, `nuget_csharp_token` and the `NugetCSharpBridge` marker moved
     // to the `nuget-runtime` klib, which exports all three unconditionally. The generated bridge
     // objects still implement the marker; it is imported, not declared, now.

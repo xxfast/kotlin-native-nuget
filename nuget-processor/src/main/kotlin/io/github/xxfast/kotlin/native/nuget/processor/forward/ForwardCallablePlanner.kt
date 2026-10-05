@@ -3199,9 +3199,8 @@ internal class ForwardCallablePlanner(
           ?: ineligibleType.sealedTypeDetail()
           ?: ineligibleType.collectionComponentDetail()
           ?: ineligibleType.unsupportedTypeDetail()
-          // ADR-201: the declared throwable's simple name, for THROWABLE's reason line.
-          ?: (ineligibleType.unwrapNullable() as? BridgeType.Throwable)
-            ?.kotlinType?.substringAfterLast('.'),
+          // ADR-201: the declared throwable spelling, for THROWABLE's reason line.
+          ?: ineligibleType.throwableInputDetail(),
         position = ForwardSkipPosition.INPUT,
         parameter = ineligible.first,
       )
@@ -4634,6 +4633,11 @@ internal class ForwardCallablePlanner(
     // here. `declinesNullableMapKey` makes `isBridgeableComponent()` false, so the arm above fires
     // first and attributes the skip to NULLABLE_MAP_KEY at an input position exactly as it does at
     // a return one -- one rule, one wording, every position.
+    // ADR-201 amendment: a `Throwable` component declared narrower than `RuntimeException` cannot
+    // hold the `NugetManagedException` each element arrives as; named for that, not COLLECTION.
+    listOfNotNull(element, key, value).any { component -> component.isNarrowThrowable() } ->
+      ForwardPlanSkipReason.THROWABLE
+
     kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP -> {
       val keyAdmitted: Boolean = key?.isWrappableComponent() == true
       val valueAdmitted: Boolean = value?.isWrappableComponent() == true
@@ -4898,6 +4902,39 @@ internal fun BridgeType.Collection.declinesThrowableComponent(): Boolean = when 
   CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> false
 }
 
+/** ADR-201: a `Throwable` declared narrower than `RuntimeException`, nullable or not. */
+internal fun BridgeType.isNarrowThrowable(): Boolean =
+  (unwrapNullable() as? BridgeType.Throwable)?.acceptsManagedException == false
+
+/**
+ * ADR-201: the declared spelling a THROWABLE input skip names: the throwable's simple name for a
+ * bare one (`IllegalStateException`), the collection with its narrow component
+ * (`List<IllegalStateException>`) for a list or map input. Null when neither applies.
+ */
+internal fun BridgeType.throwableInputDetail(): String? {
+  fun spell(component: BridgeType): String {
+    val throwable: BridgeType.Throwable =
+      component.unwrapNullable() as? BridgeType.Throwable ?: return component.diagnosticTypeName()
+    val suffix: String = if (component is BridgeType.Nullable) "?" else ""
+    return throwable.kotlinType.substringAfterLast('.') + suffix
+  }
+  val bare: BridgeType = unwrapNullable()
+  if (bare is BridgeType.Throwable) return spell(bare)
+  val collection: BridgeType.Collection = bare as? BridgeType.Collection ?: return null
+  val components: List<BridgeType> =
+    listOfNotNull(collection.key, collection.value, collection.element)
+  if (components.none { component -> component.isNarrowThrowable() }) return null
+  val kind: String = when (collection.kind) {
+    CollectionKind.LIST -> "List"
+    CollectionKind.MUTABLE_LIST -> "MutableList"
+    CollectionKind.MAP -> "Map"
+    CollectionKind.MUTABLE_MAP -> "MutableMap"
+    CollectionKind.SET -> "Set"
+    CollectionKind.MUTABLE_SET -> "MutableSet"
+  }
+  return components.joinToString(", ", "$kind<", ">") { component -> spell(component) }
+}
+
 /**
  * ADR-083 amendment (boundary nullability part B): whether this collection is a map whose KEY is
  * nullable, which is declined at EVERY position rather than only at an input one.
@@ -5000,6 +5037,11 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
   // holds for both.
   is BridgeType.Interface -> true
 
+  // ADR-201 amendment: a `Throwable` component takes the parameter encoding per element: C# boxes
+  // its `"{FullName}: {Message}"` text, Kotlin casts the box to `String` and builds a
+  // `NugetManagedException`, so only a declaration that can hold one is wrappable.
+  is BridgeType.Throwable -> acceptsManagedException
+
   // ADR-081: a value-class component crosses as its *underlying*, projected per element at the C#
   // call site (`x.Value`, `(int)x.Mood`, `x.Patient`) before `Wrap<T>` is ever instantiated, so the
   // write side only ever boxes a type it already handles.
@@ -5013,7 +5055,9 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
   // ADR-083 amendment (boundary nullability part B): the inline "key is not Nullable" test that
   // used to sit in the map arm below now lives in [declinesNullableMapKey], so the write side and
   // every read side consult one predicate instead of four copies of the rule.
-  is BridgeType.Collection -> if (declinesByteArrayComponent() || declinesNullableMapKey()) {
+  is BridgeType.Collection -> if (
+    declinesByteArrayComponent() || declinesThrowableComponent() || declinesNullableMapKey()
+  ) {
     false
   } else {
     val isMap: Boolean = kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP

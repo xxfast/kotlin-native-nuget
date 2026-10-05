@@ -13,6 +13,7 @@ import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSValueParameter
 import com.google.devtools.ksp.symbol.Modifier
 import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.MUTABLE_STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 
@@ -100,6 +101,13 @@ internal sealed interface ForwardLegacyParameterShape {
   data class Enum(val type: BridgeType.Enum) : ForwardLegacyParameterShape
 
   /**
+   * ADR-201 amendment: a `Throwable`, `Exception` or `RuntimeException` parameter, crossing as the
+   * sync route's one nullable `STRING` slot: C# sends `"{FullName}: {Message}"`, Kotlin rebuilds a
+   * `NugetManagedException`. A narrower declaration stays [Refused].
+   */
+  data class ManagedException(val nullable: Boolean) : ForwardLegacyParameterShape
+
+  /**
    * Any other parameter, named so the skip diagnostic can quote it.
    *
    * [refusal] is the classifier's own [BridgeType.Unsupported] when the parameter is an
@@ -156,6 +164,8 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
     classified is BridgeType.Nullable && classified.type is BridgeType.ObjectHandle ->
       ForwardLegacyParameterShape.Handle(classified.type, nullable = true)
     classified is BridgeType.Enum -> ForwardLegacyParameterShape.Enum(classified)
+    (classified.unwrapNullable() as? BridgeType.Throwable)?.acceptsManagedException == true ->
+      ForwardLegacyParameterShape.ManagedException(nullable = classified is BridgeType.Nullable)
     classified is BridgeType.Nullable &&
         (classified.type.isLegacyScalar() || classified.type is BridgeType.Enum) ->
       ForwardLegacyParameterShape.NullableScalar(classified.type)
@@ -306,6 +316,7 @@ private fun legacyWidenedIndices(
     ForwardLegacyParameterShape.Plain, is ForwardLegacyParameterShape.Enum,
     is ForwardLegacyParameterShape.NullableScalar -> true
     is ForwardLegacyParameterShape.Handle, is ForwardLegacyParameterShape.Marshalled,
+    is ForwardLegacyParameterShape.ManagedException,
     is ForwardLegacyParameterShape.Refused -> false
   }
 }
@@ -450,6 +461,13 @@ internal sealed interface ForwardLegacyReturnShape {
   data class Bytes(val nullable: Boolean) : ForwardLegacyReturnShape
 
   /**
+   * ADR-201 amendment: a bare `Throwable` result. The export pins the ADR-107 envelope
+   * (`buildError(result, ::nugetMappedType)`) and the completion reads it with
+   * `NugetErrorNative.BuildException`, which disposes it; a null result is the null pointer.
+   */
+  data class Envelope(val nullable: Boolean) : ForwardLegacyReturnShape
+
+  /**
    * ROADMAP Phase 4 line 23: an exported class or object handle (not a sealed base, which is
    * [Discriminated]). It used to be [Plain], spelled with the bare `nestedCsName()`, which names
    * nothing once the type lives in another namespace (an admitted dependency type does, as
@@ -540,6 +558,22 @@ internal fun ForwardLegacyReturnShape.ValueClass.legacyValueClassRead(handle: St
  * expression that reads its handle back. Shared by the suspend routes and the flow routes so the
  * four call sites cannot drift.
  */
+/** ADR-201 amendment: the public type of a legacy-route Throwable result or element. */
+internal fun legacyEnvelopeCsharpType(nullable: Boolean): String =
+  if (nullable) "global::System.Exception?" else "global::System.Exception"
+
+/**
+ * ADR-201 amendment: `NugetErrorNative.BuildException(h)`, which rebuilds the unthrown exception
+ * and disposes the envelope; a nullable position is guarded on the wire pointer first.
+ */
+internal fun legacyEnvelopeRead(handle: String, nullable: Boolean): String =
+  if (nullable) "$handle == IntPtr.Zero ? null : NugetErrorNative.BuildException($handle)"
+  else "NugetErrorNative.BuildException($handle)"
+
+/** [legacyEnvelopeRead] in the ADR-123 `read:` slot the flow routes hand their enumerator. */
+internal fun legacyEnvelopeElementReadArgument(nullable: Boolean): String =
+  "read: static h => ${legacyEnvelopeRead("h", nullable)}"
+
 internal fun legacyBytesCsharpType(nullable: Boolean): String =
   if (nullable) "byte[]?" else "byte[]"
 
@@ -612,10 +646,9 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
 
   // ADR-201: a bare `Throwable` reached the same `Plain` fall-through and rendered
   // `Task<Throwable?>` over `new Throwable(resultPtr, out _)`, a C# type nothing declares. The
-  // envelope is a sync-result shape with no suspend completion arm, so it is refused by name;
-  // `suspend fun f(): List<Throwable>` binds through the collection shape below.
+  // amendment binds it: the export pins the ADR-107 envelope, the completion reads it.
   if (classified is BridgeType.Throwable) {
-    return ForwardLegacyReturnShape.Refused(expanded.legacyDescription())
+    return ForwardLegacyReturnShape.Envelope(expanded.isMarkedNullable)
   }
 
   // ROADMAP Phase 4 line 23: `Plain` means "spell it", so a type the classifier refused (an
@@ -673,6 +706,13 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
     // (ADR-067's encoding, per-member exports they can widen to `COpaquePointer?`); this one
     // cannot without widening a shared runtime export's return type, so it skips NAMED instead of
     // binding a `KotlinStateFlow<T>` that dies on the first absent value.
+    // ADR-201 amendment: a Throwable element is refused here for the runtime-pair reason first,
+    // whatever its nullability, so the diagnostic names the real constraint.
+    if (legacyFlowElementShape(element) is ForwardLegacyFlowElementShape.Envelope) {
+      return ForwardLegacyReturnShape.Refused(
+        "${expanded.legacyDescription()}$THROWABLE_RUNTIME_PAIR_REFUSAL",
+      )
+    }
     if (element?.isMarkedNullable == true) {
       return ForwardLegacyReturnShape.Refused(expanded.legacyDescription())
     }
@@ -750,6 +790,14 @@ internal sealed interface ForwardLegacyFlowElementShape {
    */
   data class Bytes(val nullable: Boolean) : ForwardLegacyFlowElementShape
 
+  /**
+   * ADR-201 amendment: a bare `Throwable` element on a per-member route (a property, a
+   * `Flow`/`StateFlow` method, an acquired `Flow`): each item and `.Value` read is boxed as its
+   * ADR-107 envelope and read with `NugetErrorNative.BuildException`. A route that reads through
+   * the runtime's shared `StateFlow` pair refuses it instead ([THROWABLE_RUNTIME_PAIR_REFUSAL]).
+   */
+  data class Envelope(val nullable: Boolean) : ForwardLegacyFlowElementShape
+
   /** Any other generic element, named so the skip diagnostic can quote it. */
   data class Refused(
     val description: String,
@@ -783,10 +831,11 @@ internal fun ForwardBridgeTypeClassifier.legacyFlowElementShape(
   if (classified == BridgeType.ByteArray) {
     return ForwardLegacyFlowElementShape.Bytes(expanded.isMarkedNullable)
   }
-  // ADR-201: the same crash for a bare `Throwable` element, which has no Flow route (the envelope
-  // is a sync-result shape); refused by name instead. `Flow<List<Throwable>>` binds below.
+  // ADR-201: the same crash for a bare `Throwable` element. The amendment binds it on the
+  // per-member routes as its ADR-107 envelope; the runtime-pair routes refuse it (see
+  // [legacyRefusedFlowElementShape] and the awaited `StateFlow` arm of [legacyReturnShape]).
   if (classified is BridgeType.Throwable) {
-    return ForwardLegacyFlowElementShape.Refused(expanded.legacyDescription())
+    return ForwardLegacyFlowElementShape.Envelope(expanded.isMarkedNullable)
   }
 
   // ROADMAP Phase 4 line 23: an element the classifier refused (an out-of-scope dependency type
@@ -847,8 +896,34 @@ internal fun ForwardBridgeTypeClassifier.legacyRefusedFlowElementShape(
 ): Pair<String, BridgeType.Unsupported?>? {
   val element: KSType = legacyFlowElement(type) ?: return null
   val shape: ForwardLegacyFlowElementShape = legacyFlowElementShape(element)
+  // ADR-201 amendment: a held or settable `MutableStateFlow` reads (and writes) through the
+  // runtime's shared `StateFlow` pair and the ADR-071 write seam, neither of which has an envelope
+  // arm, so a Throwable element is refused there; a read-only `StateFlow` binds per member.
+  val mutable: Boolean =
+    type?.expandAliases()?.declaration?.qualifiedName?.asString() in MUTABLE_STATE_FLOW_TYPES
+  if (shape is ForwardLegacyFlowElementShape.Envelope && mutable) {
+    val described: String = requireNotNull(type).expandAliases().legacyDescription()
+    return "$described$THROWABLE_RUNTIME_PAIR_REFUSAL" to null
+  }
   return if (shape is ForwardLegacyFlowElementShape.Refused) shape.description to shape.refusal
   else null
+}
+
+/**
+ * ADR-201 amendment: the clause appended to a refused `StateFlow<Throwable>`'s description: the
+ * element reads through the runtime's shared `nuget_stateflow_value`/`nuget_stateflow_collect` (or
+ * the ADR-071 write seam), which box the value itself with no envelope arm, and the frozen runtime
+ * ABI gets no new export for it.
+ */
+internal const val THROWABLE_RUNTIME_PAIR_REFUSAL: String =
+  " (a Throwable element of an awaited StateFlow or a MutableStateFlow reads through the " +
+    "runtime's shared StateFlow exports, which have no envelope seam; expose a read-only " +
+    "StateFlow property or method instead)"
+
+/** ADR-201 amendment: whether a `Flow`/`StateFlow` member's element is a bare `Throwable`. */
+internal fun ForwardBridgeTypeClassifier.legacyFlowElementEnvelope(type: KSType?): Boolean {
+  val element: KSType = legacyFlowElement(type) ?: return false
+  return legacyFlowElementShape(element) is ForwardLegacyFlowElementShape.Envelope
 }
 
 /** The marshalled collection a `Flow`/`StateFlow` member's element is, or null for every other. */
@@ -1153,6 +1228,7 @@ internal fun ForwardLegacyParameterShape.isLegacyLowered(): Boolean = when (this
   ForwardLegacyParameterShape.Plain,
   is ForwardLegacyParameterShape.Enum,
   is ForwardLegacyParameterShape.NullableScalar,
+  is ForwardLegacyParameterShape.ManagedException,
   is ForwardLegacyParameterShape.Refused -> false
 }
 
@@ -1166,6 +1242,10 @@ internal fun ForwardLegacyNames.legacyArgument(index: Int, parameter: String): S
   loweredLocals[index]?.let { local -> return local }
   val shape: ForwardLegacyParameterShape = shapes[index]
   if (shape is ForwardLegacyParameterShape.Enum) return legacyEnumValue(shape.type, parameter)
+  // ADR-201 amendment: the sync route's lowering of the managed-exception text.
+  if (shape is ForwardLegacyParameterShape.ManagedException) {
+    return managedExceptionLowering(parameter, shape.nullable)
+  }
   val scalar: ForwardLegacyParameterShape.NullableScalar =
     shape as? ForwardLegacyParameterShape.NullableScalar ?: return parameter
   val value: String = (scalar.type as? BridgeType.Enum)
@@ -1268,6 +1348,7 @@ internal fun ForwardLegacyParameterShape.legacyPrelude(
   ForwardLegacyParameterShape.Plain,
   is ForwardLegacyParameterShape.Enum,
   is ForwardLegacyParameterShape.NullableScalar,
+  is ForwardLegacyParameterShape.ManagedException,
   is ForwardLegacyParameterShape.Refused -> null
 }
 
@@ -1591,7 +1672,12 @@ internal fun legacyRefusedStoredCallbackPair(
  * route. Read by both halves (`exports/InterfaceBridgeExports.kt`, `cir/CirClassTranslator.kt`)
  * off one classification, so the wire cannot drift from the gate above.
  */
-internal enum class InterfaceBridgeWire { BOOL, BY_VALUE, ORDINAL, HANDLE }
+internal enum class InterfaceBridgeWire {
+  BOOL, BY_VALUE, ORDINAL, HANDLE,
+
+  /** ADR-201 amendment: a `Throwable`, as its ADR-107 envelope (`BuildException` in C#). */
+  ENVELOPE,
+}
 
 internal fun BridgeType.interfaceBridgeWire(): InterfaceBridgeWire = when (this) {
   is BridgeType.Primitive ->
@@ -1599,6 +1685,7 @@ internal fun BridgeType.interfaceBridgeWire(): InterfaceBridgeWire = when (this)
   is BridgeType.Enum -> InterfaceBridgeWire.ORDINAL
   BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface ->
     InterfaceBridgeWire.HANDLE
+  is BridgeType.Throwable -> InterfaceBridgeWire.ENVELOPE
   else -> error("ADR-039: the subscription pair gate admitted $this, which has no wire")
 }
 

@@ -330,18 +330,19 @@ class Tier1ThrowablePositionsTest {
   }
 
   /**
-   * The deferred positions stay named skips: a `List<Throwable>` input, a `Set` element and a
-   * `Map` key (each crossing builds a fresh `System.Exception`, which compares by reference), and
+   * The declined positions stay named skips: a `Set` element and a `Map` key, at an input and a
+   * result (each crossing builds a fresh `System.Exception`, which compares by reference), and
    * an extension receiver (it would extend every `System.Exception` in C#).
    */
   @Test
-  fun `Throwable input collections, Set elements, Map keys and receivers skip named`() {
+  fun `Throwable Set elements, Map keys and receivers skip named`() {
     val result: Tier1Result = Tier1Harness.run(
       """
       package tier1.throwableskips
 
       class MishapLog {
-        fun reportAll(errors: List<Throwable>) {}
+        fun reportUnique(errors: Set<Throwable>) {}
+        fun reportByKey(errors: Map<Exception, String>) {}
         fun distinct(): Set<Throwable> = emptySet()
         fun byError(): Map<Throwable, String> = emptyMap()
         val unique: Set<Exception> get() = emptySet()
@@ -355,16 +356,29 @@ class Tier1ThrowablePositionsTest {
     assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
     assertTrue(result.kspSucceeded, "expected KSP to succeed; got: ${result.kspErrors}")
     val cs: String = result.generatedCSharp
-    for (member in listOf("ReportAll(", "Distinct(", "ByError(", " Unique", "Describe(")) {
+    val absent: List<String> =
+      listOf("ReportUnique(", "ReportByKey(", "Distinct(", "ByError(", " Unique", "Describe(")
+    for (member in absent) {
       assertFalse(
         Regex("""public [^\n]*\b${Regex.escape(member)}""").containsMatchIn(cs),
         "expected $member to be absent; generated=$cs",
       )
     }
-    for (member in listOf("reportAll", "distinct", "byError", "unique", "describe")) {
+    val named: List<String> =
+      listOf("reportUnique", "reportByKey", "distinct", "byError", "unique", "describe")
+    for (member in named) {
       assertTrue(
         result.kspWarnings.any { it.contains("SKIPPED_") && it.contains(member) },
         "expected a named skip for $member; kspWarnings=${result.kspWarnings}",
+      )
+    }
+    // A declined slot, not a deferred one, and the hint says why, at an input as at a result.
+    for (member in listOf("reportUnique", "reportByKey", "distinct", "byError")) {
+      assertTrue(
+        result.kspWarnings.any {
+          it.contains(".$member") && it.contains("cannot be a `Set` element or a `Map` key")
+        },
+        "expected the declined-slot hint for $member; kspWarnings=${result.kspWarnings}",
       )
     }
     assertTrue(
@@ -476,13 +490,13 @@ class Tier1ThrowablePositionsTest {
 
   /**
    * The legacy suspend and Flow routes: a `List<Throwable>` result rides the shared collection
-   * projection both halves already use; a bare `Throwable` result, `Flow`/`StateFlow` element or
-   * suspend parameter has no legacy-route arm and skips named. The bare suspend result used to
-   * render `Task<Throwable?>` over a C# type nothing declares, and the bare `Flow` element crashed
-   * the processor in the user-type speller.
+   * projection both halves already use. The ADR-201 amendment binds the bare positions too (the
+   * bare suspend result used to render `Task<Throwable?>` over a C# type nothing declares, and the
+   * bare `Flow` element crashed the processor in the user-type speller); the full matrix is
+   * `Tier1ThrowableRemainingPositionsTest`.
    */
   @Test
-  fun `suspend and Flow Throwable positions bind as lists and skip bare`() {
+  fun `suspend and Flow Throwable positions bind as lists and bare`() {
     val result: Tier1Result = Tier1Harness.run(
       """
       package tier1.throwableasync
@@ -509,19 +523,12 @@ class Tier1ThrowablePositionsTest {
     assertTrue(result.kspSucceeded, "expected KSP to succeed; got: ${result.kspErrors}")
     val cs: String = result.generatedCSharp
     assertContains(cs, "Task<IReadOnlyList<global::System.Exception>> AllAsync(")
+    // ADR-201 amendment: a suspend parameter binds on the sync route's string wire.
+    assertContains(cs, "ReportAsync(global::System.Exception mishap")
     assertContains(cs, "IReadOnlyList<global::System.Exception>")
-    for (member in listOf("LatestAsync(", "Each(", " State", "ReportAsync(")) {
-      assertFalse(
-        Regex("""public [^\n]*\b${Regex.escape(member)}""").containsMatchIn(cs),
-        "expected $member to be absent; generated=$cs",
-      )
-    }
-    for (member in listOf("latest", "each", "state", "report")) {
-      assertTrue(
-        result.kspWarnings.any { it.contains("SKIPPED_") && it.contains(member) },
-        "expected a named skip for $member; kspWarnings=${result.kspWarnings}",
-      )
-    }
+    assertContains(cs, "Task<global::System.Exception?> LatestAsync(")
+    assertContains(cs, "KotlinFlow<global::System.Exception> Each(")
+    assertContains(cs, "KotlinStateFlow<global::System.Exception?> State")
     Tier1CSharpCompile.assertCompiles(
       result, "public static class Consumer { }", allowUnsafe = true,
     )
@@ -621,7 +628,9 @@ class Tier1ThrowablePositionsTest {
       "return nativeResult == IntPtr.Zero ? null : " +
           "NugetErrorNative.BuildException(nativeResult);",
     )
-    Tier1CSharpCompile.assertCompiles(result, "public static class Consumer { }")
+    Tier1CSharpCompile.assertCompiles(
+      result, "public static class Consumer { }", allowUnsafe = true,
+    )
   }
 
   /**

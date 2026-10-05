@@ -220,10 +220,11 @@ private fun BridgeType.isLambdaTypeArgument(isResult: Boolean): Boolean = when (
 
 /**
  * ADR-201: the C# argument a `Throwable` input crosses as, `"{FullName}: {Message}"`, which the
- * Kotlin export splits back into a `NugetManagedException`. The same join `BuildException`'s
- * ADR-161 `TakeOriginalManagedFault` compares against, so a passed exception the Kotlin side
- * rethrows unchanged comes back to its C# caller as itself. A null [nullable] value is the null
- * string pointer.
+ * Kotlin export splits back into a `NugetManagedException`. It is the same join ADR-161's
+ * `TakeOriginalManagedFault` compares against, but that stash is set only by a throwing callback
+ * (`CreateManagedError`), never by this parameter path, so a passed exception Kotlin rethrows
+ * reaches C# as a `KotlinException` over the `NugetManagedException`, not as itself: the input is
+ * lossy by design (ADR-201 amendment). A null [nullable] value is the null string pointer.
  */
 internal fun managedExceptionTextCs(name: String, nullable: Boolean): String {
   val text = "($name.GetType().FullName ?? \"System.Exception\") + \": \" + $name.Message"

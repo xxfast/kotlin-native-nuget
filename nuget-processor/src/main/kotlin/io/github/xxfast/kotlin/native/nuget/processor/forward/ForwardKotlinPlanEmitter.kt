@@ -554,6 +554,9 @@ internal fun componentLowering(
   // ClassCastException at the first call, so this arm and that projection change together.
   is BridgeType.Enum -> "${type.qualifiedName}.entries[$name as kotlin.Int]"
 
+  // ADR-201 amendment: the box holds the managed-exception text the C# call site projected.
+  is BridgeType.Throwable -> managedExceptionLowering("($name as kotlin.String)", nullable = false)
+
   is BridgeType.ValueClass -> when (val underlying: BridgeType = type.underlying) {
     is BridgeType.Enum ->
       "${type.qualifiedName}(${underlying.qualifiedName}.entries[$name as kotlin.Int])"
@@ -583,6 +586,10 @@ internal fun componentLowering(
         "($name as ${elementKotlinTypeName(underlying)}?)?.let { ${letParameter(depth)} -> " +
             "${inner.qualifiedName}(${letParameter(depth)}) }"
     }
+
+    // ADR-201 amendment: a null element arrived as the null text and stays null.
+    is BridgeType.Throwable ->
+      managedExceptionLowering("($name as kotlin.String?)", nullable = true)
 
     else -> "$name as ${elementKotlinTypeName(inner)}?"
   }
@@ -1764,7 +1771,8 @@ private fun loweredCallbackExpression(
       if (component.kind == PrimitiveKind.BOOLEAN) "Byte" else component.kind.simpleKotlinName()
 
     is BridgeType.Enum -> "Int"
-    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface -> "COpaquePointer?"
+    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface,
+    is BridgeType.Throwable -> "COpaquePointer?"
     else -> error("Forward Kotlin plan emitter has no callback wire type for $component")
   }
 
@@ -1792,6 +1800,8 @@ private fun loweredCallbackExpression(
           // `as Any` so `NugetHandles.retain` takes the String through its object overload, the
           // legacy route's spelling.
           BridgeType.String -> "NugetHandles.retain($argument as Any)"
+          // ADR-201 amendment: the ADR-107 envelope; C# reads it with `BuildException`.
+          is BridgeType.Throwable -> "NugetHandles.retain(buildError($argument, ::nugetMappedType))"
           else -> "NugetHandles.retain($argument)"
         }
       } + userDataSlot + "nugetErr"
@@ -1816,6 +1826,14 @@ private fun loweredCallbackExpression(
         appendLine("  val ${name}Value = ${name}Box.asStableRef<String>().get()")
         appendLine("  NugetHandles.release(${name}Box)")
         appendLine("  ${name}Value")
+      }
+
+      // ADR-201 amendment: the managed-exception text C# boxed, as a `NugetManagedException`.
+      is BridgeType.Throwable -> {
+        appendLine("  val ${name}Box = $invocation!!")
+        appendLine("  val ${name}Value = ${name}Box.asStableRef<String>().get()")
+        appendLine("  NugetHandles.release(${name}Box)")
+        appendLine("  ${managedExceptionLowering("${name}Value", nullable = false)}")
       }
 
       is BridgeType.Primitive -> if (result.kind == PrimitiveKind.BOOLEAN) {

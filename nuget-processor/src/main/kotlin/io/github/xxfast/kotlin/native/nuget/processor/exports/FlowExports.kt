@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementEnvelope
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinIdentifier
 import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
 import com.google.devtools.ksp.getVisibility
@@ -181,6 +182,8 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
   // ordinal) has to leave as that wire value or the C# per-element read decodes the wrong box.
   val flowElementCollection: BridgeType.Collection? =
     classifier.legacyFlowElementCollection(propTypeResolved)
+  // ADR-201 amendment: a Throwable element leaves as its ADR-107 envelope.
+  val flowElementEnvelope: Boolean = classifier.legacyFlowElementEnvelope(propTypeResolved)
 
   addFunction(
     FunSpec.builder("export_${prefix}_get_${propName}_collect")
@@ -195,7 +198,7 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
       .addCode(
         buildFlowCollectBody(
           qualifiedName, propCall, flowElementQualified, elementNullable, memberNullable,
-          flowElementCollection,
+          flowElementCollection, flowElementEnvelope,
         )
       )
       .build()
@@ -218,6 +221,7 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
         .addCode(
           buildStateFlowValuePropertyBody(
             qualifiedName, propCall, elementNullable, memberNullable, flowElementCollection,
+            flowElementEnvelope,
           ),
         )
         .build()
@@ -291,6 +295,8 @@ internal fun FileSpec.Builder.addFlowMethodExports(
   // leaves per-element projected, exactly as the ordinary route's collection result does.
   val flowElementCollection: BridgeType.Collection? =
     classifier.legacyFlowElementCollection(returnType)
+  // ADR-201 amendment: a Throwable element leaves as its ADR-107 envelope.
+  val flowElementEnvelope: Boolean = classifier.legacyFlowElementEnvelope(returnType)
 
   // ADR-114: a collection parameter is dereferenced and copied out of its wire container
   // eagerly, before `launch`, and the member is called with that local instead of the raw
@@ -391,7 +397,7 @@ internal fun FileSpec.Builder.addFlowMethodExports(
     .addCode(
       buildFlowMethodCollectBody(
         qualifiedName, call, paramPrelude, flowElementQualified,
-        elementNullable, memberNullable, flowElementCollection, names,
+        elementNullable, memberNullable, flowElementCollection, names, flowElementEnvelope,
       )
     )
 
@@ -417,7 +423,7 @@ internal fun FileSpec.Builder.addFlowMethodExports(
       .addCode(
         buildStateFlowValueMethodBody(
           qualifiedName, call, paramPrelude, elementNullable, memberNullable,
-          flowElementCollection, names.obj,
+          flowElementCollection, names.obj, flowElementEnvelope,
         )
       )
 
@@ -464,7 +470,12 @@ private fun memberAccessor(receiver: String, memberNullable: Boolean): String =
 internal fun itemBoxExpr(
   elementNullable: Boolean,
   collection: BridgeType.Collection?,
+  // ADR-201 amendment: a Throwable element leaves as its ADR-107 envelope.
+  envelope: Boolean = false,
 ): String = when {
+  envelope && elementNullable ->
+    "if (value != null) NugetHandles.retain(buildError(value, ::nugetMappedType)) else null"
+  envelope -> "NugetHandles.retain(buildError(value, ::nugetMappedType))"
   elementNullable -> "if (value != null) NugetHandles.retain(value) else null"
   collection != null -> "NugetHandles.retain(${flowValueExpression("value", collection)} as Any)"
   else -> "NugetHandles.retain(value as Any)"
@@ -485,6 +496,7 @@ private fun buildFlowCollectBody(
   elementNullable: Boolean = false,
   memberNullable: Boolean = false,
   elementCollection: BridgeType.Collection?,
+  envelope: Boolean = false,
 ): String = buildString {
   appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
   // ADR-128: the runtime's `collectForCSharp` owns the three reinterpreted callbacks, the ATOMIC
@@ -496,7 +508,7 @@ private fun buildFlowCollectBody(
     "return collectForCSharp(scope, onNextPtr, onCompletePtr, onErrorPtr, userData, ::nugetMappedType) { emit ->"
   )
   appendLine("  obj.${memberAccessor(propName, memberNullable)}.collect { value ->")
-  appendLine("    val itemRef = ${itemBoxExpr(elementNullable, elementCollection)}")
+  appendLine("    val itemRef = ${itemBoxExpr(elementNullable, elementCollection, envelope)}")
   appendLine("    emit(itemRef)")
   appendLine("  }")
   append("}")
@@ -515,6 +527,7 @@ private fun buildFlowMethodCollectBody(
   elementCollection: BridgeType.Collection?,
   // Every fixed slot and local below is minted apart from the member's own parameter names.
   names: ForwardLegacyNames,
+  envelope: Boolean = false,
 ): String = buildString {
   val obj: String = names.obj
   val scope: String = names.scope
@@ -531,7 +544,7 @@ private fun buildFlowMethodCollectBody(
         "${names.userData}, ::nugetMappedType) { $emit ->"
   )
   appendLine("  ${memberAccessor(call, memberNullable)}.collect { value ->")
-  appendLine("    val itemRef = ${itemBoxExpr(elementNullable, elementCollection)}")
+  appendLine("    val itemRef = ${itemBoxExpr(elementNullable, elementCollection, envelope)}")
   appendLine("    $emit(itemRef)")
   appendLine("  }")
   append("}")
@@ -547,14 +560,15 @@ private fun buildStateFlowValuePropertyBody(
   elementNullable: Boolean = false,
   memberNullable: Boolean = false,
   elementCollection: BridgeType.Collection?,
+  envelope: Boolean = false,
 ): String = buildString {
   appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
   if (!elementNullable && !memberNullable) {
     val read: String = flowValueExpression("obj.$propName.value", elementCollection)
-    append("return NugetHandles.retain($read as Any)")
+    append("return NugetHandles.retain(${stateFlowBox(read, envelope)})")
   } else {
     appendLine("val v = obj.${memberAccessor(propName, memberNullable)}.value")
-    append("return if (v != null) NugetHandles.retain(v) else null")
+    append("return if (v != null) NugetHandles.retain(${stateFlowNullableBox(envelope)}) else null")
   }
 }
 
@@ -566,17 +580,26 @@ private fun buildStateFlowValueMethodBody(
   memberNullable: Boolean = false,
   elementCollection: BridgeType.Collection?,
   obj: String,
+  envelope: Boolean = false,
 ): String = buildString {
   appendLine("val $obj = handle.asStableRef<$qualifiedName>().get()")
   append(paramPrelude)
   if (!elementNullable && !memberNullable) {
     val read: String = flowValueExpression("$call.value", elementCollection)
-    append("return NugetHandles.retain($read as Any)")
+    append("return NugetHandles.retain(${stateFlowBox(read, envelope)})")
   } else {
     appendLine("val v = ${memberAccessor(call, memberNullable)}.value")
-    append("return if (v != null) NugetHandles.retain(v) else null")
+    append("return if (v != null) NugetHandles.retain(${stateFlowNullableBox(envelope)}) else null")
   }
 }
+
+// ADR-201 amendment: what a `_value` read boxes: the ADR-107 envelope for a Throwable element,
+// else the value itself (the shipped `as Any` spelling).
+private fun stateFlowBox(read: String, envelope: Boolean): String =
+  if (envelope) "buildError($read, ::nugetMappedType)" else "$read as Any"
+
+private fun stateFlowNullableBox(envelope: Boolean): String =
+  if (envelope) "buildError(v, ::nugetMappedType)" else "v"
 
 // ADR-067: nullable-member presence probe -- backs the C# `_has_value` two-call pattern. A pure,
 // idempotent read of a `val`/getter-backed StateFlow reference; safe to call before subscribing.

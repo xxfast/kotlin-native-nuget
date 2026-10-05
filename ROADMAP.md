@@ -54,7 +54,8 @@ Complete.
 Complete.
 
 ## Phase 5: Exception handling
-- [ ] Deferred by [ADR-201](docs/adr/201-throwable-beyond-the-property-getter.md): `Throwable` on a bare `suspend` result or a bare `Flow`/`StateFlow` element, on a `suspend`/`Flow` parameter, in a lambda payload and in a C#-implemented interface slot, as a `List<Throwable>` input, a `Set` element or a `Map` key all skip named; and the input that did ship is lossy, since Kotlin receives a `NugetManagedException` (managed type name and message only, no cause chain), so a `KotlinException` passed back does not round-trip as the original object.
+
+Complete.
 
 ## Phase 6: Async support
 - [ ] Unverified whether an `abstract suspend fun` with no body on an abstract base is counted as a projected scope-using member by [ADR-159](docs/adr/159-async-member-on-kotlin-subclass.md)'s ownership walk; if it is, the member vanishes unnamed since a derived override is skipped only when the overridee sits on a kept base. ([details](docs/backlog/abstract-suspend-fun-no-body-scope-projection-unverified.md))

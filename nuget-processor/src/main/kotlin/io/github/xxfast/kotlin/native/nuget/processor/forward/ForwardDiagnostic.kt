@@ -1557,12 +1557,12 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
   // narrower one cannot: C# hands Kotlin a `NugetManagedException`, a `RuntimeException`.
   ForwardPlanSkipReason.THROWABLE ->
     "a C# exception reaches Kotlin as a `NugetManagedException` (a `RuntimeException` carrying " +
-        "the managed type name and message), so a Throwable parameter or setter binds only when " +
+        "the managed type name and message), so a Throwable input (a parameter, a setter, a " +
+        "`List` element or `Map` value, a lambda or interface-slot result) binds only when " +
         "declared `Throwable`, `Exception` or `RuntimeException`, and never as an extension " +
-        "receiver or inside a collection; " +
-        "a Throwable cannot be a `Set` element or a `Map` key either, since each crossing builds " +
-        "a fresh `System.Exception` that compares by reference. a Throwable binds at a return, " +
-        "a getter, a `List` element and a `Map` value"
+        "receiver. a Throwable cannot be a `Set` element or a `Map` key either: each crossing " +
+        "builds a fresh `System.Exception` that compares by reference, so no lookup could ever " +
+        "match; use a `List`. a Throwable read out of Kotlin is an unthrown `System.Exception`"
 
   // ROADMAP Phase 4 (ADR-151 amendment): since a `ByteArray` binds as a `List` element and as a
   // `Map` VALUE, the only shapes that still reach this reason are the two DECLINED equality slots,
