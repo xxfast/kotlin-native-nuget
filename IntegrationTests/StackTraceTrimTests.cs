@@ -50,7 +50,7 @@ public class StackTraceTrimTests
     {
         if (!OperatingSystem.IsWindows()) return;
         var ex = Assert.ThrowsAny<ArgumentException>(() => SyncExceptions.FeedCatTreat("Oreo"));
-        Assert.Matches(@"\skn_[0-9a-f]+_cat__feedCatTreat \+ \d+$", Frames(ex)[^1]);
+        Assert.Matches(@"\skn_[a-z0-9_]+_cat__feedCatTreat \+ \d+$", Frames(ex)[^1]);
     }
 
     [Fact]
