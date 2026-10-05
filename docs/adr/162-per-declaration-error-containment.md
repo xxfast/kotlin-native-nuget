@@ -109,9 +109,11 @@ already exists:
    hand without threading source nodes through the whole CIR model (see Deferred scope), so it is
    caught only by the whole-round guard below, with `symbol = null`.
 
-A final whole-`process()` catch, also routed through `guarded` with `node = null`, is the last resort
-for work no declaration owns (the ADR-066 closure, the post-passes, the one `render()` call), so
-nothing escapes unlabelled even if a future change adds a phase between these three families.
+A final whole-`process()` catch, its own `try`/`catch` in `process()` that emits directly with
+`node = null` (it does not go through `guarded` and does not dedupe; see the
+[2026-10-05 amendment](#amendment-2026-10-05-the-failure-arm-and-the-whole-round-catch-are-tested)),
+is the last resort for work no declaration owns (the ADR-066 closure, the post-passes, the one
+`render()` call), so nothing escapes unlabelled even if a future change adds a phase between these three families.
 
 ### Q1: fatal everywhere, not a skip-and-ship
 
@@ -258,9 +260,9 @@ fields are optional on read, so a `NugetDiagnostics.json` written by an older pr
   offending member: `emitCsharpSignatureCollisions` receives the container's `KSNode`, and giving it a
   per-member node would change the shared guard signature for every one of its producers (classes,
   sealed bases, sealed arms, objects, file classes, extensions). Recorded as its own new ROADMAP line.
-- **No test covers the failure arm of the Kotlin-half guards or the whole-round catch.** No legal
-  Kotlin shape shipped in this repository reaches either today, and a shipped test may not inject a
-  throw to manufacture one. Recorded as its own new ROADMAP line.
+- **No test covered the failure arm of the Kotlin-half guards or the whole-round catch.** No legal
+  Kotlin shape shipped in this repository reaches either. Closed by the
+  [2026-10-05 amendment](#amendment-2026-10-05-the-failure-arm-and-the-whole-round-catch-are-tested).
 
 No new handle kind and no new marshalling path are introduced anywhere in this ADR, so it adds no
 `LiveHandleTests.cs` row.
@@ -300,3 +302,53 @@ follow from the lookup's code only (inferred).
 
 As with the original change, no new handle kind or marshalling path is introduced, so there is no
 `LiveHandleTests.cs` row.
+
+## Amendment (2026-10-05): the failure arm and the whole-round catch are tested {id="amendment-2026-10-05-the-failure-arm-and-the-whole-round-catch-are-tested"}
+
+The Deferred-scope item "no test covers the failure arm of the Kotlin-half guards or the whole-round
+catch" is closed. Neither is reachable from legal Kotlin, so both tests drive the real processor
+through a seam that production never uses.
+
+**Reading of the rule.** "A shipped test may not inject a throw" means no planted throw in
+`src/main`, which is what the research spikes did. A test-only collaborator passed through an
+existing or defaulted seam is allowed: the throw lives in `src/test`, and production behaviour does
+not change.
+
+**The whole-round catch is not a `guarded` call.** `NugetProcessor.process` wraps `processRound` in
+its own `try`/`catch (Exception)` and emits one diagnostic directly, so it has no dedupe and
+`ForwardDiagnosticGuardTest` never covered it. It now reports through
+`wholeRoundFailureDiagnostic`, whose hint differs from the per-declaration one. The old hint told
+the author to `exclude("this Kotlin module")`, which is not an exclude anyone can write. It now says
+this is a bug in the bridge generator, that no single declaration owns it so there is nothing to
+exclude, and to report the failure with the whole message, which carries its cause. The
+per-declaration hint is unchanged.
+
+**Whole-round test (`Tier1WholeRoundGuardTest`, zero production change).** A test provider wraps the
+injected `CodeGenerator` and throws `IOException` from the `Interop.cs` write, a failure a real
+build can produce (full disk, locked file). That write is inside no per-declaration guard and runs
+before the fatal gate. Verified: the failure is reported exactly once as
+`ERROR_INTERNAL_GENERATOR_FAILURE` labelled `this Kotlin module`, with no source location and no
+`exclude(...)` advice; nothing escapes `process()`; neither `Interop.cs` nor `CNameExports.kt` is
+written; the KSP run ends `PROCESSING_ERROR`. The test is not vacuous: narrowing the catch let the
+exception escape to JUnit, and with the catch removed KSP2's `execute()` rethrows to the caller
+rather than routing to `logger.exception`. That settles which of the two an uncaught `Exception`
+does.
+
+**Kotlin-half test (`Tier1KotlinHalfGuardTest`, one defaulted seam).** `NugetProcessor` takes a new
+constructor parameter `declarationStep: (KSDeclaration) -> Unit = {}`. `guardDeclaration` calls it
+first inside `guarded`, at every one of its call sites (20, including the interface bridge-plan
+guard). It is a no-op in every real build. A test passes a step that throws for declarations named
+`broken*`, with one broken and one healthy declaration for each kind of loop. Verified: each broken
+declaration is reported once per guard it passes through, named and located at its own source; the
+healthy declaration after it in the same loop is still reached and reports nothing; nothing falls
+to the whole-round catch; `CNameExports.kt` is not written; the run ends `PROCESSING_ERROR`.
+`Interop.cs` is still written, because the C# half is generated ahead of the gate and its
+translators do not call the step. The step throws a fresh message on every visit so the guard's
+dedupe cannot fold two installations into one report.
+
+**Still unproven.** The step reaches only `guardDeclaration`. Not covered by a test of the failure
+arm: the direct `guarded(...)` calls in the interface-planning loops of `processRound`, the C#
+translator guards in `CirTranslator`, and the planner's internal guard (`planOrSkip`). A future
+per-declaration loop that calls neither guard is also invisible to the test, since the step only
+proves the sites that call it. The `Error` path (an `Error` is deliberately not caught) is not tested
+end to end.

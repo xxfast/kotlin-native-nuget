@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
 import com.google.devtools.ksp.impl.KotlinSymbolProcessing
 import com.google.devtools.ksp.processing.KSPJvmConfig
+import com.google.devtools.ksp.processing.SymbolProcessorProvider
 import io.github.xxfast.kotlin.native.nuget.processor.NugetProcessorProvider
 import org.jetbrains.kotlin.cli.common.arguments.K2JVMCompilerArguments
 import org.jetbrains.kotlin.cli.jvm.K2JVMCompiler
@@ -40,11 +41,13 @@ internal object Tier1Harness {
     processorOptions: Map<String, String> = emptyMap(),
     libraries: List<File> = emptyList(),
     coroutinesOnCompileClasspath: Boolean = true,
+    provider: SymbolProcessorProvider = NugetProcessorProvider(),
   ): Tier1Result = run(
     mapOf(fileName to kotlinSource),
     processorOptions,
     libraries,
     coroutinesOnCompileClasspath = coroutinesOnCompileClasspath,
+    provider = provider,
   )
 
   /**
@@ -70,6 +73,9 @@ internal object Tier1Harness {
     // *mentioning* coroutines, but genuinely compiles without the dependency present, which is
     // exactly what a consumer library that never depends on coroutines does.
     coroutinesOnCompileClasspath: Boolean = true,
+    // ADR-162: a test provider wrapping the real one (a throwing `CodeGenerator`, a declaration
+    // step that fails on purpose), so the containment is driven through the real processor.
+    provider: SymbolProcessorProvider = NugetProcessorProvider(),
   ): Tier1Result {
     val workDir: File = Files.createTempDirectory("nuget-tier1-").toFile()
     try {
@@ -80,6 +86,7 @@ internal object Tier1Harness {
         libraries,
         commonSources = commonSources,
         coroutinesOnCompileClasspath = coroutinesOnCompileClasspath,
+        provider = provider,
       )
     } finally {
       workDir.deleteRecursively()
@@ -154,6 +161,7 @@ internal object Tier1Harness {
     // an actual native compilation (ADR-074 spike finding 1).
     commonSources: Map<String, String> = emptyMap(),
     coroutinesOnCompileClasspath: Boolean = true,
+    provider: SymbolProcessorProvider = NugetProcessorProvider(),
   ): Tier1Result {
     val sourceDir: File = workDir.resolve("src").apply { mkdirs() }
     val fixtureFiles: List<File> = sources.map { (fileName, kotlinSource) ->
@@ -216,7 +224,7 @@ internal object Tier1Harness {
 
     val kspExitCode = KotlinSymbolProcessing(
       config,
-      listOf(NugetProcessorProvider()),
+      listOf(provider),
       logger,
     ).execute()
 

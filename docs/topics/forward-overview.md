@@ -238,7 +238,9 @@ member, and a compiler plugin's synthesized surface such as kotlinx.serializatio
   rather than a documented limitation, the build fails with `ERROR_INTERNAL_GENERATOR_FAILURE`,
   naming the declaration, the underlying exception, and an `exclude("<qualified name>")` line that
   unblocks the build while the bug is reported and fixed; every other offending declaration in the
-  same build is reported the same way, in the same run, rather than one at a time
+  same build is reported the same way, in the same run, rather than one at a time. A failure no
+  single declaration owns is labelled `this Kotlin module` instead, with nothing to exclude:
+  report it with the whole message
   ([ADR-162](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/162-per-declaration-error-containment.md)).
 
 ### Breaking in 0.9.0 {id="diagnostics-breaking-0-9-0"}
