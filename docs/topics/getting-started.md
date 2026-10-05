@@ -19,44 +19,6 @@ The plugin id on the
 `io.github.xxfast.kotlin.native.nuget`. The same artifacts are on Maven Central under
 `io.github.xxfast`.
 
-### Resolving from GitHub Packages instead {id="github-packages"}
-
-Every release is also mirrored to GitHub Packages. Use it if you would rather pull from GitHub than
-from the Plugin Portal and Maven Central. GitHub Packages needs a token even to read a public
-package: a personal access token with the `read:packages` scope.
-
-```kotlin
-// settings.gradle.kts
-pluginManagement {
-  repositories {
-    maven("https://maven.pkg.github.com/xxfast/kotlin-native-nuget") {
-      credentials {
-        username = System.getenv("GITHUB_ACTOR")
-        password = System.getenv("GITHUB_TOKEN")
-      }
-    }
-    gradlePluginPortal()
-    mavenCentral()
-  }
-}
-
-dependencyResolutionManagement {
-  repositories {
-    maven("https://maven.pkg.github.com/xxfast/kotlin-native-nuget") {
-      credentials {
-        username = System.getenv("GITHUB_ACTOR")
-        password = System.getenv("GITHUB_TOKEN")
-      }
-    }
-    mavenCentral()
-  }
-}
-```
-
-Both blocks are needed: the first resolves the plugin, the second the processor, runtime and
-annotations the plugin adds to your project. Keep the Plugin Portal and Maven Central listed, since
-the mirror holds only this project's artifacts and not Kotlin, KSP or their dependencies.
-
 ## 2. Declare native targets
 
 Every target that should ship a native binary needs a `sharedLib` binary. Leave `baseName` unset:
