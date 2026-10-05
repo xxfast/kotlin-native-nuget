@@ -30,6 +30,15 @@ internal val KONAN_TO_RID = mapOf(
 private const val KMP_PLUGIN: String = "org.jetbrains.kotlin.multiplatform"
 private const val KSP_PLUGIN: String = "com.google.devtools.ksp"
 
+// #469: KGP's `baseName` is a plain `String`, so "set explicitly" means "differs from what KGP
+// assigned". `sharedLib()` defaults to the project name; `sharedLib("prefix")` to the prefix, and
+// names the binary `<prefix><BuildType>Shared` (KGP 2.4.10 `AbstractKotlinNativeBinaryContainer`).
+private fun defaultBaseName(project: Project, lib: SharedLibrary): String {
+  val type: String = lib.buildType.getName()
+  if (lib.name == "${type}Shared") return project.name
+  return lib.name.removeSuffix("${type.replaceFirstChar { it.uppercaseChar() }}Shared")
+}
+
 internal fun parseStrictCompileCheck(value: String): Boolean {
   if (value == "true") return true
   if (value == "false") return false
@@ -85,6 +94,12 @@ public class NugetPlugin : Plugin<Project> {
       project.extensions.findByType(KotlinMultiplatformExtension::class.java)
         ?.targets?.filterIsInstance<KotlinNativeTarget>()?.forEach { target ->
           target.binaries.withType(SharedLibrary::class.java).configureEach { lib ->
+            val default: String = defaultBaseName(project, lib)
+            require(lib.baseName == default || lib.baseName == stem) {
+              "[nuget] ${target.name} binary '${lib.name}' sets baseName '${lib.baseName}', but " +
+                "the native library name is derived from packageId '$id' as '$stem' (ADR-178). " +
+                "Remove the baseName line; the plugin names the library from packageId."
+            }
             lib.baseName = stem
           }
         }

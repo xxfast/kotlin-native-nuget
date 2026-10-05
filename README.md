@@ -36,8 +36,8 @@ plugins {
 }
 
 kotlin {
-  mingwX64 { binaries { sharedLib { baseName = "mycatlib" } } }
-  macosArm64 { binaries { sharedLib { baseName = "mycatlib" } } }
+  mingwX64 { binaries { sharedLib() } }
+  macosArm64 { binaries { sharedLib() } }
 }
 
 nuget {

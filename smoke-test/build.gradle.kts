@@ -11,7 +11,7 @@ plugins {
 kotlin {
   macosArm64 {
     binaries {
-      sharedLib { baseName = "smoke" }
+      sharedLib()
     }
   }
 }

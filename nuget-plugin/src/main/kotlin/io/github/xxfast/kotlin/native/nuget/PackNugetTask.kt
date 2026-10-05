@@ -124,12 +124,7 @@ public abstract class PackNugetTask : DefaultTask() {
         "disabled on this host and no prebuiltRuntimes is set. Build on a host that can link " +
         "one, or set nuget { publish { prebuiltRuntimes = ... } }."
     }
-    nativeLibDirs.get().forEach { (rid, path) ->
-      val dir = File(path)
-      val libs = nativeLibsIn(dir)
-      check(libs.isNotEmpty()) { "No native library (.dll, .dylib, .so) found for RID '$rid' in ${dir.absolutePath}. The link task produced nothing to pack." }
-      validateNativeLibs(id, rid, dir, libs)
-    }
+    nativeLibDirs.get().forEach { (rid, path) -> linkedNativeLib(id, rid, File(path)) }
     val producers: List<ForwardPackageProducer> = forwardPackageProducers(
       nativeLibDirs.get(), localContractDirs.get(), prebuiltRuntimesDir.orNull?.asFile,
     )
@@ -149,20 +144,8 @@ public abstract class PackNugetTask : DefaultTask() {
     val localRids: Map<String, String> = nativeLibDirs.get()
 
     localRids.forEach { (rid, libPath) ->
-      val sourceDir = File(libPath)
-      val libs: List<File> = nativeLibsIn(sourceDir)
-
-      // ADR-093: targets whose link task is disabled on this host never reach nativeLibDirs, so an
-      // entry with nothing to copy means the link ran and produced nothing. Silently skipping it
-      // shipped packages missing a platform.
-      check(libs.isNotEmpty()) {
-        "No native library (.dll, .dylib, .so) found for RID '$rid' in " +
-            "${sourceDir.absolutePath}. The link task for this target produced nothing to pack."
-      }
-
-      validateNativeLibs(id, rid, sourceDir, libs)
-
-      copyNativeLibs(libs, File(nupkgDir, "runtimes/$rid/native"))
+      val lib: File = linkedNativeLib(id, rid, File(libPath))
+      copyNativeLibs(listOf(lib), File(nupkgDir, "runtimes/$rid/native"))
     }
 
     stagePrebuiltRuntimes(nupkgDir, localRids)
@@ -218,6 +201,30 @@ public abstract class PackNugetTask : DefaultTask() {
   private fun copyNativeLibs(libs: List<File>, targetDir: File) {
     targetDir.mkdirs()
     libs.forEach { lib -> lib.copyTo(File(targetDir, lib.name), overwrite = true) }
+  }
+
+  // #469: link output is taken by name. The link directory keeps whatever an earlier build left
+  // there (a library under an old `baseName`), so only the expected file is required and shipped.
+  private fun linkedNativeLib(id: String, rid: String, dir: File): File {
+    val libs: List<File> = nativeLibsIn(dir)
+
+    // ADR-093: targets whose link task is disabled on this host never reach nativeLibDirs, so an
+    // entry with nothing to copy means the link ran and produced nothing. Silently skipping it
+    // shipped packages missing a platform.
+    check(libs.isNotEmpty()) {
+      "No native library (.dll, .dylib, .so) found for RID '$rid' in " +
+        "${dir.absolutePath}. The link task for this target produced nothing to pack."
+    }
+
+    val expected: String = nativeLibraryFile(id, rid)
+    val lib: File? = libs.firstOrNull { it.name == expected }
+    require(lib != null) {
+      "[nuget] RID '$rid' in ${dir.absolutePath} has no '$expected'; found " +
+        libs.joinToString { it.name } + ". The native library is now named from packageId " +
+        "(ADR-178), so a file under an old baseName is a leftover. Remove the baseName setting " +
+        "and relink."
+    }
+    return lib
   }
 
   private fun validateNativeLibs(id: String, rid: String, dir: File, libs: List<File>) {

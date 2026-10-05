@@ -18,7 +18,7 @@ public class RuntimeVersionTests
     private const string TraceFileVariable = "NUGET_INTEROP_TRACEFILE";
 
     /// <summary>The package-derived native library name imported by the fixture bindings.</summary>
-    private const string LibraryName = "kn_746573746c696272617279";
+    private const string LibraryName = "kn_testlibrary";
 
     [Fact]
     public void Version_MatchesThePackedRuntimeVersion()

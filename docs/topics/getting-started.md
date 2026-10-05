@@ -20,14 +20,14 @@ The plugin id on the
 
 ## 2. Declare native targets
 
-Every target that should ship a native binary needs a `sharedLib` binary with a `baseName`. This
-becomes the native library name (`mycatlib.dll` on Windows, `libmycatlib.dylib` on macOS, ...)
-that the generated C# `[DllImport]`s.
+Every target that should ship a native binary needs a `sharedLib` binary. Leave `baseName` unset:
+the plugin names the native library from `packageId` (`MyCatLib` becomes `kn_mycatlib.dll` on
+Windows, `libkn_mycatlib.dylib` on macOS, ...), and the generated C# `[DllImport]`s that name.
 
 ```kotlin
 kotlin {
-  mingwX64 { binaries { sharedLib { baseName = "mycatlib" } } }
-  macosArm64 { binaries { sharedLib { baseName = "mycatlib" } } }
+  mingwX64 { binaries { sharedLib() } }
+  macosArm64 { binaries { sharedLib() } }
 }
 ```
 

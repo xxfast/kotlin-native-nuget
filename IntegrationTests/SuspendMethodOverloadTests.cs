@@ -266,12 +266,12 @@ public class SuspendMethodOverloadTests
         string[] sitter = EntryPointsOf(typeof(AsyncCatSitter));
         string[] tracker = EntryPointsOf(typeof(CatMoodTracker));
 
-        Assert.Contains("kn_746573746c696272617279_cat__asynccatservice_fetchCat_async", service);
-        Assert.Contains("kn_746573746c696272617279_cat__asynccatservice_fetchCat_2_async", service);
-        Assert.Contains("kn_746573746c696272617279_cat__asynccatsitter_feed_async", sitter);
-        Assert.Contains("kn_746573746c696272617279_cat__asynccatsitter_feed_2_async", sitter);
-        Assert.Contains("kn_746573746c696272617279_cat__catmoodtracker_awaitMoodReport_async", tracker);
-        Assert.Contains("kn_746573746c696272617279_cat__catmoodtracker_awaitMoodReport_2_async", tracker);
+        Assert.Contains("kn_testlibrary_cat__asynccatservice_fetchCat_async", service);
+        Assert.Contains("kn_testlibrary_cat__asynccatservice_fetchCat_2_async", service);
+        Assert.Contains("kn_testlibrary_cat__asynccatsitter_feed_async", sitter);
+        Assert.Contains("kn_testlibrary_cat__asynccatsitter_feed_2_async", sitter);
+        Assert.Contains("kn_testlibrary_cat__catmoodtracker_awaitMoodReport_async", tracker);
+        Assert.Contains("kn_testlibrary_cat__catmoodtracker_awaitMoodReport_2_async", tracker);
     }
 
     /// <summary>
@@ -286,14 +286,14 @@ public class SuspendMethodOverloadTests
     {
         string[] functions = EntryPointsOf(typeof(AsyncFunctions));
 
-        Assert.Contains("kn_746573746c696272617279_cat__fetchGreeting_async", functions);
-        Assert.Contains("kn_746573746c696272617279_cat__fetchTreat_async", functions);
-        Assert.Contains("kn_746573746c696272617279_cat__fetchTreat_2_async", functions);
-        Assert.Contains("kn_746573746c696272617279_cat__serveTreats_async", functions);
-        Assert.Contains("kn_746573746c696272617279_cat__serveTreats_2_async", functions);
-        Assert.Contains("kn_746573746c696272617279_cat__ping", functions);
-        Assert.Contains("kn_746573746c696272617279_cat__ping_2_async", functions);
-        Assert.DoesNotContain("kn_746573746c696272617279_cat__ping_async", functions);
+        Assert.Contains("kn_testlibrary_cat__fetchGreeting_async", functions);
+        Assert.Contains("kn_testlibrary_cat__fetchTreat_async", functions);
+        Assert.Contains("kn_testlibrary_cat__fetchTreat_2_async", functions);
+        Assert.Contains("kn_testlibrary_cat__serveTreats_async", functions);
+        Assert.Contains("kn_testlibrary_cat__serveTreats_2_async", functions);
+        Assert.Contains("kn_testlibrary_cat__ping", functions);
+        Assert.Contains("kn_testlibrary_cat__ping_2_async", functions);
+        Assert.DoesNotContain("kn_testlibrary_cat__ping_async", functions);
     }
 
     /// <summary>Every <c>[DllImport]</c> EntryPoint declared on <paramref name="type"/>.</summary>

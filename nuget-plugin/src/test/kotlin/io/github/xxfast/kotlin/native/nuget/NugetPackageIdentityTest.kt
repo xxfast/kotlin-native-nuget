@@ -4,7 +4,6 @@ import java.util.Locale
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertNotEquals
 
 class NugetPackageIdentityTest {
   @Test
@@ -12,7 +11,7 @@ class NugetPackageIdentityTest {
     val previous: Locale = Locale.getDefault()
     try {
       Locale.setDefault(Locale.forLanguageTag("tr-TR"))
-      assertEquals("kn_746573746c696272617279", nativeLibraryStem("TESTLIBRARY"))
+      assertEquals("kn_testlibrary", nativeLibraryStem("TESTLIBRARY"))
       assertEquals(nativeLibraryStem("TestLibrary"), nativeLibraryStem("testlibrary"))
     } finally {
       Locale.setDefault(previous)
@@ -20,10 +19,18 @@ class NugetPackageIdentityTest {
   }
 
   @Test
-  fun `punctuation is preserved in identity instead of collapsed`() {
-    assertNotEquals(nativeLibraryStem("Test.Library"), nativeLibraryStem("Test-Library"))
-    assertNotEquals(nativeLibraryStem("Test-Library"), nativeLibraryStem("Test_Library"))
-    assertEquals("kn_61", nativeLibraryStem("A"))
+  fun `separators fold to underscores in a readable stem`() {
+    assertEquals("kn_testlibrary", nativeLibraryStem("TestLibrary"))
+    assertEquals("kn_mobileevidence_kotlin", nativeLibraryStem("MobileEvidence.Kotlin"))
+    assertEquals("kn_a", nativeLibraryStem("A"))
+  }
+
+  // #469: accepted limit, ids that differ only by separators share a stem.
+  @Test
+  fun `ids differing only by separators share a stem`() {
+    assertEquals("kn_test_library", nativeLibraryStem("Test.Library"))
+    assertEquals(nativeLibraryStem("Test.Library"), nativeLibraryStem("Test-Library"))
+    assertEquals(nativeLibraryStem("Test-Library"), nativeLibraryStem("Test_Library"))
   }
 
   @Test
@@ -35,9 +42,9 @@ class NugetPackageIdentityTest {
 
   @Test
   fun `primary filenames follow platform conventions`() {
-    assertEquals("kn_61.dll", nativeLibraryFile("A", "win-x64"))
-    assertEquals("libkn_61.dylib", nativeLibraryFile("A", "osx-arm64"))
-    assertEquals("libkn_61.so", nativeLibraryFile("A", "linux-x64"))
+    assertEquals("kn_a.dll", nativeLibraryFile("A", "win-x64"))
+    assertEquals("libkn_a.dylib", nativeLibraryFile("A", "osx-arm64"))
+    assertEquals("libkn_a.so", nativeLibraryFile("A", "linux-x64"))
     assertFailsWith<IllegalStateException> { nativeLibraryFile("A", "unknown-x64") }
   }
 

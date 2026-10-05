@@ -11,15 +11,18 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirObjectHandleType
 import io.github.xxfast.kotlin.native.nuget.rir.RirParameter
 import io.github.xxfast.kotlin.native.nuget.rir.RirPrimitiveType
 import io.github.xxfast.kotlin.native.nuget.rir.RirStruct
+import org.gradle.api.Project
 import org.gradle.api.internal.project.ProjectInternal
 import org.gradle.testfixtures.ProjectBuilder
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
+import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 import org.jetbrains.kotlin.gradle.plugin.mpp.SharedLibrary
 import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFails
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 
@@ -119,43 +122,99 @@ class NugetCoexistenceTest {
   }
 
   @Test
-  fun `local and prebuilt mismatched primary native identity fails with migration diagnostic`() {
-    listOf(false, true).forEach { prebuilt ->
-      val (task, _) = pack(listOf("shared.dll"), prebuilt)
-      val error = assertFailsWith<IllegalArgumentException> { task.pack() }
-      assertContains(error.message.orEmpty(), "kn_746573746c696272617279.dll")
-      assertContains(error.message.orEmpty(), "win-x64")
-    }
+  fun `prebuilt mismatched primary native identity fails with migration diagnostic`() {
+    val (task, _) = pack(listOf("shared.dll"), prebuilt = true)
+    val error = assertFailsWith<IllegalArgumentException> { task.pack() }
+    assertContains(error.message.orEmpty(), "kn_testlibrary.dll")
+    assertContains(error.message.orEmpty(), "win-x64")
   }
 
   @Test
-  fun `local and prebuilt auxiliary native files fail instead of colliding in consumers`() {
-    listOf(false, true).forEach { prebuilt ->
-      val (task, _) = pack(listOf("kn_746573746c696272617279.dll", "auxiliary.dll"), prebuilt)
-      val error = assertFailsWith<IllegalArgumentException> { task.pack() }
-      assertContains(error.message.orEmpty(), "auxiliary.dll")
-    }
+  fun `prebuilt auxiliary native files fail instead of colliding in consumers`() {
+    val (task, _) = pack(listOf("kn_testlibrary.dll", "auxiliary.dll"), prebuilt = true)
+    val error = assertFailsWith<IllegalArgumentException> { task.pack() }
+    assertContains(error.message.orEmpty(), "auxiliary.dll")
+  }
+
+  // #469: link output keeps a library left behind under an old baseName; only the expected one ships.
+  @Test
+  fun `local output ships only the expected library beside a leftover`() {
+    val (task, output) = pack(listOf("kn_testlibrary.dll", "shared.dll"))
+    task.pack()
+    val native = File(output, "TestLibrary.1.0.0/runtimes/win-x64/native")
+    assertEquals(listOf("kn_testlibrary.dll"), native.list()?.toList())
   }
 
   @Test
-  fun `publish derives native stem before native name providers resolve it`() {
-    val project = ProjectBuilder.builder().build()
+  fun `local output without the expected library names the leftover`() {
+    val (task, _) = pack(listOf("shared.dll"))
+    val error = assertFailsWith<IllegalArgumentException> { task.pack() }
+    val message: String = error.message.orEmpty()
+    assertContains(message, "kn_testlibrary.dll")
+    assertContains(message, "win-x64")
+    assertContains(message, "shared.dll")
+    assertContains(message, "ADR-178")
+  }
+
+  private fun publishing(id: String, configure: SharedLibrary.() -> Unit = {}): Pair<Project, KotlinNativeTarget> {
+    val project = ProjectBuilder.builder().withName("fixture").build()
     project.plugins.apply("org.jetbrains.kotlin.multiplatform")
     project.plugins.apply("io.github.xxfast.kotlin.native.nuget")
     val kotlin = project.extensions.getByType(KotlinMultiplatformExtension::class.java)
-    val target = kotlin.mingwX64 { binaries.sharedLib { baseName = "shared" } }
+    val target = kotlin.mingwX64 { binaries.sharedLib { configure() } }
     project.tasks.withType(NugetCompileInteropTask::class.java).configureEach { task ->
       task.dependencySources.add("local-contract-feed")
     }
     project.extensions.getByType(NugetExtension::class.java).publish {
-      it.packageId.set("Test.Library-2")
+      it.packageId.set(id)
       it.version.set("1.0.0")
       it.authors.set("Test")
       it.description.set("Test")
     }
+    return project to target
+  }
+
+  @Test
+  fun `publish derives native stem before native name providers resolve it`() {
+    val (project, target) = publishing("Test.Library-2")
     (project as ProjectInternal).evaluate()
-    assertEquals("kn_746573742e6c6962726172792d32", target.binaries.filterIsInstance<SharedLibrary>().first().baseName)
+    target.binaries.filterIsInstance<SharedLibrary>().forEach { lib ->
+      assertEquals("kn_test_library_2", lib.baseName)
+    }
     assertContains(project.tasks.named("nugetCompileInterop", NugetCompileInteropTask::class.java)
       .get().dependencySources.get(), "local-contract-feed")
+  }
+
+  @Test
+  fun `an explicit baseName equal to the derived stem is accepted`() {
+    val (project, target) = publishing("Test.Library-2") { baseName = "kn_test_library_2" }
+    (project as ProjectInternal).evaluate()
+    assertEquals("kn_test_library_2", target.binaries.filterIsInstance<SharedLibrary>().first().baseName)
+  }
+
+  // #469: KGP's default is the project name for an unprefixed sharedLib and the prefix otherwise.
+  @Test
+  fun `a prefixed sharedLib keeps no explicit baseName`() {
+    val project = ProjectBuilder.builder().withName("fixture").build()
+    project.plugins.apply("org.jetbrains.kotlin.multiplatform")
+    project.plugins.apply("io.github.xxfast.kotlin.native.nuget")
+    val kotlin = project.extensions.getByType(KotlinMultiplatformExtension::class.java)
+    val target = kotlin.mingwX64 { binaries.sharedLib("extra") }
+    assertEquals("extra", target.binaries.filterIsInstance<SharedLibrary>().first().baseName)
+    project.extensions.getByType(NugetExtension::class.java).publish { it.packageId.set("Test.Library-2") }
+    (project as ProjectInternal).evaluate()
+    assertEquals("kn_test_library_2", target.binaries.filterIsInstance<SharedLibrary>().first().baseName)
+  }
+
+  @Test
+  fun `an explicit baseName that disagrees with the derived stem fails the build`() {
+    val (project, _) = publishing("Test.Library-2") { baseName = "shared" }
+    val error = assertFails { (project as ProjectInternal).evaluate() }
+    val message: String = generateSequence(error) { it.cause }.mapNotNull { it.message }
+      .first { it.startsWith("[nuget]") }
+    assertContains(message, "mingwX64")
+    assertContains(message, "'shared'")
+    assertContains(message, "'kn_test_library_2'")
+    assertContains(message, "packageId")
   }
 }
