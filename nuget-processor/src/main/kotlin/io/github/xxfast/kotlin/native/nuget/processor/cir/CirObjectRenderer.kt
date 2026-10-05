@@ -206,7 +206,17 @@ private fun StringBuilder.renderValueClassMembers(cls: CirValueClass) {
   cls.properties.forEach { prop ->
     renderDllImport(cls.propertyNativeImport(prop))
     renderDoc(prop.doc, "        ", generated = prop.remarks)
-    appendLine("        public ${prop.type} ${prop.identifier} => ${prop.getter};")
+    if (prop.getter.isValueClassBlockBody()) {
+      appendLine("        public ${prop.type} ${prop.identifier}")
+      appendLine("        {")
+      appendLine("            get")
+      appendLine("            {")
+      prop.getter.lines().forEach { line -> appendLine("    $line") }
+      appendLine("            }")
+      appendLine("        }")
+    } else {
+      appendLine("        public ${prop.type} ${prop.identifier} => ${prop.getter};")
+    }
     appendLine()
   }
 
@@ -214,7 +224,12 @@ private fun StringBuilder.renderValueClassMembers(cls: CirValueClass) {
     renderDllImport(cls.methodNativeImport(method))
     renderDoc(method.doc, "        ")
     val paramStr: String = method.parameters.joinToString(", ") { it.declaration }
-    if (method.returnType == "void") {
+    if (method.body.isValueClassBlockBody()) {
+      appendLine("        public ${method.returnType} ${method.identifier}($paramStr)")
+      appendLine("        {")
+      appendLine(method.body)
+      appendLine("        }")
+    } else if (method.returnType == "void") {
       appendLine("        public void ${method.identifier}($paramStr) => ${method.body};")
     } else {
       appendLine("        public ${method.returnType} ${method.identifier}($paramStr) => ${method.body};")
@@ -222,3 +237,10 @@ private fun StringBuilder.renderValueClassMembers(cls: CirValueClass) {
     appendLine()
   }
 }
+
+/**
+ * A value-class member body is one expression, except when the native result has to be held in a
+ * local to be tested and then read (`ForwardCirPlanProjection.valueClassMemberExpression`): those
+ * are statement lines at method-body indentation, rendered as a block.
+ */
+private fun String.isValueClassBlockBody(): Boolean = '\n' in this

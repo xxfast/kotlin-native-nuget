@@ -276,7 +276,7 @@ internal fun CirValueClass.propertyNativeImport(property: CirProperty): CirDllIm
   entryPoint = "${nativePrefix}_get_${property.nativeName}",
   returnType = property.nativeReturnType,
   name = "Native_Get${property.name}",
-  parameters = listOf(CirParameter("value", receiverNativeType())),
+  parameters = listOf(CirParameter("value", receiverNativeType())) + property.nativeOutParameters,
   visibility = CirVisibility.PRIVATE,
 )
 

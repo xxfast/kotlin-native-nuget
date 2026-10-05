@@ -530,8 +530,8 @@ class Tier1ThrowablePositionsTest {
   /**
    * The other owners of an ordinary sync callable: an interface, an object, a companion, a sealed
    * arm, an enum, a generic class, a class extension, a `Result<Throwable>` and a value class's own
-   * members. The value class has no error slot (ADR-014), so its `Throwable?` result is a named
-   * skip while the non-null result, getter and parameter bind.
+   * members. The value class has no error slot (ADR-014); its `Throwable?` result binds anyway, on
+   * the null pointer, beside the non-null result, getter and parameter.
    */
   @Test
   fun `every ordinary owner binds Throwable results and inputs`() {
@@ -613,12 +613,13 @@ class Tier1ThrowablePositionsTest {
       "Blame(this global::Interop.Throwableowners.Kennel receiver, " +
           "global::System.Exception mishap)",
     )
-    assertFalse(
-      Regex("""\bMaybe\(""").containsMatchIn(cs), "expected Tag.maybe absent; generated=$cs",
-    )
-    assertTrue(
-      result.kspWarnings.any { it.contains("SKIPPED_") && it.contains("Tag.maybe") },
-      "expected a named skip for Tag.maybe; kspWarnings=${result.kspWarnings}",
+    // The value-class member route binds a nullable result with no error slot: the null pointer,
+    // then the envelope.
+    assertContains(cs, "public global::System.Exception? Maybe()")
+    assertContains(
+      cs,
+      "return nativeResult == IntPtr.Zero ? null : " +
+          "NugetErrorNative.BuildException(nativeResult);",
     )
     Tier1CSharpCompile.assertCompiles(result, "public static class Consumer { }")
   }

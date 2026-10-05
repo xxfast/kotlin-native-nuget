@@ -1066,6 +1066,9 @@ internal data class CirProperty(
   val getter: String,
   val setter: String? = null,
   val extraNatives: List<CirExtraNative> = emptyList(),
+  // A value-class getter's trailing `DllImport` out slots after its receiver: the has-value
+  // `valueOut` of a nullable value-type result. Empty everywhere else.
+  val nativeOutParameters: List<CirParameter> = emptyList(),
   val isStatic: Boolean = false,
   // ADR-040 fixture gap: the property-side twin of [CirMethod.isOverride]/[CirMethod.isVirtual] —
   // a property never carried either concept before this feature, because no prior fixture had a

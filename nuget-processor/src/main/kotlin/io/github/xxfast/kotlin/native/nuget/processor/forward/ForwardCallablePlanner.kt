@@ -3229,22 +3229,6 @@ internal class ForwardCallablePlanner(
       }
     val unwrapsKotlinResult: Boolean = effectiveResult !== plannedResult
 
-    // A value class's own member and getter keep the ADR-014 no-errorOut ABI, and neither half of
-    // that route has a nullable result arm (the Kotlin emitter's needs an error slot, the C# one is
-    // a single expression). Every nullable result there used to reach the emitter's `require` and
-    // fail the whole KSP run; it is a named return skip instead, so the value class's other
-    // members still bind. A value-class constructor carries an error slot, so `value class
-    // X(val s: String?)` keeps its nullable underlying result.
-    if (origin == ForwardCallableOrigin.VALUE_CLASS && !includeError &&
-      effectiveResult is BridgeType.Nullable
-    ) {
-      return ForwardCallableCatalogEntry.Skipped(
-        symbol, ForwardPlanSkipReason.NULLABLE, node = node,
-        position = ForwardSkipPosition.RETURN,
-        returnType = node.declaredResultType()?.kotlinSpelling(),
-      )
-    }
-
     val resultShape: ForwardResultShape? = effectiveResult.shapeOrNull()
     if (resultShape == null) {
       val returnSkipReason: ForwardPlanSkipReason = requireNotNull(plannedResult.skipReason())

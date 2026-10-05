@@ -380,6 +380,13 @@ pin it. An exception passed in crosses as one string and mints no handle:
 `ThrowableParameter_ReportAndSet_ReturnsToBaseline` covers a parameter, a nullable parameter and a
 setter.
 
+A [value class's own member](value-classes.md#nullable) that returns an object, a `List` or a
+`Throwable` mints one handle that C# releases or hands to you, null or not.
+`LeakTests/LiveHandleTests.cs`'s `ValueClassMemberObjectResult_NullAndNonNull_ReturnsToBaseline`,
+`ValueClassMemberListResult_NullAndNonNull_ReturnsToBaseline` and
+`ValueClassMemberThrowableResult_NullAndNonNull_ReturnsToBaseline` pin it. There is no throw-path
+row, because these members have no error slot.
+
 ### Dropped wrappers are released by the GC
 
 A wrapper dropped without `Dispose()` returns `LiveHandles` to baseline once the .NET GC finalizes it
