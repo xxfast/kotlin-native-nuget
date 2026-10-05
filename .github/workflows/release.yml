@@ -8,6 +8,16 @@ on:
     tags:
       - '[0-9]+.[0-9]+.[0-9]+'
       - '[0-9]+.[0-9]+.[0-9]+-*'
+  # Rehearsal: publishes only the shared NuGet contract, at the prerelease version typed here, and
+  # stops before Maven Central and the Plugin Portal. It proves the nuget.org Trusted Publishing
+  # policy and the GitHub Packages push without a tag. nuget.org never deletes a version, so the
+  # rehearsal version stays there for good; unlist it afterwards.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Prerelease contract version to publish, e.g. 0.9.0-rehearsal.1
+        required: true
+        type: string
 
 jobs:
   release:
@@ -39,23 +49,37 @@ jobs:
 
       # The tag is the only thing a human types. If it disagrees with the version the artifacts
       # will actually carry, stop here rather than publish a mislabelled release that can't be
-      # taken back.
-      - name: Verify the tag matches gradle.properties
+      # taken back. A rehearsal must name a prerelease, so it can never burn a release version.
+      - name: Resolve the version
         run: |
-          version="$(grep '^version=' gradle.properties | cut -d= -f2)"
-          if [ "$GITHUB_REF_NAME" != "$version" ]; then
-            echo "::error::tag '$GITHUB_REF_NAME' does not match gradle.properties version '$version'"
-            exit 1
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            if ! printf '%s' "$REHEARSAL_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+-[0-9a-z.-]+$'; then
+              echo "::error::rehearsal version '$REHEARSAL_VERSION' is not a lowercase prerelease such as 0.9.0-rehearsal.1"
+              exit 1
+            fi
+            version="$REHEARSAL_VERSION"
+            echo "Rehearsing the contract publish at $version"
+          else
+            version="$(grep '^version=' gradle.properties | cut -d= -f2)"
+            if [ "$GITHUB_REF_NAME" != "$version" ]; then
+              echo "::error::tag '$GITHUB_REF_NAME' does not match gradle.properties version '$version'"
+              exit 1
+            fi
+            echo "Releasing $version"
           fi
-          echo "Releasing $version"
+          echo "CONTRACT_VERSION=$version" >> "$GITHUB_ENV"
+        env:
+          REHEARSAL_VERSION: ${{ inputs.version }}
 
       - name: Plugin tests
+        if: github.event_name == 'push'
         run: ./gradlew :nuget-plugin:test
 
       # Publish to a local file repo and resolve the plugin from a separate Gradle build, exactly
       # as a consumer does. This is the last chance to catch a broken coordinate fallback while
       # the mistake is still free.
       - name: Verify the consumer path
+        if: github.event_name == 'push'
         run: |
           ./gradlew \
             :nuget-processor:publishAllPublicationsToLocalTestRepository \
@@ -68,12 +92,13 @@ jobs:
       # The contract goes first and must be listed before anything else is published: every
       # generated package depends on `Xxfast.Kotlin.Native.Interop` from this version up, so a plugin
       # release without it does not restore for any C# consumer. It is versioned in lockstep with
-      # the plugin (its csproj reads gradle.properties), so each release pushes a new version.
+      # the plugin (its csproj reads gradle.properties), so each release pushes a new version; on a tag
+      # `CONTRACT_VERSION` is that same version, and only a rehearsal overrides it.
       # `--skip-duplicate` only lets a failed run be retried after the push already went through.
       - name: Verify and pack the shared NuGet contract
         run: |
           dotnet test ContractTests
-          dotnet pack Kotlin.Native.Interop -c Release -o build/nuget
+          dotnet pack Kotlin.Native.Interop -c Release -o build/nuget -p:PackageVersion="$CONTRACT_VERSION"
 
       # Trusted Publishing: the nuget.org policy names this repository and this workflow file, so
       # renaming `release.yml` breaks publishing until the policy is updated. The key is
@@ -100,7 +125,7 @@ jobs:
       # restored, so the irreversible steps below never run against a contract that failed validation.
       - name: Wait for nuget.org to list the contract
         run: |
-          version="$(grep '^version=' gradle.properties | cut -d= -f2)"
+          version="$CONTRACT_VERSION"
           url="https://api.nuget.org/v3-flatcontainer/xxfast.kotlin.native.interop/$version/xxfast.kotlin.native.interop.nuspec"
           for attempt in $(seq 1 60); do
             if curl --silent --fail --output /dev/null "$url"; then
@@ -119,6 +144,7 @@ jobs:
       # too (ADR-127): the plugin resolves `io.github.xxfast:nuget-runtime:<version>` by coordinate
       # in every consumer, so a release without it does not resolve outside this repository.
       - name: Publish to Maven Central
+        if: github.event_name == 'push'
         run: >
           ./gradlew --no-configuration-cache
           :nuget-processor:publishToMavenCentral
@@ -134,6 +160,7 @@ jobs:
       # The Plugin Portal publishes immediately and irreversibly, so it goes last: if Central
       # rejects the credentials or the signature, nothing has been made permanent yet.
       - name: Publish to the Gradle Plugin Portal
+        if: github.event_name == 'push'
         run: ./gradlew --no-configuration-cache :nuget-plugin:publishPlugins
         env:
           GRADLE_PUBLISH_KEY: ${{ secrets.GRADLE_PUBLISH_KEY }}
