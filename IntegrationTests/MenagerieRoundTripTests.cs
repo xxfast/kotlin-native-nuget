@@ -329,6 +329,24 @@ public class MenagerieRoundTripTests
         Assert.Equal("no vacancy", ex.Message);
     }
 
+    // ADR-203: the reverse envelope maps through the same shared mapper as a forward call.
+    // Sanctuary.DescribeFault catches inside C# and reports the type the reverse shim built, so
+    // these see the slot's own exception rather than the ADR-104 re-wrap the test above sees.
+    [Fact]
+    public void Oreo_KotlinxIoIOException_FromAKotlinSlot_IsKotlinIOException() =>
+        Assert.Equal("Kotlin.Native.Interop.KotlinIOException|Oreo spilled the bag",
+            MenagerieSample.KotlinOreoSpillsTheBagFault());
+
+    [Fact]
+    public void Mylo_SubclassOfIllegalState_FromAKotlinSlot_IsKotlinInvalidOperationException() =>
+        Assert.Equal("Kotlin.Native.Interop.KotlinInvalidOperationException|Mylo split the bag",
+            MenagerieSample.KotlinMyloSplitsTheBagFault());
+
+    [Fact]
+    public void Oreo_UnmappedException_FromAKotlinSlot_StaysKotlinException() =>
+        Assert.Equal("Kotlin.Native.Interop.KotlinException|Oreo jammed the treat jar",
+            MenagerieSample.KotlinOreoJamsTheTreatJarFault());
+
     [Fact]
     public void KotlinNoVacancy_LegsOnly_NonThrowingSiblingSlotStillWorks()
     {

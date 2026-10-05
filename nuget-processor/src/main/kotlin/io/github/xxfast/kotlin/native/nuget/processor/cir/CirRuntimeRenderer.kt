@@ -43,6 +43,32 @@ internal fun StringBuilder.renderRuntimeHelper(helper: CirRuntimeHelper) {
   appendLine("            if (file is null) Console.Error.WriteLine(line);")
   appendLine("            else System.IO.File.AppendAllText(file, line + Environment.NewLine);")
   appendLine("        }")
+  appendLine()
+  // ADR-129 amendment: the forward error trace, one line per Kotlin exception crossing the bridge,
+  // called only from `NugetErrorNative.BuildException` (the error path; a successful call never
+  // reaches it). The variables are read per call exactly as `TraceLoaded` reads them, so the off
+  // case costs one environment read beside an exception that already cost several P/Invokes.
+  // Serialised and fenced: two threads failing at once must not interleave or collide on the file,
+  // and a trace that cannot be written must never replace the exception being thrown.
+  appendLine("        private static readonly object s_traceLock = new object();")
+  appendLine()
+  appendLine("        internal static void TraceError(string caller, string kotlinType, string? mappedType, string message, Exception exception)")
+  appendLine("        {")
+  appendLine("            if (Environment.GetEnvironmentVariable(\"NUGET_INTEROP_TRACE\") is not (\"1\" or \"true\" or \"all\")) return;")
+  appendLine("            string row = string.IsNullOrEmpty(mappedType) ? \"none\" : mappedType;")
+  appendLine("            string text = message.Replace('\\r', ' ').Replace('\\n', ' ');")
+  appendLine("            string line = \$\"[nuget:interop] error {caller}: {kotlinType} -> {exception.GetType().Name} (row {row}): {text}\";")
+  appendLine("            string? file = Environment.GetEnvironmentVariable(\"NUGET_INTEROP_TRACEFILE\");")
+  appendLine("            try")
+  appendLine("            {")
+  appendLine("                lock (s_traceLock)")
+  appendLine("                {")
+  appendLine("                    if (file is null) Console.Error.WriteLine(line);")
+  appendLine("                    else System.IO.File.AppendAllText(file, line + Environment.NewLine);")
+  appendLine("                }")
+  appendLine("            }")
+  appendLine("            catch (Exception) { }")
+  appendLine("        }")
   appendLine("    }")
   appendLine()
 }

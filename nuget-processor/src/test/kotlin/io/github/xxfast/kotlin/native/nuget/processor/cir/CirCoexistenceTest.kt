@@ -31,11 +31,17 @@ class CirCoexistenceTest {
   }
 
   @Test
-  fun `fallback uses shared factory while mapped exception rows remain intact`() {
+  fun `mapped and unmapped errors are built by the shared contract's factory`() {
+    // ADR-203: the row switch (fallback included) lives in Kotlin.Native.Interop, so two
+    // publishers in one process build every exception through the same contract code.
     val source = render()
-    assertContains(source, "KotlinException.Create(kotlinType, message, stackTrace, inner)")
-    assertContains(source, "new global::Kotlin.Native.Interop.KotlinArgumentException(kotlinType, message, stackTrace, inner)")
-    assertContains(source, "new global::Kotlin.Native.Interop.KotlinOperationCanceledException(kotlinType, message, stackTrace, inner)")
+    assertContains(
+      source,
+      "global::Kotlin.Native.Interop.KotlinException.CreateMapped(" +
+        "kotlinType, mappedType, msg, stackTrace, inner)",
+    )
+    assertFalse(source.contains("new global::Kotlin.Native.Interop.Kotlin"), source)
+    assertFalse(source.contains("KotlinException.Create("), source)
   }
 
   @Test

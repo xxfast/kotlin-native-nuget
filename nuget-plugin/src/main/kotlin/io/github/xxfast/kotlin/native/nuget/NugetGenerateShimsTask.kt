@@ -3101,10 +3101,10 @@ private fun nugetRuntimeRegistrationContent(
   |    }
   |
   |    // ADR-087 stage 2: reads a Kotlin slot's error envelope and maps it onto the SAME ADR-029
-  |    // exception hierarchy a forward call throws. The READ is reverse-owned (the reverse Kotlin
-  |    // owns its own envelope class, see NugetRuntime.kt, because it cannot see the forward
-  |    // NugetError across the source-set boundary); the THROWN types are the forward PUBLIC ones,
-  |    // so a consumer writes one catch for both directions.
+  |    // exception hierarchy a forward call throws. The READ is reverse-owned (its own accessor
+  |    // exports, see NugetKotlinErrors.kt); the MAP is the shared contract's
+  |    // KotlinException.CreateMapped (ADR-203), the one the forward NugetErrorNative calls, so a
+  |    // consumer writes one catch for both directions.
   |    internal static class NugetKotlinErrors
   |    {
   |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
@@ -3136,6 +3136,10 @@ private fun nugetRuntimeRegistrationContent(
   |        private static extern IntPtr Native_causeStackTrace(IntPtr handle, int index);
   |
   |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
+  |            EntryPoint = "nuget_kotlin_error_cause_mapped_type")]
+  |        private static extern IntPtr Native_causeMappedType(IntPtr handle, int index);
+  |
+  |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
   |            EntryPoint = "nuget_kotlin_error_free")]
   |        private static extern void Native_free(IntPtr handle);
   |
@@ -3152,34 +3156,32 @@ private fun nugetRuntimeRegistrationContent(
   |            Exception? inner = null;
   |            for (int i = causeCount - 1; i >= 1; i--)
   |            {
-  |                inner = Map(
+  |                inner = ${ex}KotlinException.CreateMapped(
   |                    Read(Native_causeType(errorPtr, i)),
+  |                    Read(Native_causeMappedType(errorPtr, i)),
   |                    Read(Native_causeMessage(errorPtr, i)),
   |                    Read(Native_causeStackTrace(errorPtr, i)),
   |                    inner);
   |            }
   |            string kotlinType = Read(Native_type(errorPtr));
+  |            string mappedType = Read(Native_causeMappedType(errorPtr, 0));
   |            string message = Read(Native_message(errorPtr));
   |            string stackTrace = Read(Native_stacktrace(errorPtr));
   |            Native_free(errorPtr);
-  |            return Map(kotlinType, message, stackTrace, inner);
-  |        }
-  |
-  |        // Mirrors the pre-ADR-177 forward BuildMapped, exact type names only. Duplicated, not shared: the forward
-  |        // one is `private` and now matches by class hierarchy, which this one does not (ROADMAP).
-  |        private static Exception Map(string kotlinType, string message, string stackTrace, Exception? inner) =>
-  |            kotlinType switch
+  |            // ADR-203: the shared contract's mapper, keyed on the ADR-177 row the module's own
+  |            // classifier matched: the one a forward call uses, so one catch fits both directions.
+  |            Exception built = ${ex}KotlinException.CreateMapped(kotlinType, mappedType, message, stackTrace, inner);
+  |            if (NugetTrace.Enabled)
   |            {
-  |                "kotlin.IllegalArgumentException" => new ${ex}KotlinArgumentException(kotlinType, message, stackTrace, inner),
-  |                "kotlin.IllegalStateException" => new ${ex}KotlinInvalidOperationException(kotlinType, message, stackTrace, inner),
-  |                "kotlin.NoSuchElementException" => new ${ex}KotlinInvalidOperationException(kotlinType, message, stackTrace, inner),
-  |                "kotlin.ConcurrentModificationException" => new ${ex}KotlinInvalidOperationException(kotlinType, message, stackTrace, inner),
-  |                "kotlin.UnsupportedOperationException" => new ${ex}KotlinNotSupportedException(kotlinType, message, stackTrace, inner),
-  |                "kotlin.ClassCastException" => new ${ex}KotlinInvalidCastException(kotlinType, message, stackTrace, inner),
-  |                "kotlin.ArithmeticException" => new ${ex}KotlinArithmeticException(kotlinType, message, stackTrace, inner),
-  |                "kotlin.NumberFormatException" => new ${ex}KotlinFormatException(kotlinType, message, stackTrace, inner),
-  |                _ => ${ex}KotlinException.Create(kotlinType, message, stackTrace, inner)
-  |            };
+  |                string row = mappedType.Length == 0 ? "none" : mappedType;
+  |                string text = message.Replace('\r', ' ').Replace('\n', ' ');
+  |                // Fenced: a trace line that cannot be written (two slots failing at once on one
+  |                // trace file) must never replace the exception being thrown.
+  |                try { NugetTrace.Write(${'$'}"error {kotlinType} -> {built.GetType().Name} (row {row}): {text}"); }
+  |                catch (Exception) { }
+  |            }
+  |            return built;
+  |        }
   |    }
   |}
 """.trimMargin().trim()
@@ -3212,9 +3214,11 @@ private fun nugetTraceCsContent(errorNamespace: String): String = """
   |        private static bool IsEnabled() =>
   |            Environment.GetEnvironmentVariable("NUGET_INTEROP_TRACE") is "1" or "true" or "all";
   |
-  |        // The only two call sites are [ModuleInitializer]s, once per registration at process
-  |        // start — never on the hot bridge-call path (there is no such path on the C# side; the
-  |        // thunks ARE the hot path and none of them call this).
+  |        // Called from the [ModuleInitializer]s, once per registration at process start, and
+  |        // (ADR-129 amendment) from NugetKotlinErrors.Build on the error path only, behind
+  |        // Enabled. Never on a successful bridge call.
+  |        internal static bool Enabled => s_enabled;
+  |
   |        internal static void Write(string message)
   |        {
   |            if (!s_enabled) return;
@@ -3240,11 +3244,10 @@ public abstract class NugetGenerateShimsTask : DefaultTask() {
   @get:Input
   public abstract val nativeLibraryName: Property<String>
 
-  // ADR-087 stage 2: the FORWARD bindings' C# namespace (the publish packageId), whose
-  // NugetErrorNative.BuildException maps a slot's error envelope onto the same ADR-029 exception
-  // hierarchy a forward call throws. Empty when the project has no `publish {}` block, in which
-  // case no forward Interop.cs exists to reuse and the generated members keep their pre-stage-2
-  // shape.
+  // ADR-087 stage 2: the FORWARD bindings' C# namespace (the publish packageId), which places the
+  // reverse shims beside the forward Interop.cs. Empty when the project has no `publish {}` block.
+  // The exception map does not depend on it: both directions call the shared contract's
+  // KotlinException.CreateMapped (ADR-203).
   @get:Input
   public abstract val forwardNamespace: Property<String>
 
@@ -3600,10 +3603,9 @@ private fun bridgeCallLines(
 // interpreting any result.
 private val ERR_SLOT_DECL: List<String> = listOf("IntPtr err = IntPtr.Zero;")
 
-// REUSE, not re-implementation: [errorNamespace] is the FORWARD bindings' C# namespace (the
-// publish packageId), whose `internal static NugetErrorNative.BuildException` maps the envelope to
-// ADR-029's KotlinException hierarchy. Forward Interop.cs and these reverse shims are contentFiles
-// of the SAME consumer assembly, so `internal` reaches; a consumer therefore catches one exception
-// hierarchy regardless of which direction threw.
+// Every bridge member reads its slot's envelope through NugetKotlinErrors.Build, which maps it
+// with the shared contract's KotlinException.CreateMapped, the same mapper the forward
+// NugetErrorNative.BuildException calls (ADR-203); a consumer therefore catches one exception
+// hierarchy regardless of which direction threw. [errorNamespace] no longer shapes this line.
 private fun errorCheckLines(@Suppress("UNUSED_PARAMETER") errorNamespace: String): List<String> =
   listOf("if (err != IntPtr.Zero) throw NugetKotlinErrors.Build(err);")

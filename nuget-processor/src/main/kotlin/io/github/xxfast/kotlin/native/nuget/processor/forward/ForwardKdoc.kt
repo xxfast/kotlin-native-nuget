@@ -267,8 +267,8 @@ internal fun ForwardKdoc.toCirDoc(
 }
 
 /**
- * ADR-150: the `cref`, through the same table `CirErrorRenderer`'s `BuildMapped` switch is built
- * from, so the documented exception is the one the consumer actually catches. An author spells the
+ * ADR-150: the `cref`, through the same table the contract's `KotlinException.CreateMapped` switch
+ * is pinned to (ADR-203), so the documented exception is the one the consumer actually catches. An author spells the
  * type as written (`IllegalArgumentException`, rarely `kotlin.IllegalArgumentException`), so the
  * match is on the simple name. An unmapped type crefs `KotlinException` and keeps the Kotlin
  * spelling as a plain `T: ` prefix on the text.

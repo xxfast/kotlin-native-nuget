@@ -60,32 +60,82 @@ class Tier1ExceptionHierarchyMappingTest {
     )
   }
 
+  /**
+   * ADR-203: the switch moved into the shared `Kotlin.Native.Interop` contract, so both directions
+   * (this `BuildException` and the reverse shim) call ONE mapper. The rows themselves are pinned by
+   * `the contract mapper's rows equal the table in order` below.
+   */
   @Test
-  fun `the C# switch keys on the mapped type and names the new classes`() {
+  fun `the forward error builder calls the shared contract mapper with the matched row`() {
     val result = Tier1Harness.run(scoop)
     val cs: String = result.generatedCSharp
 
-    assertTrue("mappedType switch" in cs, cs)
     assertTrue("EntryPoint = \"nuget_error_cause_mapped_type\"" in cs, cs)
     assertTrue("string mappedType = CauseMappedType(errorPtr, 0);" in cs, cs)
     assertTrue(
-      "new global::Kotlin.Native.Interop.KotlinIOException(kotlinType, message, stackTrace, inner)" in cs,
+      "global::Kotlin.Native.Interop.KotlinException.CreateMapped(" +
+        "kotlinType, mappedType, msg, stackTrace, inner)" in cs,
       cs,
     )
     assertTrue(
-      "new global::Kotlin.Native.Interop.KotlinNullReferenceException(kotlinType, message, stackTrace, inner)" in cs,
+      "global::Kotlin.Native.Interop.KotlinException.CreateMapped(" +
+        "causeType, causeMapped, causeMsg, causeStack, inner)" in cs,
       cs,
     )
-    assertTrue(
-      "new global::Kotlin.Native.Interop.KotlinOperationCanceledException(kotlinType, message, stackTrace, inner)" in cs,
-      cs,
+    assertFalse("BuildMapped" in cs, "the generated per-library copy must be gone; cs=$cs")
+    assertFalse("mappedType switch" in cs, "no per-library switch may remain; cs=$cs")
+  }
+
+  /**
+   * The hand-written contract switch and this table must name the same rows, mapped to the same
+   * C# types, in the same order: `KOTLIN_EXCEPTION_TYPES` still drives the Kotlin classifier and
+   * the `<exception cref>`, and the contract is what the consumer actually catches. Read from the
+   * contract source, the same honesty device as the runtime-rows pin below.
+   */
+  @Test
+  fun `the contract mapper's rows equal the table in order`() {
+    val source: String = File("../Kotlin.Native.Interop/KotlinException.cs").readText()
+    val body: String = source
+      .substringAfter("mappedType switch")
+      .substringBefore("_ => new KotlinException(")
+    val contractRows: List<Pair<String, String>> = Regex(""""([^"]+)"\s*=>\s*new (\w+)\(""")
+      .findAll(body)
+      .map { match -> match.groupValues[1] to match.groupValues[2] }
+      .toList()
+
+    val tableRows: List<Pair<String, String>> =
+      KOTLIN_EXCEPTION_TYPES.map { row -> row.kotlinType to row.csharpType }
+
+    assertEquals(tableRows, contractRows)
+  }
+
+  /**
+   * ADR-203: the reverse envelope (`nugetKotlinError`, plugin-generated) classifies with this
+   * module's `nugetMappedType`, so the classifier must exist even in a module that exports nothing.
+   */
+  @Test
+  fun `a module with nothing to export still gets the classifier`() {
+    val result = Tier1Harness.run(
+      mapOf(
+        "Fixture.kt" to """
+          package tier1.emptybowl
+
+          internal class Bowl(val kibble: Int)
+        """.trimIndent(),
+        "KotlinxIo.kt" to kotlinxIo,
+      ),
     )
-    assertTrue("global::Kotlin.Native.Interop.KotlinException.Create(" in cs, cs)
-    // Most specific first: the CancellationException arm precedes the IllegalStateException arm.
-    assertTrue(
-      cs.indexOf("\"kotlin.coroutines.cancellation.CancellationException\" =>") <
-        cs.indexOf("\"kotlin.IllegalStateException\" =>"),
-      cs,
+
+    val generated: String = requireNotNull(
+      result.generatedFiles.entries.firstOrNull { it.key.endsWith("CNameExports.kt") }?.value,
+    ) { "expected the classifier file; generatedFiles=${result.generatedFiles.keys}" }
+    assertTrue(result.compiledClean, "expected it to compile; got: ${result.compileErrors}")
+    assertTrue("internal fun nugetMappedType(t: Throwable): String?" in generated, generated)
+    assertTrue("t is kotlinx.io.IOException -> \"kotlinx.io.IOException\"" in generated, generated)
+    assertFalse("@CName(" in generated, "nothing to export means no export; got: $generated")
+    assertFalse(
+      result.generatedFiles.keys.any { it.endsWith("Interop.cs") },
+      "nothing to export still writes no C#; generatedFiles=${result.generatedFiles.keys}",
     )
   }
 

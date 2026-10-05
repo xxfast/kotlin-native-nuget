@@ -54,6 +54,49 @@ public class ContractTests
     }
 
     [Fact]
+    public void MappedFactoryBuildsTheTypeOfTheRowTheKotlinSideMatched()
+    {
+        MethodInfo factory = Assert.Single(typeof(KotlinException).GetMethods(),
+            m => m.Name == "CreateMapped");
+        Assert.Equal(EditorBrowsableState.Never,
+            factory.GetCustomAttribute<EditorBrowsableAttribute>()!.State);
+        (string row, Type mapped)[] rows =
+        [
+            ("kotlinx.io.IOException", typeof(KotlinIOException)),
+            ("kotlin.NumberFormatException", typeof(KotlinFormatException)),
+            ("kotlin.IllegalArgumentException", typeof(KotlinArgumentException)),
+            ("kotlin.coroutines.cancellation.CancellationException",
+                typeof(KotlinOperationCanceledException)),
+            ("kotlin.IllegalStateException", typeof(KotlinInvalidOperationException)),
+            ("kotlin.NoSuchElementException", typeof(KotlinInvalidOperationException)),
+            ("kotlin.ConcurrentModificationException", typeof(KotlinInvalidOperationException)),
+            ("kotlin.UnsupportedOperationException", typeof(KotlinNotSupportedException)),
+            ("kotlin.ClassCastException", typeof(KotlinInvalidCastException)),
+            ("kotlin.ArithmeticException", typeof(KotlinArithmeticException)),
+            ("kotlin.NullPointerException", typeof(KotlinNullReferenceException)),
+            ("kotlin.NoWhenBranchMatchedException", typeof(KotlinInvalidOperationException)),
+        ];
+        var cause = new Exception("empty bowl");
+        foreach ((string row, Type mapped) in rows)
+        {
+            // The concrete Kotlin class is a subclass of the row: the row, not the class, decides.
+            Exception error = KotlinException.CreateMapped("cats.SpilledBag", row, "Oreo", "feed:3", cause);
+            Assert.IsType(mapped, error);
+            Assert.Same(cause, error.InnerException);
+            Assert.Equal("Oreo", error.Message);
+            Assert.Equal("cats.SpilledBag", ((IKotlinException)error).KotlinType);
+            Assert.Equal("feed:3", ((IKotlinException)error).KotlinStackTrace);
+        }
+        Assert.IsType<KotlinException>(
+            KotlinException.CreateMapped("cats.Grumble", "", "Mylo", "feed:9"));
+        Assert.IsType<KotlinException>(
+            KotlinException.CreateMapped("cats.Grumble", null, "Mylo", "feed:9"));
+        // Keyed on the row only: a concrete class name that happens to be a row name is not a row.
+        Assert.IsType<KotlinException>(
+            KotlinException.CreateMapped("kotlin.IllegalStateException", "", "Mylo", "feed:9"));
+    }
+
+    [Fact]
     public void NothingMarkerIsSealedAndUninstantiable()
     {
         Assert.True(typeof(KotlinNothing).IsSealed);
