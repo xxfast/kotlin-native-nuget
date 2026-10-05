@@ -190,8 +190,10 @@ top-level function, or an extension function.
 A few shapes are not supported and are refused by name (a build-time skip, not broken generated
 code): `Char` as either the lambda's payload or its own return; a payload that is a Kotlin builtin
 non-scalar (`List`, `Set`, `Map`, `Any`, `Pair`, an array, `Duration`, or anything else under
-`kotlin`/`kotlinx` outside a primitive, `String` or `Char`); a lambda's *own* return outside `Unit`,
-a primitive or `String` (an object, an enum, `Char`, or one of those same builtins); a suspend
+`kotlin`/`kotlinx` outside a primitive, `String`, `Char` or a `Throwable`, which binds as an unthrown
+`Exception`, see [Throwable values](exceptions.md#throwable-values)); a lambda's *own* return
+outside `Unit`, a primitive, `String` or a `Throwable`, `Exception` or `RuntimeException` (an
+object, an enum, `Char`, or one of those same builtins); a suspend
 lambda (`suspend (T) -> R`); a lambda type nested inside a `List`/`Set`/`Map`; a class or object member
 that returns a lambda rather than taking one (a [top-level function](#a-top-level-function-that-returns-a-lambda) can; expose a
 [lambda property](#kotlin-c-lambda-properties-and-returns) on the class instead); and a lambda parameter

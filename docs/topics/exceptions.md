@@ -213,7 +213,9 @@ A `Throwable`, `Throwable?` or stdlib subtype that Kotlin returns reads in C# as
 gets. It is something you inspect, not something you catch. This applies to a return from any
 exported type (a value class's own member included) or a top-level function, a property getter,
 a `List` element (nullable included) and a `Map` value. A `Result<Throwable>` return binds too,
-with its `TryX` twin.
+with its `TryX` twin. It also applies in async and callback positions: a `suspend` result, a
+`Flow` element, a `StateFlow` element on a property or method, a lambda parameter, an `add*`
+listener parameter, and a parameter of an interface you implement in C#.
 
 ```kotlin
 class MishapLog {
@@ -241,20 +243,63 @@ to dispose. A class in your module that extends `Exception` but is not exported 
 it arrives mapped through its nearest mapped base, with `KotlinType` naming the class. An exported
 exception class stays an ordinary exported class instead.
 
+The async and callback positions read the same way:
+
+```kotlin
+class MishapStream {
+  suspend fun worstLater(): Throwable = /* ... */
+  fun each(): Flow<Throwable> = /* ... */
+  val current: StateFlow<Throwable?> get() = /* ... */
+  fun onMishap(handler: (Throwable) -> Unit) = /* ... */
+}
+```
+
+```C#
+using var stream = new MishapStream();
+
+Exception worst = await stream.WorstLaterAsync();
+await foreach (Exception mishap in stream.Each()) { /* ... */ }
+Exception? latest = stream.Current.Value;
+stream.OnMishap(mishap => Console.WriteLine(mishap.Message));
+```
+
 ### Passing an exception to Kotlin
 
 A parameter, `var` property, constructor parameter or data class `copy` declared exactly
-`Throwable`, `Exception` or `RuntimeException`, nullable or not, accepts any `System.Exception`:
+`Throwable`, `Exception` or `RuntimeException`, nullable or not, accepts any `System.Exception`.
+So do a `suspend` or `Flow` parameter, a `List` or `MutableList` element, a `Map` value, a lambda
+result, and the result of an interface method you implement in C#:
 
 ```kotlin
 fun report(mishap: Throwable) { seen += mishap }
 fun describeLast(): String = seen.last().let { "${it::class.simpleName}: ${it.message}" }
+suspend fun reportLater(mishap: Throwable): String = /* ... */
 ```
 
 ```C#
 log.Report(new InvalidOperationException("the bowl is empty"));
 string kotlinView = log.DescribeLast();   // "NugetManagedException: System.InvalidOperationException: ..."
 string text = log.All[0].Message;           // "System.InvalidOperationException: the bowl is empty"
+string later = await stream.ReportLaterAsync(new TimeoutException("Mylo is late for dinner"));
+```
+
+An interface you implement in C# crosses both ways: Kotlin hands your method an unthrown
+exception, and what your method returns reaches Kotlin as a `NugetManagedException`:
+
+```kotlin
+interface MishapSink {
+  fun accept(mishap: Throwable)
+  fun last(): Exception?
+}
+```
+
+```C#
+private sealed class Sink : IMishapSink
+{
+    public void Accept(Exception mishap) { /* a KotlinException */ }
+    public Exception? Last() => new InvalidOperationException("the bowl is empty");
+    public void Dispose() { }
+}
 ```
 
 <warning>
@@ -262,8 +307,8 @@ string text = log.All[0].Message;           // "System.InvalidOperationException
 the C# type's full name and message: no <code>InnerException</code> chain, no stack trace, and
 Kotlin <code>is IllegalArgumentException</code> is false for a passed <code>ArgumentException</code>.
 An exception that came from Kotlin and is passed back is not the original object either; Kotlin
-sees a new one named after the C# type. Do not rely on Kotlin code branching on the exception's
-class.</p>
+sees a new one named after the C# type. This holds at every input position. Do not rely on Kotlin
+code branching on the exception's class.</p>
 </warning>
 
 Because a data class's constructor and `copy` now accept an exception, a class such as
@@ -281,14 +326,17 @@ A declaration with one of these shapes is left out of the generated C# with a bu
 names it:
 
 - an input declared narrower than `RuntimeException`, such as `IllegalStateException` or your own
-  exception class; declare it `Exception` to bind it
-- a `List<Throwable>` parameter, a `Set<Throwable>` or a `Map` with `Throwable` keys, and a
-  `Throwable` extension receiver
-- a bare `suspend` result or bare `Flow`/`StateFlow` element typed `Throwable`; a
-  `suspend fun f(): List<Throwable>` and `Flow<List<Throwable>>` do bind
-- a `suspend` or `Flow` parameter, a lambda payload, and a C#-implemented interface member typed
-  `Throwable`
-- a value class over `Throwable`
+  exception class, at any of the positions above; declare it `Exception` to bind it. A C# class
+  cannot implement an interface whose method result is declared that narrow; Kotlin
+  implementations of it are unaffected
+- a `Set<Throwable>` or a `Map` with `Throwable` keys, as a parameter or a result. Each crossing
+  builds a new `Exception` that compares by reference, so no lookup could match; use a `List`
+- a `StateFlow<Throwable>` returned from a `suspend` function, and any `MutableStateFlow<Throwable>`;
+  expose a read-only `StateFlow` property or method instead
+- a `Throwable` extension receiver and a value class over `Throwable`
+- a `(Throwable?) -> Unit` lambda, a lambda result narrower than `RuntimeException`, a stored
+  lambda, a lambda property and a returned lambda, which follow the
+  [lambda rules](lambdas-and-callbacks.md) rather than anything specific to `Throwable`
 
 ## Result return values
 
