@@ -87,21 +87,21 @@ targets all resolve it; you add nothing yourself. See
 
 Only the module that applies the plugin gets the dependency. To annotate a declaration in a
 dependency module that doesn't apply it, which the
-[cross-module export closure](#cross-module-export-closure) can still bridge, add it to that module
-yourself:
+[cross-module export closure](#cross-module-export-closure) can still bridge, apply the
+annotations-only plugin there. It adds `nuget-annotations` to `commonMainApi` at the plugin's own
+version and does nothing else: no `nuget {}` block, no code generation.
 
 ```kotlin
 // build.gradle.kts of the dependency module
-kotlin {
-  sourceSets.commonMain.dependencies {
-    api("io.github.xxfast:nuget-annotations:<version>")
-  }
+plugins {
+  kotlin("multiplatform")
+  id("io.github.xxfast.kotlin.native.nuget.annotations") version "<version>"
 }
 ```
 
-Use the same `<version>` as the plugin, as in [Getting started](getting-started.md). `api` matches
-what the plugin does: a module that compiles against the dependency's klib must resolve the
-annotation class.
+Use the same `<version>` as the main plugin, as in [Getting started](getting-started.md).
+Declaring `api("io.github.xxfast:nuget-annotations:<version>")` yourself works too, but you then
+keep the version in step by hand.
 
 ## `publish { }`
 

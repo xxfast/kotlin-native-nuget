@@ -15,6 +15,7 @@ plugins {
   alias(libs.plugins.kotlinJvm) apply false
   alias(libs.plugins.mavenPublish) apply false
   id("io.github.xxfast.kotlin.native.nuget") apply false
+  id("io.github.xxfast.kotlin.native.nuget.annotations") apply false
 }
 
 // The verification scripts need only bash, Gradle and dotnet, so the checks that parse files live

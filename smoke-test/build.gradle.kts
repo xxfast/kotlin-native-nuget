@@ -4,6 +4,8 @@ import org.jetbrains.kotlin.gradle.plugin.mpp.SharedLibrary
 plugins {
   kotlin("multiplatform")
   id("io.github.xxfast.kotlin.native.nuget")
+  // Issue #464: requested here so its marker resolves from the local repo. `:annotations` applies it.
+  id("io.github.xxfast.kotlin.native.nuget.annotations") apply false
 }
 
 kotlin {

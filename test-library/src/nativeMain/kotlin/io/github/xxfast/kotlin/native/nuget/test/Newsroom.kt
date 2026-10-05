@@ -7,6 +7,7 @@ import io.github.xxfast.kotlin.native.nuget.test.models.Broadcast
 import io.github.xxfast.kotlin.native.nuget.test.models.Byline
 import io.github.xxfast.kotlin.native.nuget.test.models.Carton
 import io.github.xxfast.kotlin.native.nuget.test.models.CartonTag
+import io.github.xxfast.kotlin.native.nuget.test.models.Dateline
 import io.github.xxfast.kotlin.native.nuget.test.models.Nap
 import io.github.xxfast.kotlin.native.nuget.test.models.StoryCode
 import io.github.xxfast.kotlin.native.nuget.test.models.StoryUri
@@ -155,4 +156,15 @@ class Newsroom {
 
   /** The `value class` arm of the same cell, unwrapped to a C# `string` as usual. */
   fun cartonTag(): CartonTag = CartonTag("oreo-approved")
+
+  /**
+   * Issue #464: reaches [Dateline], whose `city` property and `city(edition)` function collide in
+   * C# unless the function carries `@CSharpName`. The annotation is written in `:test-models`,
+   * which applies only the annotations plugin.
+   */
+  fun dateline(): Dateline = object : Dateline {
+    override val city: String = "Windowsill"
+
+    override fun city(edition: Int): String = "Windowsill, edition $edition"
+  }
 }

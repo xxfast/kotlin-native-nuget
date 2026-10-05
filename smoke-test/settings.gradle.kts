@@ -30,6 +30,7 @@ pluginManagement {
 
   plugins {
     id("io.github.xxfast.kotlin.native.nuget") version pluginVersion
+    id("io.github.xxfast.kotlin.native.nuget.annotations") version pluginVersion
     kotlin("multiplatform") version kotlinVersion
   }
 }
@@ -42,3 +43,5 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "smoke-test"
+
+include(":annotations")

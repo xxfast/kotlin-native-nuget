@@ -243,8 +243,8 @@ private fun defaultHint(ownerPhrase: String, collision: CsNameCollision): String
  * Issue #464: a collision hint's [rename], then ADR-179's `@CSharpName` as the alternative, then
  * [detail]. The alternative is left out when every colliding declaration is a `const val`, whose C#
  * name ignores the annotation. A declaration that could carry it but was read from a klib (the
- * ADR-066 cross-module signal, `containingFile == null`) lives in a dependency module, which does
- * not get `nuget-annotations` from the plugin, so its type is named (a klib carries no module name).
+ * ADR-066 cross-module signal, `containingFile == null`) lives in a dependency module, which needs
+ * the annotations-only plugin, so its type is named (a klib carries no module name).
  */
 internal fun csharpNameRemedy(
   rename: String,
@@ -264,8 +264,8 @@ internal fun csharpNameRemedy(
   } else {
     "${owners.joinToString(" and ")} are declared in dependency modules, which each need"
   }
-  return "$remedy; $declared `io.github.xxfast:nuget-annotations` on its own `commonMain` to use " +
-      "the annotation (the plugin adds it only to the module that applies it)"
+  return "$remedy; $declared the `io.github.xxfast.kotlin.native.nuget.annotations` plugin to use " +
+      "the annotation (the main plugin adds `nuget-annotations` only to the module that applies it)"
 }
 
 /** Issue #464: this declaration's qualified name when it was read from a klib, else null. */
