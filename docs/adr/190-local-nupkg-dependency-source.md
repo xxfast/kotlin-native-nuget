@@ -262,3 +262,10 @@ Verified by running, 2026-10-03, macOS arm64, .NET SDK 10.0.300:
 - Deferred, each its own ROADMAP line: a per-dependency `source` exclusive for its id via package
   source mapping; a `packNuget` warning when a bound dependency came from a local source; a lazy
   file source with task-dependency inference; a project-local packages folder for every project.
+
+## Amendment (2026-10-07): the same-version repack tests fail loudly on CI
+
+The same-version repack tests no longer skip silently when `dotnet` is absent: the shared helper
+`dotnetForTest()` fails the test under the `CI` environment variable and otherwise aborts through
+JUnit assumptions (reported skipped, never passed), so the Windows `generators` leg, which installs
+the SDK with setup-dotnet, visibly runs them (verified from the change's source).
