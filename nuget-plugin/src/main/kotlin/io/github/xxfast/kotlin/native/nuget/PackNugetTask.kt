@@ -161,6 +161,7 @@ public abstract class PackNugetTask : DefaultTask() {
     val contentDir = File(nupkgDir, "contentFiles/cs/$tfm")
     contentDir.mkdirs()
 
+    generatedCsDirs.files.forEach(::requireGeneratedCsDir)
     val csFiles: List<File> = generatedCsFiles(generatedCsDirs.files).filter {
       producers.isEmpty() || it.name != "Interop.cs"
     } + producers.take(1).map { File(it.directory, "Interop.cs") }
@@ -193,6 +194,33 @@ public abstract class PackNugetTask : DefaultTask() {
     writeNupkgZip(nupkgDir, nupkgFile, id)
 
     logger.lifecycle("NuGet package written at: ${nupkgFile.absolutePath}")
+  }
+
+  // The ADR-093 fail-fast, applied to generatedCsDirs: every entry comes from a task-managed
+  // output directory, so a missing one means its producer was mis-wired or never ran, and
+  // skipping it would ship a package without those bindings. An existing directory with no .cs
+  // files stays legal.
+  private fun requireGeneratedCsDir(dir: File) {
+    check(dir.isDirectory) {
+      val state: String = if (dir.exists()) "is not a directory" else "does not exist"
+      "[nuget] Generated C# directory ${dir.absolutePath} $state. It should have been created " +
+        "by ${generatedCsProducer(dir)}; check that task ran and still writes there."
+    }
+  }
+
+  // Names the task expected to produce a generatedCsDirs entry, from the layouts the plugin wires:
+  // KSP's `generated/ksp/<target>/<target>Main/resources` and the shims' `nuget-interop/csharp`.
+  private fun generatedCsProducer(dir: File): String {
+    val segments: List<String> = dir.invariantSeparatorsPath.split('/')
+    val ksp: Int = segments.indexOf("ksp")
+    if (ksp > 0 && segments[ksp - 1] == "generated" && ksp + 1 < segments.size) {
+      val target: String = segments[ksp + 1]
+      return "kspKotlin${target.replaceFirstChar { it.uppercase() }} (the forward Interop.cs)"
+    }
+    if (segments.takeLast(2) == listOf("nuget-interop", "csharp")) {
+      return "${NugetTaskNames.GENERATE_SHIMS} (the reverse registration shims)"
+    }
+    return "the task configured to produce it"
   }
 
   private fun nativeLibsIn(dir: File): List<File> =

@@ -241,4 +241,74 @@ class PackNugetTaskTest {
 
     assertContains(error.message.orEmpty(), "packageId")
   }
+
+  // The generatedCsDirs twin of the ADR-093 case above: a missing producer directory used to
+  // contribute zero files silently, so a mis-wired KSP or shim output shipped no bindings.
+  @Test
+  fun `pack fails for a generatedCsDirs entry that does not exist, naming its producer`() {
+    val task: PackNugetTask = newTask()
+    val missing: File = File(Files.createTempDirectory("pack-missing").toFile(),
+      "build/generated/ksp/mingwX64/mingwX64Main/resources")
+
+    val outputDir: File = Files.createTempDirectory("pack-out").toFile()
+    configureCommon(task, outputDir)
+    task.generatedCsDirs.from(missing)
+    task.dependencyVersions.set(emptyMap())
+
+    val error = assertFailsWith<IllegalStateException> { task.pack() }
+
+    assertContains(error.message.orEmpty(), missing.absolutePath)
+    assertContains(error.message.orEmpty(), "kspKotlinMingwX64")
+  }
+
+  @Test
+  fun `pack fails for a generatedCsDirs entry that is a file, not a directory`() {
+    val task: PackNugetTask = newTask()
+    val notADirectory: File = File(Files.createTempDirectory("pack-file").toFile(), "csharp")
+    notADirectory.writeText("not a directory")
+
+    val outputDir: File = Files.createTempDirectory("pack-out").toFile()
+    configureCommon(task, outputDir)
+    task.generatedCsDirs.from(notADirectory)
+    task.dependencyVersions.set(emptyMap())
+
+    val error = assertFailsWith<IllegalStateException> { task.pack() }
+
+    assertContains(error.message.orEmpty(), notADirectory.absolutePath)
+    assertContains(error.message.orEmpty(), "not a directory")
+  }
+
+  @Test
+  fun `pack accepts an existing generatedCsDirs entry with no cs files`() {
+    val task: PackNugetTask = newTask()
+    val kspDir: File = Files.createTempDirectory("ksp-cs").toFile()
+    File(kspDir, "Interop.cs").writeText("// forward bindings\nnamespace Sample { }\n")
+    val emptyShims: File = Files.createTempDirectory("shim-cs-empty").toFile()
+
+    val outputDir: File = Files.createTempDirectory("pack-out").toFile()
+    configureCommon(task, outputDir)
+    task.generatedCsDirs.from(kspDir, emptyShims)
+    task.dependencyVersions.set(emptyMap())
+
+    task.pack()
+
+    assertTrue(File(outputDir, "TestLibrary.1.0.0/contentFiles/cs/net10.0/Interop.cs").exists())
+  }
+
+  @Test
+  fun `pack names nugetGenerateShims for a missing reverse shim directory`() {
+    val task: PackNugetTask = newTask()
+    val missing: File =
+      File(Files.createTempDirectory("pack-shims").toFile(), "build/nuget-interop/csharp")
+
+    val outputDir: File = Files.createTempDirectory("pack-out").toFile()
+    configureCommon(task, outputDir)
+    task.generatedCsDirs.from(missing)
+    task.dependencyVersions.set(emptyMap())
+
+    val error = assertFailsWith<IllegalStateException> { task.pack() }
+
+    assertContains(error.message.orEmpty(), "does not exist")
+    assertContains(error.message.orEmpty(), NugetTaskNames.GENERATE_SHIMS)
+  }
 }
