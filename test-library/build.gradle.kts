@@ -135,6 +135,16 @@ kotlin {
     }
   }
 
+  // Linux hosts only: cross-linking the `.so` costs every macOS and Windows pack a few minutes,
+  // and only the ubuntu CI leg runs it.
+  if (org.jetbrains.kotlin.konan.target.HostManager.hostIsLinux) {
+    linuxX64 {
+      binaries {
+        sharedLib()
+      }
+    }
+  }
+
   sourceSets {
     nativeMain.dependencies {
       // ADR-156: coroutines is NOT declared here on purpose. The plugin puts

@@ -134,6 +134,10 @@ case "$(uname -s)" in
     dotnet publish AotSmokeTest -r osx-arm64 -c Release -p:PublishAot=true
     ./AotSmokeTest/bin/Release/net10.0/osx-arm64/publish/AotSmokeTest
     ;;
+  Linux)
+    dotnet publish AotSmokeTest -r linux-x64 -c Release -p:PublishAot=true
+    ./AotSmokeTest/bin/Release/net10.0/linux-x64/publish/AotSmokeTest
+    ;;
 esac
 
 echo "==> Verify complete"

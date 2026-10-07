@@ -5,10 +5,10 @@ namespace IntegrationTests;
 
 // ADR-074 ("Forward expect/actual declarations: the actual is the export root"). Oreo travels
 // with a smart collar; the `Device`/`Sensor` fixture stands in for it. Kotlin only ever declared
-// ONE collar (`expect class Device`), but the CI box only ever runs ONE of its two actual bodies
-// at a time (macosArm64 on macos-latest, mingwX64 elsewhere) — so these tests select the expected
-// value by RID, the same way Oreo's collar reports different values depending which cat door he
-// walked through.
+// ONE collar (`expect class Device`), but the CI box only ever runs ONE of its three actual bodies
+// at a time (macosArm64 on macos-latest, linuxX64 on ubuntu-latest, mingwX64 on Windows), so
+// these tests select the expected value by RID, the same way Oreo's collar reports different
+// values depending which cat door he walked through.
 //
 // The static class is `PlatformApi`, not `Platform`: the package `...test.platform` already maps
 // to C# namespace `TestLibrary.Platform`, and a class named `Platform` inside a namespace segment
@@ -23,12 +23,15 @@ namespace IntegrationTests;
 public class PlatformTests
 {
     private static readonly bool IsMacOs = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
+    private static readonly bool IsLinux = OperatingSystem.IsLinux();
 
-    private static readonly string ExpectedPlatformName = IsMacOs ? "macos" : "mingw";
-    private static readonly string ExpectedPlatformTag = IsMacOs ? "osx-arm64" : "win-x64";
-    private static readonly string ExpectedDeviceSuffix = IsMacOs ? "on macos" : "on mingw";
-    private static readonly string ExpectedDeviceId = IsMacOs ? "macos-device" : "mingw-device";
-    private static readonly int ExpectedSensorReading = IsMacOs ? 42 : 24;
+    private static readonly string ExpectedPlatformName =
+        IsMacOs ? "macos" : IsLinux ? "linux" : "mingw";
+    private static readonly string ExpectedPlatformTag =
+        IsMacOs ? "osx-arm64" : IsLinux ? "linux-x64" : "win-x64";
+    private static readonly string ExpectedDeviceSuffix = $"on {ExpectedPlatformName}";
+    private static readonly string ExpectedDeviceId = $"{ExpectedPlatformName}-device";
+    private static readonly int ExpectedSensorReading = IsMacOs ? 42 : IsLinux ? 33 : 24;
 
     // --- Top-level `expect fun` / `expect val` (PlatformApi.kt), Decision 3: static class `PlatformApi` ---
 
@@ -148,5 +151,6 @@ public class PlatformTests
         // ships, so at most one of these could ever exist, but neither should).
         Assert.Null(Type.GetType("TestLibrary.Platform.PlatformApiMacos, TestLibrary"));
         Assert.Null(Type.GetType("TestLibrary.Platform.PlatformApiMingw, TestLibrary"));
+        Assert.Null(Type.GetType("TestLibrary.Platform.PlatformApiLinux, TestLibrary"));
     }
 }

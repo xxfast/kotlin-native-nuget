@@ -22,6 +22,12 @@ kotlin {
   macosArm64 {
     binaries.sharedLib()
   }
+  // Linux hosts only, as in test-library: only the ubuntu CI leg runs the `.so`.
+  if (org.jetbrains.kotlin.konan.target.HostManager.hostIsLinux) {
+    linuxX64 {
+      binaries.sharedLib()
+    }
+  }
   // Never name `nativeMain` here: this fixture is the real build proving the reverse bindings
   // reach a `nativeMain` that only the default hierarchy creates (its sources import them).
   sourceSets {
