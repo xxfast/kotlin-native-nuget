@@ -19,7 +19,7 @@ Two minor releases lead to 1.0.0: 0.9.0 carries every breaking change, 0.10.0 is
 ### 0.10.0: hardening
 
 - [ ] [ADR-165](docs/adr/165-publish-nuget-task.md)'s three Unverified claims need one real push to nuget.org and one to GitHub Packages before the next release ([details](docs/backlog/adr-165-unverified-claims-need-a-real-push.md))
-- [ ] Triage the backlog, then fix every live leak, wrong-behaviour and silent-omission item in the sections below; the 2026-09-29 audit counted seven leak or wrong-behaviour items and ten silent omissions, and found at least one entry, the triple-dispose one, already fixed. Verified.
+Reverse-direction backlog items deferred by the 2026-10-07 triage (experimental direction, outside the 1.0 promise; each stays on its phase line): the silent `UP-TO-DATE` reverse diagnostics, `alias`/`includeNamespaces` prefix matching, same-named types overwriting one generated file, the Shape B `init`-only property, the four delegate gaps, nested public types, the `dynamic` parameter, unsupported-struct members, and `validateKotlinSignatures` skipping generic and struct routes. The forward, tooling and runtime leak, wrong-behaviour and silent-omission items from that audit were fixed in the 2026-10-07 stack (#489 to #514).
 
 ### 1.0.0: policy and docs
 
