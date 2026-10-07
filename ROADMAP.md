@@ -183,6 +183,8 @@ Everything but the C# twin has shipped: bullets 1 to 3 in [ADR-127](docs/adr/127
 
 ## Tooling & Test Integrity
 
+- [ ] Kotlin stack traces are unsymbolized on linuxX64: the release `.so` reports frames as `libkn_testlibrary.so 0x... 0x0 + N` and `???`, so `KotlinStackTrace` names no Kotlin function and the ADR-200 `kn_<stem>_` export anchor never matches, leaving host frames in place. Verified on the first ubuntu CI leg (2026-10-07); four `StackTraceTrimTests`/`ExceptionPropagationTests` tests skip on Linux. Candidate fix, inferred: build the Linux target with `-Xadd-light-debug=enable` or ship symbols, then lift the gates.
+
 Fallout from [ADR-053](docs/adr/053-nullable-reference-types-in-kotlin.md) (reverse nullability), the first fixture to exercise the reverse bridge realistically. It flushed out four latent defects, **two of which were phantoms of stale build state**, and the debugging cost was dominated by having no way to observe the bridge and no way to trust the build. These items exist so the next feature does not pay that cost again.
 
 **Rejected: a `scripts/verify.sh --fast` mode.** Measurement killed the premise (verify is 38s clean, 18s warm) and a fast mode would sanction exactly the stale-state phantoms this section exists to prevent. Do not re-add it; full writeup in the [archive](docs/archive/roadmap.md).
