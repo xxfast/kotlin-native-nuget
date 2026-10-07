@@ -75,7 +75,7 @@ Complete.
 - [ ] **The same route's object/string parameter marshalling disposes the argument `StableRef` up to three times.** ([details](docs/backlog/same-route-s-object-string-parameter-marshalling.md))
 - [ ] Fold the reverse template's internal `NugetManagedException` onto the runtime class over the ADR-130 expect/actual seam ([details](docs/backlog/fold-reverse-managed-exception-onto-runtime-class.md))
 - [ ] A cancelled C# callback re-crosses to an uncaught C# caller typed as Kotlin's `CancellationException`, not the original .NET cancellation type ([details](docs/backlog/cancelled-callback-loses-original-exception-type.md))
-- [ ] `NugetErrorNative._lastManagedFault` keeps one exception rooted per thread until the next fault ([details](docs/backlog/managed-fault-stash-roots-one-exception-per-thread.md))
+- [ ] A callback that throws on a Kotlin dispatcher thread (suspend or `Flow` routes) leaves its `NugetErrorNative._lastManagedFault` stash uncleared, as that thread never runs a C# export call site; inferred, not reproduced ([details](docs/backlog/managed-fault-stash-never-cleared-on-dispatcher-threads.md))
 - [ ] `NugetManagedException` carries no `@NugetRuntimeApi`, unlike every other public runtime export ([details](docs/backlog/managed-exception-missing-runtime-api-marker.md))
 
 ## Phase 8: Ecosystem – consuming NuGet packages from Kotlin
