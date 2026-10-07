@@ -306,6 +306,23 @@ nuget {
 }
 ```
 
+The types can come straight from published Maven klibs. With the block above and a Kotlin class
+that exposes them (`fun parse(address: String): Url`, `fun nameOf(severity: Severity): String`),
+C# gets `Severity` as a plain `enum` and `Url` as a disposable handle class:
+
+```C#
+using var postbox = new Postbox("Oreo");
+using Url url = postbox.Parse("https://example.com:8443/cats/oreo");
+Console.WriteLine(url.Host);                    // example.com
+Console.WriteLine(postbox.NameOf(Severity.Warn)); // Warn
+```
+
+`Severity` lives under `TestLibrary.Co.Touchlab.Kermit` and `Url` under `TestLibrary.Io.Ktor.Http`,
+the dependency's package PascalCased below your `packageId`. `Url` has no public constructor, so
+create it in Kotlin and hand it over. Its `String`, `Int` and `List<string>` members (`Host`,
+`Port`, `EncodedPath`) bind; members typed with ktor types you didn't admit, such as `Protocol`
+and `Parameters`, are skipped with a hint to `admit` them.
+
 Admitting a type admits only that declaration, not its package: a sibling type or a member typed
 with something you didn't also `admit` still skips named, with a hint that says
 `add admit("<qualified type>")`, never `include(...)` (an additive verb has no replacement trap to
