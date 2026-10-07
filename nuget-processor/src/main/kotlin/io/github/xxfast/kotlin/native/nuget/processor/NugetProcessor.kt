@@ -121,7 +121,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.renderForwardDiagn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticTrackingLogger
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInterfacePlan
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgePlanOutcome
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceBridgePlanner
+import io.github.xxfast.kotlin.native.nuget.processor.forward.unimplementableInterfaceDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardReachabilityBucket
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isArmOfIneligibleSealedInterface
@@ -184,6 +186,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.shadowedCapturedTy
 import io.github.xxfast.kotlin.native.nuget.processor.forward.capturedMultiBoundTypeParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.hasUnspellableBound
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedCsName
+import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedInterfaceCsName
 
 // A `@kotlin.native.CName`-annotated function is already a C-ABI export by definition (its native
 // export name is fixed by the annotation itself). It must never be picked up by the forward
@@ -2973,30 +2976,45 @@ internal class NugetProcessor(
     }
     // ADR-084 stage 1: the per-interface bridge factory, projected from the same slot plan the C#
     // `{Iface}BridgeState` is projected from (see `ForwardInterfaceBridgePlanner`).
-    val bridgePlans: List<ForwardBridgeInterfacePlan> =
+    // The one guarded planner walk per interface: its outcome feeds both the factory below and the
+    // named skip after it, so a refusal is never re-derived (and never re-guarded).
+    val bridgeOutcomes: List<Pair<KSClassDeclaration, ForwardBridgePlanOutcome>> =
       reachableInterfaces.mapNotNull { iface ->
         guardDeclaration(iface) {
-          ForwardInterfaceBridgePlanner.plan(iface, forwardClassifier, context.symbols)
-        }
+          ForwardInterfaceBridgePlanner.planOrRefuse(iface, forwardClassifier, context.symbols)
+        }?.let { outcome -> iface to outcome }
       }
+    val bridgePlans: List<ForwardBridgeInterfacePlan> = bridgeOutcomes.mapNotNull { (_, outcome) ->
+      (outcome as? ForwardBridgePlanOutcome.Planned)?.plan
+    }
     bridgePlans.forEach { plan -> builder.addInterfaceBridgeFactoryExport(plan) }
-    // ADR-201 amendment: a null bridge plan is silent (a C# implementation then fails at runtime
-    // in `NugetMarshal.HandleOf`), so the one refusal this route owns for a Throwable is named: a
-    // slot result declared narrower than `RuntimeException`.
-    val plannedBridges: Set<String> = bridgePlans.map { plan -> plan.qualifiedName }.toSet()
+    // ADR-084 / ADR-064: a null bridge plan used to be silent, a C# implementation then failing at
+    // runtime in `NugetMarshal.HandleOf` with a message naming only its own type. Every reachable
+    // unplanned interface is now named once, from the planner's own walk (so the reason cannot
+    // drift from the decision), listing every disqualifying member. ADR-201 amendment: when the
+    // only refusals are slot results declared narrower than `RuntimeException`, the shipped
+    // `SKIPPED_UNSUPPORTED_RETURN` line is kept exactly.
     ForwardDiagnosticSink.emit(
-      reachableInterfaces
-        .filter { iface -> iface.qualifiedName?.asString() !in plannedBridges }
-        .mapNotNull { iface ->
-          val (member, declared) =
-            ForwardInterfaceBridgePlanner.throwableRefusal(
-              iface, forwardClassifier, context.symbols,
+      bridgeOutcomes
+        .mapNotNull { (iface, outcome) ->
+          val refused: ForwardBridgePlanOutcome.Refused =
+            outcome as? ForwardBridgePlanOutcome.Refused ?: return@mapNotNull null
+          val qualifiedName: String = iface.qualifiedName?.asString() ?: return@mapNotNull null
+          val narrow: Pair<String, String>? =
+            ForwardInterfaceBridgePlanner.throwableRefusal(refused)
+          if (narrow == null) {
+            return@mapNotNull unimplementableInterfaceDiagnostic(
+              symbol = iface,
+              qualifiedName = qualifiedName,
+              csName = iface.nestedInterfaceCsName(),
+              refusals = refused.refusals,
             )
-              ?: return@mapNotNull null
+          }
+          val (member, declared) = narrow
           ForwardDiagnostic(
             kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
             symbol = iface,
-            declaration = "${iface.qualifiedName?.asString()}.$member",
+            declaration = "$qualifiedName.$member",
             reason = "a C# implementation of it cannot be handed to Kotlin: its result is " +
                 "declared `$declared`, which cannot hold the `NugetManagedException` a C# " +
                 "exception arrives as",

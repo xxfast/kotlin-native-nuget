@@ -262,6 +262,16 @@ internal enum class ForwardDiagnosticKind(
    *  inadmissible), so a Kotlin implementation of it cannot be handed back to C#. */
   SKIPPED_UNIMPLEMENTABLE_BOUND_INTERFACE(ForwardDiagnosticSeverity.WARNING),
 
+  /** ADR-084: the forward twin of [SKIPPED_UNIMPLEMENTABLE_BOUND_INTERFACE]. A reachable Kotlin
+   *  interface with a member outside the bridge's slot vocabulary (a `var`, a `suspend` or `Flow`
+   *  member, a type parameter, more than two parameters, a type the bridge cannot carry) plans
+   *  no bridge factory, so a C# class implementing `I<Name>` cannot be passed to Kotlin. Named
+   *  once at the interface, listing every disqualifying member and its remedy. What is skipped is
+   *  the bridge, not a member: `I<Name>` still declares every member (ADR-040), so `owner` is
+   *  null and no `<remarks>` claims one is absent. A narrower-than-`RuntimeException` Throwable
+   *  result alone keeps ADR-201's shipped [SKIPPED_UNSUPPORTED_RETURN]. */
+  SKIPPED_UNIMPLEMENTABLE_INTERFACE(ForwardDiagnosticSeverity.WARNING),
+
   /** ADR-101 and its 2026-09-05 amendment: an exported class declares a supertype — an interface
    *  *or* its base class — that is not in the export set, so nothing is ever generated for that
    *  supertype and naming it in the base list would not compile (CS0246). It is dropped from the

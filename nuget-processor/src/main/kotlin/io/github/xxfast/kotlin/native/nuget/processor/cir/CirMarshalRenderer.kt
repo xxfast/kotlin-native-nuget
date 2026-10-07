@@ -668,7 +668,11 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
     appendLine("            return NugetBridge.HandleFor(value, declared);")
   } else {
     appendLine("            throw new NotSupportedException(")
-    appendLine("                $\"{value.GetType().Name} is not a Kotlin-backed object; passing a C#-implemented interface is not supported yet.\");")
+    // ADR-084: names the declared interface and where the build said why, never only the C# type.
+    appendLine("                $\"{value.GetType().Name} is not a Kotlin-backed object, \" +")
+    appendLine("                $\"and {declared.Name} has no bridge for C# implementations; \" +")
+    appendLine("                \"the Kotlin build names the members that keep it out \" +")
+    appendLine("                \"(SKIPPED_* in NugetDiagnostics.json).\");")
   }
   appendLine("        }")
   appendLine()

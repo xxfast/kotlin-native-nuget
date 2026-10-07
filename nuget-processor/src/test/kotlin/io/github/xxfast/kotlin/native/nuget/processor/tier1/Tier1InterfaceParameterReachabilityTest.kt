@@ -61,7 +61,7 @@ class Tier1InterfaceParameterReachabilityTest {
     // The bridge layer exists at all, so the ADR-040 boundary throw is gone.
     assertContains(cs, "return NugetBridge.HandleFor(value, declared);")
     assertFalse(
-      cs.contains("passing a C#-implemented interface is not supported yet"),
+      cs.contains("{value.GetType().Name} is not a Kotlin-backed object"),
       "a parameter-only interface is bridgeable, so the boundary exception must be gone",
     )
   }
