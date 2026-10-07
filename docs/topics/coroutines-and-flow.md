@@ -420,7 +420,9 @@ await foreach (var item in feeder.MealAnnouncements)
 the Kotlin flow from the start. `WithCancellation` stops the enumeration early.
 
 An element type that is an interface, or a `List<T>`/`Set<T>`/`Map<K, V>`, is spelled and read
-exactly like the same type at a property or `suspend` return, described above.
+exactly like the same type at a property or `suspend` return, described above. An interface that appears
+nowhere else in your exported API, only as a `Flow`/`StateFlow` element or a `suspend` result, still gets
+its backing class like any other interface return.
 
 If an emitted element (or a `suspend` result) cannot be materialized on the C# side, `await
 foreach` throws instead of aborting the process: the failure faults the `IAsyncEnumerable<T>` (or

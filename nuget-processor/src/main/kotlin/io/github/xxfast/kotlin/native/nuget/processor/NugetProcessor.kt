@@ -2168,14 +2168,17 @@ internal class NugetProcessor(
     // element through the same `isBridgeableComponent` gate, so `suspend fun pets(): List<Pet>` and
     // `fun stream(): Flow<List<Pet>>` bind `Task<IReadOnlyList<IPet>>` / `KotlinFlow<...>`. The
     // interface inside that collection needs its backing wrapper and `Factories` key exactly as a
-    // planned position gives it. Collection components only: a bare interface at a suspend/Flow
-    // position stays with the routes that already own it. Over-inclusive by design (a member the
-    // legacy route later skips for an unrelated reason only mints an unused wrapper, the trade
-    // `erasedPositionTypes` already accepts).
-    fun legacyComponentInterfaceNames(type: KSType?): Set<String> {
+    // planned position gives it. Issue #487: the BARE interface too (`Flow<Sighting>`,
+    // `StateFlow<Nest>`, `suspend fun one(): Beak`). No route owns it: C# spells `ISighting` and
+    // reads it through `new Interop.Sighting(h, out _)`, so unless this walk makes it reachable no
+    // backing class is declared and the consumer fails `CS0234`. Over-inclusive by design (a
+    // member the legacy route later skips for an unrelated reason, or an interface at a suspend
+    // parameter the route refuses, only mints an unused wrapper, the trade `erasedPositionTypes`
+    // already accepts).
+    fun legacyCarriedInterfaceNames(type: KSType?): Set<String> {
       val expanded: KSType = type?.expandAliases() ?: return emptySet()
       val carried: KSType = legacyFlowElement(expanded) ?: expanded
-      return forwardClassifier.classify(carried).componentInterfaceQualifiedNames()
+      return forwardClassifier.classify(carried).interfaceQualifiedNames()
     }
 
     fun legacyPositionTypes(): Sequence<KSType?> = sequence {
@@ -2214,7 +2217,7 @@ internal class NugetProcessor(
         }
         plan.nativeExports.receiverInterfaceQualifiedNames().forEach(::add)
       }
-      legacyPositionTypes().forEach { type -> addAll(legacyComponentInterfaceNames(type)) }
+      legacyPositionTypes().forEach { type -> addAll(legacyCarriedInterfaceNames(type)) }
       ordinaryCatalog.propertyPlans.forEach { plan ->
         addAll(plan.type.interfaceQualifiedNames())
         // Same receiver reasoning for an extension property over an interface receiver.
@@ -2250,9 +2253,12 @@ internal class NugetProcessor(
     // ADR-176: reaching `Groomer` plans its members, so `fun brushes(): List<Brush>` (or a
     // suspend / Flow member) binds `IReadOnlyList<IBrush>`; if `Brush` is reachable nowhere else it
     // would have no backing wrapper and no `Factories` key and throw at the first Kotlin-backed
-    // element. Own AND inherited members (over-inclusive by design: an inherited member may be
-    // declared on a super's `IBase` instead, and an unused wrapper is the cheap failure).
-    fun KSClassDeclaration.memberCollectionInterfaceNames(): Set<String> {
+    // element. Issue #487: a bare member (`fun brush(): Brush`, `fun combs(): Flow<Comb>`) is
+    // spelled `IBrush` and read through `new Interop.Brush(h, out _)` the same way, so it is walked
+    // too, not just collection components. Own AND inherited members (over-inclusive by design: an
+    // inherited member may be declared on a super's `IBase` instead, and an unused wrapper is the
+    // cheap failure).
+    fun KSClassDeclaration.memberInterfaceNames(): Set<String> {
       val memberTypes: List<KSType?> = buildList {
         getAllFunctions()
           .filter { function -> function.getVisibility() == Visibility.PUBLIC }
@@ -2264,12 +2270,12 @@ internal class NugetProcessor(
           .filter { property -> property.getVisibility() == Visibility.PUBLIC }
           .forEach { property -> add(property.type.resolve()) }
       }
-      return memberTypes.flatMapTo(mutableSetOf()) { type -> legacyComponentInterfaceNames(type) }
+      return memberTypes.flatMapTo(mutableSetOf()) { type -> legacyCarriedInterfaceNames(type) }
     }
 
     // The JOINT fixed point of both closures, over one worklist, so they feed each other: a super
-    // promoted for its async members can name a new interface in a collection member, and an
-    // interface found through a collection member can have async-carrying supers of its own.
+    // promoted for its async members can name a new interface in a member, and an
+    // interface found through a member can have async-carrying supers of its own.
     // Whatever either rule adds is itself walked by both rules, until neither grows the set.
     val interfacesByName: Map<String, KSClassDeclaration> =
       interfaces.associateBy { iface -> iface.qualifiedName?.asString().orEmpty() }
@@ -2278,7 +2284,7 @@ internal class NugetProcessor(
       val pending: ArrayDeque<String> = ArrayDeque(reachableInterfaceNames)
       while (pending.isNotEmpty()) {
         val iface: KSClassDeclaration = interfacesByName[pending.removeFirst()] ?: continue
-        (iface.promotedAsyncSuperNames() + iface.memberCollectionInterfaceNames())
+        (iface.promotedAsyncSuperNames() + iface.memberInterfaceNames())
           .filter { name -> add(name) }
           .forEach { name -> pending.addLast(name) }
       }

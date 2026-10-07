@@ -177,3 +177,34 @@ Option 1, as decided, with these confirmed and added details.
 
 The interface reachability walk also enters a lambda parameter's payload types; see the "interface and unsigned payload coverage"
 amendment to [ADR-160](160-callback-parameter-on-the-forward-plan.md).
+
+## Amendment 2026-10-07: bare interfaces on the legacy routes (issue #487)
+
+**What was wrong.** The reachability walk (`legacyComponentInterfaceNames`, and the member walk
+`memberCollectionInterfaceNames` that closes over a reachable interface's own members) collected
+collection components only, on the belief that a bare interface at a suspend or Flow position "stays
+with the routes that already own it". No route owned it. The C# read spelled `ISighting` and built it
+through `new Interop.Sighting(h, out _)`, but when that position was the interface's only appearance
+no backing class, `Factories` key or bridge arm was declared, so the generated C# failed `CS0234` at
+`nugetCompileInterop`.
+
+**Shapes affected** (each a bare interface that is reachable nowhere else):
+
+- `Flow<Sighting>` and `StateFlow<Sighting>` elements at a class method or property, or on a sealed base or arm.
+- A bare `suspend fun one(): Beak`, class-level or top-level.
+- An interface reached only through a reachable interface's own member: `interface Groomer { fun
+  brush(): Brush }`, including a `Flow<Comb>` or `suspend` member of that interface.
+
+**Fix.** The walk is now `legacyCarriedInterfaceNames` (and `memberInterfaceNames`). It collects the
+bare interface as well as collection components, so ADR-040's backing class, `Factories` key and
+bridge arm are generated exactly as a planned position gives them. The `read:` expression
+([ADR-136](136-csharp-identity-on-async-interface-reads.md)) is unchanged. The over-inclusion trade is
+unchanged too: an interface at a suspend parameter the route refuses mints only an unused wrapper.
+
+**Supersedes** the "collection components only" clause in the Decision text above and the
+"Reachability" bullet of "What shipped": the walk collects every interface at a legacy position, bare
+or inside a collection. This corrects the ADR-176 walk and ADR-040 C.1; it adds no new decision.
+
+Evidence: `Tier1FlowInterfaceElementTest.kt` (including the invariant that every
+`new global::Interop...X(` names a type declared in the same file) and
+`SuspendReachabilityTests.ClassLevelFlow_OfInterfaceReachedOnlyAsTheElement_StreamsBackingWrappers`.

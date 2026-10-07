@@ -21,6 +21,11 @@ kotlin {
   sourceSets {
     nativeMain.dependencies {
       api(libs.kotlinx.serialization.core)
+      // Issue #487: `dev/other/bysuspend/Spotter.kt` returns a `Flow`. `implementation`, not `api`,
+      // on purpose: an `api` edge would put coroutines on :test-library's compile classpath through
+      // `implementation(project(":test-models"))`, which is exactly the declaration ADR-156 keeps
+      // out of :test-library so that a plugin which stops adding it still fails there.
+      implementation(libs.kotlinx.coroutines.core)
     }
     nativeTest.dependencies {
       implementation(libs.kotlin.test)

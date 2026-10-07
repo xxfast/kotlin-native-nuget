@@ -182,6 +182,54 @@ public class SuspendReachabilityTests
         Assert.Equal(DepNs, typeof(Yarnball).Namespace);
     }
 
+    // ---- dependency interface as a Flow element on an admitted dependency class --------------
+
+    /// <summary>
+    /// Issue #487: a bare dependency interface reached ONLY as the element of a <c>Flow</c> result
+    /// on a dependency class that is itself admitted through the closure
+    /// (<c>ErrandRunner.lookout(): Spotter</c>). The element walk alone has to give
+    /// <c>Sighting</c> its backing class, or the element read constructs a type that is never
+    /// declared (CS0234). Kotlin-backed elements materialise as that backing class, typed as the
+    /// interface, and the nullable <c>Name</c> crosses both ways round, null included.
+    /// </summary>
+    [Fact]
+    public async Task ClassLevelFlow_OfInterfaceReachedOnlyAsTheElement_StreamsBackingWrappers()
+    {
+        using var runner = new ErrandRunner("Oreo");
+        using Spotter spotter = runner.Lookout();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        // No C#-implemented identity check here: that needs an input position, which would make
+        // `Sighting` reachable another way and defeat the fixture.
+        var names = new List<string?>();
+        await foreach (ISighting sighting in spotter.Watch().WithCancellation(cts.Token))
+        {
+            using (sighting)
+            {
+                Assert.IsType<Sighting>(sighting);
+                names.Add(sighting.Name);
+            }
+        }
+
+        Assert.Equal(
+            new string?[]
+            {
+                "Oreo saw Oreo on the fence, black with a white middle",
+                "Oreo saw Mylo under the hedge, milky-brown",
+                null,
+            },
+            names);
+        Assert.Equal(DepNs, typeof(ISighting).Namespace);
+        Assert.Equal(DepNs, typeof(Sighting).Namespace);
+        Assert.Equal(DepNs, typeof(Spotter).Namespace);
+        Assert.True(typeof(ISighting).IsInterface);
+
+        // The declared element type is the interface, not the wrapper: an `ISighting` local accepts
+        // either spelling, so only reflection tells the two apart.
+        Type element = typeof(Spotter).GetMethod("Watch")!.ReturnType.GetGenericArguments().Single();
+        Assert.Equal(typeof(ISighting), element);
+    }
+
     // ---- enum at a suspend return ------------------------------------------------------------
 
     /// <summary>
