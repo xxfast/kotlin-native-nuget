@@ -134,4 +134,26 @@ class NugetPluginPublishedScopesWiringTest {
       "expected no nuget.publishedScopes for a project with no publish {}; got ${ksp.arguments}",
     )
   }
+
+  /**
+   * ADR-154 meets ADR-109: a publisher's `admit(...)` entries ride an optional fourth field, so a
+   * type it admits by name is visible to every other publisher's duplicate check. Absent when the
+   * publisher admits nothing, so every existing encoding is byte-identical.
+   */
+  @Test
+  fun `a publisher's admissions are encoded as a fourth field`() {
+    val project: Project = buildProjectWithSharedLib("admitting")
+    project.publish("Admitting") {
+      it.rootPackage.set("com.contoso.api")
+      it.admit("dev.other.bykind.SomeType", "dev.pkg")
+    }
+
+    project.evaluate()
+
+    val ksp: KspExtension = project.extensions.getByType(KspExtension::class.java)
+    assertEquals(
+      "Admitting:com.contoso.api::dev.other.bykind.SomeType|dev.pkg",
+      ksp.arguments["nuget.publishedScopes"],
+    )
+  }
 }

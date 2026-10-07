@@ -148,13 +148,13 @@ class NugetPluginKspArgsWiringTest {
   }
 
   /**
-   * ADR-154's documented gap, pinned so it is a decision and not a surprise: ADR-109's
-   * cross-publisher scopes are lowered BY PACKAGE (a klib declaration carries no module identity),
-   * so a by-name `admit` entry in another publisher's scope is invisible to the duplicate-type
-   * warning. The `publishedScopes` entry must therefore stay exactly `<id>:<include>:<exclude>`.
+   * ADR-154 meets ADR-109: a by-name `admit` entry used to be invisible to the cross-publisher
+   * duplicate-type warning, because the scopes were lowered by package alone. The admissions now
+   * ride an optional fourth field, `<id>:<include>:<exclude>:<admit>`, so another publisher can
+   * match a type this one admits by name.
    */
   @Test
-  fun `admit entries do not leak into the ADR-109 published scopes`() {
+  fun `admit entries reach the ADR-109 published scopes as a fourth field`() {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).publish {
@@ -171,7 +171,7 @@ class NugetPluginKspArgsWiringTest {
     val scopes: String = project.extensions.getByType(KspExtension::class.java)
       .arguments.getValue("nuget.publishedScopes")
 
-    assertEquals("TestLibrary:com.contoso.api:", scopes)
+    assertEquals("TestLibrary:com.contoso.api::io.ktor.http.Url", scopes)
   }
 
   /**

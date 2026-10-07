@@ -1701,7 +1701,8 @@ internal class NugetProcessor(
     // parse time). ADR-066 generates an admitted dependency type into THIS module's package, over
     // its own opaque handle — so if another published package's scope also covers that type's
     // package, that package declares its own unrelated copy and a consumer referencing both sees
-    // two C# types for one Kotlin type. By package is the only match available: a cross-module
+    // two C# types for one Kotlin type. By package, or by the qualified name another publisher
+    // passed to ADR-154's `admit(...)`, is the only match available: a cross-module
     // declaration carries no module identity at all.
     //
     // Nothing is skipped: the type still exports, the generated output is byte-identical, and the
@@ -1712,8 +1713,17 @@ internal class NugetProcessor(
         val pkg: String = cls.packageName.asString()
         val qualifiedName: String = requireNotNull(cls.qualifiedName).asString()
         context.publishedScopes
-          .filter { scope -> scope.covers(pkg, qualifiedName) }
-          .map { scope ->
+          .mapNotNull { scope -> scope.matchedBy(pkg, qualifiedName)?.let { scope to it } }
+          .map { (scope, admitted) ->
+            // ADR-154 meets ADR-109: an empty match is the other publisher's include scope, the
+            // original package match, kept byte-identical; otherwise it is the `admit(...)` entry
+            // (a package or this very type by name) that reaches it, quoted with the type.
+            val byAdmit: Boolean = admitted.isNotEmpty()
+            val covering: String =
+              if (byAdmit) "(admit \"$admitted\") also covers $qualifiedName"
+              else "(rootPackage/include ${scope.scope.include.joinToString { "\"$it\"" }}) also " +
+                "covers it"
+            val excluded: String = if (byAdmit) qualifiedName else pkg
             ForwardDiagnostic(
               kind = ForwardDiagnosticKind.WARNING_DUPLICATED_DEPENDENCY_TYPE,
               // ADR-066, verified: a klib declaration has no `containingFile`, so there is no
@@ -1721,9 +1731,8 @@ internal class NugetProcessor(
               symbol = null,
               declaration = qualifiedName,
               reason = "the export closure admitted it from a dependency module, and the " +
-                  "${scope.packageId} NuGet package's export scope " +
-                  "(rootPackage/include ${scope.scope.include.joinToString { "\"$it\"" }}) also " +
-                  "covers it, so ${scope.packageId} declares its own copy (certainly if it is " +
+                  "${scope.packageId} NuGet package's export scope $covering, so " +
+                  "${scope.packageId} declares its own copy (certainly if it is " +
                   "one of ${scope.packageId}'s own types, otherwise whenever " +
                   "${scope.packageId}'s API reaches it) and a consumer referencing both packages " +
                   "sees two unrelated C# " +
@@ -1734,7 +1743,7 @@ internal class NugetProcessor(
               // is meaningless to the other's exports.
               hint = "Kotlin objects cannot cross between two native libraries, so export it " +
                   "from exactly one package: publish a single umbrella module that depends on " +
-                  "both, or add exclude(\"$pkg\") to nuget { publish { } } here so only " +
+                  "both, or add exclude(\"$excluded\") to nuget { publish { } } here so only " +
                   "${scope.packageId} declares it (callables reaching it are then skipped with " +
                   "${ForwardDiagnosticKind.SKIPPED_UNEXPORTED_DEPENDENCY_TYPE.name})",
               // Nothing is skipped and the generated output is byte-identical (the verb says so),

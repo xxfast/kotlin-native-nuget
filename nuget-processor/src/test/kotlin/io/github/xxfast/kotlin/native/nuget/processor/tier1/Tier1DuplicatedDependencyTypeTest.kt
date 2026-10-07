@@ -146,4 +146,79 @@ class Tier1DuplicatedDependencyTypeTest {
       "dep.other does not cover dep.models; got: ${result.kspWarnings}",
     )
   }
+
+  private val byKindJar: File = Tier1DependencyLibrary.compile(
+    """
+    package dev.other.bykind
+
+    class SomeType(val label: String)
+    """.trimIndent(),
+    fileName = "SomeType.kt",
+  )
+
+  private val byKindFixture: String = """
+    package tier1.dupadmit
+
+    import dev.other.bykind.SomeType
+
+    class Desk {
+      fun some(): SomeType = SomeType("Acme")
+    }
+  """.trimIndent()
+
+  /** This module admits through ADR-154's `admit(...)` alone: [admit] is a package or a name. */
+  private fun runAdmitting(admit: String, publishedScopes: String): Tier1Result = Tier1Harness.run(
+    byKindFixture,
+    processorOptions = mapOf(
+      "nuget.namespace" to "Lib",
+      "nuget.includePackages" to "tier1.dupadmit",
+      "nuget.admit" to admit,
+      "nuget.publishedScopes" to publishedScopes,
+    ),
+    libraries = listOf(byKindJar),
+  )
+
+  /**
+   * ADR-154 meets ADR-109: the other publisher admits the type BY NAME, which its package scope
+   * (`dev.otherlib`) never covers. Matching by package alone missed this collision outright.
+   */
+  @Test
+  fun `a package admission here and a by-name admission in another publisher warn`() {
+    val result: Tier1Result = runAdmitting(
+      admit = "dev.other.bykind",
+      publishedScopes = "OtherLib:dev.otherlib::dev.other.bykind.SomeType",
+    )
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    val warning: String = duplicationWarnings(result.kspWarnings).single()
+    assertTrue("] Duplicating dev.other.bykind.SomeType" in warning, warning)
+    assertTrue("OtherLib" in warning, warning)
+    assertTrue("""admit "dev.other.bykind.SomeType"""" in warning, warning)
+  }
+
+  @Test
+  fun `a by-name admission on both sides warns`() {
+    val result: Tier1Result = runAdmitting(
+      admit = "dev.other.bykind.SomeType",
+      publishedScopes = "Lib:tier1.dupadmit::dev.other.bykind.SomeType;" +
+        "OtherLib:dev.otherlib::dev.other.bykind.SomeType",
+    )
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    val warning: String = duplicationWarnings(result.kspWarnings).single()
+    assertTrue("] Duplicating dev.other.bykind.SomeType" in warning, warning)
+    assertTrue("OtherLib" in warning, warning)
+  }
+
+  /** The other publisher's by-name admission is of a different type: nothing collides. */
+  @Test
+  fun `another publisher admitting a different type by name is silent`() {
+    val result: Tier1Result = runAdmitting(
+      admit = "dev.other.bykind",
+      publishedScopes = "OtherLib:dev.otherlib::dev.other.bykind.OtherType",
+    )
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    assertTrue(duplicationWarnings(result.kspWarnings).isEmpty(), "${result.kspWarnings}")
+  }
 }

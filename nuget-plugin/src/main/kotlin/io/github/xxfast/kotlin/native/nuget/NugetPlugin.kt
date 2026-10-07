@@ -557,10 +557,16 @@ public class NugetPlugin : Plugin<Project> {
         // "unknown scope" and stays silent about (ADR-109's documented gap).
         val include: List<String> = config.include.get()
           .ifEmpty { listOfNotNull(config.rootPackage.orNull?.takeIf { it.isNotBlank() }) }
-        listOf(
+        // ADR-154: the publisher's `admit(...)` entries (packages or qualified type names) ride
+        // an optional fourth field, so a type it admits by name is visible to every other
+        // publisher's duplicate check. Written only when non-empty, so an admission-free
+        // encoding is byte-identical to the three-field one.
+        val admit: List<String> = config.admit.get()
+        listOfNotNull(
           config.packageId.orNull.orEmpty(),
           include.joinToString("|"),
           config.exclude.get().joinToString("|"),
+          admit.takeIf { it.isNotEmpty() }?.joinToString("|"),
         ).joinToString(":")
       }
       // Sorted for a stable configuration-cache input: the value must not depend on the order
