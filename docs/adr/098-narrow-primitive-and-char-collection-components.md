@@ -297,7 +297,8 @@ path (`:238-255`) strips a leading `[MarshalAs(...)] ` only inside the `out `-pr
 A by-value `[MarshalAs(UnmanagedType.U2)] char` parameter will therefore reach `csharpType` with the
 attribute still attached. ADR-069 never hit this because its `I1` only ever sat on an `out`
 parameter or a return. Expect to hoist the strip out of the `out` test. This fails **loudly** at
-generation time, not silently, but it will be the first thing that breaks.
+generation time, not silently, but it will be the first thing that breaks. (Fixed; see the
+2026-10-07 amendment at the end.)
 
 **B3.** One `Wrap<T>` branch and one `FromHandle<T>` branch for `char`, the latter in **both** the
 `nullableUnderlying` pre-block and the plain `typeof(T)` block, matching every other kind.
@@ -563,3 +564,11 @@ Evidence (**verified**): `PASS 7/7 char-wire` under a real `PublishAot` build; f
 `scripts/verify.sh` green on the branch (Contract 3, Integration 2999, Leak 158, MultiPackage 9,
 SharedException 2, all 7 NativeAOT shapes). Not covered: `osx-arm64` NativeAOT runs the same step
 only in CI, and Mono full-AOT (Mac Catalyst, iOS) `char` marshalling is measured by no lane.
+
+## Amendment 2026-10-07: the contract normalizer strips `MarshalAs` on both branches
+
+The "Watch the ABI contract normalizer" caveat is resolved. `ForwardAbiContract.csharpType` now
+strips a leading `[MarshalAs(...)]` once before the `out` branch, so `[MarshalAs(UnmanagedType.U2)]
+char` reads `short` by value as well as after `out` (**verified**: unit test in
+`ForwardAbiContractTest`). Generated output is unchanged; the attribute is still applied at render
+time.
