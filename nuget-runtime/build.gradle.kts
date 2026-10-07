@@ -12,6 +12,7 @@ kotlin {
   macosArm64()
   macosX64()
   linuxX64()
+  linuxArm64()
   mingwX64()
 
   sourceSets {
@@ -26,6 +27,7 @@ kotlin {
     macosArm64Main.get().dependsOn(nativeMain)
     macosX64Main.get().dependsOn(nativeMain)
     linuxX64Main.get().dependsOn(nativeMain)
+    linuxArm64Main.get().dependsOn(nativeMain)
     mingwX64Main.get().dependsOn(nativeMain)
 
     // ADR-128: `launchForCSharp` / `collectForCSharp` are ordinary Kotlin/Native code with no
@@ -40,6 +42,7 @@ kotlin {
     macosArm64Test.get().dependsOn(nativeTest)
     macosX64Test.get().dependsOn(nativeTest)
     linuxX64Test.get().dependsOn(nativeTest)
+    linuxArm64Test.get().dependsOn(nativeTest)
     mingwX64Test.get().dependsOn(nativeTest)
   }
 }
