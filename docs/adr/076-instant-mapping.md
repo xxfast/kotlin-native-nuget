@@ -481,3 +481,16 @@ now appear in the public C# surface, which is a surface addition, not a change.
    (`MinValue.Ticks`, `MaxValue.Ticks`, `UnixEpoch.Ticks`, `UtcTicks` normalization, instant-based
    equality, negative-tick rejection) is a documented BCL invariant unchanged since .NET Framework,
    so the risk is low, but it is inference, not observation, that they are identical on net8.0.
+
+## Amendment 2026-10-07: the exhaustiveness lesson now holds everywhere
+
+The lesson in "A sealed variant, not a re-use" (a new variant makes the compiler enumerate every
+`when` that must change) was only partly true when this ADR landed: 16 `else ->` branches over
+`BridgeType` swallowed a new variant, so the compiler flagged only 5 sites. Every `when` over a
+`BridgeType` in `nuget-processor/src/main` is now exhaustive with no `else` (94 `else` branches
+were replaced by explicit variant lists in 16 files; behaviour and generated output are unchanged).
+
+To re-check, add a dummy variant to `BridgeType` and compile non-incrementally:
+`./gradlew :nuget-processor:compileKotlin -Pkotlin.incremental=false --rerun`. **Verified:** this
+flagged 102 sites (the 94 converted plus 8 already exhaustive). An ordinary incremental compile
+reports only 2 sites before it stops, so it is not a valid check.
