@@ -80,6 +80,49 @@ jobs:
         if: github.event_name == 'push'
         run: ./gradlew :nuget-plugin:test
 
+      # The packed bridge, driven from C#, before anything reaches a registry: the same chain as
+      # ci.yml's `bridge` job on this one host, without coverage, AOT or the diagnostics scripts.
+      # The contract is packed here only so the fixtures restore; the `contract` job below packs
+      # and pushes its own copy.
+      - name: "Contract: verify and pack the shared compiled contract"
+        if: github.event_name == 'push'
+        run: |
+          dotnet test ContractTests
+          dotnet pack Kotlin.Native.Interop -c Release -o build/nuget
+
+      - name: "Pack: both independent NuGet publishers"
+        if: github.event_name == 'push'
+        run: ./gradlew :test-library:packNuget :test-companion:packNuget
+
+      - name: "Compile: generated bindings as a consumer (net10.0, warnings as errors)"
+        if: github.event_name == 'push'
+        run: dotnet build GeneratedBindingsCheck
+
+      - name: "Behaviour: build IntegrationTests"
+        if: github.event_name == 'push'
+        run: dotnet build IntegrationTests
+
+      # The two filters are complements, as in ci.yml: every test runs in exactly one of them.
+      - name: "Behaviour: forward, Kotlin exported to C#"
+        if: github.event_name == 'push'
+        run: dotnet test IntegrationTests --no-build --filter "Direction!=Reverse"
+
+      - name: "Behaviour: reverse, NuGet consumed from Kotlin"
+        if: github.event_name == 'push'
+        run: dotnet test IntegrationTests --no-build --filter "Direction=Reverse"
+
+      - name: "Coexistence: independent native runtimes"
+        if: github.event_name == 'push'
+        run: dotnet test MultiPackageTests
+
+      - name: "Coexistence: shared exception identity across consumer assemblies"
+        if: github.event_name == 'push'
+        run: dotnet test SharedExceptionTests
+
+      - name: "Leaks: run harness"
+        if: github.event_name == 'push'
+        run: dotnet test LeakTests
+
       # Publish to a local file repo and resolve the plugin from a separate Gradle build, exactly
       # as a consumer does. This is the last chance to catch a broken coordinate fallback while
       # the mistake is still free.
