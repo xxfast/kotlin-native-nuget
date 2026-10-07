@@ -548,6 +548,10 @@ parse time, so it never fires this warning). A cross-module declaration has no s
 the message never carries an <code>at &lt;file&gt;:&lt;line&gt;</code> line.</p>
 </note>
 
+A dependency type the other publisher admits by name with `admit(...)` is matched too. The reason
+then reads `export scope (admit "dev.other.bykind.SomeType") also covers dev.other.bykind.SomeType`,
+and the hint suggests `exclude("dev.other.bykind.SomeType")` instead of the package.
+
 The two workable remedies are the two the hint names: publish a single umbrella module that depends
 on both instead of two separate publishers, or `exclude("<pkg>")` from one of them so only the other
 declares it (the excluded module's own callables reaching that type then skip named with

@@ -185,7 +185,8 @@ providerArg.invoke(ksp, "nuget.publishedScopes", publishedScopes)
 
 ### 2. Encoding
 
-Entries `;`, fields `:`, lists `|`: `<packageId>:<include1|include2>:<exclude1|exclude2>`.
+Entries `;`, fields `:`, lists `|`: `<packageId>:<include1|include2>:<exclude1|exclude2>`, plus an
+optional fourth admit field added 2026-10-07 (see the amendment at the end).
 
 - `include` is the publisher's *effective* include, exactly what `effectiveInclude` computes
   (`NugetProcessor.kt:252`, Verified): the explicit `include(...)` list when non-empty, else
@@ -350,3 +351,22 @@ The original proof was the sum of three things; current permanent evidence is li
 > publisher warning under Gradle 9.1.0, KGP 2.4.10, and KSP 2.3.10; universal timing remains
 > unverified. `KspExtension.getArguments()` exposes the resolved option, as confirmed by inspecting
 > the KSP 2.3.10 implementation (`arguments` delegates to `apOptions.get()`).
+
+> **Amendment (2026-10-07): the wire format gains an optional fourth field for `admit(...)`.**
+> The by-package match above missed a type another publisher admitted **by name** with
+> [ADR-154](154-forward-dependency-type-admission.md)'s `admit(...)`, because that type lies outside
+> the publisher's include scope. An entry may now carry a fourth `:`-separated field,
+> `<packageId>:<include>:<exclude>:<admit1|admit2>`, listing the publisher's `admit(...)` entries
+> (packages or qualified type names). The plugin writes it only when the publisher admits
+> something, so every admission-free encoding is byte-identical to the three-field one, and the
+> processor accepts three or four fields (any other count still fails loudly). The processor
+> matches a type through the other publisher's include scope or its admit entries, by package or by
+> qualified name; the publisher's own `exclude` wins over both, and an empty `admit` admits
+> nothing. The diagnostic kind and shape are unchanged. When the match comes from an admit entry
+> the reason reads `export scope (admit "<entry>") also covers <qualified type>` and the hint names
+> `exclude("<qualified type>")` instead of the package. **Verified** by
+> `Tier1DuplicatedDependencyTypeTest` (package admission here with by-name admission in the other
+> publisher, by-name on both sides, and a different type admitted by name staying silent) and
+> `ForwardPublishedScopeTest`. This closes the "by-name admit is not seen" gap; the "no
+> `rootPackage` and no `include`" gap above is unchanged for the include scope, though such a
+> publisher's admit entries are now matched.
