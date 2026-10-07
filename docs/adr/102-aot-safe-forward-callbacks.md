@@ -287,3 +287,11 @@ deferred to its own ROADMAP item.
   positions in callback signatures are unaffected (none exist in the delegate set today, verified);
   `[LibraryImport]`/`CSharpProfile` interactions (orthogonal, ADR-071/094 scope); the Mono
   interpreter fallback documentation stays until the Catalyst repro is re-verified clean.
+
+## Amendment 2026-10-07: more than a smoke test runs under NativeAOT
+
+`AotSmokeTest` is no longer the only NativeAOT lane. `AotIntegrationTests/` and `AotLeakTests/`
+publish the full `IntegrationTests` and `LeakTests` sources with `PublishAot` and run them as
+executables (win-x64 verified: 3259 passed, 4 skipped, 0 failed and 209/209; osx-arm64 and
+linux-x64 pending on CI). Those suites root the test assembly, so `AotSmokeTest` remains the
+unrooted check that trimming keeps the generated `[UnmanagedCallersOnly]` thunks.

@@ -399,3 +399,11 @@ h) param token A + enumerator token B, cancel B: System.Threading.Tasks.TaskCanc
 - The enumeration and CTS `GCHandle`s are uncounted by `nuget_live_handles`, as the ADR-153 CTS
   handle is (ROADMAP line 268). The per-step `ctx` is counted, so `LeakTests` rows still catch a
   Kotlin-side leak; a C#-side leak is pinned only by a counting fake in a `nativeTest`.
+
+## Amendment 2026-10-07: NativeAOT verification
+
+Assumption B (the statically instantiated `NugetAsyncEnumeration<T>` is NativeAOT-safe) is now
+verified on win-x64: `AotIntegrationTests/` runs the `IntegrationTests` sources, including the
+per-method instantiations, as a `PublishAot` executable (3259 passed, 4 skipped, 0 failed). osx-arm64
+and linux-x64 run on CI for the first time (pending at writing). The test assembly is rooted, so
+trimming of the generated code is not covered.
