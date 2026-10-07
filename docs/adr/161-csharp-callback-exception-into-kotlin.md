@@ -86,10 +86,10 @@ public class NugetManagedException(
 `kind` is `1` when the C# exception was an `OperationCanceledException`, `0` otherwise, mirroring
 ADR-153's reverse-direction mapping: `nugetCallbackCall` throws Kotlin's `CancellationException`
 (with the `NugetManagedException` as `cause`) instead, so a cancelled C# callback cancels the
-Kotlin coroutine that invoked it rather than merely failing it. Residual: an escaping
-`CancellationException` that a consumer catches uncaught in turn re-crosses to C# through the
-ordinary ADR-024 channel typed `KotlinType == "kotlin.coroutines.cancellation.CancellationException"`
-(stdlib's cancellation type), not the original `OperationCanceledException`; not fixed here.
+Kotlin coroutine that invoked it rather than merely failing it. Residual, closed by the
+2026-10-07 cancelled-callback amendment: an escaping `CancellationException` re-crossed to C# typed
+`KotlinType == "kotlin.coroutines.cancellation.CancellationException"`, not the original
+`OperationCanceledException`.
 
 The Flow/async thunks (part A) and the cleaner's release thunk keep today's arity and
 `Environment.FailFast`; the release thunk shares the interface bridge's `void`-shaped delegate but
@@ -221,6 +221,11 @@ moment ago. That is ordinary late delivery, not a wrong-listener bug and not a u
    reaches an uncaught-in-Kotlin C# caller typed `KotlinType ==
    "kotlin.coroutines.cancellation.CancellationException"`, not the original
    `OperationCanceledException`.
+
+3. A dropped late call whose payload was a handle-passed argument (`String`, an exported object)
+   leaks that argument's `StableRef`: the delegate that would have read and released it never runs.
+4. Fixed, see the 2026-10-07 cancelled-callback amendment: a cancelled C# callback that escaped
+   Kotlin uncaught re-crossed typed as Kotlin's `CancellationException`, not the original type.
 5. `NugetErrorNative._lastManagedFault` ([ThreadStatic]) kept one exception rooted per thread until
    the next fault overwrote it or read it back. Mostly fixed, see the 2026-10-07 amendment.
 6. `NugetManagedException` carries no `@NugetRuntimeApi`, unlike every other public runtime export;
@@ -306,3 +311,27 @@ thread never runs a C# export call site, so its stash is never cleared. Tracked 
 Verified: `Tier1ManagedFaultStashTest` (emitted shape, and the wrapped-throw case pinned by
 `WrappedThrow_ManagedFaultStashIsClearedByTheNextSuccessfulCrossing`) and two cells in
 `CallbackFaultTests.cs`. Inferred, not reproduced: the dispatcher-thread gap.
+
+## Amendment (2026-10-07): a cancelled callback re-crosses as the original .NET type
+
+Residual 4 is closed. No envelope `kind` and no `nuget_*` ABI change was needed: `BuildException`
+recognises a cancelled callback from the cause chain Kotlin already carries (top type
+`kotlin.coroutines.cancellation.CancellationException`, cause 1 `NugetManagedException`, matching
+messages). It then resolves the original type as follows:
+
+- If the stashed original exception is an `OperationCanceledException`, it is returned as the same
+  object, so `TaskCanceledException`, `OperationCanceledException` and a user subclass all arrive
+  unchanged.
+- If a nested successful call already cleared the stash, `BuildException` rebuilds
+  `TaskCanceledException` or `OperationCanceledException` from the type name in the message. A user
+  subclass cannot be rebuilt (NativeAOT cannot construct an arbitrary type), so it keeps the
+  ordinary `KotlinOperationCanceledException` mapping, which `catch (OperationCanceledException)`
+  still catches.
+- A managed fault that the Kotlin author converted into a `CancellationException` stays a
+  cancellation: the stash type check fails, so it is not unwrapped to the fault's type.
+- A `CancellationException` thrown by Kotlin itself still maps to `KotlinOperationCanceledException`.
+
+Verified: `Tier1CancelledCallbackOriginalTest` and the six `CancelledCallback_*` cells in
+`CallbackFaultTests.cs`. Inferred, not tested: suspend and `Flow` exports share `BuildException`, so
+a cancelled callback there hits the same detection, but only the rebuild path can fire because the
+stash lives on another thread.

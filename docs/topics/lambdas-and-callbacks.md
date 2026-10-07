@@ -523,8 +523,11 @@ The same holds if Kotlin catches the callback exception, makes another successfu
 only then rethrows the original: the C# caller gets the `KotlinException`, not the original object.
 
 An `OperationCanceledException` thrown from a callback cancels the Kotlin coroutine that invoked
-it; if that cancellation is never caught, it reaches C# again as `KotlinType ==
-"kotlin.coroutines.cancellation.CancellationException"`, not the original .NET cancellation type.
+it; if that cancellation is never caught, it reaches C# again as the original exception: the same `TaskCanceledException`,
+`OperationCanceledException` or subclass object when no other successful C# call ran in between. If
+one did, a `TaskCanceledException` or `OperationCanceledException` is rebuilt with the original
+message, and a user subclass arrives as `KotlinOperationCanceledException`, which
+`catch (OperationCanceledException)` still catches.
 
 A callback that throws on a Kotlin coroutine or worker with no `try`/`catch` around the call still
 terminates the process, the same as any other uncaught Kotlin exception on that thread: catching
