@@ -416,13 +416,14 @@ internal object ForwardAbiContract {
       // ADR-069: a Boolean out-parameter's DllImport declaration carries a leading
       // `[MarshalAs(UnmanagedType.I1)] ` attribute (the C# marshaller's default `out bool` read is
       // 4 bytes against Kotlin's 1-byte `BooleanVar` write); strip it before the `out `-prefix
-      // check below, which recognizes the pointer shape by native-type text.
+      // check below, which recognizes the pointer shape by native-type text. Stripped once, so the
+      // by-value branch reads the plain type too rather than falling through to POINTER.
       val spelling: String = parameter.nativeType.substringAfterLast("] ").trim()
       requireMarshalable(name, spelling)
       if (spelling.startsWith("out ")) {
         ForwardAbiSignatureParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT)
       } else {
-        ForwardAbiSignatureParameter(csharpType(parameter.nativeType))
+        ForwardAbiSignatureParameter(csharpType(spelling))
       }
     }.toMutableList()
     if (hasSyncErrorOut) {

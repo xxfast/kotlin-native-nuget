@@ -894,4 +894,32 @@ class ForwardAbiContractTest {
       helperRequirements = setOf(ForwardHelperRequirement.STABLE_REF),
     ).validate()
   }
+
+  /**
+   * A leading `[MarshalAs(...)] ` on a `CirParameter.nativeType` is stripped once, before the
+   * `out`-prefix branch, so the by-value branch reads the plain type too. It used to read the raw
+   * text there, where `[MarshalAs(UnmanagedType.U2)] char` fell through to POINTER.
+   */
+  @Test
+  fun `a MarshalAs attribute reads the same as the plain type on both branches`() {
+    fun signatureOf(nativeType: String): String {
+      val import = CirDllImport(
+        "sample",
+        "marshal_probe",
+        "void",
+        "Native_Probe",
+        listOf(CirParameter("value", nativeType)),
+      )
+      val file = CirFile(
+        namespaces = listOf(
+          CirNamespace("Sample", listOf(CirStaticClass("Probe", listOf(import)))),
+        ),
+      )
+      return ForwardAbiContract.csharp(file).canonicalText()
+    }
+
+    assertEquals(signatureOf("char"), signatureOf("[MarshalAs(UnmanagedType.U2)] char"))
+    assertEquals(signatureOf("out char"), signatureOf("[MarshalAs(UnmanagedType.U2)] out char"))
+    assertEquals("marshal_probe(in short) -> void", signatureOf("char"))
+  }
 }
