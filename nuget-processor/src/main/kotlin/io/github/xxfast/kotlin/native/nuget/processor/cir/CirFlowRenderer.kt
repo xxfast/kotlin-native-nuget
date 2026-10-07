@@ -524,6 +524,7 @@ private fun StringBuilder.renderHeldStateFlowMethod(method: CirMethod, className
   val writeReceiver: String = if (method.isMutableStateFlowElementObject) "v._handle" else "v"
   appendLine("                    ${method.stateFlowSetValueNativeName}($owned, $writeReceiver, out IntPtr error);")
   appendLine("                    if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
+  appendLine("                    NugetErrorNative.ClearManagedFault();")
   appendLine("                },")
   appendLine("                $owned);")
   appendLine("        }")

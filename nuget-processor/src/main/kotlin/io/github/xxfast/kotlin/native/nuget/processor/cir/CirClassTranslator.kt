@@ -2031,12 +2031,14 @@ internal fun flowProperty(
             appendLine("                        if (v is null) throw new ArgumentNullException(nameof(v));")
             appendLine("                        $setValueNativeName(_handle, $writeReceiver, out IntPtr error);")
             appendLine("                        if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
+            appendLine("                        NugetErrorNative.ClearManagedFault();")
             appendLine("                    });")
           } else {
             appendLine("                    v =>")
             appendLine("                    {")
             appendLine("                        $setValueNativeName(_handle, $writeReceiver, out IntPtr error);")
             appendLine("                        if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
+            appendLine("                        NugetErrorNative.ClearManagedFault();")
             appendLine("                    });")
           }
         } else if (flowElementRead != null) {
@@ -3945,6 +3947,7 @@ internal fun translateCompanionFunction(
       appendLine("                {")
       appendLine("                    throw NugetErrorNative.BuildException(error);")
       appendLine("                }")
+      appendLine("                NugetErrorNative.ClearManagedFault();")
       appendLine("                int count = NugetListNative.Count(listHandle);")
       appendLine("                var result = new List<$listElementType>(count);")
       appendLine("                for (int i = 0; i < count; i++)")
@@ -3983,6 +3986,7 @@ internal fun translateCompanionFunction(
         appendLine("                {")
         appendLine("                    throw NugetErrorNative.BuildException(error);")
         appendLine("                }")
+        appendLine("                NugetErrorNative.ClearManagedFault();")
         append("                return new $kotlinReturnType(nativeResult, out _);")
       },
       isStatic = true,
@@ -5067,6 +5071,7 @@ private fun translateCallbackMethod(
       isOuterRetList -> appendLine("            IntPtr listHandle = $nativeCall;")
     }
     appendLine("            if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
+    appendLine("            NugetErrorNative.ClearManagedFault();")
     when {
       isOuterRetString -> append("            return Marshal.PtrToStringUTF8(nativeResult)!;")
       isOuterRetList -> {

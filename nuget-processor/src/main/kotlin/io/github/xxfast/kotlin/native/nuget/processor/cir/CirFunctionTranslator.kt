@@ -550,6 +550,7 @@ internal fun translateFunction(
       appendLine("            {")
       appendLine("                throw NugetErrorNative.BuildException(error);")
       appendLine("            }")
+      appendLine("            NugetErrorNative.ClearManagedFault();")
       append("            return new $constructed(nativeResult, out _);")
     }
 

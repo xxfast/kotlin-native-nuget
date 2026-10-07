@@ -1517,12 +1517,14 @@ internal fun translateProperty(
       appendLine("                {")
       appendLine("                    throw NugetErrorNative.BuildException(error);")
       appendLine("                }")
+      appendLine("                NugetErrorNative.ClearManagedFault();")
       appendLine("                if (!hasValue) return null;")
       appendLine("                $csValueType value = Native_Get_${propName}_value(out IntPtr error2);")
       appendLine("                if (error2 != IntPtr.Zero)")
       appendLine("                {")
       appendLine("                    throw NugetErrorNative.BuildException(error2);")
       appendLine("                }")
+      appendLine("                NugetErrorNative.ClearManagedFault();")
       append("                return value;")
     }
 
@@ -1535,6 +1537,7 @@ internal fun translateProperty(
       appendLine("                    {")
       appendLine("                        throw NugetErrorNative.BuildException(error);")
       appendLine("                    }")
+      appendLine("                    NugetErrorNative.ClearManagedFault();")
       appendLine("                }")
       appendLine("                else")
       appendLine("                {")
@@ -1543,6 +1546,7 @@ internal fun translateProperty(
       appendLine("                    {")
       appendLine("                        throw NugetErrorNative.BuildException(error);")
       appendLine("                    }")
+      appendLine("                    NugetErrorNative.ClearManagedFault();")
       append("                }")
     } else null
 
@@ -1589,6 +1593,7 @@ internal fun translateProperty(
       appendLine("                {")
       appendLine("                    throw NugetErrorNative.BuildException(error);")
       appendLine("                }")
+      appendLine("                NugetErrorNative.ClearManagedFault();")
       append("                return Marshal.PtrToStringUTF8(nativeResult);")
     }
     setter = if (isMutable) buildString {
@@ -1597,7 +1602,8 @@ internal fun translateProperty(
       appendLine("                if (error != IntPtr.Zero)")
       appendLine("                {")
       appendLine("                    throw NugetErrorNative.BuildException(error);")
-      append("                }")
+      appendLine("                }")
+      append("                NugetErrorNative.ClearManagedFault();")
     } else null
 
     if (isMutable) {
@@ -1622,6 +1628,7 @@ internal fun translateProperty(
       appendLine("                {")
       appendLine("                    throw NugetErrorNative.BuildException(error);")
       appendLine("                }")
+      appendLine("                NugetErrorNative.ClearManagedFault();")
       append("                return Marshal.PtrToStringUTF8(nativeResult)!;")
     }
     setter = if (isMutable) buildString {
@@ -1630,7 +1637,8 @@ internal fun translateProperty(
       appendLine("                if (error != IntPtr.Zero)")
       appendLine("                {")
       appendLine("                    throw NugetErrorNative.BuildException(error);")
-      append("                }")
+      appendLine("                }")
+      append("                NugetErrorNative.ClearManagedFault();")
     } else null
 
     if (isMutable) {
@@ -1655,6 +1663,7 @@ internal fun translateProperty(
       appendLine("                {")
       appendLine("                    throw NugetErrorNative.BuildException(error);")
       appendLine("                }")
+      appendLine("                NugetErrorNative.ClearManagedFault();")
       append("                return result;")
     }
     setter = if (isMutable) buildString {
@@ -1663,7 +1672,8 @@ internal fun translateProperty(
       appendLine("                if (error != IntPtr.Zero)")
       appendLine("                {")
       appendLine("                    throw NugetErrorNative.BuildException(error);")
-      append("                }")
+      appendLine("                }")
+      append("                NugetErrorNative.ClearManagedFault();")
     } else null
 
     if (isMutable) {

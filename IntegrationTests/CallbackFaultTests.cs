@@ -1,3 +1,4 @@
+using System.Reflection;
 using TestLibrary;
 using TestLibrary.Cat;
 
@@ -398,6 +399,56 @@ public class CallbackFaultTests
         Assert.True(Volatile.Read(ref emitted) > 0);
         Assert.Equal(0, faults.ListenerCount());
         Assert.Equal("Oreo.", faults.DescribeWith(name => name + "."));
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // The managed-fault stash never outlives the crossing that set it
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Kotlin catches the managed exception, so <c>RecoverWith</c> returns without an error and no
+    /// error arm ever consumes the stash. Its success arm has to clear it, or this thread keeps the
+    /// exception rooted for as long as it lives.
+    /// </summary>
+    [Fact]
+    public void KotlinCaughtThrow_LeavesNoManagedFaultStashedOnTheThread()
+    {
+        using var faults = new CallbackFaults();
+        var thrown = new InvalidOperationException("Oreo hid the remote");
+
+        string report = faults.RecoverWith(_ => throw thrown);
+
+        Assert.StartsWith("recovered ", report);
+        Assert.Null(StashedManagedFault());
+    }
+
+    /// <summary>
+    /// The C# caller catches a rethrow that is NOT the original (Kotlin wrapped it), so the error
+    /// arm leaves the stash in place; the next successful crossing on this thread must clear it.
+    /// </summary>
+    [Fact]
+    public void WrappedThrow_ManagedFaultStashIsClearedByTheNextSuccessfulCrossing()
+    {
+        using var faults = new CallbackFaults();
+
+        Exception wrapped = Assert.ThrowsAny<Exception>(
+            () => faults.WrapWith(_ => throw new InvalidOperationException("Mylo chewed the lead")));
+        Assert.IsAssignableFrom<IKotlinException>(wrapped);
+
+        Assert.Equal("Oreo!", faults.DescribeWith(name => name + "!"));
+        Assert.Null(StashedManagedFault());
+    }
+
+    /// <summary>
+    /// The calling thread's slot of the generated, internal <c>[ThreadStatic]</c> stash. Read
+    /// through reflection because the generated class exposes no accessor, and none is added for a
+    /// test.
+    /// </summary>
+    private static Exception? StashedManagedFault()
+    {
+        Type errorNative = typeof(CallbackFaults).Assembly.GetType("TestLibrary.NugetErrorNative", throwOnError: true)!;
+        FieldInfo field = errorNative.GetField("_lastManagedFault", BindingFlags.NonPublic | BindingFlags.Static)!;
+        return (Exception?)field.GetValue(null);
     }
 
     // ---------------------------------------------------------------------------------------

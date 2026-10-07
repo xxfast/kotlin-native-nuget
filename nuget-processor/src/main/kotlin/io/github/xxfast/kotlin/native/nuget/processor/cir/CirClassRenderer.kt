@@ -499,6 +499,7 @@ internal fun StringBuilder.renderConstructor(
     appendLine("            {")
     appendLine("                throw NugetErrorNative.BuildException(error);")
     appendLine("            }")
+    appendLine("            NugetErrorNative.ClearManagedFault();")
     appendLine("            _handle = new NugetKotlinHandle(handle);")
     appendLine("        }")
   } else {
@@ -994,6 +995,7 @@ private fun StringBuilder.renderStoredCallbackMethod(method: CirStoredCallbackMe
     "            if (error != IntPtr.Zero) { NugetThunks.UnregisterCtx(cbKey); " +
         "throw NugetErrorNative.BuildException(error); }"
   )
+  appendLine("            NugetErrorNative.ClearManagedFault();")
   // ADR-187 (gate, 2026-10-02): the token is NOT finalizer-released on its own. A discarded
   // subscription keeps delivering while its owner lives; it is unregistered by an explicit
   // `Dispose()` or, at the latest, when the owner's handle is released (`Attach`).
@@ -1065,6 +1067,7 @@ private fun StringBuilder.renderInterfaceBridgeMethod(method: CirInterfaceBridge
   val freeHandles: String =
     method.entries.indices.joinToString(" ") { "NugetThunks.UnregisterCtx(k$it);" }
   appendLine("            if (error != IntPtr.Zero) { $freeHandles throw NugetErrorNative.BuildException(error); }")
+  appendLine("            NugetErrorNative.ClearManagedFault();")
 
   appendSubscriptionReturn(
     "${method.csRemoveNativeName}(IntPtr.Zero, sub); $freeHandles",

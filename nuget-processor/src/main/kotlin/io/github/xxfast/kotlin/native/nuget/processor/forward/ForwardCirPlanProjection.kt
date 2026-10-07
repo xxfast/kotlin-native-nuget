@@ -1928,6 +1928,7 @@ internal object ForwardCirPlanProjection {
       appendLine("                return false;")
     }
     appendLine("            }")
+    appendLine("            NugetErrorNative.ClearManagedFault();")
   }
 
   /** [returnExpression] defaults to the bare `valueOut` a nullable primitive returns; ADR-079's
