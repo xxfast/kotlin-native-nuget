@@ -394,6 +394,13 @@ when the callback disposes the payload. `LeakTests/LiveHandleTests.cs` row 13-if
 `CallbackMemberInterfacePayload_EachInvocation_ReturnsToBaseline`, runs 5000 invocations and
 returns to baseline.
 
+A [late callback invocation](lambdas-and-callbacks.md#exceptions-from-a-callback) that finds its
+subscription disposed releases any handle-passed argument it was given before it drops the call or
+reports `ObjectDisposedException`. `LeakTests/LiveHandleTests.cs` row 14e,
+`DroppedLateCallbackArgument_ReturnsToBaseline`, runs fifty dropped `void` calls carrying a
+`String`, and row 14f, `ReportedLateCallbackArgument_ReturnsToBaseline`, runs the value-returning
+shape; both return to baseline.
+
 A [listener `val`](lambdas-and-callbacks.md#a-listener-val) read by Kotlin adds no handle you
 dispose: a `String` it returns is released by Kotlin after each read.
 `LeakTests/LiveHandleTests.cs` row 8j-val,
