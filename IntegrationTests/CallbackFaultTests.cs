@@ -247,7 +247,8 @@ public class CallbackFaultTests
     /// thunk. The failure has to fault the <c>IAsyncEnumerable&lt;Tantrum&gt;</c> and cancel the
     /// Kotlin collector; the host must survive. This used to lean on <c>Flow&lt;Mood&gt;</c> failing
     /// for want of an enum factory, a gap that is now a round trip (<c>FlowEnumElementTests</c>).
-    /// Runners are serial (<c>xunit.runner.json</c>), so the swap races no other test.
+    /// Collections run in parallel, but <c>Tantrum</c> is test-only and no other class
+    /// materialises one, and a class's own tests run serially, so the swap races no other test.
     /// </summary>
     [Fact]
     public async Task FlowItemMaterialisationFailure_FaultsTheStream_AndTheHostSurvives()
