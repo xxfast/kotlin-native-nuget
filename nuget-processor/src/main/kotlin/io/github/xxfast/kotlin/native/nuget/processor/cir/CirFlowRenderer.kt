@@ -76,21 +76,28 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   // (it has no collection branch) supplies its own per-member materialiser instead. Trailing,
   // optional and on an `internal` constructor, so every shipped member's generated text is
   // byte-identical and no consumer-visible surface moves.
+  // `release` is the same per-member slot for the abandoned half: a collection element that was
+  // read but never reaches the consumer (queued at `DisposeAsync`, or refused by `TryWrite`
+  // after it) holds wrappers nobody else can reach, so the member that knows the element is a
+  // collection also says how to release one. Every other element passes nothing, keeping row 16c's
+  // wrapper-typed item on the GC (ADR-187).
   appendLine("    public class KotlinFlow<T> : IAsyncEnumerable<T>, IDisposable")
   appendLine("    {")
   appendLine("        private readonly NugetFlowCollectDelegate _startCollect;")
   appendLine("        internal readonly Func<IntPtr, T> _read;")
+  appendLine("        private readonly Action<T>? _release;")
   appendLine("        private NugetKotlinHandle _ownedHandle;")
   appendLine()
-  appendLine("        internal KotlinFlow(NugetFlowCollectDelegate startCollect, Func<IntPtr, T>? read = null, NugetKotlinHandle? ownedHandle = null)")
+  appendLine("        internal KotlinFlow(NugetFlowCollectDelegate startCollect, Func<IntPtr, T>? read = null, NugetKotlinHandle? ownedHandle = null, Action<T>? release = null)")
   appendLine("        {")
   appendLine("            _ownedHandle = ownedHandle ?? NugetKotlinHandle.Null;")
   appendLine("            _startCollect = startCollect;")
   appendLine("            _read = read ?? NugetMarshal.FromHandle<T>;")
+  appendLine("            _release = release;")
   appendLine("        }")
   appendLine()
   appendLine("        public IAsyncEnumerator<T> GetAsyncEnumerator(CancellationToken cancellationToken = default)")
-  appendLine("            => new KotlinFlowEnumerator<T>(_startCollect, cancellationToken, _read);")
+  appendLine("            => new KotlinFlowEnumerator<T>(_startCollect, cancellationToken, _read, _release);")
   appendLine()
   appendLine("        public void Dispose()")
   appendLine("        {")
@@ -117,13 +124,15 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   // by its callbacks, so an undisposed wrapper is never finalized mid-collection.
   appendLine("        private readonly NugetFlowCollectDelegate _startCollect;")
   appendLine("        private readonly Func<IntPtr, T> _read;")
+  appendLine("        private readonly Action<T>? _release;")
   appendLine()
   appendLine("        public T Current { get; private set; } = default!;")
   appendLine()
-  appendLine("        internal KotlinFlowEnumerator(NugetFlowCollectDelegate startCollect, CancellationToken cancellationToken, Func<IntPtr, T>? read = null)")
+  appendLine("        internal KotlinFlowEnumerator(NugetFlowCollectDelegate startCollect, CancellationToken cancellationToken, Func<IntPtr, T>? read = null, Action<T>? release = null)")
   appendLine("        {")
   appendLine("            _startCollect = startCollect;")
   appendLine("            _read = read ?? NugetMarshal.FromHandle<T>;")
+  appendLine("            _release = release;")
   appendLine("            _channel = Channel.CreateUnbounded<T>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });")
   appendLine()
   appendLine("            var callbacks = new NugetFlowCallbacks();")
@@ -140,14 +149,16 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   // inside the NugetFlowOnNext thunk, whose catch-all is `Environment.FailFast` (ADR-102), so a
   // failed item used to end the host process. It now faults the channel -- which `MoveNextAsync`
   // already rethrows out of `await foreach` -- and cancels the Kotlin collector, so the consumer
-  // sees the materialisation exception on the stream it was enumerating. Accepted residue, named in
-  // the ADR and in LeakTests: the item handle whose read failed is not released here, because a
-  // read that threw may or may not have taken ownership of it, and a dispose on that path risks a
-  // double free.
+  // sees the materialisation exception on the stream it was enumerating. The item handle whose
+  // read failed is released by the read itself, never here: each read owns its handle on its own
+  // failure branch (`Materialize<T>`'s single owner, `ReadList`'s `finally`), so a dispose here
+  // would be the second release (LeakTests row 14d).
+  // A value `TryWrite` refuses (the channel completed by `DisposeAsync` or by an earlier fault)
+  // reaches no consumer, so a collection element is released on the spot (row 16l).
   appendLine("                try")
   appendLine("                {")
   appendLine("                    T value = _read(itemPtr);")
-  appendLine("                    _channel.Writer.TryWrite(value);")
+  appendLine("                    if (!_channel.Writer.TryWrite(value)) _release?.Invoke(value);")
   appendLine("                }")
   appendLine("                catch (Exception ex)")
   appendLine("                {")
@@ -268,6 +279,11 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   )
   appendLine("            callbacks?.Release();")
   appendLine("            _channel.Writer.TryComplete();")
+  // Row 16l: what is still queued was read but never handed out. Completing the writer first
+  // splits the two abandoned positions cleanly: a write that landed before it is drained here, a
+  // write after it is refused and released by onNext, so no element is released twice.
+  appendLine("            if (_release != null)")
+  appendLine("                while (_channel.Reader.TryRead(out T? abandoned)) _release(abandoned);")
   appendLine("            GC.KeepAlive(_startCollect);")
   appendLine("            return ValueTask.CompletedTask;")
   appendLine("        }")
@@ -287,8 +303,8 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
     // ADR-187: the owned flow handle is the same `NugetKotlinHandle` the read and write lambdas
     // pass, so a dropped flow is released by the GC and a live one is kept alive by every call.
     appendLine()
-    appendLine("        internal KotlinStateFlow(NugetFlowCollectDelegate startCollect, Func<IntPtr> readValue, NugetKotlinHandle? ownedHandle = null, Func<IntPtr, T>? read = null)")
-    appendLine("            : base(startCollect, read, ownedHandle)")
+    appendLine("        internal KotlinStateFlow(NugetFlowCollectDelegate startCollect, Func<IntPtr> readValue, NugetKotlinHandle? ownedHandle = null, Func<IntPtr, T>? read = null, Action<T>? release = null)")
+    appendLine("            : base(startCollect, read, ownedHandle, release)")
     appendLine("        {")
     appendLine("            _readValue = readValue;")
     appendLine("        }")

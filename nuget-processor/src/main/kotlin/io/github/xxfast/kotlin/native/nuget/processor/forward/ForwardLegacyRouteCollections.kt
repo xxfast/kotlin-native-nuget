@@ -1031,9 +1031,15 @@ internal fun ForwardLegacyReturnShape.Interface.legacyInterfaceRead(handle: Stri
  * file, so a collection element cannot specialise them; it hands them this per-member delegate
  * instead of the default `NugetMarshal.FromHandle<T>`. `h` never collides:
  * `componentCollectionRead` names its own lambdas from nesting level 1 (`h1`) down.
+ *
+ * The trailing `release:` is the abandoned half (LeakTests row 16l): an element the enumerator
+ * read but could not hand out is a collection nobody can reach, so the wrappers inside it are
+ * released through `NugetMarshal.ReleaseAbandoned`. Both slots are named and trail every other
+ * constructor argument, so the one string fits every flow construction site.
  */
 internal fun legacyFlowElementReadArgument(type: BridgeType.Collection): String =
-  "read: static h => ${legacyCollectionRead("h", type)}"
+  "read: static h => ${legacyCollectionRead("h", type)}, " +
+      "release: static v => NugetMarshal.ReleaseAbandoned(v)"
 
 /**
  * ADR-040 at a `Flow`/`StateFlow` **element**: the projected interface the element is declared

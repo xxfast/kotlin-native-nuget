@@ -341,7 +341,9 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
       appendLine("                                    throw new ObjectDisposedException(\"${method.asyncReturnType}\");")
       appendLine("                                return ${method.acquiredFlowCollectNativeName}($ownedFlow, ${locals.collectScope}, $next, $complete, $error, $data);")
       appendLine("                            },")
-      appendLine("                            ${acquiredRead ?: "null"}, $ownedFlow));")
+      // Named, not positional: a collection element's read carries a trailing `release:` too
+      // (row 16l), which sits after the owned-handle slot.
+      appendLine("                            ${acquiredRead ?: "null"}, ownedHandle: $ownedFlow));")
       appendLine("                    }")
       appendLine("                    catch")
       appendLine("                    {")

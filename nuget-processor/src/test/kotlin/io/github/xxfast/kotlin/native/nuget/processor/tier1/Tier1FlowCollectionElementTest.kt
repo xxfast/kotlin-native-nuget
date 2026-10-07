@@ -311,6 +311,40 @@ class Tier1FlowCollectionElementTest {
     )
   }
 
+  /**
+   * LeakTests row 16l: an element the enumerator read but could not hand out (queued at
+   * `DisposeAsync`, or refused by `TryWrite` after it) is a collection nobody can reach. Every
+   * collection element passes a `release:` beside its `read:`, the enumerator invokes it on both
+   * abandoned positions, and a non-collection element passes none, so a wrapper-typed item stays
+   * on the GC exactly as row 16c pins.
+   */
+  @Test
+  fun `a flow collection element is released when the enumerator abandons it`() {
+    val csharp: String = run().generatedCSharp
+    val release = "release: static v => NugetMarshal.ReleaseAbandoned(v)"
+
+    val readLines: List<String> = csharp.lines().filter { it.contains("read: static h =>") }
+    assertTrue(
+      readLines.size >= 5 && readLines.all { it.contains(release) },
+      "expected every collection element read to carry its release; got: $readLines",
+    )
+    val stray: List<String> = csharp.lines()
+      .filter { it.contains(release) && !it.contains("read: static h =>") }
+    assertTrue(stray.isEmpty(), "expected a release only beside a collection read; got: $stray")
+
+    val missing: List<String> = listOf(
+      "internal static void ReleaseAbandoned(object? value)",
+      "if (!_channel.Writer.TryWrite(value)) _release?.Invoke(value);",
+      "while (_channel.Reader.TryRead(out T? abandoned)) _release(abandoned);",
+      ": base(startCollect, read, ownedHandle, release)",
+    ).filterNot(csharp::contains)
+    assertTrue(
+      missing.isEmpty(),
+      "expected the helper, both abandoned positions and the StateFlow pass-through; missing: " +
+          "$missing",
+    )
+  }
+
   private fun csharpLinesFor(result: Tier1Result, needle: String): List<String> =
     result.generatedCSharp.lines().filter { it.contains(needle) }.map(String::trim)
 }
