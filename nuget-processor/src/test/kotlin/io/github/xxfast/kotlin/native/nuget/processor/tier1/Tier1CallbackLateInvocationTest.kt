@@ -229,6 +229,75 @@ class Tier1CallbackLateInvocationTest {
   }
 
   /**
+   * The late call's ARGUMENTS. Kotlin mints every handle-passed argument (`NugetHandles.retain`)
+   * before it invokes the thunk, and on a hit the delegate's read (`FromHandle`, a wrapper's
+   * constructor, `BuildException`) is what frees it. A miss returns before that read, so the miss
+   * branch frees each handle slot itself: the object-typed and the string-typed payload alike, on
+   * the dropped `void` shape and on the reported value-returning one.
+   */
+  @Test
+  fun `a lookup miss releases every handle-passed argument`() {
+    val result = run()
+
+    val cells: Map<String, String> = mapOf(
+      // Void, one handle slot. Thunks are keyed by ABI shape, so this one thunk carries the
+      // object payload (`forEachToy(action: (Toy) -> Unit)`) and the string payloads
+      // (`addWatcher(watcher: (String) -> Unit)`, `CatEventListener.onMeow(message: String)`).
+      "NugetObjectVoidCallbackThunk" to "return;",
+      // String payload, value-returning: the per-call `describeWith(format: (String) -> String)`.
+      "NugetStringStringCallbackThunk" to "throw new ObjectDisposedException",
+      // String payload, value-returning, through an ADR-084 slot: `Greeter.greet(name: String)`.
+      "NugetBridgeObjectObjectCallbackThunk" to "throw new ObjectDisposedException",
+    )
+    cells.forEach { (thunk, exit) ->
+      val miss: String = missBranch(thunkBody(result, thunk))
+      assertTrue(
+        miss.contains("if (a0 != IntPtr.Zero) NugetMarshal.Dispose(a0);") &&
+            miss.indexOf("NugetMarshal.Dispose(a0)") < miss.indexOf(exit),
+        "expected $thunk's miss branch to free its handle argument before `$exit`; the delegate " +
+            "that would have read it never runs, so nothing else does; got: $miss",
+      )
+    }
+  }
+
+  /**
+   * The ctx is a table key, not a handle, and a by-value scalar is not a handle either: freeing
+   * either would be `nuget_dispose` on a pointer Kotlin never retained.
+   */
+  @Test
+  fun `a lookup miss frees neither the ctx key nor a by-value argument`() {
+    val result = run()
+
+    val thunks: List<String> = result.generatedCSharp.split("[UnmanagedCallersOnly")
+      .filter { part -> part.contains("object? target = LookupCtx(") }
+      .map { part -> part.substringBefore("Ptr =>") }
+    assertTrue(thunks.size >= 4, "expected the fixture to reach at least four key-table thunks")
+    thunks.forEach { thunk ->
+      val ctx: String = thunk.substringAfter("LookupCtx(").substringBefore(")")
+      assertTrue(
+        !thunk.contains("Dispose($ctx)"),
+        "expected the miss branch never to free the ctx key $ctx; got: $thunk",
+      )
+      val signature: String = thunk.substringAfter("Thunk(").substringBefore(")")
+      Regex("""\b(?!IntPtr\b)\w+ (a\d+)""").findAll(signature).forEach { match ->
+        val slot: String = match.groupValues[1]
+        assertTrue(
+          !thunk.contains("Dispose($slot)"),
+          "expected the by-value slot $slot (${match.value}) to stay untouched; got: $thunk",
+        )
+      }
+    }
+    assertTrue(
+      thunks.any { thunk -> thunk.contains("(int a0, IntPtr a1") },
+      "expected the fixture to reach a by-value scalar slot (Greeter.tick(count: Int))",
+    )
+  }
+
+  /** The text between the miss test and its closing brace. */
+  private fun missBranch(thunk: String): String =
+    thunk.substringAfter("if (target is null)").substringBefore("}")
+
+  /**
    * The text of one named thunk. The rendered file is one `[UnmanagedCallersOnly]` block per thunk
    * followed by its pointer getter, so the chunk that declares [thunkName] and stops at the getter
    * is exactly that thunk's own body and cannot pick up a neighbour's miss branch.
@@ -236,7 +305,11 @@ class Tier1CallbackLateInvocationTest {
   private fun thunkBody(result: Tier1Result, thunkName: String): String {
     val chunk: String? = result.generatedCSharp.split("[UnmanagedCallersOnly")
       .firstOrNull { part -> part.contains("$thunkName(") }
-    assertTrue(chunk != null, "expected the fixture to emit $thunkName")
+    assertTrue(
+      chunk != null,
+      "expected the fixture to emit $thunkName; emitted: " +
+          Regex("""\w+Thunk(?=\()""").findAll(result.generatedCSharp).map { it.value }.toSet(),
+    )
     return chunk!!.substringBefore("Ptr =>")
   }
 

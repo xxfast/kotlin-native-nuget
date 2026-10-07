@@ -128,7 +128,7 @@ internal fun StringBuilder.appendCtxDispatchThunk(
     returnType,
     invocation,
     errOut = errOut,
-    preamble = if (viaKeyTable) ctxLookupPreamble(name, ctx, returnType) else emptyList(),
+    preamble = if (viaKeyTable) ctxLookupPreamble(name, ctx, returnType, types) else emptyList(),
   )
   appendThunkPointer(name, if (errOut) types + "IntPtr*" else types, returnType)
 }
@@ -145,17 +145,34 @@ internal fun StringBuilder.appendCtxDispatchThunk(
  * Kotlin call site, and `0` or `""` would be a lie), so it throws `ObjectDisposedException`, which
  * the shared catch below reports through part B's `errOut` channel: Kotlin sees a
  * `NugetManagedException` naming it and can catch it at the invocation site.
+ *
+ * Either way the delegate never runs, so neither does the read that would have freed a
+ * handle-passed argument (`FromHandle`, a wrapper's constructor, `BuildException`). Kotlin minted
+ * each one with `NugetHandles.retain` before the call, on all four key-table routes (stored
+ * callback, listener interface pair, per-call lambda, ADR-084 slot): every `IntPtr` slot ahead of
+ * the ctx is such a `StableRef` or zero, and every by-value scalar crosses as its own C# type. So
+ * the miss frees each `IntPtr` argument slot first, with the same `nuget_dispose` that read would
+ * have ended in. [types] is the thunk's own parameter list, ctx last.
  */
-private fun ctxLookupPreamble(name: String, ctx: String, returnType: String): List<String> =
-  listOf(
+private fun ctxLookupPreamble(
+  name: String,
+  ctx: String,
+  returnType: String,
+  types: List<String>,
+): List<String> {
+  val releases: List<String> = types.dropLast(1).mapIndexedNotNull { index, type ->
+    if (type == "IntPtr") "    if (a$index != IntPtr.Zero) NugetMarshal.Dispose(a$index);" else null
+  }
+  return listOf(
     "object? target = LookupCtx($ctx);",
     "if (target is null)",
     "{",
-  ) + if (returnType == "void") {
+  ) + releases + if (returnType == "void") {
     listOf("    return;")
   } else {
     listOf("    throw new ObjectDisposedException(\"$name\");")
   } + listOf("}")
+}
 
 /**
  * The shared thunk shell: the attribute, the catch-all, and ADR-102's decided exception discipline
