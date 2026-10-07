@@ -17,7 +17,6 @@ Complete.
 
 ### 0.10.0: hardening
 
-- [ ] `linuxArm64` is in `KONAN_TO_RID` (`NugetPlugin.kt`, verified) but `nuget-runtime` does not build that target (`nuget-runtime/build.gradle.kts:11-14`, verified); add the target or withdraw the claim. The resolution failure is inferred.
 - [ ] CI links and tests a Linux leg; today two of five RIDs run end to end. Verified.
 - [ ] `release.yml` runs `packNuget` and `IntegrationTests` before it publishes; today it runs neither. Verified.
 - [ ] [ADR-165](docs/adr/165-publish-nuget-task.md)'s three Unverified claims need one real push to nuget.org and one to GitHub Packages before the next release ([details](docs/backlog/adr-165-unverified-claims-need-a-real-push.md))

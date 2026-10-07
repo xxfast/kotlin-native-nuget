@@ -90,6 +90,9 @@ The plugin maps Kotlin/Native targets to NuGet runtime identifiers (RIDs), used 
 | `linuxX64`     | `linux-x64`   | No               |
 | `linuxArm64`   | `linux-arm64` | No               |
 
+The runtime library that generated bindings depend on is published for every target in this table,
+including `linuxArm64`.
+
 A target outside this table is skipped with a warning, and if no configured target is supported,
 the plugin skips the whole project for that build. See [Getting started](getting-started.md) for
 target configuration.

@@ -298,3 +298,8 @@ ADR-054-style startup arm is deferred to bullet 5, where C# gains a startup call
   `mingwX64` exports the same way, checked only by CI's Windows leg. If that is wrong the symptom
   is `EntryPointNotFoundException` on the first `nuget_*` call on Windows, and Alternative 3 is the
   fallback.
+
+## Amendment 2026-10-07: `linuxArm64`
+
+`nuget-runtime` also targets `linuxArm64` (verified on a Windows host: the klib cross-compiles),
+so the runtime klib is published for every `KONAN_TO_RID` target; the target list above predates it.
