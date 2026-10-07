@@ -28,22 +28,11 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * Integration tests that invoke the C# metadata reader as a subprocess. Skipped when `dotnet` is
- * absent from PATH. These tests hit the network, the global NuGet cache, and compile the bundled
- * reader project on first run.
+ * Integration tests that invoke the C# metadata reader as a subprocess. Skipped locally, and failed
+ * under CI, when `dotnet` is absent from PATH (`dotnetForTest`). These tests hit the network, the
+ * global NuGet cache, and compile the bundled reader project on first run.
  */
 class NugetExtractApiIntegrationTest {
-  // Probe for `dotnet` by running it directly, so the skip works on any OS (a `which`/`where`
-  // shell-out is platform-specific and throws on the wrong platform instead of skipping).
-  private fun findDotnet(): String? = runCatching {
-    ProcessBuilder("dotnet", "--version")
-      .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-      .redirectError(ProcessBuilder.Redirect.DISCARD)
-      .start()
-      .waitFor()
-    "dotnet"
-  }.getOrNull()
-
   private fun JsonObject.type(namespace: String, name: String): JsonObject {
     val assembly: JsonObject = getValue("assemblies").jsonArray.single().jsonObject
     val ns: JsonObject = assembly.getValue("namespaces").jsonArray
@@ -60,7 +49,7 @@ class NugetExtractApiIntegrationTest {
 
   @Test
   fun `metadata reader emits reverse-ir json for Newtonsoft Json dll`() {
-    val dotnet: String = findDotnet() ?: return
+    val dotnet: String = dotnetForTest()
 
     // 1. dotnet restore Newtonsoft.Json 13.0.3 to a temp dir → real project.assets.json
     val restoreDir: File = Files.createTempDirectory("nuget-extract-api-test").toFile()
@@ -140,7 +129,7 @@ class NugetExtractApiIntegrationTest {
 
   @Test
   fun `metadata reader no longer rejects Newtonsoft overload groups wholesale`() {
-    val dotnet: String = findDotnet() ?: return
+    val dotnet: String = dotnetForTest()
 
     val restoreDir: File = Files.createTempDirectory("nuget-extract-overloads-test").toFile()
 
@@ -188,7 +177,7 @@ class NugetExtractApiIntegrationTest {
 
   @Test
   fun `metadata reader preserves overload identities and shape A alternate constructors`() {
-    val dotnet: String = findDotnet() ?: return
+    val dotnet: String = dotnetForTest()
     val declarationGroups: List<String> = listOf(
       """
       public OverloadLab(int seed) => _origin = $"seed:{seed}";
@@ -336,7 +325,7 @@ class NugetExtractApiIntegrationTest {
    */
   @Test
   fun `metadata reader maps BCL collections to a collection type ref`() {
-    val dotnet: String = findDotnet() ?: return
+    val dotnet: String = dotnetForTest()
 
     val source: String = """
       using System.Collections.Generic;
@@ -455,7 +444,7 @@ class NugetExtractApiIntegrationTest {
   // `SKIPPED_UNBOUND_TYPE_REFERENCE` (hint: include System.Private.CoreLib).
   @Test
   fun `metadata reader carries a delegate as a delegate and never as a class`() {
-    val dotnet: String = findDotnet() ?: return
+    val dotnet: String = dotnetForTest()
 
     val source: String = """
       using System;
@@ -643,7 +632,7 @@ class NugetExtractApiIntegrationTest {
 
   @Test
   fun `metadata reader maps Task returns to an async method and skips the rest`() {
-    val dotnet: String = findDotnet() ?: return
+    val dotnet: String = dotnetForTest()
 
     val source: String = """
       using System.Collections.Generic;
@@ -822,7 +811,7 @@ class NugetExtractApiIntegrationTest {
    */
   @Test
   fun `metadata reader elides a single CancellationToken from an async method`() {
-    val dotnet: String = findDotnet() ?: return
+    val dotnet: String = dotnetForTest()
 
     val source: String = """
       using System.Threading;
@@ -935,7 +924,7 @@ class NugetExtractApiIntegrationTest {
 
   @Test
   fun `metadata reader excludes internal methods from MimeMapping dll (KnownMimeTypes LookupType)`() {
-    val dotnet: String = findDotnet() ?: return
+    val dotnet: String = dotnetForTest()
 
     // 1. dotnet restore MimeMapping 4.0.0 to a temp dir → real project.assets.json
     val restoreDir: File = Files.createTempDirectory("nuget-extract-api-mimemapping-test").toFile()
@@ -1015,7 +1004,7 @@ class NugetExtractApiIntegrationTest {
 
   @Test
   fun `an init-only property is read-only and flagged init-only on a class and on an interface`() {
-    val dotnet: String = findDotnet() ?: return
+    val dotnet: String = dotnetForTest()
 
     // An `init` accessor reaches metadata as a public setter carrying
     // `modreq(System.Runtime.CompilerServices.IsExternalInit)` on its RETURN type: nothing in the
@@ -1073,7 +1062,7 @@ class NugetExtractApiIntegrationTest {
 
   @Test
   fun `a generic method with a phantom type parameter is skipped and never collides`() {
-    val dotnet: String = findDotnet() ?: return
+    val dotnet: String = dotnetForTest()
 
     // A phantom type parameter appears in no parameter and not in the return type, so signature
     // decoding never meets `!!n`. `Unregister<TMap>()` used to render the same canonical managed
@@ -1124,7 +1113,7 @@ class NugetExtractApiIntegrationTest {
    */
   @Test
   fun `metadata reader names every dropped nested public type`() {
-    val dotnet: String = findDotnet() ?: return
+    val dotnet: String = dotnetForTest()
 
     val source: String = """
       namespace Probe.Nested;
@@ -1191,7 +1180,7 @@ class NugetExtractApiIntegrationTest {
    */
   @Test
   fun `metadata reader names every struct that fails the ADR-056 shape rules`() {
-    val dotnet: String = findDotnet() ?: return
+    val dotnet: String = dotnetForTest()
 
     val source: String = """
       namespace Probe.Structs;

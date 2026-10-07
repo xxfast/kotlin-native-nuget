@@ -13,24 +13,14 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * Integration tests that invoke `dotnet restore` as a subprocess. Skipped when `dotnet` is absent
- * from PATH. These tests hit the network and the global NuGet cache.
+ * Integration tests that invoke `dotnet restore` as a subprocess. Skipped locally, and failed under
+ * CI, when `dotnet` is absent from PATH (`dotnetForTest`). These tests hit the network and the
+ * global NuGet cache.
  */
 class NugetRestoreIntegrationTest {
-  // Probe for `dotnet` by running it directly, so the skip works on any OS (a `which`/`where`
-  // shell-out is platform-specific and throws on the wrong platform instead of skipping).
-  private fun findDotnet(): String? = runCatching {
-    ProcessBuilder("dotnet", "--version")
-      .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-      .redirectError(ProcessBuilder.Redirect.DISCARD)
-      .start()
-      .waitFor()
-    "dotnet"
-  }.getOrNull()
-
   @Test
   fun `dotnet restore produces valid project assets json for Newtonsoft Json`() {
-    val dotnet: String = findDotnet() ?: return
+    val dotnet: String = dotnetForTest()
 
     val tempDir: File = Files.createTempDirectory("nuget-restore-test").toFile()
 
@@ -65,7 +55,7 @@ class NugetRestoreIntegrationTest {
 
   @Test
   fun `dotnet restore fails with NU1202 for a package incompatible with target framework`() {
-    val dotnet: String = findDotnet() ?: return
+    val dotnet: String = dotnetForTest()
 
     val tempDir: File = Files.createTempDirectory("nuget-restore-nu1202-test").toFile()
 
@@ -165,7 +155,7 @@ class NugetRestoreIntegrationTest {
   }
 
   private fun assertSameVersionRepackRebinds(sourceOf: (feed: File) -> String) {
-    val dotnet: String = findDotnet() ?: return
+    val dotnet: String = dotnetForTest()
     val feed: File = Files.createTempDirectory("probe-local-feed").toFile()
     packProbe(dotnet, "MarkerOne", feed)
 
@@ -197,7 +187,7 @@ class NugetRestoreIntegrationTest {
   // nuget.org, which is exactly the silent wrong binding the post-restore check exists to stop.
   @Test
   fun `a directory source that does not hold the package fails even when nuget org does`() {
-    findDotnet() ?: return
+    dotnetForTest()
     val empty: File = Files.createTempDirectory("empty-local-feed").toFile()
     val project: Project = consumer("Newtonsoft.Json", "13.0.3", empty.absolutePath)
 
@@ -215,7 +205,7 @@ class NugetRestoreIntegrationTest {
   // ADR-190's local-feed set, a same-version repack there is rebound too.
   @Test
   fun `a shared directory feed serves a dependency without a source and rebinds a repack`() {
-    val dotnet: String = findDotnet() ?: return
+    val dotnet: String = dotnetForTest()
     val feed: File = Files.createTempDirectory("probe-shared-feed").toFile()
     packProbe(dotnet, "MarkerOne", feed)
 
@@ -233,7 +223,7 @@ class NugetRestoreIntegrationTest {
   // nuget.org. That is a legitimate resolution, so the post-restore check must not fail it.
   @Test
   fun `a shared directory holding another version does not fail a package nuget org serves`() {
-    findDotnet() ?: return
+    dotnetForTest()
     val feed: File = Files.createTempDirectory("shared-other-version").toFile()
     writeNupkg(File(feed, "Newtonsoft.Json.12.0.1.nupkg"), "Newtonsoft.Json", "12.0.1")
     val project: Project =

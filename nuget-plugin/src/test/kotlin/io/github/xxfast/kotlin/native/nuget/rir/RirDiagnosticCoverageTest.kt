@@ -3,6 +3,7 @@ package io.github.xxfast.kotlin.native.nuget.rir
 import io.github.xxfast.kotlin.native.nuget.ForwardDiagnosticEntry
 import io.github.xxfast.kotlin.native.nuget.NugetGenerateBindingsTask
 import io.github.xxfast.kotlin.native.nuget.RealPackageFixture
+import io.github.xxfast.kotlin.native.nuget.dotnetForTest
 import io.github.xxfast.kotlin.native.nuget.consoleLine
 import io.github.xxfast.kotlin.native.nuget.parseForwardDiagnostics
 import io.github.xxfast.kotlin.native.nuget.reverseDiagnosticsJson
@@ -66,7 +67,7 @@ class RirDiagnosticCoverageTest {
    */
   @Test
   fun `every kind is written to the report from a real assembly`() {
-    val dotnet: String = RealPackageFixture.findDotnet() ?: return
+    val dotnet: String = dotnetForTest()
     val everyKind: File = RealPackageFixture.compileFixture(
       dotnet, resource("diagnostics/EveryKind.cs"), "EveryKind",
     )
