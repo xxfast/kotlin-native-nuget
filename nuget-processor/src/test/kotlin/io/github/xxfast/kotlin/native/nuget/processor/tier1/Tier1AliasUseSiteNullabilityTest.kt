@@ -118,7 +118,7 @@ class Tier1AliasUseSiteNullabilityTest {
 
   /**
    * Pins for the legacy collection-return reads (`CirFunctionTranslator` List/MutableList/Set/
-   * MutableSet arms, `translateCompanionFunction`, `translateExtensionFunction`), which read the
+   * MutableSet arms, `translateCompanionFunction`), which read the
    * element's `simpleName` without expanding. Spiked 2026-09-28: every one of these shapes is
    * already planned on the ADR-062 route, so the element spells `string`, never the alias `Name`
    * (a CS0246 break). If a shape ever falls back to those reads, this cell names it.

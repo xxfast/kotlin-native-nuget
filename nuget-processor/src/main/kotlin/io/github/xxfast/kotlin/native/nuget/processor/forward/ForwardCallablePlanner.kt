@@ -2766,7 +2766,7 @@ internal class ForwardCallablePlanner(
         forwardExtensionImportAlias(function.packageName.asString(), functionName),
     )
       // ADR-064 amendment (2026-09-13): no legacy route is keyed to an extension for any of these
-      // reasons (measured cells 6a/6b/13c/18c/22c; `translateExtensionFunction` has no caller at
+      // reasons (measured cells 6a/6b/13c/18c/22c; there is no legacy extension translator at
       // all, and `genericFunctions` excludes extensions outright), so every deferral here is a
       // drop, with no exemption.
       .nameUnroutedPosition { false }

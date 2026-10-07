@@ -389,7 +389,6 @@ class CirOrdinaryRendererTest {
           hasCustomBody = true,
         ),
       ),
-      hasInternalHandleConstructor = true,
     )
 
     val rendered: String = render(cls)
@@ -619,7 +618,6 @@ class CirOrdinaryRendererTest {
       ),
       properties = emptyList(),
       methods = emptyList(),
-      hasInternalHandleConstructor = false,
     )
 
     val rendered: String = render(cls)
@@ -627,7 +625,6 @@ class CirOrdinaryRendererTest {
     assertContains(rendered, "public class HandleBox")
     assertContains(rendered, "public HandleBox(IntPtr raw)")
     assertContains(rendered, "_handle = raw;")
-    assertFalse(rendered.contains("internal HandleBox(IntPtr handle, out NugetHandleTag tag)"))
   }
 
   /**

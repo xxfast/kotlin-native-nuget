@@ -4571,7 +4571,6 @@ internal fun translateInterfaceBackingClass(
     properties = properties + async?.properties.orEmpty(),
     methods = methods,
     interfaces = listOf("I$name"),
-    hasInternalHandleConstructor = true,
     isSealed = true,
     backsInterface = "I$name",
     companionMembers = async?.members.orEmpty(),
@@ -4927,6 +4926,13 @@ private fun translateCallbackMethod(
   val isOuterRetList: Boolean = outerRetQualified in setOf(
     "kotlin.collections.List", "kotlin.collections.MutableList",
   )
+  // `legacyRefusedCallbackMember` admits only these returns, and both callers apply it. Any other
+  // return would need a handle the Kotlin export never `retain`s, which ADR-187's finalizer would
+  // then release, so fail generation rather than emit that wrapper.
+  check(isOuterRetUnit || isOuterRetString || isOuterRetList) {
+    "legacy lambda-parameter route reached with return $outerRetQualified; " +
+      "legacyRefusedCallbackMember admits only Unit, String and List"
+  }
 
   // Delegate name: Nuget{Arg1}...{Return}Callback
   fun typeSuffix(kotlinType: String, qualified: String?): String = when {
@@ -5059,7 +5065,6 @@ private fun translateCallbackMethod(
       isOuterRetUnit -> appendLine("            $nativeCall;")
       isOuterRetString -> appendLine("            IntPtr nativeResult = $nativeCall;")
       isOuterRetList -> appendLine("            IntPtr listHandle = $nativeCall;")
-      else -> appendLine("            IntPtr nativeHandle = $nativeCall;")
     }
     appendLine("            if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
     when {
@@ -5077,8 +5082,6 @@ private fun translateCallbackMethod(
         appendLine("            NugetListNative.Dispose(listHandle);")
         append("            return result.AsReadOnly();")
       }
-
-      !isOuterRetUnit -> append("            return new $outerRetKotlin(nativeHandle, out _);")
     }
   }
 
