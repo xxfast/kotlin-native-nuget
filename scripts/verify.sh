@@ -133,10 +133,21 @@ case "$(uname -s)" in
   Darwin)
     dotnet publish AotSmokeTest -r osx-arm64 -c Release -p:PublishAot=true
     ./AotSmokeTest/bin/Release/net10.0/osx-arm64/publish/AotSmokeTest
+    # Rung 8: the IntegrationTests and LeakTests sources under NativeAOT, one binary each because
+    # LiveHandles is process-global; the leak binary runs serially regardless of xunit.runner.json.
+    dotnet publish AotIntegrationTests -r osx-arm64 -c Release -p:PublishAot=true
+    ./AotIntegrationTests/bin/Release/net10.0/osx-arm64/publish/AotIntegrationTests
+    dotnet publish AotLeakTests -r osx-arm64 -c Release -p:PublishAot=true
+    ./AotLeakTests/bin/Release/net10.0/osx-arm64/publish/AotLeakTests --parallel none
     ;;
   Linux)
     dotnet publish AotSmokeTest -r linux-x64 -c Release -p:PublishAot=true
     ./AotSmokeTest/bin/Release/net10.0/linux-x64/publish/AotSmokeTest
+    # Rung 8, as on Darwin above.
+    dotnet publish AotIntegrationTests -r linux-x64 -c Release -p:PublishAot=true
+    ./AotIntegrationTests/bin/Release/net10.0/linux-x64/publish/AotIntegrationTests
+    dotnet publish AotLeakTests -r linux-x64 -c Release -p:PublishAot=true
+    ./AotLeakTests/bin/Release/net10.0/linux-x64/publish/AotLeakTests --parallel none
     ;;
 esac
 

@@ -199,7 +199,9 @@ public class DependencyAdmissionTests
 
     private static XDocument LoadDoc()
     {
-        string path = Path.ChangeExtension(typeof(DependencyAdmissionTests).Assembly.Location, ".xml");
+        // Not Assembly.Location: empty under NativeAOT (AotIntegrationTests); see XmlDocTests.
+        string name = typeof(DependencyAdmissionTests).Assembly.GetName().Name!;
+        string path = Path.Combine(AppContext.BaseDirectory, name + ".xml");
         if (!File.Exists(path))
         {
             throw new InvalidOperationException(

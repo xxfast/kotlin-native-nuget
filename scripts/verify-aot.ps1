@@ -12,4 +12,17 @@ if ($null -eq (Get-Command vswhere.exe -ErrorAction SilentlyContinue) -and
 dotnet publish AotSmokeTest -r win-x64 -c Release -p:PublishAot=true
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & ./AotSmokeTest/bin/Release/net10.0/win-x64/publish/AotSmokeTest.exe
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+# Rung 8: the IntegrationTests and LeakTests sources under NativeAOT, one binary each because
+# LiveHandles is process-global. The leak binary runs serially whether or not the runner picks
+# up xunit.runner.json.
+dotnet publish AotIntegrationTests -r win-x64 -c Release -p:PublishAot=true
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& ./AotIntegrationTests/bin/Release/net10.0/win-x64/publish/AotIntegrationTests.exe
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+dotnet publish AotLeakTests -r win-x64 -c Release -p:PublishAot=true
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& ./AotLeakTests/bin/Release/net10.0/win-x64/publish/AotLeakTests.exe --parallel none
 exit $LASTEXITCODE

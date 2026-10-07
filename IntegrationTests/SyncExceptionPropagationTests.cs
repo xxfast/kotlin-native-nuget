@@ -1,6 +1,5 @@
 using TestLibrary;
 using TestLibrary.Cat;
-using Xunit.Abstractions;
 
 namespace IntegrationTests;
 

@@ -465,8 +465,10 @@ public class SealedSubclassMethodTests
     /// <summary>
     /// Every <c>[DllImport]</c> EntryPoint declared on <c>Job</c> or on one of its nested arms.
     /// </summary>
-    private static string[] EntryPointsOfTheSealedFamily() =>
-        new[] { typeof(Job) }
+    private static string[] EntryPointsOfTheSealedFamily()
+    {
+        PseudoAttributes.SkipUnlessReconstructed();
+        return new[] { typeof(Job) }
             .Concat(typeof(Job).GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic))
             .SelectMany(type => type.GetMethods(
                 BindingFlags.Public | BindingFlags.NonPublic |
@@ -475,6 +477,7 @@ public class SealedSubclassMethodTests
             .Where(entryPoint => entryPoint is not null)
             .Select(entryPoint => entryPoint!)
             .ToArray();
+    }
 
     // ---- ADR-118: the suspend route, re-keyed so a sealed arm is a valid owner. ----
 
