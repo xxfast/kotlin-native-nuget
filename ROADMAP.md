@@ -17,7 +17,6 @@ Complete.
 
 ### 0.10.0: hardening
 
-- [ ] CI links and tests a Linux leg; today two of five RIDs run end to end. Verified.
 - [ ] `release.yml` runs `packNuget` and `IntegrationTests` before it publishes; today it runs neither. Verified.
 - [ ] [ADR-165](docs/adr/165-publish-nuget-task.md)'s three Unverified claims need one real push to nuget.org and one to GitHub Packages before the next release ([details](docs/backlog/adr-165-unverified-claims-need-a-real-push.md))
 - [ ] Triage the backlog, then fix every live leak, wrong-behaviour and silent-omission item in the sections below; the 2026-09-29 audit counted seven leak or wrong-behaviour items and ten silent omissions, and found at least one entry, the triple-dispose one, already fixed. Verified.

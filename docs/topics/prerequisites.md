@@ -87,8 +87,8 @@ The plugin maps Kotlin/Native targets to NuGet runtime identifiers (RIDs), used 
 | `mingwX64`     | `win-x64`     | Yes              |
 | `macosArm64`   | `osx-arm64`   | Yes              |
 | `macosX64`     | `osx-x64`     | No               |
-| `linuxX64`     | `linux-x64`   | No               |
-| `linuxArm64`   | `linux-arm64` | No               |
+| `linuxX64`     | `linux-x64`   | Yes              |
+| `linuxArm64`   | `linux-arm64` | Compiled only    |
 
 The runtime library that generated bindings depend on is published for every target in this table,
 including `linuxArm64`.
