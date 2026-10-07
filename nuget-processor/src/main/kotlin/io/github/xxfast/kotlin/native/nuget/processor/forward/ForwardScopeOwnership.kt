@@ -239,7 +239,17 @@ internal fun KSFunctionDeclaration.reProjectsKeptBaseMember(
   // a generic owner), so this class is the only carrier there is, as for a dropped base.
   if (overridee.forwardTypeParametersInScope().isNotEmpty()) return false
   val qualified: String = overridee.qualifiedName?.asString() ?: return false
-  return cls.droppedBaseChain(superClass).none { it.qualifiedName?.asString() == qualified }
+  if (cls.droppedBaseChain(superClass).none { it.qualifiedName?.asString() == qualified }) {
+    return true
+  }
+  // The nearest overridee sits on a dropped base, but that base's member may itself override one
+  // the kept base already carries (`Dinghy : Skiff(dropped) : Vessel(kept)`, all three declaring
+  // it). Then the kept base projects it and this class must not (CS0108); only when the kept base
+  // has no such member is this class the only carrier.
+  if (superClass == null || superClass.forwardTypeParametersInScope().isNotEmpty()) return false
+  val key: List<String> = forwardSignatureKey()
+  return superClass.getAllFunctions()
+    .any { inherited -> inherited.forwardInheritedSignatureKey().admits(key) }
 }
 
 /**
