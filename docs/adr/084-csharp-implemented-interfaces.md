@@ -639,3 +639,40 @@ parameter and returned as the same instance, and subscribed and unsubscribed on 
 pair. `LeakTests` row 8j-marker, `InterfaceBridge_CSharpMarkerInterface_ReturnsToBaseline`, returns
 to baseline. Full `:nuget-processor:test`: 1698 passed; native pipeline `IntegrationTests` 3069,
 `LeakTests` 169, 7 AOT shapes.
+
+## Amendment (2026-10-07): an interface the planner refuses is named at build time
+
+**Rule.** A reachable interface for which `ForwardInterfaceBridgePlanner` plans no bridge factory
+now emits one `SKIPPED_UNIMPLEMENTABLE_INTERFACE` warning, the forward twin of ADR-088's
+`SKIPPED_UNIMPLEMENTABLE_BOUND_INTERFACE`. Before, the refusal was silent at build time and
+surfaced only as a runtime `NotSupportedException` naming the C# type. The line is emitted once per
+interface and names every disqualifying member with its reason and remedy, because the planner now
+walks every member and collects refusals (`planOrRefuse`) instead of returning at the first. The
+reason therefore cannot drift from the planning decision. The refusals are:
+
+- a `var` property (declare it `val`, or hand the value over through a function);
+- a `suspend` member, or a `Flow`/`StateFlow` member (move it to a class);
+- a type parameter on the interface or on a member;
+- more than two parameters on a member;
+- a property, parameter or result type outside the slot vocabulary (`String`, `String?`, a non-null
+  `Boolean`/`Int`/`Long`/`Float`/`Double`, a non-null enum, or a Throwable);
+- a `Unit`-typed property, or a member name with no C# member name (add `@CSharpName`);
+- a Throwable result declared narrower than `RuntimeException` (ADR-201).
+
+What is skipped is the bridge, not a member: `I<Name>` still declares every member (ADR-040), so the
+diagnostic has no owner and no `<remarks>` claims anything is absent. Kotlin-backed values of the
+interface are unaffected. ADR-201's amendment is unchanged: when a narrow Throwable result is the
+sole refusal, the shipped `SKIPPED_UNSUPPORTED_RETURN` line is emitted instead and the new code is
+silent. The two runtime `NotSupportedException` messages (`NugetMarshal.HandleOf` and
+`NugetBridge.HandleFor`) now name the declared interface and point at the build warning, replacing
+"implements no bridgeable Kotlin interface" and "not supported yet".
+
+**Not decided here.** The add/remove subscription route (ADR-039) keeps its own slot rules. Moving
+it onto the planner was rejected for 0.10.0: the two vocabularies are not nested, so a single rule
+would unbind listeners that ship today. Inferred residual: a `var` on a listener interface may now
+be named twice, once on the `addX`/`removeX` pair and once at the interface.
+
+Evidence, verified: `Tier1InterfaceBridgeRefusalTest` (one line per refusal shape, every member
+named in a single line, the narrow-Throwable case keeping ADR-201's code, a bridgeable interface
+silent) and `ForwardBridgeRefusalDiagnosticTest` (the rendered line). The residual is inferred, not
+tested.
