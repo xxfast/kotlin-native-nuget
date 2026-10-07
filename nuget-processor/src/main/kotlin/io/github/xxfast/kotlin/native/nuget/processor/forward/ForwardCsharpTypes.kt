@@ -6,7 +6,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.csLambdaType
  * The public C# spelling of a [BridgeType], i.e. what a caller writes at a call site, as opposed
  * to the native (`DllImport`) type it is projected to.
  *
- * Lifted out of [ForwardCirPlanProjection]'s private copy so ADR-114's legacy Flow/suspend routes
+ * The one speller: the property route's private twin was folded in, so a callable and a property
+ * can no longer spell the same member differently. Lifted out of [ForwardCirPlanProjection]'s
+ * private copy so ADR-114's legacy Flow/suspend routes
  * can spell a collection parameter the same way the ordinary route does. A third private copy was
  * the alternative, and the three would have drifted the first time a `BridgeType` variant landed.
  */
@@ -75,7 +77,13 @@ internal fun BridgeType.forwardPublicCsharpType(): String = when (this) {
   is BridgeType.Nullable ->
     if ((type as? BridgeType.TypeParameter)?.nullableFromBound == true) type.name
     else "${type.forwardPublicCsharpType()}?"
-  else -> error("Forward CIR direct-value projection cannot render public type $this")
+  // Exhaustive with no `else`: a new variant fails to compile here until it is spelled or named
+  // unspellable. These four never reach a public signature; planning skips them by name first.
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+    -> error("Forward CIR direct-value projection cannot render public type $this")
 }
 
 /**
