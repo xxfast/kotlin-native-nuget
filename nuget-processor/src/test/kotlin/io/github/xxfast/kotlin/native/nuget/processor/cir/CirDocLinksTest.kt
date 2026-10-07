@@ -228,4 +228,72 @@ class CirDocLinksTest {
     assertEquals(cref, ((declarations[1] as CirObject).methods.single() as CirMethod).doc!!.summary)
     assertEquals(cref, (declarations[2] as CirEnum).entries.single().doc!!.summary)
   }
+
+  private fun scoped(path: String): CirDoc =
+    CirDoc(summary = listOf(CirDocInline.Link(path.substringAfterLast('.'), scopedPath = path)))
+
+  private fun summaryIn(file: CirFile, namespace: String): CirDocText = (
+    file.namespaces.single { it.name == namespace }.declarations
+      .first { it is CirClass && it.name == "Desk" } as CirClass
+    ).doc!!.summary!!
+
+  @Test
+  fun `a scoped link crefs its own namespace's type even when another namespace has one too`() {
+    val file: CirFile = CirFile(
+      namespaces = listOf(
+        CirNamespace("Lib.One", listOf(classOf("Desk", scoped("Odd")), classOf("Odd"))),
+        CirNamespace("Lib.Two", listOf(classOf("Desk", scoped("Odd")), classOf("Odd"))),
+        CirNamespace("Lib.Three", listOf(classOf("Desk", docOf("Odd")))),
+      ),
+    ).resolveDocLinks()
+
+    assertEquals(listOf(CirDocInline.TypeRef("global::Lib.One.Odd")), summaryIn(file, "Lib.One"))
+    assertEquals(listOf(CirDocInline.TypeRef("global::Lib.Two.Odd")), summaryIn(file, "Lib.Two"))
+    // Unscoped and claimed by two namespaces: ambiguous, so no cref at all.
+    assertEquals(listOf(CirDocInline.Link("Odd")), summaryIn(file, "Lib.Three"))
+  }
+
+  @Test
+  fun `a scoped link to an own type the file does not declare never borrows another's`() {
+    val file: CirFile = CirFile(
+      namespaces = listOf(
+        CirNamespace("Lib.One", listOf(classOf("Odd"))),
+        CirNamespace("Lib.Two", listOf(classOf("Desk", scoped("Odd")))),
+      ),
+    ).resolveDocLinks()
+
+    assertEquals(
+      listOf(CirDocInline.Link("Odd", scopedPath = "Odd")),
+      summaryIn(file, "Lib.Two"),
+    )
+  }
+
+  @Test
+  fun `a scoped nested path resolves exactly, past a same-named sibling in the namespace`() {
+    val file: CirFile = fileOf(
+      listOf(
+        classOf("Desk", scoped("Outer.Inner")),
+        classOf("Outer", nested = listOf(classOf("Inner"))),
+        classOf("Other", nested = listOf(classOf("Inner"))),
+      ),
+    ).resolveDocLinks()
+
+    // The bare `Inner` is ambiguous here, but the scoped path names exactly one type.
+    assertEquals(listOf(CirDocInline.TypeRef("global::Lib.Outer.Inner")), summaryOf(file))
+  }
+
+  @Test
+  fun `a scoped path through an interface carries the Kotlin spelling`() {
+    val file: CirFile = fileOf(
+      listOf(
+        classOf("Desk", scoped("Perch.Inner")),
+        CirInterface(
+          "IPerch", properties = emptyList(), methods = emptyList(),
+          nestedDeclarations = listOf(classOf("Inner")),
+        ),
+      ),
+    ).resolveDocLinks()
+
+    assertEquals(listOf(CirDocInline.TypeRef("global::Lib.IPerch.Inner")), summaryOf(file))
+  }
 }

@@ -19,65 +19,114 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
  *   (CS0419 on ambiguity), which is deferred scope.
  */
 internal fun CirFile.resolveDocLinks(): CirFile {
-  val index: Map<String, String> = docLinkIndex()
-  if (index.isEmpty()) return this
+  val entries: List<DocLinkEntry> = docLinkEntries()
+  if (entries.isEmpty()) return this
+  val fileWide: Map<String, String> = entries.uniqueBy { entry -> entry.key }
+  val byNamespace: Map<String, Map<String, String>> = entries
+    .groupBy { entry -> entry.namespace }
+    .mapValues { (_, inNamespace) -> inNamespace.filter { it.isPath }.uniqueBy { it.key } }
   return copy(
     namespaces = namespaces.map { namespace ->
+      val index = DocLinkIndex(byNamespace[namespace.name].orEmpty(), fileWide)
       namespace.copy(declarations = namespace.declarations.map { it.resolveDocLinks(index) })
     },
   )
 }
 
 /**
- * Simple name (and dotted nested path) to `global::`-qualified cref, for every type this file
- * declares. A key two declarations claim is dropped rather than guessed at.
+ * The two lookups a `[link]` in one namespace can take. [local] is that namespace's own types, and
+ * answers a link KSP scoped to a type of the documented declaration's own package
+ * ([CirDocInline.Link.scopedPath]): that type or nothing, never a same-named one elsewhere.
+ * [fileWide] answers an unscoped link, and only for a name exactly one type in the file claims.
  */
-private fun CirFile.docLinkIndex(): Map<String, String> {
-  val entries: MutableList<Pair<String, String>> = mutableListOf()
-  for (namespace in namespaces) {
-    for (declaration in namespace.declarations) {
-      declaration.indexInto(entries, namespace.name, emptyList())
-    }
-  }
-  return entries
-    .groupBy({ it.first }, { it.second })
+private class DocLinkIndex(val local: Map<String, String>, val fileWide: Map<String, String>)
+
+/** One key a declared type can be linked by, with the namespace that declares it. */
+private data class DocLinkEntry(
+  val namespace: String,
+  val key: String,
+  val cref: String,
+  /** The whole path from the namespace, rather than a nested type's bare simple name. */
+  val isPath: Boolean,
+)
+
+/** Key to `global::`-qualified cref. A key two declarations claim is dropped, not guessed at. */
+private fun List<DocLinkEntry>.uniqueBy(key: (DocLinkEntry) -> String): Map<String, String> =
+  groupBy(key) { entry -> entry.cref }
     .filterValues { crefs -> crefs.distinct().size == 1 }
     .mapValues { (_, crefs) -> crefs.first() }
+
+/**
+ * Simple name, dotted nested path and its Kotlin spelling, for every type this file declares.
+ */
+private fun CirFile.docLinkEntries(): List<DocLinkEntry> {
+  val entries: MutableList<DocLinkEntry> = mutableListOf()
+  for (namespace in namespaces) {
+    val keys: MutableList<DocLinkEntry> = mutableListOf()
+    for (declaration in namespace.declarations) {
+      declaration.indexInto(keys, namespace.name, emptyList(), emptyList())
+    }
+    entries += keys
+  }
+  return entries
 }
 
+/**
+ * [prefix] is the enclosing C# path, [kotlinPrefix] the same path as the Kotlin author spells it:
+ * they differ only across an ADR-040 interface (`IOuter.Inner` against `Outer.Inner`), and a
+ * KSP-scoped link carries the Kotlin spelling.
+ */
 private fun CirDeclaration.indexInto(
-  entries: MutableList<Pair<String, String>>,
+  entries: MutableList<DocLinkEntry>,
   namespace: String,
   prefix: List<String>,
+  kotlinPrefix: List<String>,
 ) {
   val name: String = docLinkName() ?: return
   val path: List<String> = prefix + name
+  val kotlinName: String = (this as? CirInterface)?.kotlinInterfaceName() ?: name
+  val kotlinPath: List<String> = kotlinPrefix + kotlinName
   if (!isGenericDeclaration()) {
     val cref: String = "global::$namespace.${path.joinToString(".")}"
-    entries += name to cref
-    if (path.size > 1) entries += path.joinToString(".") to cref
+    entries += DocLinkEntry(namespace, name, cref, isPath = path.size == 1)
+    if (path.size > 1) entries += DocLinkEntry(namespace, path.joinToString("."), cref, true)
     // ADR-040: the C# interface is `IPerchable` while the author writes `[Perchable]`. Both keys
     // are indexed; if a backing wrapper class also claims `Perchable`, the key is ambiguous and
     // the link falls back, which is the safe half of the trade.
-    if (this is CirInterface) kotlinInterfaceName()?.let { entries += it to cref }
+    if (this is CirInterface) {
+      kotlinInterfaceName()?.let { entries += DocLinkEntry(namespace, it, cref, path.size == 1) }
+    }
+    if (kotlinPath.size > 1 && kotlinPath != path) {
+      entries += DocLinkEntry(namespace, kotlinPath.joinToString("."), cref, isPath = true)
+    }
   }
-  for (nested in docLinkChildren()) nested.indexInto(entries, namespace, path)
+  for (nested in docLinkChildren()) nested.indexInto(entries, namespace, path, kotlinPath)
   if (this is CirSealedClass) {
     for (arm in subclasses) {
       // Issue #54: a nested arm is declared inside the base (`Snooze.Catnap`), a sibling arm at
       // namespace level, and the cref has to follow the C# scope either way.
       val armPrefix: List<String> = if (arm.isNested) path else prefix
+      val armKotlinPrefix: List<String> = if (arm.isNested) kotlinPath else kotlinPrefix
       val armPath: List<String> = armPrefix + arm.name
+      val armKotlinPath: List<String> = armKotlinPrefix + arm.name
       val cref: String = "global::$namespace.${armPath.joinToString(".")}"
       // ADR-199: a generic arm has no bare cref spelling either, but its holder's children do.
       if (arm.typeParameters.isEmpty()) {
-        entries += arm.name to cref
-        if (armPath.size > 1) entries += armPath.joinToString(".") to cref
+        entries += DocLinkEntry(namespace, arm.name, cref, isPath = armPath.size == 1)
+        if (armPath.size > 1) {
+          entries += DocLinkEntry(namespace, armPath.joinToString("."), cref, isPath = true)
+          if (armKotlinPath != armPath) {
+            entries += DocLinkEntry(namespace, armKotlinPath.joinToString("."), cref, isPath = true)
+          }
+        }
       }
-      for (nested in arm.nestedDeclarations) nested.indexInto(entries, namespace, armPath)
+      for (nested in arm.nestedDeclarations) {
+        nested.indexInto(entries, namespace, armPath, armKotlinPath)
+      }
     }
   }
 }
+
 
 /**
  * The C# simple name this declaration is spelled with inside its enclosing scope, or null for the
@@ -120,7 +169,7 @@ private fun CirDeclaration.isGenericDeclaration(): Boolean = when (this) {
 private fun CirInterface.kotlinInterfaceName(): String? =
   name.takeIf { it.length > 1 && it[0] == 'I' && it[1].isUpperCase() }?.drop(1)
 
-private fun CirDeclaration.resolveDocLinks(index: Map<String, String>): CirDeclaration =
+private fun CirDeclaration.resolveDocLinks(index: DocLinkIndex): CirDeclaration =
   when (this) {
     is CirStaticClass -> copy(members = members.map { it.resolveDocLinks(index) })
     is CirInterface -> copy(
@@ -177,7 +226,7 @@ private fun CirDeclaration.resolveDocLinks(index: Map<String, String>): CirDecla
     else -> this
   }
 
-private fun CirSealedSubclass.resolveDocLinks(index: Map<String, String>): CirSealedSubclass = copy(
+private fun CirSealedSubclass.resolveDocLinks(index: DocLinkIndex): CirSealedSubclass = copy(
   properties = properties.map { it.copy(doc = it.doc.resolve(index)) },
   constructors = constructors.map { it.copy(doc = it.doc.resolve(index)) },
   methods = methods.map { it.copy(doc = it.doc.resolve(index)) },
@@ -189,7 +238,7 @@ private fun CirSealedSubclass.resolveDocLinks(index: Map<String, String>): CirSe
 )
 
 /** Exhaustive on purpose: a member kind that grows a `doc` slot must be handled here too. */
-private fun CirMember.resolveDocLinks(index: Map<String, String>): CirMember = when (this) {
+private fun CirMember.resolveDocLinks(index: DocLinkIndex): CirMember = when (this) {
   is CirMethod -> copy(doc = doc.resolve(index))
   is CirProperty -> copy(doc = doc.resolve(index))
   is CirDllImport -> this
@@ -200,7 +249,7 @@ private fun CirMember.resolveDocLinks(index: Map<String, String>): CirMember = w
   is CirExtensionProperty -> copy(doc = doc.resolve(index))
 }
 
-private fun CirDoc?.resolve(index: Map<String, String>): CirDoc? {
+private fun CirDoc?.resolve(index: DocLinkIndex): CirDoc? {
   val doc: CirDoc = this ?: return null
   return doc.copy(
     summary = doc.summary?.map { it.resolve(index) },
@@ -217,8 +266,10 @@ private fun CirDoc?.resolve(index: Map<String, String>): CirDoc? {
   )
 }
 
-private fun CirDocInline.resolve(index: Map<String, String>): CirDocInline = when (this) {
-  is CirDocInline.Link -> index[target]
+private fun CirDocInline.resolve(index: DocLinkIndex): CirDocInline = when (this) {
+  is CirDocInline.Link -> (
+    if (scopedPath != null) index.local[scopedPath] else index.fileWide[target]
+  )
     ?.let { cref -> CirDocInline.TypeRef(cref, label) }
     ?: this
 

@@ -5103,9 +5103,11 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
  */
 internal fun KSDeclaration.forwardKdoc(expects: ExpectIndex): ForwardKdoc? {
   if (origin != Origin.KOTLIN) return null
-  val doc: ForwardKdoc = parseKdoc(docString ?: expects.docOrNull(this))
+  val doc: ForwardKdoc = (
+    parseKdoc(docString ?: expects.docOrNull(this))
     ?: (this as? KSPropertyDeclaration)?.propertyTagKdoc(expects)
     ?: return null
+  ).scopedAt(this, expects)
   if (doc.throws.isEmpty()) return doc
   return doc.copy(
     throws = doc.throws.map { entry ->
@@ -5113,6 +5115,41 @@ internal fun KSDeclaration.forwardKdoc(expects: ExpectIndex): ForwardKdoc? {
     },
   )
 }
+
+/**
+ * A bare `[Name]` resolves like an identifier at the declaration it documents: its own class
+ * scope outward, then its package. Each target that names a type that way is stamped with that
+ * type's dotted path from the package, so `CirFile.resolveDocLinks()` crefs that type or nothing,
+ * and never a same-named type in another package. KSP exposes no file imports, so a type reached
+ * only through an import stays unscoped, and keeps the file-wide unique-name fallback.
+ */
+private fun ForwardKdoc.scopedAt(declaration: KSDeclaration, expects: ExpectIndex): ForwardKdoc {
+  val paths: Map<String, String> = linkTargets()
+    .mapNotNull { target -> declaration.linkPath(target, expects)?.let { path -> target to path } }
+    .toMap()
+  return if (paths.isEmpty()) this else copy(linkPaths = linkPaths + paths)
+}
+
+private fun KSDeclaration.linkPath(target: String, expects: ExpectIndex): String? {
+  val head: String = target.substringBefore('.')
+  var scope: KSDeclaration? = this as? KSClassDeclaration ?: parentDeclaration
+  while (scope != null) {
+    val declaresHead: Boolean = scope is KSClassDeclaration &&
+      scope.declarations.any { it is KSClassDeclaration && it.simpleName.asString() == head }
+    if (declaresHead) return (scope.typePath() + target).joinToString(".")
+    scope = scope.parentDeclaration
+  }
+  val pkg: String = packageName.asString()
+  val qualified: String = if (pkg.isEmpty()) head else "$pkg.$head"
+  return target.takeIf { expects.classByName(qualified) != null }
+}
+
+/** The simple names from the outermost enclosing class down to this one. */
+private fun KSDeclaration.typePath(): List<String> =
+  generateSequence(this) { it.parentDeclaration }
+    .map { it.simpleName.asString() }
+    .toList()
+    .reversed()
 
 /**
  * ADR-177: the class an ADR-150 `@throws T` names. KSP exposes no file imports, so the written
@@ -5184,7 +5221,7 @@ private fun KSPropertyDeclaration.propertyTagKdoc(expects: ExpectIndex): Forward
  */
 private fun KSClassDeclaration.classLevelKdoc(expects: ExpectIndex): ForwardKdoc? {
   if (origin != Origin.KOTLIN) return null
-  return parseKdoc(docString ?: expects.docOrNull(this))
+  return parseKdoc(docString ?: expects.docOrNull(this))?.scopedAt(this, expects)
 }
 
 /**
@@ -5208,7 +5245,7 @@ private fun KSFunctionDeclaration.primaryConstructorKdoc(
     classDoc.params + classDoc.properties.filterKeys { it !in classDoc.params }
   val summary: String? = classDoc.constructor.takeIf { withSummary }
   if (summary == null && params.isEmpty()) return null
-  return ForwardKdoc(summary = summary, params = params)
+  return ForwardKdoc(summary = summary, params = params, linkPaths = classDoc.linkPaths)
 }
 
 /**
