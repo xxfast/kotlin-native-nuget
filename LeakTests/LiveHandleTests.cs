@@ -4332,7 +4332,7 @@ public class LiveHandleTests
         Assert.Equal(baseline, NugetMarshal.LiveHandles);
     }
 
-    // Row 16m. The GC half of row 16i: Oreo herself is dropped undisposed, with subscriptions the
+    // Row 16n. The GC half of row 16i: Oreo herself is dropped undisposed, with subscriptions the
     // consumer discarded and whose listeners capture only a `StrongBox`, so nothing C#-side roots
     // the wrapper. Finalizing Oreo's handle unregisters each subscription and frees its token before
     // the handle itself goes. A listener that captured Oreo would keep her reachable through the

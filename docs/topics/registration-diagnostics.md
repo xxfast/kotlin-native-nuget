@@ -477,15 +477,19 @@ GC fallback is covered by `UndisposedSuspendFlowHolder_IsReleasedByTheGc`.
 | 16f | `UndisposedKotlinFuncAndAction_IsReleasedByTheGc` | `KotlinFunc` and `KotlinAction` |
 | 16g | `UndisposedKotlinSuspendFunc_IsReleasedByTheGc` | `KotlinSuspendFunc` |
 | 16h | `UndisposedKotlinStateFlow_IsReleasedByTheGc` | `KotlinStateFlow` |
-| 16i | `DiscardedSubscription_KeepsDeliveringAfterTheGc_AndKeepsItsToken` | a discarded `AddX` subscription keeps delivering and keeps its token |
+| 16i | `DiscardedSubscription_KeepsDeliveringAfterTheGc_AndIsReleasedWithItsOwner` | a discarded `AddX` subscription keeps delivering and is released with its owner |
 | 16j | `UndisposedWrapperWithASuspendScope_IsReleasedByTheGc` | a wrapper that owns a suspend scope |
 | 16k | `DisposedWrappers_ThenFinalized_AreNotReleasedTwice` | no double release after `Dispose()` |
 | 16l | `AbandonedCollectionFlowItems_AreReleasedByTheEnumerator` | a `List`, `Set` or `Map` `Flow` item abandoned after `DisposeAsync`, released by the enumerator |
 | 16m | `UndisposedSuspendFlowHolder_IsReleasedByTheGc` | an acquired suspend-returning `Flow` holder |
+| 16n | `UndisposedOwnerWithDiscardedSubscriptions_IsReleasedByTheGc` | an undisposed owner whose `AddX` subscriptions were discarded |
 
-The subscription token is the exception: row 16i pins that nothing releases it until you dispose the
-subscription, so a discarded subscription holds one handle for the life of the process. The
-finalizer rows have been run on macOS with the JIT only.
+The subscription is the exception to the per-wrapper rule: a discarded subscription keeps delivering
+while its owner lives, and releasing the owner (rows 16i and 16n) unregisters it and frees its token.
+The two collectability checks, `StoredCallbackReceiver_DiscardedToken_IsReleasedWithItsOwner` and
+`StoredCallbackReceiver_TokenHeldPastItsOwner_DoesNotRootTheSource`, cover a discarded token and a
+token kept past its owner.
+The finalizer rows have been run on macOS with the JIT only.
 
 ## Forward direction has no registration step
 
