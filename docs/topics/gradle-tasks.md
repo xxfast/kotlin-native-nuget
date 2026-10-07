@@ -114,8 +114,9 @@ The following three are registered only when at least one dependency declares a 
 | `nugetGenerateShims` | Generates C#-side [UnmanagedCallersOnly] thunks and startup registration shims from reverse-ir.json | `nugetExtractApi` | `build/nuget-interop/csharp/` |
 
 `nugetGenerateBindings`'s output directory is added as a Kotlin source directory on `nativeMain`
-(and, per native target, `mingwMain` or `posixMain`), and every `kspKotlin{Target}` task depends on
-it, so KSP sees the reverse-generated stubs before it runs. `nugetGenerateShims`'s C# output is
+(and, per native target, `mingwMain` or `posixMain`), and every `kspKotlin{Target}` task and every
+`compile*KotlinMetadata` task (shared source-set metadata compiles, which IDE import also runs)
+depends on it, so KSP and the metadata compile see the reverse-generated stubs on a clean build. `nugetGenerateShims`'s C# output is
 what `packNuget` merges in when a project both publishes and binds a dependency.
 
 Each run of `nugetGenerateBindings` and `nugetGenerateShims` replaces the contents of its output directory, so do not hand-place files in `build/nuget-interop/kotlin/` or `build/nuget-interop/csharp/`.
