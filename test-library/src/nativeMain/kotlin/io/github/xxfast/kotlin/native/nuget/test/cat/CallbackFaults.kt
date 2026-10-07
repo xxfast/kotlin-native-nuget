@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.test.cat
 
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.concurrent.Volatile
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -103,6 +104,33 @@ class CallbackFaults {
       format("Mylo")
     } catch (e: Exception) {
       throw IllegalStateException("Mylo knocked it over: ${e.message}", e)
+    }
+
+  /**
+   * Kotlin catches what [first] threw, runs [second], then rethrows the SAME exception unchanged.
+   * When [first] is a cancelled C# callback and [second] makes a successful call back into this
+   * library, that nested call has already cleared the C# side's per-thread record of the original
+   * exception, so the C# caller's rethrow must be rebuilt from the Kotlin cause chain alone.
+   */
+  fun rethrowAfter(first: (String) -> String, second: (String) -> String): String =
+    try {
+      first("Oreo")
+    } catch (e: Exception) {
+      second("Mylo")
+      throw e
+    }
+
+  /**
+   * Kotlin turns whatever [format] threw into its OWN cancellation, keeping the message and the
+   * cause. The C# caller must see that cancellation, never the original managed exception the
+   * author chose to convert: the rethrow-the-original rule for cancellations only applies when the
+   * original IS a .NET cancellation.
+   */
+  fun cancelOnFault(format: (String) -> String): String =
+    try {
+      format("Oreo")
+    } catch (e: Exception) {
+      throw CancellationException(e.message, e)
     }
 
   // --- per-call lambda kept past the call that supplied it (memo item 3, value-returning) -------

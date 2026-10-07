@@ -439,6 +439,108 @@ public class CallbackFaultTests
         Assert.Null(StashedManagedFault());
     }
 
+    // ---------------------------------------------------------------------------------------
+    // A cancelled callback reaches an uncaught C# caller as the original .NET cancellation
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The headline cell. The cancelled callback cancels the Kotlin side (Kotlin's
+    /// <c>CancellationException</c>, cause <c>NugetManagedException</c>); nothing in Kotlin catches
+    /// it, so the C# caller of <c>DescribeWith</c> gets the very <c>TaskCanceledException</c> its
+    /// lambda threw, not a <c>KotlinOperationCanceledException</c>.
+    /// </summary>
+    [Fact]
+    public void CancelledCallback_Uncaught_RethrowsTheOriginalTaskCanceledException()
+    {
+        using var faults = new CallbackFaults();
+        var thrown = new TaskCanceledException("Oreo left the bath");
+
+        var ex = Assert.Throws<TaskCanceledException>(() => faults.DescribeWith(_ => throw thrown));
+
+        Assert.Same(thrown, ex);
+        Assert.Null(StashedManagedFault());
+    }
+
+    /// <summary>The base type, so the cell is not only about <c>TaskCanceledException</c>.</summary>
+    [Fact]
+    public void CancelledCallback_Uncaught_RethrowsTheOriginalOperationCanceledException()
+    {
+        using var faults = new CallbackFaults();
+        var thrown = new OperationCanceledException("Mylo stopped purring");
+
+        var ex = Assert.Throws<OperationCanceledException>(() => faults.DescribeWith(_ => throw thrown));
+
+        Assert.Same(thrown, ex);
+    }
+
+    /// <summary>A user subclass of <c>OperationCanceledException</c> comes back as itself.</summary>
+    [Fact]
+    public void CancelledCallback_Uncaught_RethrowsTheOriginalUserSubclass()
+    {
+        using var faults = new CallbackFaults();
+        var thrown = new NapInterruptedException("Oreo woke up");
+
+        var ex = Assert.Throws<NapInterruptedException>(() => faults.DescribeWith(_ => throw thrown));
+
+        Assert.Same(thrown, ex);
+    }
+
+    /// <summary>
+    /// Kotlin catches the cancellation, makes a successful nested call (which clears the per-thread
+    /// record of the original instance), then rethrows the same Kotlin exception. The C# caller
+    /// still gets a <c>TaskCanceledException</c> with the original message, rebuilt from the Kotlin
+    /// cause chain rather than from the cleared record.
+    /// </summary>
+    [Fact]
+    public void CancelledCallback_RethrownAfterANestedCall_IsRebuiltAsTheOriginalType()
+    {
+        using var faults = new CallbackFaults();
+
+        var ex = Assert.Throws<TaskCanceledException>(() => faults.RethrowAfter(
+            _ => throw new TaskCanceledException("Oreo left the bath"),
+            name => faults.DescribeWith(n => n + name)));
+
+        Assert.Equal("Oreo left the bath", ex.Message);
+    }
+
+    /// <summary>
+    /// The same, for a user subclass: without the instance there is no way to construct a type the
+    /// bridge cannot name, so it keeps the ordinary mapping. That is a
+    /// <c>KotlinOperationCanceledException</c>, still what a C# <c>catch (OperationCanceledException)</c>
+    /// expects, and never an invented type.
+    /// </summary>
+    [Fact]
+    public void CancelledCallback_UserSubclassRethrownAfterANestedCall_KeepsTheOrdinaryMapping()
+    {
+        using var faults = new CallbackFaults();
+
+        var ex = Assert.Throws<KotlinOperationCanceledException>(() => faults.RethrowAfter(
+            _ => throw new NapInterruptedException("Mylo woke up"),
+            name => faults.DescribeWith(n => n + name)));
+
+        Assert.IsAssignableFrom<OperationCanceledException>(ex);
+        Assert.Contains("Mylo woke up", ex.Message);
+    }
+
+    /// <summary>
+    /// The discriminating cell: the callback threw an ordinary <c>InvalidOperationException</c> and
+    /// the Kotlin author turned it into their own cancellation. The cause chain looks the same as a
+    /// cancelled callback's, so only the stashed instance's type tells them apart; the C# caller
+    /// must get the author's cancellation, not the exception they chose to convert.
+    /// </summary>
+    [Fact]
+    public void ManagedFaultTheAuthorConvertedToCancellation_StaysACancellation()
+    {
+        using var faults = new CallbackFaults();
+
+        var ex = Assert.ThrowsAny<OperationCanceledException>(
+            () => faults.CancelOnFault(_ => throw new InvalidOperationException("Oreo bit the brush")));
+
+        Assert.IsType<KotlinOperationCanceledException>(ex);
+        Assert.Contains("Oreo bit the brush", ex.Message);
+        Assert.Null(StashedManagedFault());
+    }
+
     /// <summary>
     /// The calling thread's slot of the generated, internal <c>[ThreadStatic]</c> stash. Read
     /// through reflection because the generated class exposes no accessor, and none is added for a
@@ -462,6 +564,9 @@ public class CallbackFaultTests
 
         public void Dispose() { }
     }
+
+    /// <summary>A user subclass of the .NET cancellation type, which the bridge cannot name.</summary>
+    private sealed class NapInterruptedException(string message) : OperationCanceledException(message);
 
     /// <summary>A throwing implementation of the ADR-039 listener interface.</summary>
     private sealed class ThrowingCatEventListener : ICatEventListener

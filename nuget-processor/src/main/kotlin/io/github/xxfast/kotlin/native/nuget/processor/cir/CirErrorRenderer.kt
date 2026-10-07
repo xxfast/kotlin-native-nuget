@@ -62,6 +62,13 @@ internal val KOTLIN_EXCEPTION_TYPES: List<KotlinExceptionRow> = listOf(
 internal const val NUGET_MANAGED_EXCEPTION_TYPE: String =
   "io.github.xxfast.kotlin.native.nuget.runtime.NugetManagedException"
 
+/**
+ * The Kotlin type a cancelled C# callback arrives as (ADR-161 `kind == 1`), with the
+ * [NUGET_MANAGED_EXCEPTION_TYPE] as its direct cause.
+ */
+internal const val KOTLIN_CANCELLATION_TYPE: String =
+  "kotlin.coroutines.cancellation.CancellationException"
+
 internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
   appendLine("    internal static class NugetErrorNative")
   appendLine("    {")
@@ -154,6 +161,35 @@ internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
   appendLine("            return fault;")
   appendLine("        }")
   appendLine()
+  appendLine("        private const string CancellationType =")
+  appendLine("            \"$KOTLIN_CANCELLATION_TYPE\";")
+  appendLine()
+  // A cancelled C# callback reaches Kotlin as `CancellationException` whose direct cause is the
+  // managed exception, so the escaping type is never the managed one and the branch above cannot
+  // match it. The cause chain the Kotlin side carries decides; the stash only supplies the
+  // instance, and only when it IS a cancellation: a Kotlin author who turned an ordinary managed
+  // fault into a `CancellationException` keeps their cancellation. When an intermediate successful
+  // crossing already cleared the stash, the two framework types are rebuilt from the carried name;
+  // anything else (a user subclass the bridge cannot construct without reflection) keeps the
+  // ordinary mapping, whose `KotlinOperationCanceledException` is still an
+  // `OperationCanceledException`.
+  appendLine("        private static Exception? TakeOriginalCancellation(string message)")
+  appendLine("        {")
+  appendLine("            Exception? fault = TakeOriginalManagedFault(ManagedExceptionType, message);")
+  appendLine("            if (fault != null) return fault is OperationCanceledException ? fault : null;")
+  appendLine("            int split = message.IndexOf(\": \", StringComparison.Ordinal);")
+  appendLine("            if (split < 0) return null;")
+  appendLine("            string managedType = message.Substring(0, split);")
+  appendLine("            string managedMessage = message.Substring(split + 2);")
+  appendLine("            return managedType switch")
+  appendLine("            {")
+  appendLine("                \"System.Threading.Tasks.TaskCanceledException\" =>")
+  appendLine("                    new System.Threading.Tasks.TaskCanceledException(managedMessage),")
+  appendLine("                \"System.OperationCanceledException\" => new OperationCanceledException(managedMessage),")
+  appendLine("                _ => null,")
+  appendLine("            };")
+  appendLine("        }")
+  appendLine()
   // ADR-129 amendment: `caller` is filled by the compiler at every generated call site, so the
   // forward error trace names the C# member without any call site changing. Spelled fully
   // qualified for the same reason `CirRuntimeRenderer` spells `ModuleInitializer` that way.
@@ -177,12 +213,17 @@ internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
   appendLine("            string msg = Message(errorPtr);")
   appendLine("            string stackTrace = StackTrace(errorPtr);")
   appendLine("            string mappedType = CauseMappedType(errorPtr, 0);")
+  appendLine("            bool cancelledCallback = causeCount >= 2 && kotlinType == CancellationType")
+  appendLine("                && CauseType(errorPtr, 1) == ManagedExceptionType")
+  appendLine("                && CauseMessage(errorPtr, 1) == msg;")
   appendLine("            NugetMarshal.Dispose(errorPtr);")
   // ADR-161: when the escaping Kotlin error IS the managed exception this process threw a moment
   // ago inside a callback thunk, the C# caller gets the ORIGINAL exception back, so
   // `Assert.Throws<InvalidOperationException>` works on `cat.DescribeWith(_ => throw ...)`.
   // Anything else, including a Kotlin author's own wrapper around it, keeps the ordinary mapping.
-  appendLine("            Exception? original = TakeOriginalManagedFault(kotlinType, msg);")
+  appendLine("            Exception? original = cancelledCallback")
+  appendLine("                ? TakeOriginalCancellation(msg)")
+  appendLine("                : TakeOriginalManagedFault(kotlinType, msg);")
   appendLine("            if (original != null)")
   appendLine("            {")
   appendLine("                NugetRuntime.TraceError(caller, kotlinType, mappedType, msg, original);")
