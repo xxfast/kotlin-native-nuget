@@ -97,9 +97,15 @@ public class CollectabilityTests
         return source.AddListener(new QuietListener());
     }
 
-    // Negative control: a live subscription token is the only remaining root and must keep the
-    // source alive. Proves the assertion above can go red, and documents that a leaked token roots
-    // the receiver.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static CatEventSource SubscribeAndDiscardTheToken()
+    {
+        var source = new CatEventSource("Oreo");
+        Morgue.WatchSource(source);
+        Assert.NotNull(source.AddListener(new QuietListener()));
+        return source;
+    }
+
     // ------------------------------------------------------------------------------------------
     // ADR-155: the same shape, mirrored for a REVERSE collection's handle ELEMENTS. Each element
     // slot of a `IList<Tag>` return is a fresh strong GCHandle owned by the Kotlin wrapper built
@@ -151,20 +157,44 @@ public class CollectabilityTests
             "a Tag issued as a collection element stayed reachable after its Kotlin wrapper closed");
     }
 
+    // Negative control: a DISCARDED subscription on a live owner keeps delivering (ADR-187 gate),
+    // so its token, which captures the Kotlin source, must keep the source alive. Disposing the
+    // owner then has to unregister that token too, or the source stays rooted by a subscription
+    // nobody can reach. Proves the assertions here can go red in both directions.
     [Fact]
-    public void StoredCallbackReceiver_TokenStillHeld_StaysAlive()
+    public void StoredCallbackReceiver_DiscardedToken_IsReleasedWithItsOwner()
     {
-        IDisposable sub = SubscribeAndDisposeTheSourceOnly();
+        CatEventSource source = SubscribeAndDiscardTheToken();
         try
         {
             Assert.False(
                 CollectedWithin(TimeSpan.FromSeconds(1)),
-                "a live subscription token must root the source");
+                "a live owner's discarded subscription must keep the source alive");
 
-            sub.Dispose();
+            source.Dispose();
             Assert.True(
                 CollectedWithin(TimeSpan.FromSeconds(5)),
-                "CatEventSource stayed reachable after its last token was disposed");
+                "CatEventSource stayed reachable after its owner's Dispose: the discarded token was not unregistered");
+        }
+        finally
+        {
+            source.Dispose();
+            Morgue.Forget();
+        }
+    }
+
+    // A token the consumer still HOLDS past its owner's Dispose no longer roots the source: the
+    // owner's release unregistered it, and the consumer's own later Dispose is a silent no-op.
+    [Fact]
+    public void StoredCallbackReceiver_TokenHeldPastItsOwner_DoesNotRootTheSource()
+    {
+        IDisposable sub = SubscribeAndDisposeTheSourceOnly();
+        try
+        {
+            Assert.True(
+                CollectedWithin(TimeSpan.FromSeconds(5)),
+                "CatEventSource stayed reachable after its owner's Dispose while the consumer held a token");
+            sub.Dispose();
         }
         finally
         {

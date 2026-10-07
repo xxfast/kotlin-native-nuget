@@ -183,7 +183,7 @@ class Tier1CallbackLateInvocationTest {
       "if (formatCtx != IntPtr.Zero) NugetThunks.UnregisterCtx(formatCtx);",
       // Stored callback (ADR-037): removed by the subscription, after the native remove.
       "IntPtr cbKey = NugetThunks.RegisterCtx(nativeCallback);",
-      "NugetThunks.UnregisterCtx(cbKey); });",
+      "NugetThunks.UnregisterCtx(cbKey); }, owner);",
       // ADR-039 listener bridge: one key per method, all removed together.
       "IntPtr k0 = NugetThunks.RegisterCtx(onMeowCb);",
       // ADR-084 bridge slots, through the shared `Pin`.
