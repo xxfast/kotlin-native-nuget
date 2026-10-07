@@ -424,9 +424,8 @@ exactly like the same type at a property or `suspend` return, described above.
 
 If an emitted element (or a `suspend` result) cannot be materialized on the C# side, `await
 foreach` throws instead of aborting the process: the failure faults the `IAsyncEnumerable<T>` (or
-the `Task`) and cancels the Kotlin side of the collection. One accepted cost: the item whose
-materialisation failed had already had its handle handed over by Kotlin, so that one handle leaks;
-see [ADR-161](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/161-csharp-callback-exception-into-kotlin.md).
+the `Task`) and cancels the Kotlin side of the collection. The failed item's handle is released,
+not leaked; see [ADR-161](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/161-csharp-callback-exception-into-kotlin.md).
 
 ### Nullable element `Flow<T?>` {id="flow-nullable-element"}
 
