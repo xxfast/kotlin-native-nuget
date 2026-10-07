@@ -34,7 +34,7 @@ enum class Bedding {
 }
 
 /**
- * The ktor `LogLevel` shape: an enum with constructor properties **and** a companion, so the
+ * The ktor `LogLevel` shape (constructor properties) plus a companion `LogLevel` lacks, so the
  * admitted-enum route has to carry the extension-property projection (`PurrLevelExtensions`) and
  * the companion, not just the ordinals. Admitted by name.
  */
@@ -46,7 +46,7 @@ enum class PurrLevel(val audible: Boolean, val rumbling: Boolean) {
 
   companion object {
 
-    /** The companion member, exactly as ktor's `LogLevel` carries one. */
+    /** The companion member; ktor 3.6.0's `LogLevel` has none, this over-covers it. */
     fun contented(): PurrLevel = RUMBLE
   }
 }
