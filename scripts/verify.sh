@@ -131,6 +131,21 @@ case "$(uname -s)" in
     powershell.exe -NoProfile -File "$ROOT/scripts/verify-aot.ps1"
     ;;
   Darwin)
+    # On a Homebrew host the ILCompiler link fails with `ld: library 'ssl' not found`: it passes
+    # `-lssl -lcrypto -lbrotlienc` and Homebrew's lib directories are not on `ld`'s search path.
+    # Prepend whichever of them exist; anything already on LIBRARY_PATH stays after them.
+    aot_library_path=""
+    for dir in /opt/homebrew/opt/openssl@3/lib /opt/homebrew/opt/brotli/lib /opt/homebrew/lib; do
+      if [ -d "$dir" ]; then
+        aot_library_path="${aot_library_path:+$aot_library_path:}$dir"
+      fi
+    done
+    if [ -n "${LIBRARY_PATH:-}" ]; then
+      aot_library_path="${aot_library_path:+$aot_library_path:}$LIBRARY_PATH"
+    fi
+    if [ -n "$aot_library_path" ]; then
+      export LIBRARY_PATH="$aot_library_path"
+    fi
     dotnet publish AotSmokeTest -r osx-arm64 -c Release -p:PublishAot=true
     ./AotSmokeTest/bin/Release/net10.0/osx-arm64/publish/AotSmokeTest
     # Rung 8: the IntegrationTests and LeakTests sources under NativeAOT, one binary each because
