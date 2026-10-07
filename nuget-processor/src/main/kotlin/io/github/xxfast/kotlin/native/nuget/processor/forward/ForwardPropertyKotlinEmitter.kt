@@ -138,7 +138,21 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
         )
       }
 
-      else -> error("Forward property direct nullable getter is invalid for ${plan.symbol}: $inner")
+      BridgeType.Unit,
+      is BridgeType.Primitive,
+      BridgeType.Char,
+      BridgeType.Instant,
+      BridgeType.Duration,
+      is BridgeType.Enum,
+      is BridgeType.BoundInterface,
+      is BridgeType.Nullable,
+      is BridgeType.Callback,
+      is BridgeType.ReturnedLambda,
+      is BridgeType.SpecializedProtocol,
+      is BridgeType.RawKSType,
+      is BridgeType.Unsupported,
+      is BridgeType.RawCollection,
+        -> error("Forward property direct nullable getter is invalid for ${plan.symbol}: $inner")
     }
 
     is BridgeType.Enum -> {
@@ -219,13 +233,39 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
           )
         }
 
-        else -> error(
+        BridgeType.Unit,
+        BridgeType.Char,
+        BridgeType.Instant,
+        BridgeType.Duration,
+        is BridgeType.Throwable,
+        BridgeType.Uuid,
+        is BridgeType.Interface,
+        is BridgeType.BoundInterface,
+        is BridgeType.ValueClass,
+        BridgeType.ByteArray,
+        is BridgeType.Collection,
+        is BridgeType.Nullable,
+        is BridgeType.Callback,
+        is BridgeType.ReturnedLambda,
+        is BridgeType.SpecializedProtocol,
+        is BridgeType.RawKSType,
+        is BridgeType.Unsupported,
+        is BridgeType.RawCollection,
+        is BridgeType.TypeParameter,
+          -> error(
           "Forward property emitter has no value-class getter for underlying $underlying",
         )
       }
     }
 
-    else -> error("Forward property emitter has no getter route for $type")
+    is BridgeType.BoundInterface,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+      -> error("Forward property emitter has no getter route for $type")
   }
   addFunction(builder.build())
 }
@@ -314,7 +354,28 @@ private fun FileSpec.Builder.addNullableValueGetter(
           .returns(kotlinType("Int"))
           .addCode(valueBody("$unboxed.ordinal", "errorOut", "0"), cOpaquePointerVar, nugetHandles)
 
-        else -> error(
+        BridgeType.Unit,
+        BridgeType.Char,
+        BridgeType.String,
+        BridgeType.Instant,
+        BridgeType.Duration,
+        is BridgeType.Throwable,
+        BridgeType.Uuid,
+        is BridgeType.ObjectHandle,
+        is BridgeType.Interface,
+        is BridgeType.BoundInterface,
+        is BridgeType.ValueClass,
+        BridgeType.ByteArray,
+        is BridgeType.Collection,
+        is BridgeType.Nullable,
+        is BridgeType.Callback,
+        is BridgeType.ReturnedLambda,
+        is BridgeType.SpecializedProtocol,
+        is BridgeType.RawKSType,
+        is BridgeType.Unsupported,
+        is BridgeType.RawCollection,
+        is BridgeType.TypeParameter,
+          -> error(
           "Forward property nullable value getter has no value-class underlying route for " +
               "${plan.symbol}: $underlying",
         )
@@ -322,7 +383,24 @@ private fun FileSpec.Builder.addNullableValueGetter(
       getterBuilder
     }
 
-    else -> error("Forward property nullable value getter is invalid for ${plan.symbol}: $inner")
+    BridgeType.Unit,
+    BridgeType.String,
+    is BridgeType.Throwable,
+    BridgeType.Uuid,
+    is BridgeType.ObjectHandle,
+    is BridgeType.Interface,
+    is BridgeType.BoundInterface,
+    BridgeType.ByteArray,
+    is BridgeType.Collection,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> error("Forward property nullable value getter is invalid for ${plan.symbol}: $inner")
   }
   addFunction(builder.build())
 }
@@ -473,7 +551,17 @@ private fun inputLowering(type: BridgeType, name: String): String = when (type) 
         "$name?.let { ${inner.qualifiedName}($lowered) }"
       }
 
-    else -> error("Forward property emitter has no nullable input route for $type")
+    BridgeType.Unit,
+    is BridgeType.BoundInterface,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> error("Forward property emitter has no nullable input route for $type")
   }
 
   is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> name
@@ -502,7 +590,15 @@ private fun inputLowering(type: BridgeType, name: String): String = when (type) 
   is BridgeType.ValueClass ->
     "${type.qualifiedName}(${valueClassUnderlyingLowering(name, type.underlying)})"
 
-  else -> error("Forward property emitter has no input route for $type")
+  BridgeType.Unit,
+  is BridgeType.Callback,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+  is BridgeType.TypeParameter,
+    -> error("Forward property emitter has no input route for $type")
 }
 
 private fun kotlinInputType(type: BridgeType): TypeName = when (type) {
@@ -523,7 +619,15 @@ private fun kotlinInputType(type: BridgeType): TypeName = when (type) {
   is BridgeType.BoundInterface, BridgeType.ByteArray ->
     cOpaquePointer.copy(nullable = type is BridgeType.Nullable)
 
-  else -> error("Forward property emitter has no input type for $type")
+  BridgeType.Unit,
+  is BridgeType.Callback,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+  is BridgeType.TypeParameter,
+    -> error("Forward property emitter has no input type for $type")
 }
 
 private fun kotlinType(type: BridgeType): TypeName = when (type) {
@@ -546,7 +650,26 @@ private fun kotlinType(type: BridgeType): TypeName = when (type) {
 
   BridgeType.Char -> kotlinType("Char")
   BridgeType.String -> kotlinType("String")
-  else -> error("Forward property emitter has no Kotlin result type for $type")
+  BridgeType.Unit,
+  BridgeType.Instant,
+  BridgeType.Duration,
+  is BridgeType.Throwable,
+  BridgeType.Uuid,
+  is BridgeType.Enum,
+  is BridgeType.ObjectHandle,
+  is BridgeType.Interface,
+  is BridgeType.BoundInterface,
+  is BridgeType.ValueClass,
+  BridgeType.ByteArray,
+  is BridgeType.Collection,
+  is BridgeType.Callback,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+  is BridgeType.TypeParameter,
+    -> error("Forward property emitter has no Kotlin result type for $type")
 }
 
 private fun kotlinType(name: String): ClassName = ClassName("kotlin", name)

@@ -177,7 +177,28 @@ internal fun BridgeType.isKotlinHandleWire(): Boolean =
   when (val type: BridgeType = if (this is BridgeType.Nullable) this.type else this) {
     is BridgeType.ObjectHandle -> true
     is BridgeType.ValueClass -> type.underlying is BridgeType.ObjectHandle
-    else -> false
+    BridgeType.Unit,
+    is BridgeType.Primitive,
+    BridgeType.Char,
+    BridgeType.String,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    is BridgeType.Throwable,
+    BridgeType.Uuid,
+    is BridgeType.Enum,
+    is BridgeType.Interface,
+    is BridgeType.BoundInterface,
+    BridgeType.ByteArray,
+    is BridgeType.Collection,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> false
   }
 
 /** The C# spelling of a primitive kind, shared for the same reason as the type above. */
@@ -223,7 +244,21 @@ private fun BridgeType.isLambdaTypeArgument(isResult: Boolean): Boolean = when (
   // planner mints that pair on, which it never does for a generic value class.
   is BridgeType.ValueClass -> typeArguments.isEmpty() && hasErasedCrossing()
   is BridgeType.Nullable -> type != BridgeType.Unit && type.isLambdaTypeArgument(isResult = false)
-  else -> false
+  BridgeType.Instant,
+  BridgeType.Duration,
+  is BridgeType.Throwable,
+  BridgeType.Uuid,
+  is BridgeType.BoundInterface,
+  BridgeType.ByteArray,
+  is BridgeType.Collection,
+  is BridgeType.Callback,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+  is BridgeType.TypeParameter,
+    -> false
 }
 
 /**

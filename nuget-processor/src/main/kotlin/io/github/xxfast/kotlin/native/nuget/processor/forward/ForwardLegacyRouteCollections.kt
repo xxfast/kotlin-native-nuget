@@ -1718,7 +1718,24 @@ internal fun BridgeType.interfaceBridgeWire(): InterfaceBridgeWire = when (this)
   BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface ->
     InterfaceBridgeWire.HANDLE
   is BridgeType.Throwable -> InterfaceBridgeWire.ENVELOPE
-  else -> error("ADR-039: the subscription pair gate admitted $this, which has no wire")
+  BridgeType.Unit,
+  BridgeType.Char,
+  BridgeType.Instant,
+  BridgeType.Duration,
+  BridgeType.Uuid,
+  is BridgeType.BoundInterface,
+  is BridgeType.ValueClass,
+  BridgeType.ByteArray,
+  is BridgeType.Collection,
+  is BridgeType.Nullable,
+  is BridgeType.Callback,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+  is BridgeType.TypeParameter,
+    -> error("ADR-039: the subscription pair gate admitted $this, which has no wire")
 }
 
 /**

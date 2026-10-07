@@ -80,7 +80,24 @@ internal fun BridgeType.hasValueFanOutInner(): BridgeType? {
       if (type.underlying is BridgeType.Primitive || type.underlying is BridgeType.Enum) type
       else null
 
-    else -> null
+    BridgeType.Unit,
+    BridgeType.String,
+    is BridgeType.Throwable,
+    BridgeType.Uuid,
+    is BridgeType.ObjectHandle,
+    is BridgeType.Interface,
+    is BridgeType.BoundInterface,
+    BridgeType.ByteArray,
+    is BridgeType.Collection,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> null
   }
 }
 
@@ -105,7 +122,23 @@ internal fun BridgeType.isNullableValueTypeReceiver(): Boolean {
     is BridgeType.Primitive, BridgeType.Char, is BridgeType.Enum, BridgeType.Instant,
     BridgeType.Duration, BridgeType.Uuid, is BridgeType.ValueClass -> true
 
-    else -> false
+    BridgeType.Unit,
+    BridgeType.String,
+    is BridgeType.Throwable,
+    is BridgeType.ObjectHandle,
+    is BridgeType.Interface,
+    is BridgeType.BoundInterface,
+    BridgeType.ByteArray,
+    is BridgeType.Collection,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> false
   }
 }
 
@@ -256,7 +289,14 @@ internal data class ForwardPropertyPlan(
       // ADR-077 sub-item 2: a value-class property is valid exactly when its underlying is.
       is BridgeType.ValueClass -> validateType(type.underlying)
       is BridgeType.Nullable -> validateType(type.type)
-      else -> error("Forward property plan $symbol has unsupported type $type")
+      is BridgeType.BoundInterface,
+      is BridgeType.Callback,
+      is BridgeType.ReturnedLambda,
+      is BridgeType.SpecializedProtocol,
+      is BridgeType.RawKSType,
+      is BridgeType.Unsupported,
+      is BridgeType.RawCollection,
+        -> error("Forward property plan $symbol has unsupported type $type")
     }
   }
 }
