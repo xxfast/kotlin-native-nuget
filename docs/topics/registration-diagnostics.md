@@ -297,6 +297,11 @@ A nullable [`StateFlow<T?>` or `StateFlow<T>?` from a `suspend fun`](coroutines-
 mints nothing for a null: a null `.Value` or null emission frees nothing, and a null holder owns no
 handle. `LeakTests/LiveHandleTests.cs`'s `SuspendStateFlowNullableElementAndMember_ReturnsToBaseline`
 covers both shapes.
+A [`KotlinStateFlowObservable<T>`](coroutines-and-flow.md#data-binding) from `AsNotifying()` runs one
+collection that only `Dispose()` ends: the job cell, the rooted callbacks and the enumerator stay
+live until then, and `Completion` finishing means they are released. `LeakTests/LiveHandleTests.cs`
+row 6g-notifying, `StateFlowNotifyingAdapter_UpdatesThenDispose_ReturnsToBaseline`, starts an
+adapter, takes two updates, disposes it and returns to baseline.
 
 For a [cancellation-token-taking async call](instance-members.md#async-cancellation), this count
 only proves the pending-continuation and `Task` handles came back to baseline: the bridge-owned

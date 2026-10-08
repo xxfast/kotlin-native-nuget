@@ -1,7 +1,7 @@
 # ADR-206: Forward, an opt-in `INotifyPropertyChanged` adapter over `KotlinStateFlow<T>`, generated per module
 
 ## Status
-Proposed. Drafted 2026-10-08 from a read-only research run; no spike was run, every mechanism claim below is labelled.
+Accepted. Implemented 2026-10-09 (commit 16fff1aa). Mechanism claims are labelled verified or inferred below.
 
 ## Context
 
@@ -90,7 +90,7 @@ Rules:
 
 - **Threading.** `PropertyChanged` is raised through `SynchronizationContext.Post` on the context captured at `AsNotifying()` (or the one passed in). With no context, it is raised inline on the thread that received the element, like `ObservableCollection<T>`. `Value` is assigned on the same thread immediately before the event, so a handler reading `Value` sees the delivered element. **Inferred (not run)**: a WPF/WinUI/MAUI dispatcher context preserves `Post` order, so elements arrive in emission order; a consumer-supplied context that reorders posts would reorder notifications.
 - **Value is cached.** `Value` is the last delivered element, never a re-read of `flow.Value`, so a binding read costs no P/Invoke and mints no wrapper (ADR-005 would otherwise create one undisposed wrapper per binding read). A replaced wrapper-typed element is not disposed by the adapter; it is released by the GC under ADR-187.
-- **Lifetime.** `Dispose()` cancels the collection; the enumerator's cancellation registration calls `NugetJobNative.Cancel`, the Kotlin side reports cancelled, the channel completes and `DisposeAsync` frees the job cell (verified by reading `CirFlowRenderer.kt`; the end-to-end handle count returning to baseline is **inferred** until the LeakTests row runs). An undisposed adapter keeps the Kotlin collect job, the enumerator, and the owner wrapper rooted for the life of the process (verified by reading: `GCHandle.Alloc` in `NugetFlowCallbacks.Root()`, `_startCollect` held by the enumerator); no finalizer is added because the running loop roots the adapter and a finalizer would never run. This is ADR-187's subscription-token contract applied to a collection: dispose it, or it keeps delivering.
+- **Lifetime.** `Dispose()` cancels the collection; the enumerator's cancellation registration calls `NugetJobNative.Cancel`, the Kotlin side reports cancelled, the channel completes and `DisposeAsync` frees the job cell (verified by reading `CirFlowRenderer.kt`; the end-to-end handle count returning to baseline is **verified** by leak row 6g-notifying, see the amendment). An undisposed adapter keeps the Kotlin collect job, the enumerator, and the owner wrapper rooted for the life of the process (verified by reading: `GCHandle.Alloc` in `NugetFlowCallbacks.Root()`, `_startCollect` held by the enumerator); no finalizer is added because the running loop roots the adapter and a finalizer would never run. This is ADR-187's subscription-token contract applied to a collection: dispose it, or it keeps delivering.
 - **Errors.** A faulted collection (Kotlin exception) ends the loop and faults `Completion`; `PropertyChanged` is not raised for a fault. A consumer that wants to observe faults awaits or continues `Completion`.
 - **ABI.** No new export, nothing in `nuget-runtime/` (Kotlin or C#), no contract change. Everything lives in the generated per-module file and regenerates with it.
 
@@ -106,3 +106,27 @@ Rules:
 1. The cancel path from `Dispose()` returns `NugetMarshal.LiveHandles` to baseline (the LeakTests row proves it).
 2. `SynchronizationContext.Post` order is preserved on the XAML dispatchers (documentation, not run).
 3. The generated adapter compiles under NativeAOT and trimming with no warnings (plain C#, but AotIntegrationTests is the proof).
+
+## Amendment 2026-10-09: as shipped
+
+The decision stands as written. The generated `KotlinStateFlowExtensions.AsNotifying` and
+`KotlinStateFlowObservable<T>` match the sketch above, with `System.ComponentModel` names fully
+qualified, XML documentation, and the emission gated by `includesStateFlow` in
+`cir/CirFlowRenderer.kt`. `KotlinMutableStateFlow<T>` inherits `AsNotifying`, so a mutable flow needs
+no separate adapter; a C# write to its `Value` reaches the binding through the same collection.
+
+Evidence for the three claims listed under "Inferred claims an implementer must check":
+
+1. `Dispose()` returns `NugetMarshal.LiveHandles` to baseline: **verified**. Leak row 6g-notifying,
+   `StateFlowNotifyingAdapter_UpdatesThenDispose_ReturnsToBaseline`, starts an adapter over
+   `CatMoodTracker.EnergyLevel` with no context, takes two updates, disposes it, awaits `Completion`
+   and returns to baseline. The element is `int` on purpose: a wrapper-typed element minted between
+   the cancel and Kotlin's cancelled callback is released by the GC (ADR-187) and would make the
+   count noisy.
+2. A XAML dispatcher context preserves `Post` order: **inferred**, not run. The tests use a
+   one-thread pump context that preserves order.
+3. NativeAOT and trimming clean: **verified**, both AOT runs pass.
+
+Also verified by `IntegrationTests/StateFlowNotifyingTests.cs`: the seed read for `int`, `string` and
+wrapper elements, delivery on the pump thread, inline delivery with no context, a C# write through
+`KotlinMutableStateFlow<int>`, and `Dispose()` stopping delivery with `Completion` finishing cleanly.

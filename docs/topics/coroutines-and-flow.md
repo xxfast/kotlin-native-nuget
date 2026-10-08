@@ -557,6 +557,35 @@ await foreach (var level in tracker.EnergyLevel.WithCancellation(cts.Token))
 the correct generated subclass, see
 [Interfaces, abstract classes and sealed classes](interfaces-abstract-sealed.md).
 
+### Data binding {id="data-binding"}
+
+To bind a `StateFlow` to XAML (WPF, WinUI, MAUI, Avalonia), call `AsNotifying()`. It returns a
+`KotlinStateFlowObservable<T>` that implements `INotifyPropertyChanged` and `IDisposable`; bind to
+its `Value`. It works on `KotlinMutableStateFlow<T>` too, where a C# write to `Value` on the flow
+reaches the binding.
+
+```C#
+using var tracker = new CatMoodTracker("Mylo");
+// No SynchronizationContext here, so the event is raised inline
+KotlinStateFlowObservable<string> mood = tracker.Mood.AsNotifying();
+mood.PropertyChanged += (_, e) => Console.WriteLine($"{e.PropertyName}: {mood.Value}");
+
+tracker.SetMood("zoomies"); // raises PropertyChanged("Value") on the thread that received it
+
+// when the binding goes away
+mood.Dispose();
+```
+
+- `Value` starts as the flow's current value and holds the last delivered element, so reading it
+  costs nothing.
+- `PropertyChanged` is posted to `SynchronizationContext.Current` at the `AsNotifying()` call, or to
+  the context you pass (`AsNotifying(context)`). With no context it is raised on the thread that
+  received the element. Call it on the UI thread, or pass the dispatcher context.
+- Call `Dispose()` when the binding goes away. An adapter you drop keeps collecting and keeps the
+  flow's owner alive for the life of the process.
+- `Completion` finishes after `Dispose()` and faults if the Kotlin collection fails.
+- A wrapper-typed element it replaces is not disposed, because you may still hold it.
+
 ## Enum and value class elements {id="enum-elements"}
 
 `StateFlow<E>`, `StateFlow<E?>`, `Flow<E>` and `Flow<E?>` over an [enum](enums.md) read back as the
