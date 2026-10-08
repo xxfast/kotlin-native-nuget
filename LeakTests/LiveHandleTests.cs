@@ -3688,6 +3688,38 @@ public class LiveHandleTests
         }
     }
 
+    // Row 14e. ADR-161 part C's late call, its argument. `CallLastRemoved` invokes the listener
+    // the disposed subscription removed, so the thunk's key lookup misses and the call is dropped.
+    // Kotlin minted the `String` payload's StableRef before it called, and the delegate that would
+    // have read and freed it never runs: the miss branch has to free it. Fifty late calls, each
+    // one handle that used to stay live for good.
+    [Fact]
+    public void DroppedLateCallbackArgument_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var faults = new CallbackFaults();
+            IDisposable sub = faults.AddFaultListener(_ => { });
+            sub.Dispose();
+            faults.CallLastRemoved("Mylo, after the door closed");
+        });
+    }
+
+    // Row 14f. The value-returning shape of the same miss: the stashed per-call formatter is
+    // invoked after `StashFormatter` returned, the thunk reports `ObjectDisposedException` through
+    // the error channel instead of running, and Kotlin catches it. The `"Mylo"` argument handle is
+    // the one the miss branch frees; the error holder is row 14a's path.
+    [Fact]
+    public void ReportedLateCallbackArgument_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var faults = new CallbackFaults();
+            Assert.Equal("Oreo!", faults.StashFormatter(name => name + "!"));
+            Assert.StartsWith("stale ", faults.CallStashedSafely());
+        });
+    }
+
     // Row 14c. The ADR-084 interface bridge slot, whose ctx is a per-slot GCHandle in `_pins` and
     // whose result is a `string` the Kotlin side would otherwise wrap. The throwing slot has to
     // release the payload handle AND leave the bridge state intact for the next call, so the row

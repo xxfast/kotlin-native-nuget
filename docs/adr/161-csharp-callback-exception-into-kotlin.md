@@ -210,6 +210,13 @@ moment ago. That is ordinary late delivery, not a wrong-listener bug and not a u
    leaks its `StableRef`.
 3. A dropped late call whose payload was a handle-passed argument (`String`, an exported object)
    leaks that argument's `StableRef`: the delegate that would have read and released it never runs.
+
+2. A `Flow<T>` item whose read failed leaks one `StableRef` (part A); a shared catch that also
+   tried to dispose it risks a double free, so per-branch ownership in `FromHandle` is needed
+   first.
+3. (Closed, see the 2026-10-07 amendment.) A dropped late call whose payload was a handle-passed
+   argument (`String`, an exported object) leaks that argument's `StableRef`: the delegate that
+   would have read and released it never runs.
 4. A cancelled C# callback that a consumer catches, then does not itself catch again further up,
    reaches an uncaught-in-Kotlin C# caller typed `KotlinType ==
    "kotlin.coroutines.cancellation.CancellationException"`, not the original
@@ -257,3 +264,21 @@ Evidence. Verified: `LeakTests/LiveHandleTests.cs` row 14d,
 dispose the handle it is given), enumerates `CallbackFaults.TantrumStream()` ten times and returns
 to the live-handle baseline. Inferred: the fix predates this amendment; the row only pins it, and
 the stale "accepted residue" comments in the generator and the test are replaced.
+
+Residual 2 (a failed read leaks one `StableRef`) is unaffected.
+
+## Amendment (2026-10-07): the late-call miss branch releases its handle-passed arguments
+
+Residual 3 is closed. The key-table miss branch of every generated thunk (`ctxLookupPreamble`) now
+emits `if (a{i} != IntPtr.Zero) NugetMarshal.Dispose(a{i});` for every non-ctx `IntPtr` slot before
+the dropped `return` (`void`) and before the `ObjectDisposedException` report (value-returning), so
+the argument handle Kotlin minted for the call is freed even though the delegate that would have
+read it never runs. The ADR-107 error envelope is not among these slots: it is one `StableRef`
+that `BuildException` frees.
+
+Evidence. Verified by reading all four key-table routes (stored callback, ADR-039 listener pair,
+per-call lambda, ADR-084 bridge slot): every non-ctx `IntPtr` slot is a `NugetHandles.retain`
+handle or zero. Verified by measurement: one leaked handle per late call before, zero after.
+`LeakTests/LiveHandleTests.cs` rows 14e (`DroppedLateCallbackArgument_ReturnsToBaseline`, a dropped
+`void` call) and 14f (`ReportedLateCallbackArgument_ReturnsToBaseline`, the value-returning
+report) pin it; the Tier 1 cells in `Tier1CallbackLateInvocationTest.kt` pin the emitted preamble.

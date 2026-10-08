@@ -313,10 +313,9 @@ cat.Dispose();
 Assert.Throws<ObjectDisposedException>(() => cat.AddMoodListener(mood => { }));
 ``` `Dispose()` does not wait for an invocation already in flight on another thread: a call
 that lands after `Dispose()` is dropped silently for a `void` listener, without running your code
-or crashing. If that dropped call carried a handle-passed payload (an exported object), the payload
-handle it minted is never released, since the code that would have read and disposed it never
-runs; this is a known, unfixed leak, not something to work around on your side. A per-call lambda
-kept past the single call that supplied it and invoked later is a different case, see
+or crashing. A handle-passed payload (an exported object) it carried is released for you; there is
+nothing to dispose. A per-call lambda kept past the single call that supplied it and invoked later
+is a different case, see
 [below](#exceptions-from-a-callback).
 
 The same pattern also binds a pair declared on a sealed arm; see

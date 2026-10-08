@@ -77,7 +77,6 @@ Complete.
 - [ ] **The `add*/remove*` subscription route silently mis-handles two member shapes it doesn't restrict for.** ([details](docs/backlog/add-remove-subscription-route-silently-mis-handles.md))
 - [ ] **The same route's object/string parameter marshalling disposes the argument `StableRef` up to three times.** ([details](docs/backlog/same-route-s-object-string-parameter-marshalling.md))
 - [ ] Fold the reverse template's internal `NugetManagedException` onto the runtime class over the ADR-130 expect/actual seam ([details](docs/backlog/fold-reverse-managed-exception-onto-runtime-class.md))
-- [ ] A dropped late callback invocation with a handle-passed argument leaks that argument's handle ([details](docs/backlog/dropped-late-callback-leaks-argument-handle.md))
 - [ ] A cancelled C# callback re-crosses to an uncaught C# caller typed as Kotlin's `CancellationException`, not the original .NET cancellation type ([details](docs/backlog/cancelled-callback-loses-original-exception-type.md))
 - [ ] `NugetErrorNative._lastManagedFault` keeps one exception rooted per thread until the next fault ([details](docs/backlog/managed-fault-stash-roots-one-exception-per-thread.md))
 - [ ] `NugetManagedException` carries no `@NugetRuntimeApi`, unlike every other public runtime export ([details](docs/backlog/managed-exception-missing-runtime-api-marker.md))
