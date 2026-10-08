@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.test.errand
 
+import dev.other.bysuspend.Spotter
 import dev.other.bysuspend.Yarnball
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -32,4 +33,12 @@ class ErrandRunner(val catName: String) {
   /** Admitted dependency class as a `Flow` element on a class: the yarn basket, one ball at a
    *  time. */
   fun yarn(): Flow<Yarnball> = flowOf(Yarnball("black-and-white"), Yarnball("milky-brown"))
+
+  /**
+   * Issue #487: the ONE route to [Spotter], a sync return that admits it through the export
+   * closure. Its `Flow<Sighting>` member is the only place `Sighting` is reachable from; nothing in
+   * `:test-library` may mention `Sighting` itself. Named `lookout` rather than `spotter` so the
+   * C# member is not spelled the same as the type it returns.
+   */
+  fun lookout(): Spotter = Spotter(catName)
 }

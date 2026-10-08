@@ -450,6 +450,9 @@ private sealed class DeskClerk : Boarding.IClerk
 Boarding.FileVia(new DeskClerk()); // "stamped filed at boarding"
 ```
 
+The same holds for an interface reached only as a `Flow`/`StateFlow` element, a bare `suspend` result,
+or a member of another interface: no other return or parameter of its type is needed for it to bind.
+
 ### Method overloads on an interface {id="method-overloads-on-an-interface"}
 
 Two or more same-named methods on a Kotlin interface collapse into one natural C# overload set on

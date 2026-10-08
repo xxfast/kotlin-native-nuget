@@ -223,3 +223,10 @@ nullable arms, between rows 6f and 6g: `NullableSuspendReturn_NullResult_Returns
 no-suspension-point route, the shape that leaks per-thousand rather than per-call), and
 `NullablePlainFlowInterfaceElement_Collected_ReturnsToBaseline`. Verify green:
 `:nuget-processor:test` 968/0; IntegrationTests 2001/0, LeakTests 63/0.
+
+**2026-10-07 note (issue #487).** The `read:` and `SetResult` expressions above construct the backing
+wrapper (`new Pet(h, out _)`). That type is now always declared: an interface reached only as a
+`Flow`/`StateFlow` element, a bare `suspend` result, or a reachable interface's own member used to
+have no backing class and failed `CS0234`. See the
+[ADR-176 amendment](176-interface-collection-components.md). The read expressions themselves are
+unchanged.

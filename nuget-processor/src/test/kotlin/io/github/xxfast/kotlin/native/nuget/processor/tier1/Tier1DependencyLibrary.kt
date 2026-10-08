@@ -43,7 +43,10 @@ internal object Tier1DependencyLibrary {
     val arguments = K2JVMCompilerArguments().apply {
       freeArgs = sourceFiles.map { it.absolutePath }
       destination = jarFile.absolutePath
-      classpath = Tier1Classpath.kotlinStdlib.absolutePath
+      // Issue #487: coroutines too, so a dependency fixture can declare a `Flow` member the way
+      // the real `:test-models` klib does.
+      classpath = listOf(Tier1Classpath.kotlinStdlib, Tier1Classpath.kotlinxCoroutinesCore)
+        .joinToString(File.pathSeparator) { it.absolutePath }
       noStdlib = true
       noReflect = true
       jvmTarget = "17"
