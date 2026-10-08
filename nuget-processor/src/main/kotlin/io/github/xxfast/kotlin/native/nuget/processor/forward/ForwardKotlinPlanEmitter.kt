@@ -202,7 +202,12 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
     is BridgeType.ValueClass ->
       addValueClassOrdinaryResult(builder, result, invocation, call.result, error.name)
 
-    else -> error("Forward Kotlin plan emitter has no Phase 4 result route for $result")
+    is BridgeType.Callback,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+      -> error("Forward Kotlin plan emitter has no Phase 4 result route for $result")
   }
 
   // ADR-198: an export that takes a value of an unspellably bounded type parameter.
@@ -268,7 +273,26 @@ private fun addValueClassOrdinaryResult(
       )
     }
 
-    else -> error(
+    BridgeType.Unit,
+    BridgeType.Char,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    is BridgeType.Throwable,
+    BridgeType.Uuid,
+    is BridgeType.Interface,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    BridgeType.ByteArray,
+    is BridgeType.Collection,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> error(
       "Forward Kotlin plan emitter has no ordinary value-class result for underlying $underlying",
     )
   }
@@ -456,7 +480,15 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
       }
     }
 
-    else -> error("Value-class Kotlin emitter has no result route for $result")
+    is BridgeType.BoundInterface,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> error("Value-class Kotlin emitter has no result route for $result")
   }
 
   addFunction(builder.build())
@@ -486,7 +518,29 @@ private fun valueClassReconstruction(plan: ForwardCallablePlan, call: ForwardNat
     is BridgeType.ObjectHandle ->
       "$owner(${receiver.name}.asStableRef<${type.qualifiedName}>().get())"
 
-    else -> "$owner(${receiver.name})"
+    BridgeType.Unit,
+    is BridgeType.Primitive,
+    BridgeType.Char,
+    BridgeType.String,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    is BridgeType.Throwable,
+    BridgeType.Uuid,
+    is BridgeType.Enum,
+    is BridgeType.Interface,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    BridgeType.ByteArray,
+    is BridgeType.Collection,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> "$owner(${receiver.name})"
   }
 }
 
@@ -527,7 +581,23 @@ private fun elementKotlinTypeName(type: BridgeType): String = when (type) {
   // lowering is the plain cast every other handle-shaped component uses. Without this arm the
   // `else` below crashes `packNuget` outright.
   BridgeType.ByteArray -> "kotlin.ByteArray"
-  else -> error("Forward Kotlin plan emitter has no element type name for $type")
+  BridgeType.Unit,
+  BridgeType.Instant,
+  BridgeType.Duration,
+  is BridgeType.Throwable,
+  BridgeType.Uuid,
+  is BridgeType.BoundInterface,
+  is BridgeType.ValueClass,
+  is BridgeType.Collection,
+  is BridgeType.Nullable,
+  is BridgeType.Callback,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+  is BridgeType.TypeParameter,
+    -> error("Forward Kotlin plan emitter has no element type name for $type")
 }
 
 /**
@@ -561,7 +631,29 @@ internal fun componentLowering(
     is BridgeType.Enum ->
       "${type.qualifiedName}(${underlying.qualifiedName}.entries[$name as kotlin.Int])"
 
-    else -> "${type.qualifiedName}($name as ${elementKotlinTypeName(underlying)})"
+    BridgeType.Unit,
+    is BridgeType.Primitive,
+    BridgeType.Char,
+    BridgeType.String,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    is BridgeType.Throwable,
+    BridgeType.Uuid,
+    is BridgeType.ObjectHandle,
+    is BridgeType.Interface,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    BridgeType.ByteArray,
+    is BridgeType.Collection,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> "${type.qualifiedName}($name as ${elementKotlinTypeName(underlying)})"
   }
 
   // ADR-083: a null component arrived as the null pointer and is already `null` in the `Any?` box,
@@ -582,7 +674,29 @@ internal fun componentLowering(
             "${inner.qualifiedName}(${underlying.qualifiedName}" +
             ".entries[${letParameter(depth)}]) }"
 
-      else ->
+      BridgeType.Unit,
+      is BridgeType.Primitive,
+      BridgeType.Char,
+      BridgeType.String,
+      BridgeType.Instant,
+      BridgeType.Duration,
+      is BridgeType.Throwable,
+      BridgeType.Uuid,
+      is BridgeType.ObjectHandle,
+      is BridgeType.Interface,
+      is BridgeType.BoundInterface,
+      is BridgeType.ValueClass,
+      BridgeType.ByteArray,
+      is BridgeType.Collection,
+      is BridgeType.Nullable,
+      is BridgeType.Callback,
+      is BridgeType.ReturnedLambda,
+      is BridgeType.SpecializedProtocol,
+      is BridgeType.RawKSType,
+      is BridgeType.Unsupported,
+      is BridgeType.RawCollection,
+      is BridgeType.TypeParameter,
+        ->
         "($name as ${elementKotlinTypeName(underlying)}?)?.let { ${letParameter(depth)} -> " +
             "${inner.qualifiedName}(${letParameter(depth)}) }"
     }
@@ -591,10 +705,48 @@ internal fun componentLowering(
     is BridgeType.Throwable ->
       managedExceptionLowering("($name as kotlin.String?)", nullable = true)
 
-    else -> "$name as ${elementKotlinTypeName(inner)}?"
+    BridgeType.Unit,
+    is BridgeType.Primitive,
+    BridgeType.Char,
+    BridgeType.String,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    BridgeType.Uuid,
+    is BridgeType.ObjectHandle,
+    is BridgeType.Interface,
+    is BridgeType.BoundInterface,
+    BridgeType.ByteArray,
+    is BridgeType.Collection,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> "$name as ${elementKotlinTypeName(inner)}?"
   }
 
-  else -> "$name as ${elementKotlinTypeName(type)}"
+  BridgeType.Unit,
+  is BridgeType.Primitive,
+  BridgeType.Char,
+  BridgeType.String,
+  BridgeType.Instant,
+  BridgeType.Duration,
+  BridgeType.Uuid,
+  is BridgeType.ObjectHandle,
+  is BridgeType.Interface,
+  is BridgeType.BoundInterface,
+  BridgeType.ByteArray,
+  is BridgeType.Callback,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+  is BridgeType.TypeParameter,
+    -> "$name as ${elementKotlinTypeName(type)}"
 }
 
 /**
@@ -866,7 +1018,16 @@ private fun addNullableResult(
       )
     }
 
-    else -> error("Forward Kotlin plan emitter has no nullable result route for $type")
+    BridgeType.Unit,
+    is BridgeType.BoundInterface,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+      -> error("Forward Kotlin plan emitter has no nullable result route for $type")
   }
 }
 
@@ -1479,10 +1640,30 @@ private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): Typ
     is BridgeType.ValueClass ->
       kotlinInputType(inner.underlying, wireType).copy(nullable = true)
 
-    else -> error("Forward Kotlin plan emitter has no input type for nullable $inner")
+    BridgeType.Unit,
+    is BridgeType.Primitive,
+    BridgeType.Char,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    is BridgeType.Enum,
+    is BridgeType.BoundInterface,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+      -> error("Forward Kotlin plan emitter has no input type for nullable $inner")
   }
 
-  else -> error("Forward Kotlin plan emitter has no input type for $type")
+  BridgeType.Unit,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+    -> error("Forward Kotlin plan emitter has no input type for $type")
 }
 
 /**
@@ -1624,7 +1805,28 @@ private fun defaultResult(type: BridgeType): String = when (type) {
     PrimitiveKind.DOUBLE -> "0.0"
   }
 
-  else -> error("Forward Kotlin plan emitter has no direct-value default for $type")
+  BridgeType.Unit,
+  BridgeType.String,
+  BridgeType.Instant,
+  BridgeType.Duration,
+  is BridgeType.Throwable,
+  BridgeType.Uuid,
+  is BridgeType.Enum,
+  is BridgeType.ObjectHandle,
+  is BridgeType.Interface,
+  is BridgeType.BoundInterface,
+  is BridgeType.ValueClass,
+  BridgeType.ByteArray,
+  is BridgeType.Collection,
+  is BridgeType.Nullable,
+  is BridgeType.Callback,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+  is BridgeType.TypeParameter,
+    -> error("Forward Kotlin plan emitter has no direct-value default for $type")
 }
 
 /**
@@ -1742,10 +1944,25 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
           "${parameter.ref}?.let { ${inner.qualifiedName}($lowered) }"
         }
 
-      else -> error("Forward Kotlin plan emitter has no argument lowering for nullable $inner")
+      BridgeType.Unit,
+      is BridgeType.BoundInterface,
+      is BridgeType.Nullable,
+      is BridgeType.Callback,
+      is BridgeType.ReturnedLambda,
+      is BridgeType.SpecializedProtocol,
+      is BridgeType.RawKSType,
+      is BridgeType.Unsupported,
+      is BridgeType.RawCollection,
+        -> error("Forward Kotlin plan emitter has no argument lowering for nullable $inner")
     }
 
-    else -> error("Forward Kotlin plan emitter has no argument lowering for $type")
+    BridgeType.Unit,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+      -> error("Forward Kotlin plan emitter has no argument lowering for $type")
   }
 
 /**
@@ -1773,7 +1990,24 @@ private fun loweredCallbackExpression(
     is BridgeType.Enum -> "Int"
     BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface,
     is BridgeType.Throwable -> "COpaquePointer?"
-    else -> error("Forward Kotlin plan emitter has no callback wire type for $component")
+    BridgeType.Unit,
+    BridgeType.Char,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    BridgeType.Uuid,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    BridgeType.ByteArray,
+    is BridgeType.Collection,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> error("Forward Kotlin plan emitter has no callback wire type for $component")
   }
 
   val parameterNames: List<String> = type.parameters.indices.map { index -> "${name}Arg$index" }
@@ -1783,7 +2017,29 @@ private fun loweredCallbackExpression(
       ).joinToString(", ")
   val resultWire: String = when (val result: BridgeType = type.result) {
     BridgeType.Unit -> "Unit"
-    else -> wireKotlinType(result)
+    is BridgeType.Primitive,
+    BridgeType.Char,
+    BridgeType.String,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    is BridgeType.Throwable,
+    BridgeType.Uuid,
+    is BridgeType.Enum,
+    is BridgeType.ObjectHandle,
+    is BridgeType.Interface,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    BridgeType.ByteArray,
+    is BridgeType.Collection,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> wireKotlinType(result)
   }
   val arguments: String = (
       type.parameters.mapIndexed { index, component ->
@@ -1802,7 +2058,26 @@ private fun loweredCallbackExpression(
           BridgeType.String -> "NugetHandles.retain($argument as Any)"
           // ADR-201 amendment: the ADR-107 envelope; C# reads it with `BuildException`.
           is BridgeType.Throwable -> "NugetHandles.retain(buildError($argument, ::nugetMappedType))"
-          else -> "NugetHandles.retain($argument)"
+          BridgeType.Unit,
+          BridgeType.Char,
+          BridgeType.Instant,
+          BridgeType.Duration,
+          BridgeType.Uuid,
+          is BridgeType.ObjectHandle,
+          is BridgeType.Interface,
+          is BridgeType.BoundInterface,
+          is BridgeType.ValueClass,
+          BridgeType.ByteArray,
+          is BridgeType.Collection,
+          is BridgeType.Nullable,
+          is BridgeType.Callback,
+          is BridgeType.ReturnedLambda,
+          is BridgeType.SpecializedProtocol,
+          is BridgeType.RawKSType,
+          is BridgeType.Unsupported,
+          is BridgeType.RawCollection,
+          is BridgeType.TypeParameter,
+            -> "NugetHandles.retain($argument)"
         }
       } + userDataSlot + "nugetErr"
       ).joinToString(", ")
@@ -1842,7 +2117,26 @@ private fun loweredCallbackExpression(
         appendLine("  $invocation")
       }
 
-      else -> error("Forward Kotlin plan emitter has no callback result lowering for $result")
+      BridgeType.Char,
+      BridgeType.Instant,
+      BridgeType.Duration,
+      BridgeType.Uuid,
+      is BridgeType.Enum,
+      is BridgeType.ObjectHandle,
+      is BridgeType.Interface,
+      is BridgeType.BoundInterface,
+      is BridgeType.ValueClass,
+      BridgeType.ByteArray,
+      is BridgeType.Collection,
+      is BridgeType.Nullable,
+      is BridgeType.Callback,
+      is BridgeType.ReturnedLambda,
+      is BridgeType.SpecializedProtocol,
+      is BridgeType.RawKSType,
+      is BridgeType.Unsupported,
+      is BridgeType.RawCollection,
+      is BridgeType.TypeParameter,
+        -> error("Forward Kotlin plan emitter has no callback result lowering for $result")
     }
     append("}")
   }
@@ -1858,7 +2152,28 @@ internal fun valueClassUnderlyingLowering(name: String, underlying: BridgeType):
     is BridgeType.Enum -> "${underlying.qualifiedName}.entries[$name]"
     is BridgeType.ObjectHandle ->
       "$name.asStableRef<${underlying.kotlinReadType ?: underlying.qualifiedName}>().get()"
-    else -> name
+    BridgeType.Unit,
+    is BridgeType.Primitive,
+    BridgeType.Char,
+    BridgeType.String,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    is BridgeType.Throwable,
+    BridgeType.Uuid,
+    is BridgeType.Interface,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    BridgeType.ByteArray,
+    is BridgeType.Collection,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> name
   }
 
 /**

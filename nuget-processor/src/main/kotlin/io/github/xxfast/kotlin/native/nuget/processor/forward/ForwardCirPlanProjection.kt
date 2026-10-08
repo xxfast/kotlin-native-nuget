@@ -300,11 +300,31 @@ internal object ForwardCirPlanProjection {
               held(present + valueClassReconstructionCs(inner, "nativeResult"))
             }
 
-          else -> error("Forward CIR value-class member has no nullable result for $inner")
+          BridgeType.Unit,
+          is BridgeType.BoundInterface,
+          is BridgeType.Nullable,
+          is BridgeType.Callback,
+          is BridgeType.ReturnedLambda,
+          is BridgeType.SpecializedProtocol,
+          is BridgeType.RawKSType,
+          is BridgeType.Unsupported,
+          is BridgeType.RawCollection,
+          is BridgeType.TypeParameter,
+            -> error("Forward CIR value-class member has no nullable result for $inner")
         }
       }
 
-      else -> ValueClassMemberBody(type, this.result.wireType.csharpType(), call)
+      is BridgeType.Primitive,
+      BridgeType.Char,
+      is BridgeType.BoundInterface,
+      is BridgeType.Callback,
+      is BridgeType.ReturnedLambda,
+      is BridgeType.SpecializedProtocol,
+      is BridgeType.RawKSType,
+      is BridgeType.Unsupported,
+      is BridgeType.RawCollection,
+      is BridgeType.TypeParameter,
+        -> ValueClassMemberBody(type, this.result.wireType.csharpType(), call)
     }
   }
 
@@ -721,7 +741,29 @@ internal object ForwardCirPlanProjection {
         (inner is BridgeType.TypeParameter && inner.name == name && !inner.nullableFromBound) ||
             inner.spells()
       }
-      else -> false
+      BridgeType.Unit,
+      is BridgeType.Primitive,
+      BridgeType.Char,
+      BridgeType.String,
+      BridgeType.Instant,
+      BridgeType.Duration,
+      is BridgeType.Throwable,
+      BridgeType.Uuid,
+      is BridgeType.Enum,
+      is BridgeType.ObjectHandle,
+      is BridgeType.Interface,
+      is BridgeType.BoundInterface,
+      is BridgeType.ValueClass,
+      BridgeType.ByteArray,
+      is BridgeType.Collection,
+      is BridgeType.Callback,
+      is BridgeType.ReturnedLambda,
+      is BridgeType.SpecializedProtocol,
+      is BridgeType.RawKSType,
+      is BridgeType.Unsupported,
+      is BridgeType.RawCollection,
+      is BridgeType.TypeParameter,
+        -> false
     }
     return publicSignature.parameters.any { parameter -> parameter.type.spells() } ||
         publicSignature.result.spells()
@@ -841,7 +883,26 @@ internal object ForwardCirPlanProjection {
   private fun BridgeType.isTrivialInput(): Boolean = when (this) {
     is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> true
     is BridgeType.Nullable -> type == BridgeType.String
-    else -> false
+    BridgeType.Unit,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    is BridgeType.Throwable,
+    BridgeType.Uuid,
+    is BridgeType.Enum,
+    is BridgeType.ObjectHandle,
+    is BridgeType.Interface,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    BridgeType.ByteArray,
+    is BridgeType.Collection,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> false
   }
 
   /** The call-site argument(s) for one public parameter. Every shape contributes exactly one
@@ -895,7 +956,28 @@ internal object ForwardCirPlanProjection {
           when (type.underlying) {
             is BridgeType.Enum -> "(int)$unwrapped"
             is BridgeType.ObjectHandle -> "$unwrapped._handle"
-            else -> unwrapped
+            BridgeType.Unit,
+            is BridgeType.Primitive,
+            BridgeType.Char,
+            BridgeType.String,
+            BridgeType.Instant,
+            BridgeType.Duration,
+            is BridgeType.Throwable,
+            BridgeType.Uuid,
+            is BridgeType.Interface,
+            is BridgeType.BoundInterface,
+            is BridgeType.ValueClass,
+            BridgeType.ByteArray,
+            is BridgeType.Collection,
+            is BridgeType.Nullable,
+            is BridgeType.Callback,
+            is BridgeType.ReturnedLambda,
+            is BridgeType.SpecializedProtocol,
+            is BridgeType.RawKSType,
+            is BridgeType.Unsupported,
+            is BridgeType.RawCollection,
+            is BridgeType.TypeParameter,
+              -> unwrapped
           }
         )
       }
@@ -969,10 +1051,25 @@ internal object ForwardCirPlanProjection {
           }
         }
 
-        else -> error("Forward CIR plan projection has no call argument for nullable $inner")
+        BridgeType.Unit,
+        is BridgeType.BoundInterface,
+        is BridgeType.Nullable,
+        is BridgeType.Callback,
+        is BridgeType.ReturnedLambda,
+        is BridgeType.SpecializedProtocol,
+        is BridgeType.RawKSType,
+        is BridgeType.Unsupported,
+        is BridgeType.RawCollection,
+          -> error("Forward CIR plan projection has no call argument for nullable $inner")
       }
 
-      else -> error("Forward CIR plan projection has no call argument for $type")
+      BridgeType.Unit,
+      is BridgeType.ReturnedLambda,
+      is BridgeType.SpecializedProtocol,
+      is BridgeType.RawKSType,
+      is BridgeType.Unsupported,
+      is BridgeType.RawCollection,
+        -> error("Forward CIR plan projection has no call argument for $type")
     }
 
   /** [type] with one `Nullable` layer removed only when it wraps a `Collection`, alongside
@@ -982,7 +1079,28 @@ internal object ForwardCirPlanProjection {
     when (this) {
       is BridgeType.Collection -> this to false
       is BridgeType.Nullable -> (type as? BridgeType.Collection)?.let { it to true }
-      else -> null
+      BridgeType.Unit,
+      is BridgeType.Primitive,
+      BridgeType.Char,
+      BridgeType.String,
+      BridgeType.Instant,
+      BridgeType.Duration,
+      is BridgeType.Throwable,
+      BridgeType.Uuid,
+      is BridgeType.Enum,
+      is BridgeType.ObjectHandle,
+      is BridgeType.Interface,
+      is BridgeType.BoundInterface,
+      is BridgeType.ValueClass,
+      BridgeType.ByteArray,
+      is BridgeType.Callback,
+      is BridgeType.ReturnedLambda,
+      is BridgeType.SpecializedProtocol,
+      is BridgeType.RawKSType,
+      is BridgeType.Unsupported,
+      is BridgeType.RawCollection,
+      is BridgeType.TypeParameter,
+        -> null
     }
 
   /**
@@ -1629,13 +1747,32 @@ internal object ForwardCirPlanProjection {
           ),
         )
 
-        else -> directOrCustomResultProjection(
+        BridgeType.Unit,
+        is BridgeType.BoundInterface,
+        is BridgeType.Nullable,
+        is BridgeType.Callback,
+        is BridgeType.ReturnedLambda,
+        is BridgeType.SpecializedProtocol,
+        is BridgeType.RawKSType,
+        is BridgeType.Unsupported,
+        is BridgeType.RawCollection,
+          -> directOrCustomResultProjection(
           result, nativeCall.result, needsCustomParams, nativeName, callArguments, prelude, cleanup,
           exit,
         )
       }
 
-      else -> directOrCustomResultProjection(
+      BridgeType.Unit,
+      is BridgeType.Primitive,
+      BridgeType.Char,
+      BridgeType.String,
+      is BridgeType.Enum,
+      is BridgeType.Callback,
+      is BridgeType.SpecializedProtocol,
+      is BridgeType.RawKSType,
+      is BridgeType.Unsupported,
+      is BridgeType.RawCollection,
+        -> directOrCustomResultProjection(
         result, nativeCall.result, needsCustomParams, nativeName, callArguments, prelude, cleanup,
         exit,
       )
@@ -1677,7 +1814,26 @@ internal object ForwardCirPlanProjection {
     BridgeType.String, is BridgeType.ObjectHandle -> "IntPtr"
     is BridgeType.Enum -> "int"
     is BridgeType.Primitive -> underlying.kind.csharpType()
-    else -> error("Forward CIR plan projection has no value-class underlying wire for $underlying")
+    BridgeType.Unit,
+    BridgeType.Char,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    is BridgeType.Throwable,
+    BridgeType.Uuid,
+    is BridgeType.Interface,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    BridgeType.ByteArray,
+    is BridgeType.Collection,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> error("Forward CIR plan projection has no value-class underlying wire for $underlying")
   }
 
   /**
@@ -1693,7 +1849,26 @@ internal object ForwardCirPlanProjection {
       is BridgeType.Enum -> "(${underlying.csharpType})$wireValue"
       is BridgeType.ObjectHandle -> underlying.handleReconstruction(wireValue)
       is BridgeType.Primitive -> wireValue
-      else -> error("Forward CIR plan projection has no value-class reconstruction for $underlying")
+      BridgeType.Unit,
+      BridgeType.Char,
+      BridgeType.Instant,
+      BridgeType.Duration,
+      is BridgeType.Throwable,
+      BridgeType.Uuid,
+      is BridgeType.Interface,
+      is BridgeType.BoundInterface,
+      is BridgeType.ValueClass,
+      BridgeType.ByteArray,
+      is BridgeType.Collection,
+      is BridgeType.Nullable,
+      is BridgeType.Callback,
+      is BridgeType.ReturnedLambda,
+      is BridgeType.SpecializedProtocol,
+      is BridgeType.RawKSType,
+      is BridgeType.Unsupported,
+      is BridgeType.RawCollection,
+      is BridgeType.TypeParameter,
+        -> error("Forward CIR plan projection has no value-class reconstruction for $underlying")
     }
     return "new ${type.csharpType}($inner)"
   }
@@ -1983,7 +2158,12 @@ internal object ForwardCirPlanProjection {
     BridgeType.Duration, BridgeType.Uuid, is BridgeType.TypeParameter,
     is BridgeType.Enum, is BridgeType.ValueClass -> false
 
-    else -> error("Forward CIR direct-value projection cannot classify public type $this")
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+      -> error("Forward CIR direct-value projection cannot classify public type $this")
   }
 
   private fun PrimitiveKind.csharpType(): String = when (this) {

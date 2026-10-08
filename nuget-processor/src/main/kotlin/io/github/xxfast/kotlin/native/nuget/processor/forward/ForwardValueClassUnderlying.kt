@@ -46,5 +46,22 @@ private fun BridgeType.valueClassUnderlyingRole(): ForwardValueClassUnderlying =
   is BridgeType.Nullable ->
     if (type == BridgeType.String || type is BridgeType.Primitive) ForwardValueClassUnderlying.VALUE
     else ForwardValueClassUnderlying.REFUSED
-  else -> ForwardValueClassUnderlying.REFUSED
+  BridgeType.Unit,
+  BridgeType.Char,
+  BridgeType.Instant,
+  BridgeType.Duration,
+  is BridgeType.Throwable,
+  BridgeType.Uuid,
+  is BridgeType.Interface,
+  is BridgeType.BoundInterface,
+  is BridgeType.ValueClass,
+  BridgeType.ByteArray,
+  is BridgeType.Collection,
+  is BridgeType.Callback,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+  is BridgeType.TypeParameter,
+    -> ForwardValueClassUnderlying.REFUSED
 }

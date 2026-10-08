@@ -101,7 +101,26 @@ internal fun forwardCallbackPrelude(
       "return $call;"
     }
 
-    else -> error("Forward CIR callback projection has no result lowering for $result")
+    BridgeType.Char,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    BridgeType.Uuid,
+    is BridgeType.Enum,
+    is BridgeType.ObjectHandle,
+    is BridgeType.Interface,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    BridgeType.ByteArray,
+    is BridgeType.Collection,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> error("Forward CIR callback projection has no result lowering for $result")
   }
   val declarations: List<String> = listOf(
     "$delegateName ${local}Native = ${type.forwardCallbackDelegateParameterList(lambdaNames)} =>",
@@ -150,7 +169,24 @@ private fun BridgeType.callbackArgumentExpression(slot: String): String = when (
   is BridgeType.Interface -> "NugetMarshal.FromHandle<$csharpType>($slot)"
   // ADR-201 amendment: the ADR-107 envelope; `BuildException` disposes it as it reads.
   is BridgeType.Throwable -> "NugetErrorNative.BuildException($slot)"
-  else -> error("Forward CIR callback projection has no payload lowering for $this")
+  BridgeType.Unit,
+  BridgeType.Char,
+  BridgeType.Instant,
+  BridgeType.Duration,
+  BridgeType.Uuid,
+  is BridgeType.BoundInterface,
+  is BridgeType.ValueClass,
+  BridgeType.ByteArray,
+  is BridgeType.Collection,
+  is BridgeType.Nullable,
+  is BridgeType.Callback,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+  is BridgeType.TypeParameter,
+    -> error("Forward CIR callback projection has no payload lowering for $this")
 }
 
 /** The C ABI spelling of one callback component. `Boolean` rides a `byte`: `bool` is not a legal
@@ -163,7 +199,23 @@ private fun BridgeType.callbackWireCsharpType(): String = when (this) {
   is BridgeType.Enum -> "int"
   BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface,
   is BridgeType.Throwable -> "IntPtr"
-  else -> error("Forward CIR callback projection has no wire type for $this")
+  BridgeType.Char,
+  BridgeType.Instant,
+  BridgeType.Duration,
+  BridgeType.Uuid,
+  is BridgeType.BoundInterface,
+  is BridgeType.ValueClass,
+  BridgeType.ByteArray,
+  is BridgeType.Collection,
+  is BridgeType.Nullable,
+  is BridgeType.Callback,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+  is BridgeType.TypeParameter,
+    -> error("Forward CIR callback projection has no wire type for $this")
 }
 
 /**
@@ -180,5 +232,21 @@ private fun BridgeType.wireSuffix(): String = when (this) {
   is BridgeType.Enum -> "Int"
   BridgeType.String -> "String"
   is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Throwable -> "Object"
-  else -> error("Forward CIR callback projection has no delegate name segment for $this")
+  BridgeType.Char,
+  BridgeType.Instant,
+  BridgeType.Duration,
+  BridgeType.Uuid,
+  is BridgeType.BoundInterface,
+  is BridgeType.ValueClass,
+  BridgeType.ByteArray,
+  is BridgeType.Collection,
+  is BridgeType.Nullable,
+  is BridgeType.Callback,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+  is BridgeType.TypeParameter,
+    -> error("Forward CIR callback projection has no delegate name segment for $this")
 }

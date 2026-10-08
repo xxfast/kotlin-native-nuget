@@ -979,7 +979,25 @@ internal class ForwardPropertyPlanner(
         inner.underlying is BridgeType.String || inner.underlying is BridgeType.ObjectHandle ||
             hasValueFanOutInner() != null
 
-      else -> hasValueFanOutInner() != null
+      BridgeType.Unit,
+      is BridgeType.Primitive,
+      BridgeType.Char,
+      BridgeType.Instant,
+      BridgeType.Duration,
+      is BridgeType.Throwable,
+      is BridgeType.Enum,
+      is BridgeType.BoundInterface,
+      BridgeType.ByteArray,
+      is BridgeType.Collection,
+      is BridgeType.Nullable,
+      is BridgeType.Callback,
+      is BridgeType.ReturnedLambda,
+      is BridgeType.SpecializedProtocol,
+      is BridgeType.RawKSType,
+      is BridgeType.Unsupported,
+      is BridgeType.RawCollection,
+      is BridgeType.TypeParameter,
+        -> hasValueFanOutInner() != null
     }
 
     // ADR-075: a value class crosses the bridge as its own underlying value (ADR-014), the same
@@ -1508,7 +1526,26 @@ internal class ForwardPropertyPlanner(
       BridgeType.String, is BridgeType.Primitive, is BridgeType.Enum,
       is BridgeType.ObjectHandle -> true
 
-      else -> false
+      BridgeType.Unit,
+      BridgeType.Char,
+      BridgeType.Instant,
+      BridgeType.Duration,
+      is BridgeType.Throwable,
+      BridgeType.Uuid,
+      is BridgeType.Interface,
+      is BridgeType.BoundInterface,
+      is BridgeType.ValueClass,
+      BridgeType.ByteArray,
+      is BridgeType.Collection,
+      is BridgeType.Nullable,
+      is BridgeType.Callback,
+      is BridgeType.ReturnedLambda,
+      is BridgeType.SpecializedProtocol,
+      is BridgeType.RawKSType,
+      is BridgeType.Unsupported,
+      is BridgeType.RawCollection,
+      is BridgeType.TypeParameter,
+        -> false
     }
 
     // ADR-077 sub-item 4 carried the pointer-shaped underlyings (String, ObjectHandle), which
@@ -1517,7 +1554,14 @@ internal class ForwardPropertyPlanner(
     // the non-null one is and the plain recursion is right again.
     is BridgeType.Nullable -> isPlannable(type.type)
 
-    else -> false
+    is BridgeType.BoundInterface,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+      -> false
   }
 
   /**
@@ -1631,7 +1675,14 @@ internal class ForwardPropertyPlanner(
     // property declared `: SomeValueClass` (getter result and setter value alike).
     is BridgeType.ValueClass -> type.underlying.wireType()
 
-    else -> error("Forward property planner cannot choose a wire type for $type")
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+      -> error("Forward property planner cannot choose a wire type for $type")
   }
 
   private fun BridgeType.inputWireType(): ForwardAbiWireType = when (val type = unwrapNullable()) {
@@ -1639,7 +1690,26 @@ internal class ForwardPropertyPlanner(
     // ADR-201: and so does a Throwable setter, over the `"{FullName}: {Message}"` text.
     BridgeType.String, BridgeType.Uuid, is BridgeType.Throwable -> ForwardAbiWireType.STRING
     is BridgeType.ValueClass -> type.underlying.inputWireType()
-    else -> wireType()
+    BridgeType.Unit,
+    is BridgeType.Primitive,
+    BridgeType.Char,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    is BridgeType.Enum,
+    is BridgeType.ObjectHandle,
+    is BridgeType.Interface,
+    is BridgeType.BoundInterface,
+    BridgeType.ByteArray,
+    is BridgeType.Collection,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> wireType()
   }
 
   private companion object {
@@ -1779,7 +1849,18 @@ internal fun BridgeType.conversion(flow: ForwardFlow): ForwardConversion? = when
     ForwardConversion.UNBOX_VALUE_CLASS
   }
 
-  else -> ForwardConversion.DIRECT
+  BridgeType.Unit,
+  is BridgeType.Primitive,
+  BridgeType.Char,
+  is BridgeType.Nullable,
+  is BridgeType.Callback,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+  is BridgeType.TypeParameter,
+    -> ForwardConversion.DIRECT
 }
 
 /**

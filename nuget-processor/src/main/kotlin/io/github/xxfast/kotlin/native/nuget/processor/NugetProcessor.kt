@@ -2128,7 +2128,28 @@ internal class NugetProcessor(
             parameter.componentInterfaceQualifiedNames()
       }
 
-      else -> emptySet()
+      BridgeType.Unit,
+      is BridgeType.Primitive,
+      BridgeType.Char,
+      BridgeType.String,
+      BridgeType.Instant,
+      BridgeType.Duration,
+      is BridgeType.Throwable,
+      BridgeType.Uuid,
+      is BridgeType.Enum,
+      is BridgeType.ObjectHandle,
+      is BridgeType.Interface,
+      is BridgeType.BoundInterface,
+      is BridgeType.ValueClass,
+      BridgeType.ByteArray,
+      is BridgeType.Callback,
+      is BridgeType.ReturnedLambda,
+      is BridgeType.SpecializedProtocol,
+      is BridgeType.RawKSType,
+      is BridgeType.Unsupported,
+      is BridgeType.RawCollection,
+      is BridgeType.TypeParameter,
+        -> emptySet()
     }
 
     // ADR-040 top-level position plus ADR-176 components, the whole planned-type walk.

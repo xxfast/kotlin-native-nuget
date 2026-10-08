@@ -964,7 +964,28 @@ internal class ForwardBridgeTypeClassifier(
           is BridgeType.Nullable -> (classified.type as? BridgeType.SpecializedProtocol)
             ?.sealedHandle?.let(BridgeType::Nullable) ?: classified
 
-          else -> classified
+          BridgeType.Unit,
+          is BridgeType.Primitive,
+          BridgeType.Char,
+          BridgeType.String,
+          BridgeType.Instant,
+          BridgeType.Duration,
+          is BridgeType.Throwable,
+          BridgeType.Uuid,
+          is BridgeType.Enum,
+          is BridgeType.ObjectHandle,
+          is BridgeType.Interface,
+          is BridgeType.BoundInterface,
+          is BridgeType.ValueClass,
+          BridgeType.ByteArray,
+          is BridgeType.Collection,
+          is BridgeType.Callback,
+          is BridgeType.ReturnedLambda,
+          is BridgeType.RawKSType,
+          is BridgeType.Unsupported,
+          is BridgeType.RawCollection,
+          is BridgeType.TypeParameter,
+            -> classified
         }
       }
     }
@@ -985,7 +1006,24 @@ internal class ForwardBridgeTypeClassifier(
     is BridgeType.Interface -> true
     // ADR-201 amendment: the ADR-107 envelope, read (and disposed) by `BuildException`.
     is BridgeType.Throwable -> true
-    else -> false
+    BridgeType.Unit,
+    BridgeType.Char,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    BridgeType.Uuid,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    BridgeType.ByteArray,
+    is BridgeType.Collection,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> false
   }
 
   /** The result shapes both callback halves lower, out. See [callbackType]. */
@@ -994,7 +1032,26 @@ internal class ForwardBridgeTypeClassifier(
     // ADR-201 amendment: the managed-exception text over the `String` result box, so only a
     // declaration that can hold a `NugetManagedException`.
     is BridgeType.Throwable -> acceptsManagedException
-    else -> false
+    BridgeType.Char,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    BridgeType.Uuid,
+    is BridgeType.Enum,
+    is BridgeType.ObjectHandle,
+    is BridgeType.Interface,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    BridgeType.ByteArray,
+    is BridgeType.Collection,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> false
   }
 
   private fun specializedProtocol(qualifiedName: String): BridgeType.SpecializedProtocol? = when {

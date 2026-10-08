@@ -178,7 +178,21 @@ internal fun BridgeType.isErasedSealedArgument(): Boolean = when (this) {
 
   is BridgeType.ValueClass -> typeArguments.isEmpty() && hasErasedCrossing()
   is BridgeType.Nullable -> type.isErasedSealedArgument()
-  else -> false
+  BridgeType.Unit,
+  BridgeType.Instant,
+  BridgeType.Duration,
+  is BridgeType.Throwable,
+  BridgeType.Uuid,
+  is BridgeType.BoundInterface,
+  BridgeType.ByteArray,
+  is BridgeType.Collection,
+  is BridgeType.Callback,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+    -> false
 }
 
 /**

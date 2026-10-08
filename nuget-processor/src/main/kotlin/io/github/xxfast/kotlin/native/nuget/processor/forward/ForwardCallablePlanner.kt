@@ -3843,10 +3843,26 @@ internal class ForwardCallablePlanner(
         ),
       )
 
-      else -> error("Forward planner cannot build an input parameter for nullable $inner")
+      BridgeType.Unit,
+      is BridgeType.BoundInterface,
+      is BridgeType.Nullable,
+      is BridgeType.Callback,
+      is BridgeType.ReturnedLambda,
+      is BridgeType.SpecializedProtocol,
+      is BridgeType.RawKSType,
+      is BridgeType.Unsupported,
+      is BridgeType.RawCollection,
+        -> error("Forward planner cannot build an input parameter for nullable $inner")
     }
 
-    else -> error("Forward planner cannot build an input parameter for $type")
+    BridgeType.Unit,
+    BridgeType.Instant,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+      -> error("Forward planner cannot build an input parameter for $type")
   }
 
   private fun transfer(subject: String, type: BridgeType, flow: ForwardFlow): ForwardTransfer = ForwardTransfer(
@@ -3975,7 +3991,12 @@ internal class ForwardCallablePlanner(
     }
 
     is BridgeType.Nullable -> nullableResultShape(type)
-    else -> null
+    is BridgeType.Callback,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+      -> null
   }
 
   private fun nullableResultShape(type: BridgeType): ForwardResultShape? = when (type) {
@@ -4093,7 +4114,28 @@ internal class ForwardCallablePlanner(
         },
       )
 
-      else -> null
+      BridgeType.Unit,
+      is BridgeType.Primitive,
+      BridgeType.Char,
+      BridgeType.Instant,
+      BridgeType.Duration,
+      is BridgeType.Throwable,
+      BridgeType.Uuid,
+      is BridgeType.Enum,
+      is BridgeType.Interface,
+      is BridgeType.BoundInterface,
+      is BridgeType.ValueClass,
+      BridgeType.ByteArray,
+      is BridgeType.Collection,
+      is BridgeType.Nullable,
+      is BridgeType.Callback,
+      is BridgeType.ReturnedLambda,
+      is BridgeType.SpecializedProtocol,
+      is BridgeType.RawKSType,
+      is BridgeType.Unsupported,
+      is BridgeType.RawCollection,
+      is BridgeType.TypeParameter,
+        -> null
     }
 
     is BridgeType.Primitive -> {
@@ -4254,7 +4296,16 @@ internal class ForwardCallablePlanner(
       ),
     )
 
-    else -> null
+    BridgeType.Unit,
+    is BridgeType.BoundInterface,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+      -> null
   }
 
   /**
@@ -4292,7 +4343,28 @@ internal class ForwardCallablePlanner(
       conversion = when (type.unwrapNullable()) {
         is BridgeType.Collection -> ForwardConversion.COLLECTION_TO_HANDLE
         BridgeType.ByteArray -> ForwardConversion.BYTES_TO_HANDLE
-        else -> ForwardConversion.STABLE_REF_TO_HANDLE
+        BridgeType.Unit,
+        is BridgeType.Primitive,
+        BridgeType.Char,
+        BridgeType.String,
+        BridgeType.Instant,
+        BridgeType.Duration,
+        is BridgeType.Throwable,
+        BridgeType.Uuid,
+        is BridgeType.Enum,
+        is BridgeType.ObjectHandle,
+        is BridgeType.Interface,
+        is BridgeType.BoundInterface,
+        is BridgeType.ValueClass,
+        is BridgeType.Nullable,
+        is BridgeType.Callback,
+        is BridgeType.ReturnedLambda,
+        is BridgeType.SpecializedProtocol,
+        is BridgeType.RawKSType,
+        is BridgeType.Unsupported,
+        is BridgeType.RawCollection,
+        is BridgeType.TypeParameter,
+          -> ForwardConversion.STABLE_REF_TO_HANDLE
       },
     ),
     cleanup = listOf(ForwardCleanup("result", ForwardCleanupKind.DISPOSE_STABLE_REF)),
@@ -4578,10 +4650,22 @@ internal class ForwardCallablePlanner(
         if (inner.isUndeclared()) requireNotNull(inner.skipReason())
         else ForwardPlanSkipReason.NULLABLE
 
-      else -> ForwardPlanSkipReason.NULLABLE
+      BridgeType.Unit,
+      is BridgeType.Nullable,
+      is BridgeType.ReturnedLambda,
+      is BridgeType.RawKSType,
+      is BridgeType.RawCollection,
+        -> ForwardPlanSkipReason.NULLABLE
     }
 
-    else -> skipReason()
+    BridgeType.Unit,
+    is BridgeType.Primitive,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+      -> skipReason()
   }
 
   /**
@@ -4715,7 +4799,28 @@ internal class ForwardCallablePlanner(
   private fun BridgeType.underlyingWireType(): ForwardAbiWireType = when (this) {
     is BridgeType.Enum -> ForwardAbiWireType.INT32
     is BridgeType.ObjectHandle -> ForwardAbiWireType.POINTER
-    else -> wireType()
+    BridgeType.Unit,
+    is BridgeType.Primitive,
+    BridgeType.Char,
+    BridgeType.String,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    is BridgeType.Throwable,
+    BridgeType.Uuid,
+    is BridgeType.Interface,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    BridgeType.ByteArray,
+    is BridgeType.Collection,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> wireType()
   }
 }
 
@@ -4754,7 +4859,26 @@ internal fun BridgeType.sealedAsHandle(): BridgeType = when (this) {
 
   is BridgeType.ValueClass -> copy(underlying = underlying.sealedAsHandle())
 
-  else -> this
+  BridgeType.Unit,
+  is BridgeType.Primitive,
+  BridgeType.Char,
+  BridgeType.String,
+  BridgeType.Instant,
+  BridgeType.Duration,
+  is BridgeType.Throwable,
+  BridgeType.Uuid,
+  is BridgeType.Enum,
+  is BridgeType.ObjectHandle,
+  is BridgeType.Interface,
+  is BridgeType.BoundInterface,
+  BridgeType.ByteArray,
+  is BridgeType.Callback,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+  is BridgeType.TypeParameter,
+    -> this
 }
 
 /**
@@ -4861,7 +4985,28 @@ internal fun BridgeType.containsByteArray(): Boolean {
     is BridgeType.Collection ->
       listOfNotNull(type.element, type.key, type.value).any { it.containsByteArray() }
 
-    else -> false
+    BridgeType.Unit,
+    is BridgeType.Primitive,
+    BridgeType.Char,
+    BridgeType.String,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    is BridgeType.Throwable,
+    BridgeType.Uuid,
+    is BridgeType.Enum,
+    is BridgeType.ObjectHandle,
+    is BridgeType.Interface,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> false
   }
 }
 
@@ -5081,7 +5226,19 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
   is BridgeType.Nullable -> type !is BridgeType.Nullable && type !is BridgeType.Collection &&
       type.isWrappableComponent()
 
-  else -> false
+  BridgeType.Unit,
+  BridgeType.Instant,
+  BridgeType.Duration,
+  BridgeType.Uuid,
+  is BridgeType.BoundInterface,
+  is BridgeType.Callback,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+  is BridgeType.TypeParameter,
+    -> false
 }
 
 /**
@@ -5300,7 +5457,29 @@ internal fun BridgeType.unexportedDependencyDetail(): String? {
     is BridgeType.Collection ->
       (unwrapped.element ?: unwrapped.key ?: unwrapped.value)?.unwrapNullable() ?: unwrapped
 
-    else -> unwrapped
+    BridgeType.Unit,
+    is BridgeType.Primitive,
+    BridgeType.Char,
+    BridgeType.String,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    is BridgeType.Throwable,
+    BridgeType.Uuid,
+    is BridgeType.Enum,
+    is BridgeType.ObjectHandle,
+    is BridgeType.Interface,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    BridgeType.ByteArray,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> unwrapped
   }
   return (candidate as? BridgeType.Unsupported)
     ?.takeIf { unsupported -> unsupported.isUnexportedDependency }
@@ -5344,7 +5523,29 @@ internal fun BridgeType.optInMarkerDetail(): String? {
     is BridgeType.Collection ->
       (unwrapped.element ?: unwrapped.key ?: unwrapped.value)?.unwrapNullable() ?: unwrapped
 
-    else -> unwrapped
+    BridgeType.Unit,
+    is BridgeType.Primitive,
+    BridgeType.Char,
+    BridgeType.String,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    is BridgeType.Throwable,
+    BridgeType.Uuid,
+    is BridgeType.Enum,
+    is BridgeType.ObjectHandle,
+    is BridgeType.Interface,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    BridgeType.ByteArray,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> unwrapped
   }
   val unsupported: BridgeType.Unsupported = candidate as? BridgeType.Unsupported ?: return null
   val marker: String = unsupported.optInMarker ?: return null
@@ -5357,7 +5558,29 @@ internal fun BridgeType.undeclaredTypeDetail(): String? {
     is BridgeType.Collection ->
       (unwrapped.element ?: unwrapped.key ?: unwrapped.value)?.unwrapNullable() ?: unwrapped
 
-    else -> unwrapped
+    BridgeType.Unit,
+    is BridgeType.Primitive,
+    BridgeType.Char,
+    BridgeType.String,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    is BridgeType.Throwable,
+    BridgeType.Uuid,
+    is BridgeType.Enum,
+    is BridgeType.ObjectHandle,
+    is BridgeType.Interface,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    BridgeType.ByteArray,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> unwrapped
   }
   return (candidate as? BridgeType.Unsupported)
     ?.takeIf { unsupported ->
@@ -5389,7 +5612,29 @@ internal fun BridgeType.sealedTypeDetail(): String? {
         .firstOrNull { component -> component.isSealedProtocol() }
         ?: unwrapped
 
-    else -> unwrapped
+    BridgeType.Unit,
+    is BridgeType.Primitive,
+    BridgeType.Char,
+    BridgeType.String,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    is BridgeType.Throwable,
+    BridgeType.Uuid,
+    is BridgeType.Enum,
+    is BridgeType.ObjectHandle,
+    is BridgeType.Interface,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    BridgeType.ByteArray,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> unwrapped
   }
   val protocol: BridgeType.SpecializedProtocol = (candidate as? BridgeType.SpecializedProtocol)
     ?.takeIf { protocol -> protocol.name.startsWith(SEALED_HELPER_PREFIX) }

@@ -43,6 +43,8 @@ On top of that, we have some additional conventions that are specific to this re
   - e.g:- `val something: List<Something>` instead of `val somethingList: List<Something>`
 - Deter using scoping functions that introduce indentation (e.g:- `apply`, `with`, `run`)
 - Prefer using `if` statements over `when` statements with just two branches
+- A `when` over `BridgeType` never ends in `else`: list every variant so adding one is a compile error at
+  each site (see the ADR-076 amendment for the re-check).
 - When handling error states from `Result`, avoid using scoping functions (such as `.onFailure`) that introduce indentation. 
   - Instead, use explicit `if (result.isFailure)` checks with proper logging and error handling.
 - A Tier 1 cell that needs a collection component the bridge refuses must take it from

@@ -231,7 +231,28 @@ private fun componentWireExpression(
 internal fun BridgeType.componentValueClass(): BridgeType.ValueClass? = when (this) {
   is BridgeType.ValueClass -> this
   is BridgeType.Nullable -> type as? BridgeType.ValueClass
-  else -> null
+  BridgeType.Unit,
+  is BridgeType.Primitive,
+  BridgeType.Char,
+  BridgeType.String,
+  BridgeType.Instant,
+  BridgeType.Duration,
+  is BridgeType.Throwable,
+  BridgeType.Uuid,
+  is BridgeType.Enum,
+  is BridgeType.ObjectHandle,
+  is BridgeType.Interface,
+  is BridgeType.BoundInterface,
+  BridgeType.ByteArray,
+  is BridgeType.Collection,
+  is BridgeType.Callback,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+  is BridgeType.TypeParameter,
+    -> null
 }
 
 /** ADR-097: the bare enum a component projects through, seeing past ADR-083's nullable spelling;
@@ -240,7 +261,28 @@ internal fun BridgeType.componentValueClass(): BridgeType.ValueClass? = when (th
 internal fun BridgeType.componentEnum(): BridgeType.Enum? = when (this) {
   is BridgeType.Enum -> this
   is BridgeType.Nullable -> type as? BridgeType.Enum
-  else -> null
+  BridgeType.Unit,
+  is BridgeType.Primitive,
+  BridgeType.Char,
+  BridgeType.String,
+  BridgeType.Instant,
+  BridgeType.Duration,
+  is BridgeType.Throwable,
+  BridgeType.Uuid,
+  is BridgeType.ObjectHandle,
+  is BridgeType.Interface,
+  is BridgeType.BoundInterface,
+  is BridgeType.ValueClass,
+  BridgeType.ByteArray,
+  is BridgeType.Collection,
+  is BridgeType.Callback,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+  is BridgeType.TypeParameter,
+    -> null
 }
 
 /** ADR-081/097: whether a component crosses as something other than itself, and therefore needs a

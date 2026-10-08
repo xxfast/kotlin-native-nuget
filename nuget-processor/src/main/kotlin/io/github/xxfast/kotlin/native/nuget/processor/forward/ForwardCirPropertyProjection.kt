@@ -378,7 +378,22 @@ internal object ForwardCirPropertyProjection {
       // ADR-077 sub-items 2/4: a value class rides its underlying's wire (IntPtr for
       // String/ObjectHandle, int ordinal for enum, the primitive's own wire otherwise), which is
       // exactly what `wireType()`'s ValueClass branch resolves to in the fallthrough below.
-      else -> appendLine("            ${type.wireType().csharpWireType()} nativeResult = $native($callArgs);")
+      BridgeType.Unit,
+      is BridgeType.Primitive,
+      BridgeType.Char,
+      BridgeType.Instant,
+      BridgeType.Duration,
+      is BridgeType.Enum,
+      is BridgeType.BoundInterface,
+      is BridgeType.ValueClass,
+      is BridgeType.Nullable,
+      is BridgeType.Callback,
+      is BridgeType.ReturnedLambda,
+      is BridgeType.SpecializedProtocol,
+      is BridgeType.RawKSType,
+      is BridgeType.Unsupported,
+      is BridgeType.RawCollection,
+        -> appendLine("            ${type.wireType().csharpWireType()} nativeResult = $native($callArgs);")
     }
     appendErrorCheck(this)
     when (val value = type) {
@@ -440,7 +455,21 @@ internal object ForwardCirPropertyProjection {
               "${valueClassGetterReconstruction(inner)};",
         )
 
-        else -> append("            return nativeResult;")
+        BridgeType.Unit,
+        is BridgeType.Primitive,
+        BridgeType.Char,
+        BridgeType.Instant,
+        BridgeType.Duration,
+        is BridgeType.Enum,
+        is BridgeType.BoundInterface,
+        is BridgeType.Nullable,
+        is BridgeType.Callback,
+        is BridgeType.ReturnedLambda,
+        is BridgeType.SpecializedProtocol,
+        is BridgeType.RawKSType,
+        is BridgeType.Unsupported,
+        is BridgeType.RawCollection,
+          -> append("            return nativeResult;")
       }
 
       is BridgeType.Enum ->
@@ -469,7 +498,17 @@ internal object ForwardCirPropertyProjection {
       is BridgeType.Collection -> append(collectionMaterialize(value))
       // ADR-151: materialize and dispose the handle the getter minted.
       BridgeType.ByteArray -> append("            return NugetMarshal.ReadBytes(nativeResult);")
-      else -> append("            return nativeResult;")
+      BridgeType.Unit,
+      is BridgeType.Primitive,
+      BridgeType.Char,
+      is BridgeType.BoundInterface,
+      is BridgeType.Callback,
+      is BridgeType.ReturnedLambda,
+      is BridgeType.SpecializedProtocol,
+      is BridgeType.RawKSType,
+      is BridgeType.Unsupported,
+      is BridgeType.RawCollection,
+        -> append("            return nativeResult;")
     }
   }
 
@@ -505,7 +544,26 @@ internal object ForwardCirPropertyProjection {
       is BridgeType.Enum -> "(${underlying.csharpType})$wireValue"
       is BridgeType.ObjectHandle -> underlying.handleReconstruction(wireValue)
       is BridgeType.Primitive -> wireValue
-      else -> error(
+      BridgeType.Unit,
+      BridgeType.Char,
+      BridgeType.Instant,
+      BridgeType.Duration,
+      is BridgeType.Throwable,
+      BridgeType.Uuid,
+      is BridgeType.Interface,
+      is BridgeType.BoundInterface,
+      is BridgeType.ValueClass,
+      BridgeType.ByteArray,
+      is BridgeType.Collection,
+      is BridgeType.Nullable,
+      is BridgeType.Callback,
+      is BridgeType.ReturnedLambda,
+      is BridgeType.SpecializedProtocol,
+      is BridgeType.RawKSType,
+      is BridgeType.Unsupported,
+      is BridgeType.RawCollection,
+      is BridgeType.TypeParameter,
+        -> error(
         "Forward CIR property projection has no value-class reconstruction for $underlying",
       )
     }
@@ -608,10 +666,46 @@ internal object ForwardCirPropertyProjection {
       BridgeType.String -> if (type is BridgeType.Nullable) "string?" else "string"
       is BridgeType.Enum -> "int"
       is BridgeType.ObjectHandle -> KOTLIN_HANDLE
-      else -> value.underlying.wireType().csharpWireType()
+      BridgeType.Unit,
+      is BridgeType.Primitive,
+      BridgeType.Char,
+      BridgeType.Instant,
+      BridgeType.Duration,
+      is BridgeType.Throwable,
+      BridgeType.Uuid,
+      is BridgeType.Interface,
+      is BridgeType.BoundInterface,
+      is BridgeType.ValueClass,
+      BridgeType.ByteArray,
+      is BridgeType.Collection,
+      is BridgeType.Nullable,
+      is BridgeType.Callback,
+      is BridgeType.ReturnedLambda,
+      is BridgeType.SpecializedProtocol,
+      is BridgeType.RawKSType,
+      is BridgeType.Unsupported,
+      is BridgeType.RawCollection,
+      is BridgeType.TypeParameter,
+        -> value.underlying.wireType().csharpWireType()
     }
 
-    else -> value.wireType().csharpWireType()
+    BridgeType.Unit,
+    is BridgeType.Primitive,
+    BridgeType.Char,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    is BridgeType.BoundInterface,
+    BridgeType.ByteArray,
+    is BridgeType.Collection,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> value.wireType().csharpWireType()
   }
 
   /**
@@ -682,7 +776,26 @@ internal object ForwardCirPropertyProjection {
         )
       }
 
-      else -> null
+      BridgeType.Unit,
+      is BridgeType.Primitive,
+      BridgeType.Char,
+      BridgeType.String,
+      BridgeType.Instant,
+      BridgeType.Duration,
+      is BridgeType.Throwable,
+      BridgeType.Uuid,
+      is BridgeType.Enum,
+      is BridgeType.ObjectHandle,
+      is BridgeType.ValueClass,
+      is BridgeType.Nullable,
+      is BridgeType.Callback,
+      is BridgeType.ReturnedLambda,
+      is BridgeType.SpecializedProtocol,
+      is BridgeType.RawKSType,
+      is BridgeType.Unsupported,
+      is BridgeType.RawCollection,
+      is BridgeType.TypeParameter,
+        -> null
     }
   }
 
@@ -713,7 +826,27 @@ internal object ForwardCirPropertyProjection {
         "if (${name}Handle != IntPtr.Zero) { $native.Dispose(${name}Handle); }"
       }
 
-      else -> null
+      BridgeType.Unit,
+      is BridgeType.Primitive,
+      BridgeType.Char,
+      BridgeType.String,
+      BridgeType.Instant,
+      BridgeType.Duration,
+      is BridgeType.Throwable,
+      BridgeType.Uuid,
+      is BridgeType.Enum,
+      is BridgeType.ObjectHandle,
+      is BridgeType.BoundInterface,
+      is BridgeType.ValueClass,
+      is BridgeType.Nullable,
+      is BridgeType.Callback,
+      is BridgeType.ReturnedLambda,
+      is BridgeType.SpecializedProtocol,
+      is BridgeType.RawKSType,
+      is BridgeType.Unsupported,
+      is BridgeType.RawCollection,
+      is BridgeType.TypeParameter,
+        -> null
     }
 
   /** [nonNull] marks a call site that has already unwrapped the `Nullable<T>` (the
@@ -775,11 +908,44 @@ internal object ForwardCirPropertyProjection {
           is BridgeType.ObjectHandle ->
             if (nullable) "$unwrapped._handle ?? NugetKotlinHandle.Null" else "$unwrapped._handle"
 
-          else -> unwrapped
+          BridgeType.Unit,
+          is BridgeType.Primitive,
+          BridgeType.Char,
+          BridgeType.String,
+          BridgeType.Instant,
+          BridgeType.Duration,
+          is BridgeType.Throwable,
+          BridgeType.Uuid,
+          is BridgeType.Interface,
+          is BridgeType.BoundInterface,
+          is BridgeType.ValueClass,
+          BridgeType.ByteArray,
+          is BridgeType.Collection,
+          is BridgeType.Nullable,
+          is BridgeType.Callback,
+          is BridgeType.ReturnedLambda,
+          is BridgeType.SpecializedProtocol,
+          is BridgeType.RawKSType,
+          is BridgeType.Unsupported,
+          is BridgeType.RawCollection,
+          is BridgeType.TypeParameter,
+            -> unwrapped
         }
       }
 
-      else -> name
+      BridgeType.Unit,
+      is BridgeType.Primitive,
+      BridgeType.Char,
+      BridgeType.String,
+      is BridgeType.Nullable,
+      is BridgeType.Callback,
+      is BridgeType.ReturnedLambda,
+      is BridgeType.SpecializedProtocol,
+      is BridgeType.RawKSType,
+      is BridgeType.Unsupported,
+      is BridgeType.RawCollection,
+      is BridgeType.TypeParameter,
+        -> name
     }
 
   private fun BridgeType.unwrapNullable(): BridgeType = if (this is BridgeType.Nullable) type else this
@@ -804,7 +970,14 @@ internal object ForwardCirPropertyProjection {
     is BridgeType.Primitive -> type.kind.wireType()
     // ADR-077 sub-item 2: the underlying's wire, matching ForwardPropertyPlanner.wireType().
     is BridgeType.ValueClass -> type.underlying.wireType()
-    else -> error("No property wire type for $type")
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+      -> error("No property wire type for $type")
   }
 
   private fun PrimitiveKind.wireType(): ForwardAbiWireType = when (this) {

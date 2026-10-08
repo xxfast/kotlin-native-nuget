@@ -1304,7 +1304,16 @@ internal object ForwardCallablePlanValidator {
       ForwardConversion.STABLE_REF_TO_HANDLE
     }
 
-    else -> null
+    BridgeType.Unit,
+    is BridgeType.Primitive,
+    BridgeType.Char,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+      -> null
   }
 
   private fun BridgeType.unwrapNullable(): BridgeType = if (this is BridgeType.Nullable) type else this
