@@ -80,10 +80,17 @@ class SuspendFlowCafe {
   }
 
   suspend fun nullableCollections(): Flow<List<Int>?> = flowOf(null)
+
+  // ADR-026 amendment (2026-10-09): a nullable acquired `Flow<T>?` awaits to `KotlinFlow<T>?`.
+  suspend fun maybeNicknames(count: Int): Flow<String>? =
+    if (count == 0) null else flowOf("Oreo", "Mylo")
+  suspend fun maybeCompanions(count: Int): Flow<Cat>? =
+    if (count == 0) null else flowOf(Cat("Oreo"), Cat("Mylo"))
 }
 
 suspend fun cafePortions(): Flow<Int> = flowOf(71, 83)
 suspend fun cafeNicknames(): Flow<String?> = flowOf("Oreo", null, "Mylo")
+suspend fun cafeMaybePortions(count: Int): Flow<Int>? = if (count == 0) null else flowOf(71, 83)
 fun cafeAcquisitionRelease(cafe: SuspendFlowCafe): () -> Unit = { cafe.releaseAcquisition() }
 
 sealed class SuspendFlowNap {

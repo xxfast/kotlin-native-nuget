@@ -1930,10 +1930,10 @@ internal fun flowProperty(
   // (measured: `KotlinException` out of `MoveNextAsync`) instead of arriving as null -- a silent
   // nullability drop, the worst of the three possible outcomes. The element wire is identical on
   // the two shapes (one `StableRef` handle per item, `IntPtr.Zero` for null), so this reuses
-  // ADR-067's encoding rather than inventing a second one. A nullable MEMBER (`StateFlow<T>?`) is
-  // still StateFlow-only: it is the `_has_value` two-call pattern, which plain Flow has no half of.
+  // ADR-067's encoding rather than inventing a second one. A nullable MEMBER (`StateFlow<T>?` and,
+  // since 2026-10-09, `Flow<T>?`) is ADR-067's `_has_value` two-call pattern on both shapes.
   val isNullableElement: Boolean = flowElementTypeResolved?.isMarkedNullable == true
-  val isNullableMember: Boolean = isStateFlowType && propTypeResolved.isMarkedNullable
+  val isNullableMember: Boolean = propTypeResolved.isMarkedNullable
   // ADR-071: a genuinely DECLARED MutableStateFlow<T> (not narrowed through .asStateFlow())
   // gains a settable `.Value` -- gated on the exact declared type and a writable element
   // (primitive/String/object; a nullable one too, bar `Boolean?`/`Char?`). A nullable member keeps
@@ -2001,7 +2001,7 @@ internal fun flowProperty(
   val type: String = when {
     isMutableStateFlowProperty -> "KotlinMutableStateFlow<$flowElementType>$memberSuffix"
     isStateFlowType -> "KotlinStateFlow<$flowElementType>$memberSuffix"
-    else -> "KotlinFlow<$flowElementType>"
+    else -> "KotlinFlow<$flowElementType>$memberSuffix"
   }
 
   val getter: String = if (isStateFlowType) {
@@ -2048,10 +2048,16 @@ internal fun flowProperty(
       }
   } else {
       val collectNativeName = "${nativeCarrier}Native_Get${csPropName}Collect"
+      // ADR-026 amendment (2026-10-09): a nullable member probes `_has_value` first (ADR-067).
+      val hasValueNativeName = "${nativeCarrier}Native_Get${csPropName}HasValue"
       buildString {
         appendLine()
         appendLine("                if (_handle.IsInvalid)")
         appendLine("                    throw new ObjectDisposedException(nameof($ownerCsName));")
+        if (isNullableMember) {
+          appendLine("                if (!$hasValueNativeName(_handle))")
+          appendLine("                    return null;")
+        }
         appendLine("                return new KotlinFlow<$flowElementType>((onNext, onComplete, onError, userData) =>")
         if (flowElementRead != null) {
           appendLine("                    $collectNativeName(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData),")
@@ -2135,9 +2141,9 @@ internal fun flowMembers(
       returnType?.arguments?.firstOrNull()?.type?.resolve()?.expandAliases()
     // ADR-067 (widened 2026-09-20): nullable ELEMENT threading mirrors the sibling property branch
     // above -- both flow shapes, since the per-item wire is the same handle either way. A nullable
-    // MEMBER stays StateFlow-only (the `_has_value` probe has no plain-Flow half).
+    // MEMBER is the `_has_value` probe on both shapes too (ADR-026 amendment, 2026-10-09).
     val isNullableElement: Boolean = flowElementTypeResolved?.isMarkedNullable == true
-    val isNullableMember: Boolean = isStateFlowMethod && returnType?.isMarkedNullable == true
+    val isNullableMember: Boolean = returnType?.isMarkedNullable == true
     // ADR-071: mirrors the sibling property branch above -- a genuinely DECLARED
     // MutableStateFlow<T> function return (not narrowed to StateFlow<T>) gains a settable
     // `.Value`, gated on a non-nullable member and a writable element (a nullable one included).
@@ -2271,6 +2277,21 @@ internal fun flowMembers(
       "_handle, GetOrCreateScope(), $paramNames, $callbackArgs"
     }
 
+    // ADR-067: nullable member -- sibling `_has_value` presence-probe DllImport, same parameter
+    // shape as `_value` (handle + the method's own parameters). Since 2026-10-09 (ADR-026
+    // amendment) a plain `Flow<T>?` return takes the same probe.
+    val hasValueNativeImport: CirDllImport? = if (isNullableMember) {
+      CirDllImport(
+        libraryName = libraryName,
+        entryPoint = "${prefix}_${cname}_has_value",
+        returnType = "bool",
+        name = "${nativeStem}HasValue",
+        parameters = listOf(CirParameter("handle", KOTLIN_HANDLE)) +
+            methodParams.nativeImportParameters(),
+        visibility = CirVisibility.PRIVATE,
+      )
+    } else null
+
     if (isStateFlowMethod) {
       // ADR-065: sibling synchronous `_value` export -- takes handle + the method's own
       // parameters (no scope, no callbacks, no errorOut; StateFlow.value cannot throw).
@@ -2283,20 +2304,6 @@ internal fun flowMembers(
             methodParams.nativeImportParameters(),
         visibility = CirVisibility.PRIVATE,
       )
-
-      // ADR-067: nullable member -- sibling `_has_value` presence-probe DllImport, same
-      // parameter shape as `_value` (handle + the method's own parameters).
-      val hasValueNativeImport: CirDllImport? = if (isNullableMember) {
-        CirDllImport(
-          libraryName = libraryName,
-          entryPoint = "${prefix}_${cname}_has_value",
-          returnType = "bool",
-          name = "${nativeStem}HasValue",
-          parameters = listOf(CirParameter("handle", KOTLIN_HANDLE)) +
-              methodParams.nativeImportParameters(),
-          visibility = CirVisibility.PRIVATE,
-        )
-      } else null
 
       // ADR-071 (2026-09-11): no `_set_value` sibling here. What reaches this point is a
       // read-only `StateFlow<T>` return; the settable one took the held route above.
@@ -2327,17 +2334,20 @@ internal fun flowMembers(
 
     val flowMethod = CirMethod(
       name = csMethodName,
-      returnType = "KotlinFlow<$flowCsElementType>",
+      returnType = "KotlinFlow<$flowCsElementType>${if (isNullableMember) "?" else ""}",
       nativeName = "${nativeStem}Collect",
       parameters = methodParams,
       body = nativeCallArgs,
       isFlow = true,
       flowElementType = flowCsElementType,
       flowElementRead = flowElementRead,
+      // The StateFlow-named fields carry the plain-Flow probe too; `renderFlowMethod` reads them.
+      isStateFlowNullableMember = isNullableMember,
+      stateFlowHasValueNativeName = if (isNullableMember) "${nativeStem}HasValue" else "",
       flowCallbackNames = callbackNames,
     )
 
-    listOf(nativeImport, flowMethod)
+    listOfNotNull(nativeImport, hasValueNativeImport, flowMethod)
   }
 }
 
@@ -2622,7 +2632,7 @@ internal fun suspendMembers(
       ),
       name = method.csharpAsyncMemberName(),
       nativeName = nativeStem,
-      returnType = "Task<$asyncReturnType>",
+      returnType = "Task<$asyncReturnType${if (element.memberNullable) "?" else ""}>",
       parameters = methodParams,
       body = "",
       isAsync = true,
@@ -2631,6 +2641,7 @@ internal fun suspendMembers(
       // ADR-136's expression). Null for a class element, which keeps the ctor's default read.
       flowElementRead = element.read,
       flowElementNullable = element.elementNullable,
+      acquiredFlowNullable = element.memberNullable,
       acquiredFlowCollectNativeName =
         if (element.asyncReturnType.startsWith("KotlinFlow<")) "${nativeStem}Collect" else null,
       stateFlowSetValueNativeName = if (write != null) "${nativeStem}SetValue" else "",
@@ -2666,6 +2677,11 @@ internal data class SuspendStateFlowElement(
   val read: String?,
   /** True for a `StateFlow<T?>` element, which reads through `nuget_stateflow_value_or_null`. */
   val elementNullable: Boolean = false,
+  /**
+   * True for a nullable acquired `Flow<T>?` (ADR-026 amendment, 2026-10-09): the `Task` yields
+   * `KotlinFlow<T>?`. Kept off [asyncReturnType], which the completion reuses inside `new ...(`.
+   */
+  val memberNullable: Boolean = false,
 )
 
 internal fun suspendStateFlowElement(
@@ -2695,7 +2711,11 @@ internal fun suspendStateFlowElement(
       ?: iface?.let { legacyInterfaceElementReadArgument(it, nullable) }
       ?: legacyBytesElementReadArgument(nullable).takeIf { bytes }
       ?: legacyEnvelopeElementReadArgument(nullable).takeIf { envelope }
-    return SuspendStateFlowElement("KotlinFlow<$cs>", read)
+    return SuspendStateFlowElement(
+      asyncReturnType = "KotlinFlow<$cs>",
+      read = read,
+      memberNullable = returnType?.expandAliases()?.isMarkedNullable == true,
+    )
   }
 
   // A nullable element (`StateFlow<T?>`) is spelled `KotlinStateFlow<T?>` and read through the

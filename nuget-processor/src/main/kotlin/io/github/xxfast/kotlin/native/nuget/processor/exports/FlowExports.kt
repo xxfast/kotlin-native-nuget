@@ -193,9 +193,10 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
   // matching change. A plain `Flow<T?>` used to box `value as Any` here, which throws on the first
   // null emission and reaches the consumer as `onError` -- a stream that dies instead of yielding
   // null. Null now crosses as a null item pointer, the encoding `StateFlow<T?>` already used.
-  // A nullable MEMBER (`StateFlow<T>?`) stays StateFlow-only: it is the `_has_value` probe pair.
+  // A nullable MEMBER (`StateFlow<T>?` and, since 2026-10-09, `Flow<T>?`) is the `_has_value`
+  // probe pair.
   val elementNullable: Boolean = flowElementType?.isMarkedNullable == true
-  val memberNullable: Boolean = isStateFlowProperty && propTypeResolved.isMarkedNullable
+  val memberNullable: Boolean = propTypeResolved.isMarkedNullable
   // ADR-123: a collection element crosses as the ordinary route's boxed wire container, so a
   // component that projects at the seam (a value class to its underlying, an enum to its
   // ordinal) has to leave as that wire value or the C# per-element read decodes the wrong box.
@@ -246,19 +247,6 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
         .build()
     )
 
-    if (memberNullable) {
-      // ADR-067: nullable member -- presence-probe export backing the C# `_has_value` two-call
-      // pattern; the getter returns `null` when this is false, else constructs normally.
-      addFunction(
-        FunSpec.builder("export_${prefix}_get_${propName}_has_value")
-          .addAnnotation(cNameAnnotation("${prefix}_get_${propName}_has_value", ownedBy(prop)))
-          .addParameter("handle", cOpaquePointer)
-          .returns(Boolean::class)
-          .addCode(buildStateFlowHasValuePropertyBody(qualifiedName, propCall))
-          .build()
-      )
-    }
-
     // ADR-071: a genuinely DECLARED MutableStateFlow<T> (not narrowed through .asStateFlow())
     // additionally gains a settable `.Value`, gated on a writable element (primitive/String/
     // object, a nullable one included bar `Boolean?`/`Char?`; enum stays deferred). A nullable
@@ -282,6 +270,20 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
           .build()
       )
     }
+  }
+
+  if (memberNullable) {
+    // ADR-067: nullable member -- presence-probe export backing the C# `_has_value` two-call
+    // pattern; the getter returns `null` when this is false, else constructs normally. Since
+    // 2026-10-09 (ADR-026 amendment) a plain `Flow<T>?` member takes the same probe.
+    addFunction(
+      FunSpec.builder("export_${prefix}_get_${propName}_has_value")
+        .addAnnotation(cNameAnnotation("${prefix}_get_${propName}_has_value", ownedBy(prop)))
+        .addParameter("handle", cOpaquePointer)
+        .returns(Boolean::class)
+        .addCode(buildFlowHasValuePropertyBody(qualifiedName, propCall))
+        .build()
+    )
   }
 }
 
@@ -308,9 +310,9 @@ internal fun FileSpec.Builder.addFlowMethodExports(
   val flowElementQualified: String =
     flowElementType?.declaration?.qualifiedName?.asString() ?: "kotlin.Any"
   // ADR-067 (widened 2026-09-20): nullable ELEMENT threading on both flow shapes, mirroring the
-  // property half above; a nullable MEMBER stays StateFlow-only.
+  // property half above, and (2026-10-09) the nullable MEMBER on both shapes too.
   val elementNullable: Boolean = flowElementType?.isMarkedNullable == true
-  val memberNullable: Boolean = isStateFlowMethod && returnType?.isMarkedNullable == true
+  val memberNullable: Boolean = returnType?.isMarkedNullable == true
   // ADR-123: the element-side twin of the parameter lowering below -- a collection element
   // leaves per-element projected, exactly as the ordinary route's collection result does.
   val flowElementCollection: BridgeType.Collection? =
@@ -432,33 +434,34 @@ internal fun FileSpec.Builder.addFlowMethodExports(
 
     addFunction(valueBuilder.build())
 
-    if (memberNullable) {
-      // ADR-067: nullable member -- presence-probe export backing the C# `_has_value` two-call
-      // pattern; the getter returns `null` when this is false, else constructs normally.
-      val hasValueBuilder: FunSpec.Builder = FunSpec
-        .builder("export_${prefix}_${cname}_has_value")
-        .addAnnotation(cNameAnnotation("${prefix}_${cname}_has_value", ownedBy(method)))
-        .addParameter("handle", cOpaquePointer)
-
-      hasValueBuilder.addFlowParameters()
-
-      hasValueBuilder
-        .returns(Boolean::class)
-        .addCode(
-          buildStateFlowHasValueMethodBody(qualifiedName, call, paramPrelude, names.obj)
-        )
-
-      addFunction(hasValueBuilder.build())
-    }
-
     // ADR-071 (2026-09-11): the settable half of a function return no longer lands here. A
     // `MutableStateFlow<T>`-declared return is held by handle and returned above, before the
     // `_collect` export is even built; what reaches this point is a read-only `StateFlow<T>`
     // return, which mints nothing per call and keeps its shipped per-member exports.
   }
+
+  if (memberNullable) {
+    // ADR-067: nullable member -- presence-probe export backing the C# `_has_value` two-call
+    // pattern; the getter returns `null` when this is false, else constructs normally. Since
+    // 2026-10-09 (ADR-026 amendment) a plain `Flow<T>?` return takes the same probe.
+    val hasValueBuilder: FunSpec.Builder = FunSpec
+      .builder("export_${prefix}_${cname}_has_value")
+      .addAnnotation(cNameAnnotation("${prefix}_${cname}_has_value", ownedBy(method)))
+      .addParameter("handle", cOpaquePointer)
+
+    hasValueBuilder.addFlowParameters()
+
+    hasValueBuilder
+      .returns(Boolean::class)
+      .addCode(
+        buildFlowHasValueMethodBody(qualifiedName, call, paramPrelude, names.obj)
+      )
+
+    addFunction(hasValueBuilder.build())
+  }
 }
 
-// ADR-067: `?` on the member access when the whole StateFlow member/return can be null (a
+// ADR-067: `?` on the member access when the whole Flow or StateFlow member/return can be null (a
 // defensive guard -- the C# side only reaches this after its `_has_value` probe is true, but a
 // race should not crash the coroutine); plain `.` (unchanged ADR-065 shape) otherwise.
 private fun memberAccessor(receiver: String, memberNullable: Boolean): String =
@@ -605,8 +608,9 @@ private fun stateFlowNullableBox(envelope: Boolean): String =
   if (envelope) "buildError(v, ::nugetMappedType)" else "v"
 
 // ADR-067: nullable-member presence probe -- backs the C# `_has_value` two-call pattern. A pure,
-// idempotent read of a `val`/getter-backed StateFlow reference; safe to call before subscribing.
-private fun buildStateFlowHasValuePropertyBody(
+// idempotent read of a `val`/getter-backed Flow or StateFlow reference; safe to call before
+// subscribing.
+private fun buildFlowHasValuePropertyBody(
   qualifiedName: String,
   propName: String,
 ): String = buildString {
@@ -614,7 +618,7 @@ private fun buildStateFlowHasValuePropertyBody(
   append("return obj.$propName != null")
 }
 
-private fun buildStateFlowHasValueMethodBody(
+private fun buildFlowHasValueMethodBody(
   qualifiedName: String,
   call: String,
   paramPrelude: String,
