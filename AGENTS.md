@@ -162,7 +162,7 @@ The reverse bridge is observable as of [ADR-054](docs/adr/054-reverse-bridge-reg
 
 - Symptom: `scripts/verify.sh` is green through `SharedExceptionTests`, then the "AOT: execute NativeAOT" step fails at link with `ld: library 'ssl' not found`. ILCompiler passes `-lssl -lcrypto -lbrotlienc ...`, and Homebrew's lib directory is not on `ld`'s search path.
 - It is a host linker-path problem, not a generator or NativeAOT bug. Unmodified `main` fails the same way (verified 2026-10-02, Homebrew SDK 10.0.300).
-- Workaround: put the Homebrew libraries on `LIBRARY_PATH` for the two commands in that step (`dotnet publish AotSmokeTest ...` and the published `AotSmokeTest` binary): `LIBRARY_PATH=/opt/homebrew/opt/openssl@3/lib:/opt/homebrew/opt/brotli/lib:/opt/homebrew/lib`. All 7 AOT shapes pass with it.
+- `scripts/verify.sh` now handles this itself: its Darwin AOT branch prepends whichever of `/opt/homebrew/opt/openssl@3/lib`, `/opt/homebrew/opt/brotli/lib` and `/opt/homebrew/lib` exist to `LIBRARY_PATH`, keeping any value already set. Running the AOT commands by hand still needs the same `LIBRARY_PATH`.
 
 ## Benchmark Finalization Requires jq
 
