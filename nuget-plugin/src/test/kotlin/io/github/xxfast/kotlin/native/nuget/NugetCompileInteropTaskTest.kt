@@ -107,7 +107,7 @@ class NugetCompileInteropTaskTest {
 
   @Test
   fun `valid bindings compile on the floor and higher frameworks`() {
-    Assumptions.assumeTrue(findExecutable("dotnet") != null, "requires the .NET SDK")
+    dotnetForTest()
     val sources: File = tempDir("compile-interop-matrix-src")
     File(sources, "Interop.cs").writeText("public class Sample { }")
     val out: File = tempDir("compile-interop-matrix-out")
@@ -127,7 +127,7 @@ class NugetCompileInteropTaskTest {
 
   @Test
   fun `a defect only on a higher framework fails the check`() {
-    Assumptions.assumeTrue(findExecutable("dotnet") != null, "requires the .NET SDK")
+    dotnetForTest()
     val sources: File = tempDir("compile-interop-higher-src")
     File(sources, "Interop.cs").writeText(
       """
@@ -354,8 +354,8 @@ class NugetCompileInteropTaskTest {
 
   @Test
   fun `a global json above the scratch dir cannot pick the sdk the check builds with`() {
-    // Skipped when the .NET SDK is absent, exactly as the task itself skips.
-    findExecutable("dotnet") ?: return
+    // Needs the .NET SDK: skipped locally without it, failed under CI.
+    dotnetForTest()
 
     // The pin no machine satisfies, the shape a consumer uses for their own app (issue #224).
     val consumer: File = tempDir("compile-interop-globaljson")
@@ -385,8 +385,8 @@ class NugetCompileInteropTaskTest {
 
   @Test
   fun `a Directory Build props above the scratch dir cannot relax the check`() {
-    // Skipped when the .NET SDK is absent, exactly as the task itself skips.
-    findExecutable("dotnet") ?: return
+    // Needs the .NET SDK: skipped locally without it, failed under CI.
+    dotnetForTest()
 
     // The marker target is what actually discriminates: `NoWarn` cannot suppress an error, so the
     // property group alone would leave CS0101 in place whether or not the props file was imported.
@@ -556,8 +556,8 @@ class NugetCompileInteropTaskTest {
 
   @Test
   fun `a duplicate class fails the task with the compiler error text`() {
-    // Skipped when the .NET SDK is absent, exactly as the task itself skips.
-    findExecutable("dotnet") ?: return
+    // Needs the .NET SDK: skipped locally without it, failed under CI.
+    dotnetForTest()
 
     val sources: File = tempDir("compile-interop-bad")
     File(sources, "Bad.cs").writeText(
