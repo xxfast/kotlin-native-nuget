@@ -49,10 +49,10 @@ public class GenericConstraintTests
     [Fact]
     public void AdoptPet_TypeParameter_HasIPetConstraint()
     {
-        MethodInfo method = typeof(Helpers)
-            .GetMethod("AdoptPet")!
-            .MakeGenericMethod(typeof(Cat))
-            .GetGenericMethodDefinition();
+        // GetMethod already returns the open definition. No MakeGenericMethod round trip: it
+        // needs code NativeAOT never generated, and the constraint lives on the definition.
+        MethodInfo method = typeof(Helpers).GetMethod("AdoptPet")!;
+        Assert.True(method.IsGenericMethodDefinition);
 
         Type[] constraints = method.GetGenericArguments()[0].GetGenericParameterConstraints();
         Assert.Contains(typeof(IPet), constraints);

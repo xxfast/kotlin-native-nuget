@@ -8,7 +8,7 @@ handle through `SafeHandle`; explicit `Dispose()` is prompt release and GC final
 runs, and the wrapper adopts that same handle, so a factory that throws before constructing a
 wrapper no longer leaks the box and a wrapper saved from a construct-then-throw factory still
 releases once ([ADR-120](120-live-stableref-counter-and-leak-harness.md), Amendment 3). Verified in
-the full verify; not run under NativeAOT.
+the full verify; not run under NativeAOT at the time (see the 2026-10-07 amendment).
 
 ## Status
 Accepted. Contract decided at the human gate on 2026-10-02; implemented on the same day. Corrected against the implementation and a spike when it moved to Accepted: the sketch's release call, the `Dispose()` shape, the Flow and StateFlow capture points, and the subscription token decision differ from the Proposed text.
@@ -120,5 +120,16 @@ Human gate decision, 2026-10-02, superseding the earlier "subscription token sub
 - ADR-003's finalizer line and ADR-121's "No finalizer" sentence carry an amendment pointing here.
 - Cost: one `SafeHandle` allocation and finalization registration per wrapper (not measured).
 - Tests: `LeakTests/LiveHandleTests.cs` rows 16 to 16k (undisposed class wrapper, callback payload on both routes, abandoned wrapper-typed Flow item, sealed arm, interface-typed return, `KotlinFunc`/`KotlinAction`, `KotlinSuspendFunc`, `KotlinStateFlow`, discarded subscription, a wrapper with a suspend scope, and no double release after dispose), and `IntegrationTests/GcStressTests.cs` (receivers, arguments, `Equals`, collection elements, an in-flight suspend call and an in-flight Flow on a dropped wrapper, under a concurrent `GC.Collect()` loop). Verified green in `scripts/verify.sh`: IntegrationTests 2954/2954, LeakTests 151/151.
-- Known gaps: the keep-alive and finalizer release are exercised under the JIT on osx-arm64 only; each `GcStressTests` hammer stops at a 2 s budget and reached about 5.6k, 12.8k and 17.3k calls for the receiver, argument and `Equals` tests and 83 for the collection-parameter test (one measurement), against a 100k design target.
+- Known gaps: the keep-alive and finalizer release were exercised under the JIT on osx-arm64 only (NativeAOT: see the 2026-10-07 amendment); each `GcStressTests` hammer stops at a 2 s budget and reached about 5.6k, 12.8k and 17.3k calls for the receiver, argument and `Equals` tests and 83 for the collection-parameter test (one measurement), against a 100k design target.
 - Deferred: shutdown release (finalizers do not run at process exit on .NET Core and later, inferred); a per-wrapper allocation benchmark; removing the now-unused per-type `*_dispose` imports and exports.
+
+## Amendment 2026-10-07: finalizer rows under NativeAOT
+
+The `SafeHandle` keep-alive and finalizer release now run under NativeAOT. `AotLeakTests/`
+compiles the `LeakTests` sources, including rows 16 to 16k, and `AotIntegrationTests/` compiles
+`IntegrationTests` including `GcStressTests`; both are published with `PublishAot` and run in
+`scripts/verify.sh`, `scripts/verify-aot.ps1` and the CI `bridge` job. Verified on win-x64:
+`AotLeakTests` 209/209 and `AotIntegrationTests` 3259 passed, 4 skipped, 0 failed. osx-arm64 and
+linux-x64 are exercised by CI only (pending at writing). The suites root the test assembly, so
+this verifies runtime behaviour, not trimming. This supersedes "the keep-alive and finalizer
+release are exercised under the JIT on osx-arm64 only" in Consequences.

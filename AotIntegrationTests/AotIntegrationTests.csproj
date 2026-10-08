@@ -1,0 +1,81 @@
+<!--
+  Rung 8 of the zero-leak evidence ladder: the whole IntegrationTests suite under NativeAOT.
+
+  This project owns no tests. It compiles IntegrationTests/*.cs as they are and runs them on
+  xunit.v3's source-generated runner (xunit.v3.aot.mtp-v2), the only xunit host that survives
+  ILC: the reflection runner reads Assembly.Location, which is empty in a NativeAOT app. The JIT
+  project stays on xunit 2 + VSTest + coverlet, so `dotnet test IntegrationTests` is unchanged.
+  Do not `dotnet test` this project: there is no repo-root global.json switching dotnet test to
+  Microsoft.Testing.Platform. Publish it and run the binary, exit 0 means every test passed.
+
+  Publish + run (Windows: from PowerShell with the VS Installer dir on PATH, see
+  scripts/verify-aot.ps1; under Git Bash the ILC link step cannot resolve vswhere.exe):
+    dotnet publish AotIntegrationTests -r win-x64 -c Release -p:PublishAot=true
+    ./AotIntegrationTests/bin/Release/net10.0/win-x64/publish/AotIntegrationTests.exe
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>AotIntegrationTests</AssemblyName>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+    <!-- The generated bindings and the packed registration shims use function pointers. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Same footgun as IntegrationTests.csproj: without a RID the runtimes/{rid}/native/*
+         asset is not copied next to the app and the P/Invoke fails with DllNotFoundException.
+         Never hardcode a RID here; -r on the publish command line wins. -->
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
+    <SelfContained Condition="'$(PublishAot)' != 'true'">false</SelfContained>
+    <!-- XmlDocTests.cs reads <AssemblyName>.xml next to the binary; see IntegrationTests.csproj
+         for why CS1591 is muted and the other doc warnings are not. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- xUnit1051 asks for TestContext.Current.CancellationToken, which the xunit 2 sources
+         this project shares cannot name. -->
+    <NoWarn>$(NoWarn);CS1591;xUnit1051</NoWarn>
+    <!-- One warning per member, so an ILC warning that points into the generated bindings names
+         the member instead of collapsing into a single per-assembly line. -->
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
+    <!-- Lets a shared source use an xunit.v3-only API (Assert.SkipUnless); see
+         IntegrationTests/PseudoAttributes.cs. -->
+    <DefineConstants>$(DefineConstants);XUNIT_V3</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3.aot.mtp-v2" Version="4.0.1" />
+    <PackageReference Include="TestLibrary" Version="$(TestLibraryVersion)" />
+  </ItemGroup>
+
+  <!-- TestOrdering.cs is the xunit 2 orderer (MethodInfo.MetadataToken, which does not exist in
+       the AOT runner); DeclarationOrderer.cs here replaces it. GlobalUsings.cs imports
+       Xunit.Abstractions, an xunit 2 namespace that xunit.v3 folded into Xunit. -->
+  <ItemGroup>
+    <Compile Include="../IntegrationTests/**/*.cs"
+             Exclude="../IntegrationTests/obj/**;
+                      ../IntegrationTests/bin/**;
+                      ../IntegrationTests/TestOrdering.cs;
+                      ../IntegrationTests/GlobalUsings.cs" />
+  </ItemGroup>
+
+  <!-- The shape tests reflect over the generated bindings (GetMethod, GetProperty, GetType by
+       name, GetTypes). TestLibrary ships those bindings as contentFiles source, so they compile
+       into this assembly, not into a TestLibrary.dll: rooting this assembly is what keeps every
+       generated member reflectable, so an absence assertion cannot pass because ILC trimmed it. -->
+  <ItemGroup>
+    <TrimmerRootAssembly Include="$(AssemblyName)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Using Include="Kotlin.Native.Interop" />
+  </ItemGroup>
+
+  <!-- ADR-129: read by RuntimeVersionTests, exactly as IntegrationTests.csproj declares it. -->
+  <ItemGroup>
+    <AssemblyMetadata Include="NugetRuntimeVersion" Value="$(NugetRuntimeVersion)" />
+  </ItemGroup>
+
+</Project>

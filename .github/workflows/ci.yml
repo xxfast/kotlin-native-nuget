@@ -110,12 +110,16 @@ jobs:
             native_library: test-library/build/bin/macosArm64/releaseShared/libkn_testlibrary.dylib
             aot_rid: osx-arm64
             aot_binary: ./AotSmokeTest/bin/Release/net10.0/osx-arm64/publish/AotSmokeTest
+            aot_tests_binary: ./AotIntegrationTests/bin/Release/net10.0/osx-arm64/publish/AotIntegrationTests
+            aot_leak_binary: ./AotLeakTests/bin/Release/net10.0/osx-arm64/publish/AotLeakTests
           - os: windows-latest
             runtime_test: mingwX64Test
             runtime_extra: ""
             native_library: test-library/build/bin/mingwX64/releaseShared/kn_testlibrary.dll
             aot_rid: win-x64
             aot_binary: ./AotSmokeTest/bin/Release/net10.0/win-x64/publish/AotSmokeTest.exe
+            aot_tests_binary: ./AotIntegrationTests/bin/Release/net10.0/win-x64/publish/AotIntegrationTests.exe
+            aot_leak_binary: ./AotLeakTests/bin/Release/net10.0/win-x64/publish/AotLeakTests.exe
           # The Linux leg also compiles the linuxArm64 runtime klib: nothing else on a pull request
           # builds that target, and `linux-arm64` is a RID the plugin maps.
           - os: ubuntu-latest
@@ -124,6 +128,8 @@ jobs:
             native_library: test-library/build/bin/linuxX64/releaseShared/libkn_testlibrary.so
             aot_rid: linux-x64
             aot_binary: ./AotSmokeTest/bin/Release/net10.0/linux-x64/publish/AotSmokeTest
+            aot_tests_binary: ./AotIntegrationTests/bin/Release/net10.0/linux-x64/publish/AotIntegrationTests
+            aot_leak_binary: ./AotLeakTests/bin/Release/net10.0/linux-x64/publish/AotLeakTests
 
     runs-on: ${{ matrix.os }}
     # The weekly schedule and workflow_dispatch above exist only for the `reverse-census` job, and a
@@ -218,7 +224,8 @@ jobs:
 
       # ADR-102: the forward callback surface (flow, suspend, per-call lambda, stored callback,
       # interface bridge) dispatches through [UnmanagedCallersOnly] thunks so it needs no JIT.
-      # NativeAOT cannot publish a test host, so this console app asserts via its exit code.
+      # This console app asserts via its exit code and prints a flushed label per shape, so a
+      # process-fatal callback failure is attributed before the AOT test binaries below run.
       # A contract/regression lane, not a red-to-green proof: NativeAOT passed before the thunks
       # too (ILC pre-generates delegate marshalling stubs) and must keep passing through them.
       # Runs in the default shell deliberately - under bash on Windows the ILC link step fails
@@ -240,6 +247,25 @@ jobs:
           dotnet test LeakTests --no-build
           --collect:"XPlat Code Coverage"
           --results-directory LeakTests/TestResults
+
+      # Rung 8 of the zero-leak evidence ladder: the same IntegrationTests and LeakTests sources,
+      # published with NativeAOT on xunit.v3's source-generated runner and run as plain binaries.
+      # Exit 0 means every test passed; the runner exits non-zero on any failure (2) or when no
+      # test ran (8). Two binaries because LiveHandles is process-global, and the leak binary gets
+      # `--parallel none` so its serial guarantee does not depend on finding xunit.runner.json.
+      # Last because they are the slowest steps. Default shell for the same vswhere.exe reason as
+      # the smoke test above.
+      - name: "AOT: publish IntegrationTests (${{ matrix.aot_rid }})"
+        run: dotnet publish AotIntegrationTests -r ${{ matrix.aot_rid }} -c Release -p:PublishAot=true
+
+      - name: "AOT: run IntegrationTests (${{ matrix.aot_rid }})"
+        run: ${{ matrix.aot_tests_binary }}
+
+      - name: "AOT: publish leak harness (${{ matrix.aot_rid }})"
+        run: dotnet publish AotLeakTests -r ${{ matrix.aot_rid }} -c Release -p:PublishAot=true
+
+      - name: "AOT: run leak harness (${{ matrix.aot_rid }})"
+        run: ${{ matrix.aot_leak_binary }} --parallel none
 
       # Same upload rules as the Kotlin report in the `generators` job: tokenless works, macos-latest only.
       - name: Upload C# coverage to Codecov

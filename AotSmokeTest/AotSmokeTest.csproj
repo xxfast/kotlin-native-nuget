@@ -1,8 +1,9 @@
 <!--
   ADR-102 / ADR-038 step 4: the AOT publish smoke-test lane.
 
-  NativeAOT cannot publish an xunit test host, so the runtime proof that the forward callback
-  surface works without a JIT lives in this plain console app: one step per callback shape plus
+  The labelled, per-shape runtime proof that the forward callback surface works without a JIT
+  lives in this plain console app (the full suites run under NativeAOT through
+  AotIntegrationTests/ and AotLeakTests/, after this): one step per callback shape plus
   the ADR-098 Char wire and the ADR-199 factory slot, exit 0 only if all eight pass. It references the packed fixture package exactly as
   IntegrationTests/ does (TestLibrary at $(TestLibraryVersion), which the root
   Directory.Build.props imports from build/FixtureVersions.props).

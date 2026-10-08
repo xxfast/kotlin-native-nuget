@@ -29,13 +29,14 @@ public class XmlDocTests
 
     /// <summary>
     /// The documentation file MSBuild copies next to the test host, named after the assembly. Read
-    /// from the test assembly's own location rather than a built path, so it follows the host RID
-    /// and configuration this run actually used.
+    /// from the host's base directory rather than a built path, so it follows the host RID and
+    /// configuration this run actually used. Not Assembly.Location: that is empty under NativeAOT,
+    /// where AotIntegrationTests runs this class from a published binary.
     /// </summary>
     private static XDocument LoadDoc()
     {
-        string assembly = typeof(XmlDocTests).Assembly.Location;
-        string path = Path.ChangeExtension(assembly, ".xml");
+        string name = typeof(XmlDocTests).Assembly.GetName().Name!;
+        string path = Path.Combine(AppContext.BaseDirectory, name + ".xml");
         if (!File.Exists(path))
         {
             throw new InvalidOperationException(

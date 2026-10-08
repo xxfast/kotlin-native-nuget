@@ -1,0 +1,50 @@
+<!--
+  Rung 8 of the zero-leak evidence ladder: the LeakTests harness under NativeAOT.
+
+  A project of its own for the same reason LeakTests is one: NugetMarshal.LiveHandles is
+  process-global, so the harness must not share a process with the rest of the suite. It compiles
+  LeakTests/*.cs as they are on xunit.v3's source-generated runner; see
+  AotIntegrationTests/AotIntegrationTests.csproj for why that runner and why not `dotnet test`.
+
+  Publish + run. Serial execution is load-bearing, so the binary also gets the runner's
+  "parallel none" option on its command line (double-dash prefixed; an XML comment cannot spell
+  it) rather than relying on the runner finding xunit.runner.json:
+    dotnet publish AotLeakTests -r win-x64 -c Release -p:PublishAot=true
+    ./AotLeakTests/bin/Release/net10.0/win-x64/publish/AotLeakTests.exe (parallel none)
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>AotLeakTests</AssemblyName>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
+    <SelfContained Condition="'$(PublishAot)' != 'true'">false</SelfContained>
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3.aot.mtp-v2" Version="4.0.1" />
+    <PackageReference Include="TestLibrary" Version="$(TestLibraryVersion)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../LeakTests/**/*.cs" Exclude="../LeakTests/obj/**;../LeakTests/bin/**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Using Include="Kotlin.Native.Interop" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../LeakTests/xunit.runner.json" Link="xunit.runner.json"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

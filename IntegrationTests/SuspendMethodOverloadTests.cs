@@ -297,12 +297,16 @@ public class SuspendMethodOverloadTests
     }
 
     /// <summary>Every <c>[DllImport]</c> EntryPoint declared on <paramref name="type"/>.</summary>
-    private static string[] EntryPointsOf(Type type) => type
-        .GetMethods(
-            BindingFlags.Public | BindingFlags.NonPublic |
-            BindingFlags.Static | BindingFlags.Instance | BindingFlags.DeclaredOnly)
-        .Select(method => method.GetCustomAttribute<DllImportAttribute>()?.EntryPoint)
-        .Where(entryPoint => entryPoint is not null)
-        .Select(entryPoint => entryPoint!)
-        .ToArray();
+    private static string[] EntryPointsOf(Type type)
+    {
+        PseudoAttributes.SkipUnlessReconstructed();
+        return type
+            .GetMethods(
+                BindingFlags.Public | BindingFlags.NonPublic |
+                BindingFlags.Static | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+            .Select(method => method.GetCustomAttribute<DllImportAttribute>()?.EntryPoint)
+            .Where(entryPoint => entryPoint is not null)
+            .Select(entryPoint => entryPoint!)
+            .ToArray();
+    }
 }
