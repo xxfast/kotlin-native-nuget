@@ -54,7 +54,16 @@ internal sealed interface ForwardLegacyParameterShape {
   data object Plain : ForwardLegacyParameterShape
 
   /** A collection the ordinary route's wire container and helpers already cover. */
-  data class Marshalled(val type: BridgeType.Collection) : ForwardLegacyParameterShape
+  data class Marshalled(
+    val type: BridgeType.Collection,
+    /**
+     * ADR-114 amendment: a `List<T>?` / `Set<T>?` / `Map<K, V>?`, still one pointer slot. `null`
+     * crosses as `IntPtr.Zero` and Kotlin receives `null`.
+     */
+    val nullable: Boolean = false,
+    /** ADR-164 rule 2: a defaulted nullable collection, `Optional<T?>` behind an `IsSet` slot. */
+    val optional: Boolean = false,
+  ) : ForwardLegacyParameterShape
 
   /**
    * ADR-122: a class, `object`, sealed base or sealed arm, crossing as the borrowed handle the
@@ -151,8 +160,8 @@ internal fun BridgeType.ValueClass.hasErasedCrossing(): Boolean =
  * them is a public `IntPtr`.
  *
  * A nullable class or sealed handle is a nullable [ForwardLegacyParameterShape.Handle] (issue
- * #365). Nullable collections (`List<T>?`) land in [ForwardLegacyParameterShape.Refused] on
- * purpose: threading nullability through these routes is ADR-067 territory and ADR-114 defers it. A nullable *scalar* is
+ * #365), and a nullable collection (`List<T>?`) is a nullable
+ * [ForwardLegacyParameterShape.Marshalled] (ADR-114 amendment). A nullable *scalar* is
  * [ForwardLegacyParameterShape.NullableScalar] (issue #299): it used to stay `Plain`, which bound
  * `Int?` as a non-null `int` on both halves, so a C# caller could not pass `null`.
  */
@@ -186,9 +195,13 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
   // Deliberately the un-rewritten classification on the parameter side: a `List<Shape>` of a
   // sealed base stays refused here, as ADR-114/ADR-119 decided (the return side now rewrites),
   // rather than being widened by the rewrite above.
-  val collection: BridgeType.Collection? = classify(type) as? BridgeType.Collection
+  // ADR-114 amendment: a nullable collection unwraps here, the ADR-119 return side's shape.
+  val unwritten: BridgeType = classify(type)
+  val nullable: Boolean = unwritten is BridgeType.Nullable
+  val collection: BridgeType.Collection? =
+    (if (unwritten is BridgeType.Nullable) unwritten.type else unwritten) as? BridgeType.Collection
   return if (collection != null && collection.isLegacyMarshallableInput()) {
-    ForwardLegacyParameterShape.Marshalled(collection)
+    ForwardLegacyParameterShape.Marshalled(collection, nullable = nullable)
   } else {
     ForwardLegacyParameterShape.Refused(expanded.legacyDescription())
   }
@@ -275,8 +288,8 @@ internal fun legacyRefusedCallbackMember(method: KSFunctionDeclaration): String?
  *  - a defaulted handle does the same on its nullable pointer slot
  *    ([ForwardLegacyParameterShape.Handle.widened] /
  *    [ForwardLegacyParameterShape.Handle.optional]);
- *  - a defaulted collection stays required, unchanged (these routes have no nullable encoding for
- *    it, ADR-114's deferral).
+ *  - a defaulted nullable collection gains the `IsSet` slot before its nullable pointer slot
+ *    ([ForwardLegacyParameterShape.Marshalled.optional]); a defaulted non-null one stays required.
  *
  * At most [MAX_OPTIONAL_DEFAULTS] widen, the last ones in declaration order (ADR-164 rule 6).
  * Both halves call this one function, so they cannot disagree on a slot.
@@ -301,6 +314,7 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShapes(
       is ForwardLegacyParameterShape.Handle ->
         if (shape.nullable) shape.copy(optional = true)
         else shape.copy(nullable = true, widened = true)
+      is ForwardLegacyParameterShape.Marshalled -> shape.copy(optional = true)
       else -> shape
     }
   }
@@ -325,10 +339,11 @@ private fun legacyWidenedIndices(
   shapes: List<ForwardLegacyParameterShape>,
   defaults: List<Boolean>,
 ): List<Int> = shapes.indices.filter { index ->
-  defaults.getOrElse(index) { false } && when (shapes[index]) {
+  defaults.getOrElse(index) { false } && when (val shape = shapes[index]) {
     ForwardLegacyParameterShape.Plain, is ForwardLegacyParameterShape.Enum,
     is ForwardLegacyParameterShape.NullableScalar, is ForwardLegacyParameterShape.Handle -> true
-    is ForwardLegacyParameterShape.Marshalled,
+    // Only a nullable one: the `IsSet` slot rides the nullable pointer slot.
+    is ForwardLegacyParameterShape.Marshalled -> shape.nullable
     is ForwardLegacyParameterShape.ManagedException,
     is ForwardLegacyParameterShape.Refused -> false
   }
@@ -384,9 +399,9 @@ internal val ForwardLegacyParameterShape.isLegacyDefaulted: Boolean
   get() = when (this) {
     is ForwardLegacyParameterShape.NullableScalar -> widened || optional
     is ForwardLegacyParameterShape.Handle -> widened || optional
+    is ForwardLegacyParameterShape.Marshalled -> optional
     ForwardLegacyParameterShape.Plain,
     is ForwardLegacyParameterShape.Enum,
-    is ForwardLegacyParameterShape.Marshalled,
     is ForwardLegacyParameterShape.ManagedException,
     is ForwardLegacyParameterShape.Refused -> false
   }
@@ -1167,7 +1182,9 @@ internal class ForwardLegacyNames(
     val scalarOptional: Boolean =
       shape is ForwardLegacyParameterShape.NullableScalar && shape.optional
     val handleOptional: Boolean = shape is ForwardLegacyParameterShape.Handle && shape.optional
-    val optional: Boolean = scalarOptional || handleOptional
+    val collectionOptional: Boolean =
+      shape is ForwardLegacyParameterShape.Marshalled && shape.optional
+    val optional: Boolean = scalarOptional || handleOptional || collectionOptional
     if (optional) mint("${name}IsSet") else null
   }
 
@@ -1243,7 +1260,8 @@ internal fun legacyLoweringStatement(
   parameter: String,
   local: String,
   type: BridgeType.Collection,
-): String = "val $local = ${loweredCollectionExpression(parameter, type)}"
+  nullable: Boolean = false,
+): String = "val $local = ${loweredCollectionExpression(parameter, type, nullable)}"
 
 /**
  * ADR-122: the eager dereference of a borrowed handle parameter, the same expression the ordinary
@@ -1264,9 +1282,13 @@ internal fun legacyHandleStatement(
   "val $local = $parameter.asStableRef<${type.qualifiedName}>().get()"
 }
 
-/** Whether this lowered parameter's `COpaquePointer` slot is nullable (issue #365). */
+/**
+ * Whether this lowered parameter's `COpaquePointer` slot is nullable: a nullable handle (issue
+ * #365) or a nullable collection (ADR-114 amendment).
+ */
 internal val ForwardLegacyParameterShape.isLegacyNullableSlot: Boolean
-  get() = this is ForwardLegacyParameterShape.Handle && nullable
+  get() = (this is ForwardLegacyParameterShape.Handle && nullable) ||
+    (this is ForwardLegacyParameterShape.Marshalled && nullable)
 
 /**
  * Whether the Kotlin export binds this parameter to an eagerly-evaluated local rather than calling
@@ -1397,7 +1419,7 @@ internal fun ForwardLegacyParameterShape.legacyPrelude(
   local: String?,
 ): String? = when (this) {
   is ForwardLegacyParameterShape.Marshalled ->
-    legacyLoweringStatement(parameter, requireNotNull(local), type)
+    legacyLoweringStatement(parameter, requireNotNull(local), type, nullable)
   is ForwardLegacyParameterShape.Handle ->
     legacyHandleStatement(parameter, requireNotNull(local), type, nullable)
   ForwardLegacyParameterShape.Plain,
@@ -1407,15 +1429,24 @@ internal fun ForwardLegacyParameterShape.legacyPrelude(
   is ForwardLegacyParameterShape.Refused -> null
 }
 
-/** The C# expression that builds [name]'s native wire handle, with per-element projection. */
-internal fun legacyCollectionCreate(name: String, type: BridgeType.Collection): String {
+/**
+ * The C# expression that builds [source]'s native wire handle, with per-element projection. A
+ * [nullable] one is `IntPtr.Zero` for `null`, the sync route's `collectionPrelude` text; [source]
+ * is the parameter, or `tags.Value` for an `Optional`.
+ */
+internal fun legacyCollectionCreate(
+  source: String,
+  type: BridgeType.Collection,
+  nullable: Boolean = false,
+): String {
   val factory: String = when (type.kind) {
     CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> "CreateList"
     CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> "CreateMap"
     CollectionKind.SET, CollectionKind.MUTABLE_SET -> "CreateSet"
   }
-  val source: String = collectionCreateArgument(name, type) { it.forwardPublicCsharpType() }
-  return "NugetMarshal.$factory($source)"
+  val argument: String = collectionCreateArgument(source, type) { it.forwardPublicCsharpType() }
+  val create = "NugetMarshal.$factory($argument)"
+  return if (nullable) "$source != null ? $create : IntPtr.Zero" else create
 }
 
 /**

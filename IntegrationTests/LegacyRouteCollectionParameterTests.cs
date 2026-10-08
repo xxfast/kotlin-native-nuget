@@ -199,6 +199,55 @@ public class LegacyRouteCollectionParameterTests
         Assert.Equal(0, await board.ForgetAsync(new HashSet<string>()));
     }
 
+    // --- ADR-114 amendment: nullable collection parameters ---
+
+    [Fact]
+    public async Task ServingsFor_NullCollections_CrossAsKotlinNull()
+    {
+        // `null` crosses as `IntPtr.Zero`; the guarded dispose must not hand that to nuget_dispose.
+        using var board = new TreatBoard();
+        var seen = new List<string>();
+
+        await foreach (var s in board.ServingsFor(null, null)) seen.Add(s);
+
+        Assert.Equal(["the whole board", "nobody"], seen);
+    }
+
+    [Fact]
+    public async Task ServingsFor_NonNullCollections_CrossAsTheCollections()
+    {
+        using var board = new TreatBoard();
+        using var oreo = new Cat("Oreo", 9);
+        using var mylo = new Cat("Mylo", 9);
+        var seen = new List<string>();
+
+        await foreach (var s in board.ServingsFor(Kinds, [oreo, mylo])) seen.Add(s);
+
+        Assert.Equal(["biscuit", "milo", "Oreo", "Mylo"], seen);
+    }
+
+    [Fact]
+    public async Task TallyForAsync_NullAndNonNull_CrossAsNullAndAsTheList()
+    {
+        using var board = new TreatBoard();
+        using var oreo = new Cat("Oreo", 9);
+
+        Assert.Equal("no kinds for no cats", await board.TallyForAsync(null, null));
+        Assert.Equal("2 for Oreo", await board.TallyForAsync(Kinds, [oreo]));
+        Assert.Equal("no kinds for Oreo", await board.TallyForAsync(null, [oreo]));
+    }
+
+    [Fact]
+    public async Task NibbleAsync_DefaultedNullableList_OmittedNullAndSetAreDistinct()
+    {
+        // ADR-164 rule 2: omitted runs Kotlin's default, an explicit null reaches Kotlin as null.
+        using var board = new TreatBoard();
+
+        Assert.Equal("salmon", await board.NibbleAsync());
+        Assert.Equal("nothing", await board.NibbleAsync(null));
+        Assert.Equal("biscuit, milo", await board.NibbleAsync(Kinds));
+    }
+
     [Fact]
     public async Task ForgetAllTreatsAsync_TopLevelSuspendWithASetParameter_RoundTrips()
     {

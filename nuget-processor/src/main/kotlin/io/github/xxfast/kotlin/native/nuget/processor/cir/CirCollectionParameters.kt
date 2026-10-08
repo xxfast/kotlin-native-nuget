@@ -34,9 +34,16 @@ internal val CirParameter.nativeArgument: String
     // ADR-122: a borrowed handle (`observation._handle`), passed straight through with no
     // call-scoped allocation, so it deliberately does not reach the create/dispose block below.
     nativeArgumentExpression != null -> nativeArgumentExpression
-    collectionCreate != null -> collectionHandle ?: "${name}Handle"
+    collectionCreate != null -> collectionHandleLocal
     else -> name
   }
+
+/**
+ * The C# local a [CirParameter.collectionCreate] is built into and disposed from. Apart from
+ * [nativeArgument] because an `Optional` collection passes `tags.HasValue, tagsHandle`.
+ */
+internal val CirParameter.collectionHandleLocal: String
+  get() = collectionHandle ?: "${name}Handle"
 
 /**
  * The `DllImport` slots these parameters occupy, in order. Issue #299: a nullable scalar on a
@@ -65,7 +72,7 @@ internal fun List<CirParameter>.nativeImportParameters(): List<CirParameter> =
 internal fun List<CirParameter>.localScopeNames(): MutableSet<String> =
   (map { parameter -> parameter.name.removePrefix("@") } +
       filter { parameter -> parameter.collectionCreate != null }
-        .map { parameter -> parameter.nativeArgument }).toMutableSet()
+        .map { parameter -> parameter.collectionHandleLocal }).toMutableSet()
 
 /** Whether any parameter needs a wire handle built before the native call. */
 internal fun List<CirParameter>.hasCollectionHandles(): Boolean =
@@ -86,14 +93,22 @@ internal fun List<CirParameter>.collectionScopedCall(
   val body: String = if (returns) "return $call;" else "$call;"
   return buildList {
     add("$indent{")
-    handles.forEach { add("$indent    IntPtr ${it.nativeArgument} = ${it.collectionCreate};") }
+    handles.forEach { parameter ->
+      val create = "IntPtr ${parameter.collectionHandleLocal} = ${parameter.collectionCreate};"
+      add("$indent    $create")
+    }
     add("$indent    try")
     add("$indent    {")
     add("$indent        $body")
     add("$indent    }")
     add("$indent    finally")
     add("$indent    {")
-    handles.forEach { add("$indent        NugetMarshal.Dispose(${it.nativeArgument});") }
+    // ADR-114 amendment: a null collection's handle is `IntPtr.Zero`, and `nuget_dispose` takes a
+    // non-null pointer. Unconditional, as the sync route's guard is: a real handle is never zero.
+    handles.forEach { parameter ->
+      val handle: String = parameter.collectionHandleLocal
+      add("$indent        if ($handle != IntPtr.Zero) NugetMarshal.Dispose($handle);")
+    }
     add("$indent    }")
     add("$indent}")
   }
@@ -170,12 +185,26 @@ private fun legacyRouteParameter(
   return when (shape) {
     is ForwardLegacyParameterShape.Marshalled -> {
       tracker.trackCollection(shape.type)
+      // ADR-114 amendment: a nullable collection is public `IReadOnlyList<T>?`, `null` crossing as
+      // `IntPtr.Zero`; a defaulted one is `Optional<IReadOnlyList<T>?>` over a leading `IsSet`
+      // slot.
+      val public: String = shape.type.forwardPublicCsharpType()
+      val type: String = if (shape.nullable) "$public?" else public
+      val handle: String = requireNotNull(names.handleLocals[index])
       CirParameter(
         name,
-        type = shape.type.forwardPublicCsharpType(),
+        type = if (shape.optional) "global::Kotlin.Native.Interop.KotlinOptional<$type>" else type,
         nativeType = "IntPtr",
-        collectionCreate = legacyCollectionCreate(name, shape.type),
-        collectionHandle = names.handleLocals[index],
+        isReferenceType = !shape.optional,
+        collectionCreate = legacyCollectionCreate(
+          if (shape.optional) "$name.Value" else name,
+          shape.type,
+          shape.nullable,
+        ),
+        nativeArgumentExpression = if (shape.optional) "$name.HasValue, $handle" else null,
+        defaultValue = if (optional && shape.optional) "default" else null,
+        isSetSlot = names.isSetSlots[index],
+        collectionHandle = handle,
       )
     }
 
