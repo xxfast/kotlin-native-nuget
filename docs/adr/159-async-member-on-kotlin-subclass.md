@@ -183,8 +183,10 @@ declarations would have handed this class a scope nothing ever creates.
 4. **`override suspend fun` is not re-projected** on either the Kotlin or the C# half. The base's
    export already dispatches to the override dynamically; re-projecting it produced a colliding
    second C# method (`CS0108`) and a stray Kotlin export the ABI contract could not see (filtered
-   out of the comparison, not flagged). Kept only when the overridden member sits on a *dropped*
-   (ADR-101, unexported) base, which has no C# class of its own to carry it.
+   out of the comparison, not flagged). Kept only when no kept base carries the member: the
+   overridden member sits on a *dropped* (ADR-101, unexported) base, which has no C# class of its
+   own to carry it, and no kept base further up has one of the same signature (see the 2026-10-07
+   amendment).
 5. **The ADR-034 signature-collision guard now runs over the async and Flow-route methods.** It used
    to run before they were assembled onto the class, so two `suspend` overloads that render one C#
    signature (reference nullability stripped from the key) reached the generated file as `CS0111`
@@ -293,3 +295,36 @@ A sealed class, or an eligible sealed interface rendered as an abstract class, t
 member is a root-most abstract owner under rules 1 to 4: it declares `_scopeHandle`, is
 `IAsyncDisposable`, and declares `abstract DisposeAsync`. Each arm overrides `DisposeAsync` and keeps
 `IDisposable`. See [ADR-175](175-sealed-base-async-members.md).
+
+## Amendment (2026-10-07): a dropped middle base, and an abstract suspend member with no body
+
+Two chain shapes rule 4 left unpinned are now covered by `Tier1SuspendOverrideChainTest`.
+
+**Rule 4 asks the kept base, not only the nearest overridee.** Rule 4 read as if the nearest
+overridee alone decided whether an override is projected again. That is wrong for
+`Dinghy : Skiff : Vessel` when `Skiff` is outside the export root (ADR-101), `Vessel` is kept, and
+all three declare the same `suspend fun launch()`. The nearest overridee is `Skiff`'s, on the dropped
+base, so the override was projected on `Dinghy` beside `Vessel`'s own `LaunchAsync` (`CS0108`).
+`reProjectsKeptBaseMember` now, when the nearest overridee sits on a dropped base, asks the kept
+direct superclass whether it carries a member with the same signature. If it does, `Dinghy` does not
+project the override, and `Vessel`'s export dispatches to it through Kotlin. If it does not, the class
+stays the only carrier, as before. A generic kept base is treated as not carrying it, as for a generic
+overridee. The `findOverridee()` chain walk was not used because it can reach an interface member and
+change the answers for shapes that already work.
+
+- Verified: the cell has one `LaunchAsync` in the kept chain (on `Vessel`), one
+  `library_vessel_launch_async` export, no export for `Dinghy`, and the generated C# compiles with
+  warnings as errors. It was red (two `LaunchAsync`, `CS0108`) before the change.
+
+**An `abstract suspend fun` with no body counts as a projected scope-using member.** On
+`abstract class Groomer { abstract suspend fun groom(cat: String): String }` with concrete
+`MittGroomer` and `CombGroomer` overriding it, the abstract base is the root-most owner (rule 1). It
+declares the scope and `IAsyncDisposable`, gets the one `GroomAsync` and its one export, and that
+export calls `groom` on the stored `Groomer`, so Kotlin dispatches to each subclass body. Neither
+subclass gets its own export or a second `IAsyncDisposable`. No change was needed.
+
+- Verified: one `GroomAsync` in the generated C#, `__groomer_groom_async` present, no
+  `mittgroomer_groom_async` or `combgroomer_groom_async`, `IAsyncDisposable` only on `Groomer`, and
+  a consumer calling `GroomAsync` on each concrete type compiles.
+- Inferred, not pinned: only the suspend route was tested. The Flow route calls the same method
+  through the same owner selection and should behave the same, but no cell covers it.

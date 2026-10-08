@@ -394,6 +394,8 @@ An `override suspend fun` is not declared as a second C# method: `Feeder.FillAsy
 and Kotlin's own dynamic dispatch reaches the override. An abstract class that declares the first
 async member declares `DisposeAsync` abstractly, and each concrete subclass carries the body as
 `override`, so `await using` and a cast to `IAsyncDisposable` both work through the abstract type.
+An `abstract suspend fun` with no body works the same way: the abstract class carries the one
+`...Async` method and the scope, and calling it reaches the concrete subclass's body.
 
 A class whose only `suspend`/`Flow` member was refused (see [Limitations](#limitations)) gets no
 scope and no `IAsyncDisposable` anywhere in its chain, since nothing on it uses one.
