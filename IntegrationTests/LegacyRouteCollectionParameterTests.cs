@@ -1,4 +1,5 @@
 using System.Reflection;
+using TestLibrary;
 using TestLibrary.Cat;
 
 namespace IntegrationTests;
@@ -25,6 +26,8 @@ namespace IntegrationTests;
 /// <list type="bullet">
 /// <item><c>_collect</c>: <see cref="TreatBoard.Servings"/>, <see cref="TreatBoard.Feeding"/></item>
 /// <item><c>_value</c>: <see cref="TreatBoard.Served"/>, <see cref="TreatBoard.Rations"/></item>
+/// <item><c>_has_value</c>: <see cref="TreatBoard.MaybeRations"/>; the held <c>MutableStateFlow</c>
+/// acquire: <see cref="TreatBoard.Menu"/></item>
 /// <item><c>_async</c>: <see cref="TreatBoard.ForgetAsync"/>, <see cref="TreatBoard.TallyAsync"/>,
 /// and the top-level <see cref="TreatRoutes.ForgetAllTreatsAsync"/></item>
 /// </list>
@@ -103,6 +106,37 @@ public class LegacyRouteCollectionParameterTests
         kinds.Add("milo");
 
         Assert.Equal("biscuit x2, milo x2", served.Value);
+    }
+
+    // --- _has_value and the held acquire: ADR-114's two arms with no fixture until now ---
+
+    [Fact]
+    public void MaybeRations_NullableStateFlowWithAListParameter_ProbesThenReads()
+    {
+        // `_has_value` takes the list too, through its own call-scoped wire handle: false on an
+        // empty list (no holder is built), true otherwise, then `_value` re-marshals the list.
+        using var board = new TreatBoard();
+
+        Assert.Null(board.MaybeRations([]));
+        using KotlinStateFlow<int>? rations = board.MaybeRations(Portions);
+        Assert.NotNull(rations);
+        Assert.Equal(8, rations!.Value);
+    }
+
+    [Fact]
+    public void Menu_HeldMutableStateFlowWithAListParameter_WriteLandsInTheFlowBuiltFromTheList()
+    {
+        // The held acquire wraps its call in a collection-scoped wire handle; the write is keyed
+        // on the flow that call handed out, so it must reach Kotlin's memoised flow for these kinds.
+        using var board = new TreatBoard();
+        using KotlinMutableStateFlow<string> menu = board.Menu(Kinds);
+
+        Assert.Equal("biscuit, milo", menu.Value);
+
+        menu.Value = "tuna";
+
+        Assert.Equal("tuna", menu.Value);
+        Assert.Equal("tuna", board.MenuValue(Kinds));
     }
 
     // --- _collect: the Flow route ---

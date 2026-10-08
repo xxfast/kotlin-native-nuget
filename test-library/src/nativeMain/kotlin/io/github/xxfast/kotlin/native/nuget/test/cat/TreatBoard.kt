@@ -25,6 +25,8 @@ import kotlinx.coroutines.flow.flow
  *  - [served] / [rations] reach `_collect` **and** `_value` (StateFlow return)
  *  - [servings] / [feeding] reach `_collect` only (plain Flow return)
  *  - [forget] / [tally] / [audit] reach `_async` (suspend class method)
+ *  - [maybeRations] reaches `_has_value` (nullable `StateFlow` member), and [menu] the held
+ *    `MutableStateFlow` acquire, whose write is keyed on the flow it handed out (ADR-071)
  *
  * Component variety, because the wire container boxes each element through its own projection:
  * [served] carries `List<String>` (needs conversion at the seam), [rations] carries `List<Int>`
@@ -114,4 +116,19 @@ class TreatBoard {
     delay(1)
     return tags?.joinToString() ?: "nothing"
   }
+  // ADR-114's two arms no fixture reached: a collection parameter on the held `MutableStateFlow`
+  // acquire (ADR-071) and on the `_has_value` probe of a nullable `StateFlow` member (ADR-067).
+  // Memoised per kinds, so a C# write lands in the flow this call built, not a throwaway.
+  private val menus: MutableMap<List<String>, MutableStateFlow<String>> = mutableMapOf()
+
+  /** Held acquire with a `List<String>` parameter: the component needs conversion at the seam. */
+  fun menu(kinds: List<String>): MutableStateFlow<String> =
+    menus.getOrPut(kinds) { MutableStateFlow(kinds.joinToString(", ")) }
+
+  /** Kotlin-side read-back, so a C# write is proven to have landed in Kotlin's flow. */
+  fun menuValue(kinds: List<String>): String? = menus[kinds]?.value
+
+  /** `_has_value` probe with a `List<Int>` parameter, needing no conversion. Null when empty. */
+  fun maybeRations(portions: List<Int>): StateFlow<Int>? =
+    if (portions.isEmpty()) null else MutableStateFlow(portions.sum())
 }
