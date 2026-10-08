@@ -15,6 +15,7 @@ import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.TypeName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.MUTABLE_STATE_FLOW_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.isMutableStateFlowElementObject
@@ -57,7 +58,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.toCName
 /** The Flow/StateFlow family this route owns, on an already alias-expanded type or not. */
 internal fun KSType.isForwardFlowType(): Boolean {
   val qualified: String? = expandAliases().declaration.qualifiedName?.asString()
-  return qualified == "kotlinx.coroutines.flow.Flow" || qualified in STATE_FLOW_TYPES
+  return qualified in FLOW_TYPES || qualified in STATE_FLOW_TYPES
 }
 
 /** Whether the member returns a Flow/StateFlow, i.e. belongs to this route rather than the plan. */
@@ -157,7 +158,7 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
   // plain Flow. The `_collect` export is byte-for-byte the same shape for both (StateFlow's
   // `collect` is inherited from Flow); StateFlow additionally gets a synchronous `_value` export.
   val isStateFlowProperty: Boolean = propType in STATE_FLOW_TYPES
-  val isFlowProperty: Boolean = propType == "kotlinx.coroutines.flow.Flow"
+  val isFlowProperty: Boolean = propType in FLOW_TYPES
   require(isFlowProperty || isStateFlowProperty) {
     "addFlowPropertyExports is the Flow/StateFlow route; got $propType"
   }

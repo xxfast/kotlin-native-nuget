@@ -2147,6 +2147,34 @@ public class LiveHandleTests
         });
     }
 
+    // Row 8k. ADR-205: a `SharedFlow<T>` never completes, so Row 7 cannot apply; this is Row 8's
+    // abandoned shape on the hot stream. The replayed headline (a per-item box) and the replayed
+    // sighting (a per-item object handle, disposed by the caller) are taken, then each enumerator
+    // is disposed, cancelling its never-ending collection. The `suspend` return adds the acquired
+    // flow handle, disposed by `using`.
+    [Fact]
+    public async Task SharedFlow_AbandonedAfterReplay_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await using var bulletin = new CatBulletin("Oreo");
+            bulletin.Publish("found the treat jar", 1);
+            IAsyncEnumerator<string> headlines = bulletin.Headlines.GetAsyncEnumerator();
+            Assert.True(await headlines.MoveNextAsync());
+            Assert.Equal("Oreo: found the treat jar", headlines.Current);
+            await headlines.DisposeAsync();
+
+            using KotlinFlow<Cat> sightings = await bulletin.LatestSightingsAsync();
+            IAsyncEnumerator<Cat> cats = sightings.GetAsyncEnumerator();
+            Assert.True(await cats.MoveNextAsync());
+            using (Cat oreo = cats.Current)
+            {
+                Assert.Equal("Oreo", oreo.Name);
+            }
+            await cats.DisposeAsync();
+        });
+    }
+
     // Row 8b. Issue #131: a top-level factory taking a *borrowed* nullable handle. The Kotlin
     // thunk reads it with `logger?.asStableRef<Logger>()?.get()`, which must not take ownership:
     // if it disposed the ref, the caller's own `logger` would go with it. Both spellings run in

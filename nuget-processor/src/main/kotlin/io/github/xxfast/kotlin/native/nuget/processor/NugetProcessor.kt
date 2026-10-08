@@ -39,6 +39,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.withoutEmptyStaticClas
 import io.github.xxfast.kotlin.native.nuget.processor.cir.withoutCollidingResultTries
 import io.github.xxfast.kotlin.native.nuget.processor.cir.mapPackageToNamespace
 import io.github.xxfast.kotlin.native.nuget.processor.cir.NugetContext
+import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.translate
@@ -3117,7 +3118,7 @@ internal class NugetProcessor(
       cls.getAllProperties().any { prop ->
         val qualified: String? =
           prop.type.resolve().expandAliases().declaration.qualifiedName?.asString()
-        qualified == "kotlinx.coroutines.flow.Flow" || qualified in STATE_FLOW_TYPES
+        qualified in FLOW_TYPES || qualified in STATE_FLOW_TYPES
       }
     }
 
@@ -3125,7 +3126,7 @@ internal class NugetProcessor(
       cls.getAllFunctions().any { method ->
         val qualified: String? =
           method.returnType?.resolve()?.expandAliases()?.declaration?.qualifiedName?.asString()
-        qualified == "kotlinx.coroutines.flow.Flow" || qualified in STATE_FLOW_TYPES
+        qualified in FLOW_TYPES || qualified in STATE_FLOW_TYPES
       }
     }
 
@@ -3478,7 +3479,7 @@ internal class NugetProcessor(
     }
 
 
-    val flowTypes: Set<String> = setOf("kotlinx.coroutines.flow.Flow") + STATE_FLOW_TYPES
+    val flowTypes: Set<String> = FLOW_TYPES + STATE_FLOW_TYPES
 
     fun KSType.isFlowType(): Boolean =
       expandAliases().declaration.qualifiedName?.asString() in flowTypes

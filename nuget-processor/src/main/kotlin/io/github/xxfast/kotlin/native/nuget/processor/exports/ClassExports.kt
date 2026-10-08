@@ -20,6 +20,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.LegacyRefusedInter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinSpelling
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardTypeParametersInScope
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedStoredCallbackPair
+import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLambdaPropertyCarrier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.carriesLegacyLambdaProperty
@@ -56,7 +57,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 internal fun KSFunctionDeclaration.hasLegacyFlowReturn(): Boolean {
   val returnQualified: String? = returnType?.resolve()
     ?.expandAliases()?.declaration?.qualifiedName?.asString()
-  return returnQualified == "kotlinx.coroutines.flow.Flow" || returnQualified in STATE_FLOW_TYPES
+  return returnQualified in FLOW_TYPES || returnQualified in STATE_FLOW_TYPES
 }
 
 /**
