@@ -475,3 +475,10 @@ LeakTests 216 (`SuspendStateFlowNullableElementAndMember_ReturnsToBaseline`), AO
 for `Int?`, `String?` and `Cat?` elements. Inferred, not exercised: a `StateFlow<Interface?>`
 element on this route; a `StateFlow<Enum?>` element reaches the generic reader with no enum case
 and may fail at runtime; `suspend fun (): MutableStateFlow<T?>` now binds as a read-only holder.
+
+## Amendment (2026-10-09): the probe also serves a nullable `Flow<T>?` member
+
+The per-member `_has_value` probe is not StateFlow-specific. [ADR-026](026-flow-mapping.md)'s
+2026-10-09 amendment reuses it for a plain `Flow<T>?` property or method, which binds as
+`KotlinFlow<T>?`. The method purity caveat above applies there unchanged. The "Flow
+nullable-member item" in Deferred is closed by that amendment.

@@ -515,8 +515,32 @@ await foreach (int? naps in window.NapsPassingBy()) seen.Add(naps);
 
 An interface element still resolves a stored C#-implemented instance the same way the non-null form
 does; only a genuinely absent element is `null`. This is the element's own nullability
-(`Flow<T?>`); the whole stream being absent (`Flow<T>?`) is a different, unsupported shape, see
-Limitations.
+(`Flow<T?>`); the whole stream being absent is the next section.
+
+### Nullable member `Flow<T>?` {id="flow-nullable-member"}
+
+A property or method whose whole `Flow` can be absent binds as `KotlinFlow<T>?`, `null` when the
+Kotlin member is `null`. Check it before enumerating:
+
+```kotlin
+val specialDiet: Flow<String>?
+  get() = if (catName == "Mylo") null else flow { emit("$catName: salmon") }
+
+fun visitorsAfter(meals: Int): Flow<Cat>? =
+  if (meals == 0) null else flow { emit(Cat("Mylo")) }
+```
+
+```C#
+KotlinFlow<string>? diet = oreo.SpecialDiet;         // null for Mylo
+KotlinFlow<Cat>? visitors = feeder.VisitorsAfter(0); // null
+```
+
+A `suspend fun` returning `Flow<T>?` awaits to `Task<KotlinFlow<T>?>`, on a class or at top level;
+dispose the acquired holder when it is not `null`. `SharedFlow<T>?` members behave the same way. A
+top-level non-`suspend` `fun f(): Flow<T>?` still has no binding.
+
+A method is called once to decide presence and again when you enumerate, so it must return the same
+answer both times. Keep a nullable-returning member free of side effects.
 
 ## `SharedFlow<T>` {id="shared-flow-t"}
 
@@ -855,9 +879,9 @@ members. A `Throwable`, `Exception` or `RuntimeException` parameter does bind, a
   `suspend fun` returning `MutableStateFlow<T>`, bind a read-only holder.
 - `StateFlow<T>` or `Flow<T>` as a function parameter, or as a generic type argument, is not
   supported.
-- A nullable `Flow<T>?` (the whole stream absent, as opposed to a nullable *element* `Flow<T?>`,
-  which is supported), and a `Pair` or a nullable collection (`List<T>?`) as a `Flow`/`StateFlow`
-  element, are not supported.
+- A top-level non-`suspend` `fun f(): Flow<T>?` and an `object` or companion `Flow<T>?` member are
+  skipped with a diagnostic, like their non-null forms.
+- A `Pair` or a nullable collection (`List<T>?`) as a `Flow`/`StateFlow` element is not supported.
 - `Boolean?` / `Char?` value elements on a nullable `StateFlow` are not supported.
 - A `suspend inline fun <reified T> Receiver.f(...): Result<T>` extension has no bridge at all:
   `inline` plus `reified` erase at the native boundary, and `suspend` needs a concrete

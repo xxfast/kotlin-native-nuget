@@ -495,7 +495,7 @@ element nullability generically at both call sites (property and method), so `Fl
 `KotlinFlow<T?>` the same way `StateFlow<T?>` binds `KotlinStateFlow<T?>` — verified for an
 interface element, `String?`, and `Int?` (`test-library/.../cat/PassersBy.kt`,
 `IntegrationTests/BidirectionalTests.cs`). Unaffected by this fix: a nullable **member**
-(`Flow<T>?`, the whole stream absent — the ROADMAP's "Map nullable `Flow<T>?`" item) is still
+(`Flow<T>?`, the whole stream absent; bound on 2026-10-09, see ADR-026's amendment) was still
 unbound, and ADR-068's `suspend
 fun` returning `StateFlow<T>` still reads its element through the module-wide
 `nuget_stateflow_value` export, which has no null arm and is refused (not bound) for a nullable
