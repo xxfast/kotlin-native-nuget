@@ -352,7 +352,8 @@ returns to baseline with nothing for you to dispose. `LeakTests/LiveHandleTests.
 `EnumStateFlowElement_RepeatedValueReads_ReturnToBaseline`,
 `EnumFlowElement_Emissions_ReturnToBaseline` and
 `ValueClassFlowElement_ValueReadsAndEmissions_ReturnToBaseline` cover the enum `.Value` loop, the enum
-emission loop and the value-class element on the same two routes.
+emission loop and the value-class element on the same two routes. The enum `.Value` loop also
+writes a settable `MutableStateFlow<E>` once; the write crosses as an ordinal and mints nothing.
 
 An [enum written into a generic slot](generics.md) (`new Crate<Mood>(Mood.Grumpy)`,
 `Helpers.Identity(Mood.Sleepy)`) mints one handle over the Kotlin entry per write and releases it

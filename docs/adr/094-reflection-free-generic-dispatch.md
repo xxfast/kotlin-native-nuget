@@ -353,8 +353,9 @@ through `FromHandle<T>`/`Materialize<T>`. `E?` resolves through `Materialize<T>`
 ordinals on the Kotlin side and never reaches this entry. The sentence "Enums, objects ... register
 nothing" in `factoryEntries`' KDoc loses "Enums".
 
-Not covered: the `MutableStateFlow<E>` setter (ADR-071's deferral) stays open. The erased write of
-an enum (`new Box<Mood>(Mood.Calm)`), first listed here as having no route, is the
+Not covered: the `MutableStateFlow<E>` setter (ADR-071's deferral) was open here and has since
+shipped, see the 2026-10-09 update at the end. The erased write of an enum
+(`new Box<Mood>(Mood.Calm)`), first listed here as having no route, is the
 2026-10-04 amendment below.
 
 ## Later change
@@ -399,3 +400,6 @@ generated export.
 
 `T : Enum<T>` (a self-bound on an enum type parameter) is
 [ADR-198](198-unspellable-bound-trampoline.md); this amendment supplies the write route it needs.
+
+Update (2026-10-09): the `MutableStateFlow<E>` setter left open in the 2026-09-29 amendment shipped;
+see the 2026-10-09 amendment in ADR-071.
