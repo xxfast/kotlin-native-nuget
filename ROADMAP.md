@@ -17,7 +17,6 @@ Complete.
 
 ### 0.10.0: hardening
 
-- [ ] `release.yml` runs `packNuget` and `IntegrationTests` before it publishes; today it runs neither. Verified.
 - [ ] [ADR-165](docs/adr/165-publish-nuget-task.md)'s three Unverified claims need one real push to nuget.org and one to GitHub Packages before the next release ([details](docs/backlog/adr-165-unverified-claims-need-a-real-push.md))
 - [ ] Triage the backlog, then fix every live leak, wrong-behaviour and silent-omission item in the sections below; the 2026-09-29 audit counted seven leak or wrong-behaviour items and ten silent omissions, and found at least one entry, the triple-dispose one, already fixed. Verified.
 - [ ] The NativeAOT step of `scripts/verify.sh` fails on the maintainer's macOS host with `ld: library 'ssl' not found`; with `LIBRARY_PATH=/opt/homebrew/opt/openssl@3/lib:/opt/homebrew/opt/brotli/lib:/opt/homebrew/lib` all 7 AOT shapes pass. Not caused by ADR-187: unmodified `main` (6945dcca) fails the same way, because Homebrew's lib directory is not on the linker search path. Verified by a clean-worktree `scripts/verify.sh` run; see `CLAUDE.md`.
