@@ -442,7 +442,7 @@ coverage today; confirm it before a future feature assumes it is verified (ROADM
   type argument** — mirror the corresponding non-nullable StateFlow deferrals (ADR-065) and the Flow
   nullable-member item (ROADMAP line 120).
 
-**2026-09-20 amendment: `suspend fun (): StateFlow<T?>` is now a named skip, not silently bound
+**2026-09-20 amendment: `suspend fun (): StateFlow<T?>` became a named skip, not silently bound
 non-null.** ADR-068's suspend-StateFlow route reads its element once through the module-wide
 `nuget_stateflow_value` export, which is `NugetHandles.retain(flow.value as Any)` with no null arm
 and no `try`: a null `.Value` would throw out of that `@CName` export, aborting the process rather
@@ -450,7 +450,28 @@ than faulting a channel the way the property/method routes' per-member exports c
 (`forward/ForwardLegacyRouteCollections.kt` ~:242) now refuses a nullable StateFlow element on this
 route (`SKIPPED_UNSUPPORTED_RETURN`, both halves) instead of hard-coding `isNullableElement = false`
 and binding a `KotlinStateFlow<T>` that would crash on the first absent value. Binding it for real
-needs a nullable-aware `nuget_stateflow_value` (widen its return to carry a null arm, mirroring what
-this ADR already did for the per-member `_value` export). Unaffected: the property and non-suspend
+needed a nullable-aware read; that shipped on 2026-10-09 as `nuget_stateflow_value_or_null` (see
+the 2026-10-09 amendment at the end), so this refusal is gone. Unaffected: the property and non-suspend
 method routes' nullable element (this ADR) and a plain `Flow<T?>`'s nullable element (ADR-065's
 2026-09-20 amendment) both bind today.
+
+## Amendment (2026-10-09): the suspend route binds a nullable element and a nullable member
+
+The 2026-09-20 amendment's "needs a nullable-aware `nuget_stateflow_value`" is done. On ADR-068's
+suspend-StateFlow route (class methods and top-level functions):
+
+- `suspend fun (): StateFlow<T?>` awaits to `Task<KotlinStateFlow<T?>>`; `.Value` and `await foreach`
+  carry nulls.
+- `suspend fun (): StateFlow<T>?` awaits to `Task<KotlinStateFlow<T>?>`, null when Kotlin returns no
+  flow. Presence rides the `_async` completion pointer, so no `_has_value` probe is needed.
+- The runtime gains the additive export `nuget_stateflow_value_or_null` (the 68th name) and
+  `nuget_stateflow_collect` emits a null element as a null item with `isCancelled = 0`, this ADR's
+  null-element wire. `nuget_stateflow_value` keeps its "never returns NULL" contract; the generated
+  reader picks the `_or_null` sibling only for a nullable element.
+
+Evidence. Verified: Tier 1 showed the member half was previously an unguarded wrap that would have
+dereferenced a zero handle on `.Value`; processor 1887, runtime 54, IntegrationTests 3282,
+LeakTests 216 (`SuspendStateFlowNullableElementAndMember_ReturnsToBaseline`), AOT both targets,
+for `Int?`, `String?` and `Cat?` elements. Inferred, not exercised: a `StateFlow<Interface?>`
+element on this route; a `StateFlow<Enum?>` element reaches the generic reader with no enum case
+and may fail at runtime; `suspend fun (): MutableStateFlow<T?>` now binds as a read-only holder.

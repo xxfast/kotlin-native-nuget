@@ -232,6 +232,32 @@ public Task<KotlinStateFlow<global::TestLibrary.Nested.Aviary.IKeeper>> KeeperRe
 A C#-implemented keeper booked earlier and read back through `.Value` is the same instance the
 caller passed in.
 
+### Nullable element or nullable holder {id="suspend-stateflow-nullable"}
+
+A nullable element carries its `?` onto the holder, and a `null` is a genuine value for `.Value` and
+`await foreach`. A nullable return awaits to `null` when Kotlin hands back no flow, so check it
+before use:
+
+```kotlin
+suspend fun watchNapStreak(): StateFlow<Int?>   // Task<KotlinStateFlow<int?>>
+suspend fun watchDen(): StateFlow<Cat>?         // Task<KotlinStateFlow<Cat>?>
+```
+
+```C#
+using KotlinStateFlow<int?> streak = await CatWatch.WatchNapStreakAsync();
+int? days = streak.Value;
+
+using KotlinStateFlow<Cat>? den = await CatWatch.WatchDenAsync();
+if (den is not null)
+{
+    using Cat cat = den.Value;
+}
+```
+
+Both work on class methods and top-level functions, and combine as `StateFlow<T?>?`. A
+`suspend fun` returning `MutableStateFlow<T?>` binds as a read-only holder; its `.Value` setter is
+not available.
+
 ## `suspend fun` returning `Flow<T>` {id="suspend-fun-returning-flow-t"}
 
 A suspend function that returns `Flow<T>` stays asynchronous: await it once to acquire a
@@ -603,9 +629,8 @@ public KotlinStateFlow<string>? MaybeMood { get; }  // null until the member exi
 ```
 
 A `null` element crossing `await foreach` is a genuine emission, not the end of the stream. Writing
-a nullable element or a nullable member is not supported. A `suspend fun` returning `StateFlow<T?>`
-is not supported either: that route reads its element through a shared export with no null arm and
-is skipped with a diagnostic naming the member.
+a nullable element or a nullable member is not supported. A `suspend fun` returning a nullable
+`StateFlow` binds as described [above](#suspend-fun-returning-stateflow-t).
 
 ## Parameters on `Flow`, `StateFlow`, and `suspend` members
 

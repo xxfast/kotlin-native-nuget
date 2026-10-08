@@ -293,6 +293,11 @@ handle is minted for it. `LeakTests/LiveHandleTests.cs`'s
 `TopLevelSuspendStateFlow_AwaitReadCollectDispose_ReturnsToBaseline` covers the await, read,
 collect and dispose cycle for an `Int` and a class element.
 
+A nullable [`StateFlow<T?>` or `StateFlow<T>?` from a `suspend fun`](coroutines-and-flow.md#suspend-stateflow-nullable)
+mints nothing for a null: a null `.Value` or null emission frees nothing, and a null holder owns no
+handle. `LeakTests/LiveHandleTests.cs`'s `SuspendStateFlowNullableElementAndMember_ReturnsToBaseline`
+covers both shapes.
+
 For a [cancellation-token-taking async call](instance-members.md#async-cancellation), this count
 only proves the pending-continuation and `Task` handles came back to baseline: the bridge-owned
 `CancellationTokenSource` is a plain .NET `GCHandle`, not one of the Kotlin `StableRef`s

@@ -93,7 +93,7 @@ class Tier1SuspendFlowTest {
   @Test fun `refused combinations name their refusal and emit neither half`() {
     val refused = listOf(
       "nullableContainer", "nullableCollection", "unsupported",
- "stateCollection", "input", "extensionFlow",
+      "stateCollection", "input", "extensionFlow",
     )
     refused.forEach { name ->
       assertTrue(result.kspWarnings.any { name in it }, "missing warning for $name: ${result.kspWarnings}")
