@@ -2614,6 +2614,33 @@ public class LiveHandleTests
         });
     }
 
+    // Row 8f-suspend. ADR-071's held-route amendment: a `suspend fun` returning
+    // `MutableStateFlow<T>` awaits to a settable holder that owns the flow's StableRef (the `_async`
+    // export mints it once per call, `Dispose()` frees it). The write goes through the flow-keyed
+    // `_set_value`, which must mint nothing that outlives the call: an object element's write
+    // borrows the C# wrapper's handle, and each `.Value` read mints one wrapper `using` frees.
+    //
+    // Mylo fills his treat jar and swaps his favourite toy, ten times over.
+    [Fact]
+    public async Task SuspendMutableStateFlow_AwaitWriteReadDispose_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var tracker = new CatMoodTracker("Mylo");
+            using (KotlinMutableStateFlow<int> jar = await tracker.AwaitTreatJarAsync())
+            {
+                jar.Value = 4;
+                Assert.Equal(4, jar.Value);
+            }
+
+            using KotlinMutableStateFlow<Cat> toys = await tracker.AwaitFavouriteToyAsync();
+            using var yarn = new Cat("Yarn", 1);
+            toys.Value = yarn;
+            using Cat toy = toys.Value;
+            Assert.Equal("Yarn", toy.Name);
+        });
+    }
+
     // Row 9. Suspend call completing: the result box is unwrapped and owned by the returned
     // wrapper, and the job handle goes on completion. The two-argument overload is the 100ms
     // one, so fifty crossings do not take five minutes.

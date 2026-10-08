@@ -667,14 +667,17 @@ private fun StringBuilder.renderHeldStateFlowMethod(method: CirMethod, className
   appendLine("            return new KotlinMutableStateFlow<$element>(")
   appendLine("                (onNext, onComplete, onError, userData) =>")
   appendLine("                    NugetStateFlowNative.Collect($owned, $collectScope, onNext, onComplete, onError, userData),")
-  appendLine("                () => NugetStateFlowNative.Value($owned),")
+  // A nullable element reads through the null-aware sibling: `nuget_stateflow_value` has no null
+  // arm and would throw out of the `@CName` on a null current value.
+  val valueRead: String = if (method.flowElementNullable) "ValueOrNull" else "Value"
+  appendLine("                () => NugetStateFlowNative.$valueRead($owned),")
   appendLine("                v =>")
   appendLine("                {")
-  if (method.isMutableStateFlowElementObject) {
+  val write: CirStateFlowWrite = requireNotNull(method.stateFlowWrite)
+  if (write.rejectsNull) {
     appendLine("                    if (v is null) throw new ArgumentNullException(nameof(v));")
   }
-  val writeReceiver: String = if (method.isMutableStateFlowElementObject) "v._handle" else "v"
-  appendLine("                    ${method.stateFlowSetValueNativeName}($owned, $writeReceiver, out IntPtr error);")
+  appendLine("                    ${method.stateFlowSetValueNativeName}($owned, ${write.arguments}, out IntPtr error);")
   appendLine("                    if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
   appendLine("                    NugetErrorNative.ClearManagedFault();")
   appendLine("                },")

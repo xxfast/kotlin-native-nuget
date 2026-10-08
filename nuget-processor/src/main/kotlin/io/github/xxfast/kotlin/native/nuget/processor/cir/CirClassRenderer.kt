@@ -430,9 +430,11 @@ internal fun StringBuilder.renderFlowPropertyNativeImports(
       // conflates by Any.equals on the previous value).
       val setValueEntryPoint = "${nativePrefix}_set_${prop.nativeName}_value"
       appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$setValueEntryPoint\")]")
-      // ADR-098: a MutableStateFlow<Char> setter slot is a `char` slot like any other.
-      val setValueParam: String = narrowParameterMarshal(prop.nativeSetterType, "value")
-      appendLine("        private static extern void Native_Set${prop.nativeStem}Value(NugetKotlinHandle handle, $setValueParam, out IntPtr error);")
+      // ADR-098: a MutableStateFlow<Char> setter slot is a `char` slot like any other, and a
+      // nullable scalar's has-value flag a `bool` one (ADR-071 nullable element write).
+      val setValueParams: String = requireNotNull(prop.stateFlowWrite).parameters
+        .joinToString(", ") { narrowParameterMarshal(it.nativeType, it.name) }
+      appendLine("        private static extern void Native_Set${prop.nativeStem}Value(NugetKotlinHandle handle, $setValueParams, out IntPtr error);")
       appendLine()
     }
   }

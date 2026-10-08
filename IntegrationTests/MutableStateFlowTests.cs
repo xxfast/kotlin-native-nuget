@@ -130,4 +130,83 @@ public class MutableStateFlowTests
         tracker.Dispose();
         Assert.Throws<ObjectDisposedException>(() => { var _ = tracker.TreatCount; });
     }
+
+    // --- ADR-071 amendment (nullable element write): `.Value = null` on a MutableStateFlow<T?>. ---
+
+    [Fact]
+    public void NullableReferenceElementWrite_RoundTripsNull_OreoLosesHerCollarTag()
+    {
+        using var tracker = new CatMoodTracker("Oreo");
+        KotlinMutableStateFlow<string?> tag = tracker.CollarTag;
+        tag.Value = "bell";
+        Assert.Equal("bell", tag.Value);
+        tag.Value = null;
+        Assert.Null(tag.Value);
+    }
+
+    [Fact]
+    public void NullableValueElementWrite_NullIsNotZero_MylosNapIsUntracked()
+    {
+        // The has-value pair: a null write must not land as 0, and a 0 write must not land as null.
+        using var tracker = new CatMoodTracker("Mylo");
+        tracker.NapMinutes.Value = 15;
+        Assert.Equal(15, tracker.NapMinutes.Value);
+        tracker.NapMinutes.Value = null;
+        Assert.Null(tracker.NapMinutes.Value);
+        tracker.NapMinutes.Value = 0;
+        Assert.Equal(0, tracker.NapMinutes.Value);
+    }
+
+    [Fact]
+    public void NullableObjectElementWrite_NullHandleLandsInKotlin_MyloFallsOutWithHisBestFriend()
+    {
+        using var tracker = new CatMoodTracker("Mylo");
+        using var oreo = new Cat("Oreo", 4);
+        tracker.BestFriend.Value = oreo;
+        Assert.Equal("Oreo", tracker.BestFriendName());
+        tracker.BestFriend.Value = null;
+        Assert.Null(tracker.BestFriendName()); // the null really landed in Kotlin
+        Assert.Null(tracker.BestFriend.Value);
+    }
+
+    [Fact]
+    public void NullableElementWrite_HeldFunctionReturn_SharesStorage_OreosNapLogIsCleared()
+    {
+        // NapLog() is the held function-return twin of NapMinutes: its null reads go through the
+        // runtime's null-aware value export, and its writes through the flow-keyed setter.
+        using var tracker = new CatMoodTracker("Oreo");
+        using KotlinMutableStateFlow<int?> log = tracker.NapLog();
+        Assert.Null(log.Value);
+        log.Value = 40;
+        Assert.Equal(40, tracker.NapMinutes.Value);
+        log.Value = null;
+        Assert.Null(tracker.NapMinutes.Value);
+        Assert.Null(log.Value);
+    }
+
+    // --- ADR-071 amendment (nullable member write): a MutableStateFlow<T>? member. ---
+
+    [Fact]
+    public void NullableMemberWrite_AbsentIsNull_PresentIsSettable_OreoStartsADiary()
+    {
+        using var tracker = new CatMoodTracker("Oreo");
+        Assert.Null(tracker.Diary);
+        tracker.OpenDiary("day one");
+        KotlinMutableStateFlow<string> diary = tracker.Diary!;
+        diary.Value = "day two";
+        Assert.Equal("day two", tracker.Diary!.Value);
+    }
+
+    [Fact]
+    public void NullableMemberWrite_AbsentAtWriteTime_Throws_MylosDiaryWasThrownAway()
+    {
+        // A holder obtained while the member was present, written after it went absent, throws
+        // through the setter's errorOut (IllegalStateException) instead of dropping the write.
+        using var tracker = new CatMoodTracker("Mylo");
+        tracker.OpenDiary("day one");
+        KotlinMutableStateFlow<string> diary = tracker.Diary!;
+        tracker.CloseDiary();
+        Assert.Throws<KotlinInvalidOperationException>(() => diary.Value = "day two");
+        Assert.Null(tracker.Diary);
+    }
 }

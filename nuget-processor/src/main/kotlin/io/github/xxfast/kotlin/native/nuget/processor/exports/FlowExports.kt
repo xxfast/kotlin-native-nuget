@@ -20,7 +20,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.isMutableStateFlowElementObject
-import io.github.xxfast.kotlin.native.nuget.processor.cir.isMutableStateFlowElementSupported
+import io.github.xxfast.kotlin.native.nuget.processor.cir.isMutableStateFlowElementWritable
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
@@ -126,11 +126,28 @@ internal fun KSFunctionDeclaration.returnsHeldMutableStateFlow(): Boolean {
   if (modifiers.contains(Modifier.SUSPEND)) return false
   val resolved: KSType = returnType?.resolve()?.expandAliases() ?: return false
   if (resolved.declaration.qualifiedName?.asString() !in MUTABLE_STATE_FLOW_TYPES) return false
-  // ADR-067's nullable element/member threading is deferred on the settable route, on both halves.
+  // A nullable member stays on the read-only `_has_value` route: the held acquire has no null arm.
+  if (resolved.isMarkedNullable) return false
+  // ADR-071 amendment: a nullable element is held and settable (bar `Boolean?`/`Char?`).
+  val element: KSType? = resolved.arguments.firstOrNull()?.type?.resolve()?.expandAliases()
+  return isMutableStateFlowElementWritable(element)
+}
+
+/**
+ * ADR-071 held-route amendment (cross-noted on ADR-068): whether a class `suspend fun`'s awaited
+ * `MutableStateFlow<T>` is settable. Its `_async` export already hands the flow back by handle, so
+ * the write is the held route's flow-keyed `_set_value` sibling. One predicate for the Kotlin
+ * export and the C# translator. A nullable member or element stays read-only: the write side of
+ * `suspend fun (): MutableStateFlow<T?>` is deferred.
+ */
+internal fun KSFunctionDeclaration.awaitsSettableMutableStateFlow(): Boolean {
+  if (!modifiers.contains(Modifier.SUSPEND)) return false
+  val resolved: KSType = returnType?.resolve()?.expandAliases() ?: return false
+  if (resolved.declaration.qualifiedName?.asString() !in MUTABLE_STATE_FLOW_TYPES) return false
   if (resolved.isMarkedNullable) return false
   val element: KSType? = resolved.arguments.firstOrNull()?.type?.resolve()?.expandAliases()
   if (element?.isMarkedNullable == true) return false
-  return isMutableStateFlowElementSupported(element)
+  return isMutableStateFlowElementWritable(element)
 }
 
 /** Whether the arm owns a coroutine scope through this route (a flow property or a flow method). */
@@ -243,22 +260,23 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
     }
 
     // ADR-071: a genuinely DECLARED MutableStateFlow<T> (not narrowed through .asStateFlow())
-    // additionally gains a settable `.Value`, gated on non-nullable element/member (both
-    // deferred) and a v1-supported element (primitive/String/object; enum stays deferred).
+    // additionally gains a settable `.Value`, gated on a writable element (primitive/String/
+    // object, a nullable one included bar `Boolean?`/`Char?`; enum stays deferred). A nullable
+    // member is settable too: the write throws when it finds the member absent.
     val isMutableStateFlowProperty: Boolean = propType in MUTABLE_STATE_FLOW_TYPES &&
-        !elementNullable && !memberNullable &&
-        isMutableStateFlowElementSupported(flowElementType)
+        isMutableStateFlowElementWritable(flowElementType)
     if (isMutableStateFlowProperty) {
-      val (valueParamType: TypeName, assignment: String) =
-        mutableStateFlowValueParameter(flowElementType)
+      val slot: MutableStateFlowWriteSlot = mutableStateFlowWriteSlot(flowElementType)
       addFunction(
         FunSpec.builder("export_${prefix}_set_${propName}_value")
           .addAnnotation(cNameAnnotation("${prefix}_set_${propName}_value", ownedBy(prop)))
           .addParameter("handle", cOpaquePointer)
-          .addParameter("value", valueParamType)
+          .addMutableStateFlowWriteSlot(slot)
           .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
           .addCode(
-            buildStateFlowSetValuePropertyBody(qualifiedName, propCall, assignment),
+            buildStateFlowSetValuePropertyBody(
+              qualifiedName, propCall, slot.assignment, memberNullable,
+            ),
             cOpaquePointerVar, nugetHandles,
           )
           .build()
@@ -347,8 +365,6 @@ internal fun FileSpec.Builder.addFlowMethodExports(
   // through a flow-handle-keyed `_set_value`. The per-member `_collect` / `_value` are not emitted:
   // they re-invoked the function, so a body that builds a fresh flow per call lost every write.
   if (method.returnsHeldMutableStateFlow()) {
-    val flowElementHeld: String = flowElementType?.expandAliases()
-      ?.declaration?.qualifiedName?.asString() ?: flowElementQualified
     val acquireBuilder: FunSpec.Builder = FunSpec
       .builder("export_${prefix}_$cname")
       .addAnnotation(cNameAnnotation("${prefix}_$cname", ownedBy(method)))
@@ -363,24 +379,7 @@ internal fun FileSpec.Builder.addFlowMethodExports(
       )
 
     addFunction(acquireBuilder.build())
-
-    val (heldValueParamType: TypeName, heldAssignment: String) =
-      mutableStateFlowValueParameter(flowElementType)
-    val heldSetValueBuilder: FunSpec.Builder = FunSpec
-      .builder("export_${prefix}_${cname}_set_value")
-      .addAnnotation(cNameAnnotation("${prefix}_${cname}_set_value", ownedBy(method)))
-      // The owner handle and the method's own parameters are gone: the write is keyed on the flow
-      // this call already handed out, which is the whole point of holding it.
-      .addParameter("flowHandle", cOpaquePointer)
-      .addParameter("value", heldValueParamType)
-      .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
-      .addCode(
-        buildStateFlowHandleSetValueBody(flowElementHeld, heldAssignment),
-        cOpaquePointerVar,
-        nugetHandles,
-      )
-
-    addFunction(heldSetValueBuilder.build())
+    addHeldStateFlowSetValueExport("${prefix}_${cname}", method, flowElementType)
     return
   }
 
@@ -627,23 +626,88 @@ private fun buildStateFlowHasValueMethodBody(
 }
 
 /**
- * ADR-071: classifies a (already-[isMutableStateFlowElementSupported]) MutableStateFlow<T>
- * element for the settable `.Value` write seam -- the exported setter's Kotlin parameter type and
- * the assignment expression that unwraps it. Primitive/`Char`/`String` cross by value (no
+ * ADR-071: the settable `.Value` write seam's Kotlin parameters (in order, after the receiver
+ * handle) and the assignment expression that unwraps them into the element.
+ */
+private data class MutableStateFlowWriteSlot(
+  val parameters: List<Pair<String, TypeName>>,
+  val assignment: String,
+)
+
+/**
+ * ADR-071: classifies a (already-[isMutableStateFlowElementWritable]) MutableStateFlow<T>
+ * element for the settable `.Value` write seam. Primitive/`Char`/`String` cross by value (no
  * conversion, or the one conversion `String` already needs); an ordinary class/object element
  * crosses as a `COpaquePointer` and is unwrapped via `asStableRef`, byte-for-byte the same shape
  * as `ForwardPropertyKotlinEmitter.valueExpression`'s `ObjectHandle` branch.
+ *
+ * Nullable element write: a `String?` is one nullable slot, an object a nullable pointer unwrapped
+ * null-safely, and a scalar the has-value pair `addLegacyScalarParameter` gives every sibling
+ * legacy-route slot (`valueHasValue, value`), so a null is never a zero.
  */
-private fun mutableStateFlowValueParameter(elementType: KSType?): Pair<TypeName, String> {
+private fun mutableStateFlowWriteSlot(elementType: KSType?): MutableStateFlowWriteSlot {
   val declaration = elementType?.expandAliases()?.declaration
   val simpleName: String = declaration?.simpleName?.asString() ?: "Any"
-  return if (isMutableStateFlowElementObject(elementType)) {
-    val qualifiedElementName: String = (declaration as KSClassDeclaration)
-      .qualifiedName?.asString() ?: simpleName
-    cOpaquePointer to "value.asStableRef<$qualifiedElementName>().get()"
-  } else {
-    ClassName("kotlin", simpleName) to "value"
+  val nullable: Boolean = elementType?.isMarkedNullable == true
+  return when {
+    isMutableStateFlowElementObject(elementType) -> {
+      val qualifiedElementName: String = (declaration as KSClassDeclaration)
+        .qualifiedName?.asString() ?: simpleName
+      val unwrap: String = if (nullable) {
+        "value?.asStableRef<$qualifiedElementName>()?.get()"
+      } else {
+        "value.asStableRef<$qualifiedElementName>().get()"
+      }
+      MutableStateFlowWriteSlot(listOf("value" to cOpaquePointer.copy(nullable = nullable)), unwrap)
+    }
+
+    nullable && simpleName != "String" -> MutableStateFlowWriteSlot(
+      listOf("valueHasValue" to BOOLEAN, "value" to ClassName("kotlin", simpleName)),
+      "if (valueHasValue) value else null",
+    )
+
+    else -> MutableStateFlowWriteSlot(
+      listOf("value" to ClassName("kotlin", simpleName).copy(nullable = nullable)),
+      "value",
+    )
   }
+}
+
+private fun FunSpec.Builder.addMutableStateFlowWriteSlot(
+  slot: MutableStateFlowWriteSlot,
+): FunSpec.Builder = apply {
+  slot.parameters.forEach { (name: String, type: TypeName) -> addParameter(name, type) }
+}
+
+/**
+ * ADR-071 (2026-09-11): the held route's flow-handle-keyed `${stem}_set_value(flowHandle, value,
+ * errorOut)` export. Shared by the held function-return route and the suspend route that awaits
+ * a `MutableStateFlow<T>`, both of which hand C# the flow's own handle.
+ */
+internal fun FileSpec.Builder.addHeldStateFlowSetValueExport(
+  stem: String,
+  owner: KSFunctionDeclaration,
+  elementType: KSType?,
+) {
+  val nullable: Boolean = elementType?.isMarkedNullable == true
+  val elementQualified: String = (elementType?.expandAliases()
+    ?.declaration?.qualifiedName?.asString() ?: "kotlin.Any") + if (nullable) "?" else ""
+  val slot: MutableStateFlowWriteSlot = mutableStateFlowWriteSlot(elementType)
+  addFunction(
+    FunSpec.builder("export_${stem}_set_value")
+      .addAnnotation(cNameAnnotation("${stem}_set_value", ownedBy(owner)))
+      // The owner handle and the method's own parameters are gone: the write is keyed on the flow
+      // the call already handed out, which is the whole point of holding it.
+      .addParameter("flowHandle", cOpaquePointer)
+      .addMutableStateFlowWriteSlot(slot)
+      .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+      .addCode(
+        buildStateFlowHandleSetValueBody(elementQualified, slot.assignment),
+        cOpaquePointerVar,
+        nugetHandles,
+      )
+      .build()
+  )
 }
 
 // ADR-071: the `_set_value` export body -- writes `value` (already unwrapped by [assignment]) into
@@ -651,13 +715,22 @@ private fun mutableStateFlowValueParameter(elementType: KSType?): Pair<TypeName,
 // `Any.equals` on the PREVIOUS value (kotlinx.coroutines StateFlow.kt), so a throwing `equals`
 // (or a throwing object `equals`/handle dereference) propagates out and is wrapped via `errorOut`,
 // the same ADR-030 shape every ordinary `var` property setter already carries.
+// Nullable member write: a member found absent throws into the same catch, so it surfaces in C#
+// as a `KotlinException` instead of a silent no-op (the C# getter answers null before then).
 private fun buildStateFlowSetValuePropertyBody(
   qualifiedName: String,
   propName: String,
   assignment: String,
+  memberNullable: Boolean,
 ): String = buildString {
+  val member: String = "handle.asStableRef<$qualifiedName>().get().$propName"
   appendLine("try {")
-  appendLine("  handle.asStableRef<$qualifiedName>().get().$propName.value = $assignment")
+  if (memberNullable) {
+    val name: String = propName.removeSurrounding("`")
+    appendLine("  ($member ?: throw IllegalStateException(\"$name is null\")).value = $assignment")
+  } else {
+    appendLine("  $member.value = $assignment")
+  }
   appendLine("} catch (e: Throwable) {")
   appendLine("  if (errorOut != null) {")
   appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.retain(")

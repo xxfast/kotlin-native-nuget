@@ -240,6 +240,56 @@ internal fun isMutableStateFlowElementObject(elementType: KSType?): Boolean {
   return !KOTLIN_TO_CSHARP_PARAM.containsKey(simpleName)
 }
 
+/**
+ * ADR-071 amendment (nullable element write): whether a `MutableStateFlow<T>` element gets a
+ * settable `.Value`. A non-null element is exactly [isMutableStateFlowElementSupported]. A nullable
+ * one additionally refuses `Boolean?` and `Char?`, mirroring ADR-067's read-side width deferral;
+ * those keep the read-only `KotlinStateFlow<T?>` mapping. Read by every gate on both halves, so a
+ * setter export and its C# import cannot disagree.
+ */
+internal fun isMutableStateFlowElementWritable(elementType: KSType?): Boolean {
+  if (!isMutableStateFlowElementSupported(elementType)) return false
+  if (elementType?.isMarkedNullable != true) return true
+  val simpleName: String = elementType.expandAliases().declaration.simpleName.asString()
+  return simpleName != "Boolean" && simpleName != "Char"
+}
+
+/**
+ * ADR-071: the C# half of the write seam for a (already-[isMutableStateFlowElementWritable])
+ * element whose public spelling is [csElementType]. A scalar crosses by value, an object as its
+ * handle; a nullable `String?` stays one nullable slot, a nullable object passes a null handle,
+ * and a nullable scalar crosses as the legacy route's has-value pair (`valueHasValue, value`).
+ */
+internal fun mutableStateFlowWrite(elementType: KSType?, csElementType: String): CirStateFlowWrite {
+  val nullable: Boolean = elementType?.isMarkedNullable == true
+  val simpleName: String? = elementType?.expandAliases()?.declaration?.simpleName?.asString()
+  return when {
+    isMutableStateFlowElementObject(elementType) && nullable -> CirStateFlowWrite(
+      parameters = listOf(CirParameter("value", KOTLIN_HANDLE)),
+      arguments = "v?._handle ?? NugetKotlinHandle.Null",
+    )
+
+    isMutableStateFlowElementObject(elementType) -> CirStateFlowWrite(
+      parameters = listOf(CirParameter("value", KOTLIN_HANDLE)),
+      arguments = "v._handle",
+      rejectsNull = true,
+    )
+
+    nullable && simpleName != "String" -> CirStateFlowWrite(
+      parameters = listOf(
+        CirParameter("valueHasValue", "bool"),
+        CirParameter("value", csElementType.removeSuffix("?")),
+      ),
+      arguments = "v.HasValue, v.GetValueOrDefault()",
+    )
+
+    else -> CirStateFlowWrite(
+      parameters = listOf(CirParameter("value", csElementType)),
+      arguments = "v",
+    )
+  }
+}
+
 internal fun mapReturnType(kotlinType: String): String =
   KOTLIN_TO_CSHARP_RETURN[kotlinType] ?: "IntPtr"
 

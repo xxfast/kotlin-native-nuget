@@ -207,6 +207,60 @@ class CatMoodTracker(private val catName: String) {
 
   val grudge: MutableStateFlow<Grudge> = MutableStateFlow(Grudge("the vet"))
 
+  // --- ADR-071 amendment (nullable element write): a `MutableStateFlow<T?>` whose `.Value` C# can
+  // set to null. One reference element, one value element (the has-value pair, so a null is never
+  // a zero) and one object element (a null handle). Each starts null. ---
+
+  /** MutableStateFlow<String?> -- nullable reference element; Oreo's collar tag can be removed. */
+  val collarTag: MutableStateFlow<String?> = MutableStateFlow(null)
+
+  /** MutableStateFlow<Int?> -- nullable value element; null means "nap not tracked", not 0. */
+  val napMinutes: MutableStateFlow<Int?> = MutableStateFlow(null)
+
+  /** MutableStateFlow<Cat?> -- nullable object element; Mylo may have no best friend. */
+  val bestFriend: MutableStateFlow<Cat?> = MutableStateFlow(null)
+
+  /** The held function-return twin of [napMinutes], sharing its storage. */
+  fun napLog(): MutableStateFlow<Int?> = napMinutes
+
+  /** Kotlin-side read-back: proves a C# write of [bestFriend] (null included) landed in Kotlin. */
+  fun bestFriendName(): String? = bestFriend.value?.name
+
+  // --- ADR-071 amendment (nullable member write): a `MutableStateFlow<T>?` absent until
+  // [openDiary], settable once present. [closeDiary] makes it absent again, so a C# holder obtained
+  // before the close finds the member gone on its next write. ---
+
+  private var _diary: MutableStateFlow<String>? = null
+
+  /** MutableStateFlow<String>? -- nullable MEMBER; null until [openDiary]. */
+  val diary: MutableStateFlow<String>? get() = _diary
+
+  /** Deterministic mutation -- brings [diary] into existence with [first]. */
+  fun openDiary(first: String) {
+    _diary = MutableStateFlow(first)
+  }
+
+  /** Deterministic mutation -- makes [diary] absent again. */
+  fun closeDiary() {
+    _diary = null
+  }
+
+  // --- ADR-071 held-route amendment (ADR-068 cross-note): `suspend fun` returning the declared
+  // MutableStateFlow, so the awaited holder is settable. Both share storage with a property above
+  // and genuinely suspend first. ---
+
+  /** suspend fun returning MutableStateFlow<Int>, sharing [treatCount]'s storage. */
+  suspend fun awaitTreatJar(): MutableStateFlow<Int> {
+    kotlinx.coroutines.delay(1)
+    return treatCount
+  }
+
+  /** suspend fun returning MutableStateFlow<Cat>, sharing [favouriteToy]'s storage. */
+  suspend fun awaitFavouriteToy(): MutableStateFlow<Cat> {
+    kotlinx.coroutines.delay(1)
+    return favouriteToy
+  }
+
   // --- ROADMAP line 74 (fromhandle-enum): an ENUM element on the StateFlow and Flow routes. The
   // Kotlin shim retains the enum object itself, and the C# side reads it through
   // `NugetMarshal.FromHandle<Mood>`, which needs a `Factories` entry for the enum. Every value a

@@ -326,7 +326,10 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
   // shared generic `nuget_stateflow_collect`/`nuget_stateflow_value` exports) instead of the
   // ordinary object-return `new T(resultPtr)` shape below -- a KotlinStateFlow<T> has no
   // single-IntPtr constructor.
-  val isStateFlowReturn: Boolean = method.asyncReturnType.startsWith("KotlinStateFlow<")
+  // ADR-071 held-route amendment: an awaited `MutableStateFlow<T>` is the same holder plus a write
+  // lambda over the flow-keyed `_set_value` ([CirMethod.stateFlowWrite]).
+  val isStateFlowReturn: Boolean = method.asyncReturnType.startsWith("KotlinStateFlow<") ||
+    method.asyncReturnType.startsWith("KotlinMutableStateFlow<")
 
   val resultExtraction: String = when {
     isUnit -> "t.SetResult(true);"
@@ -382,6 +385,18 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
       appendLine("$indent                        (flowOnNext, flowOnComplete, flowOnError, flowUserData) =>")
       appendLine("$indent                            NugetStateFlowNative.Collect(flowHandle, collectScope, flowOnNext, flowOnComplete, flowOnError, flowUserData),")
       appendLine("$indent                        () => NugetStateFlowNative.$valueRead(flowHandle),")
+      // The write lambda sits between the read and `ownedHandle`, as on the held route.
+      method.stateFlowWrite?.let { write ->
+        appendLine("$indent                        v =>")
+        appendLine("$indent                        {")
+        if (write.rejectsNull) {
+          appendLine("$indent                            if (v is null) throw new ArgumentNullException(nameof(v));")
+        }
+        appendLine("$indent                            ${method.stateFlowSetValueNativeName}(flowHandle, ${write.arguments}, out IntPtr error);")
+        appendLine("$indent                            if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
+        appendLine("$indent                            NugetErrorNative.ClearManagedFault();")
+        appendLine("$indent                        },")
+      }
       // ADR-123's `read:` slot, fourth ctor argument (trailing optional, `CirFlowRenderer`): an
       // interface element materialises each `.Value` through the ADR-136 resolve-then-wrap
       // expression instead of the default `FromHandle<T>`, which has no factory for an interface.

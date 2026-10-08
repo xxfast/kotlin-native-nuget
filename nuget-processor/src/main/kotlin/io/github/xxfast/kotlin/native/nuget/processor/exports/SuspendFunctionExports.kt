@@ -205,6 +205,12 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
 
     addFunction(builder.build())
     addAcquiredFlowCollectExport(method, "${prefix}_${cname}", returnType, classifier)
+    // ADR-071 held-route amendment: an awaited `MutableStateFlow<T>` is written through the held
+    // route's flow-keyed setter; the `_async` export above already hands the flow back by handle.
+    if (method.awaitsSettableMutableStateFlow()) {
+      val element: KSType? = returnType?.arguments?.firstOrNull()?.type?.resolve()?.expandAliases()
+      addHeldStateFlowSetValueExport("${prefix}_${cname}", method, element)
+    }
   }
 }
 
