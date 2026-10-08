@@ -157,6 +157,11 @@ kotlin {
       // ADR-177: kotlinx-io on the classpath is what switches on the optional
       // `kotlinx.io.IOException -> KotlinIOException` row (`cat/LitterBoxErrors.kt`).
       implementation(libs.kotlinx.io.core)
+      // ADR-154: two real Maven-published klibs, the shapes `admit(...)` was designed around
+      // (`realklib/Postbox.kt`). Not sibling modules: these prove admission against a klib this
+      // repo never built.
+      implementation(libs.ktor.http)
+      implementation(libs.kermit)
     }
     nativeTest.dependencies {
       implementation(libs.kotlin.test)
@@ -286,6 +291,10 @@ nuget {
     // (`errand/Errands.kt`, `errand/ErrandRunner.kt`). In scope on purpose, so the fixture is about
     // the closure reaching the types, not about the scope admitting them.
     admit("dev.other.bysuspend")
+    // The same by-name arm against real published klibs: ktor's `Url` (a class with an internal
+    // constructor, kept whole minus the members typed by un-admitted ktor types) and kermit's
+    // `Severity` (a plain enum). Asserted by `IntegrationTests/RealKlibAdmissionTests.cs`.
+    admit("io.ktor.http.Url", "co.touchlab.kermit.Severity")
     // ADR-115 amendment: one waived marker, so this build shows both halves of the feature. Every
     // other `@RequiresOptIn` marker in `issue113/` stays unlisted and keeps being dropped.
     exportMarkers("io.github.xxfast.kotlin.native.nuget.test.issue113.ExperimentalDiet")

@@ -211,6 +211,34 @@ routes cannot disagree about which value classes bind. See
   by-name `admit` in another publisher was not seen; closed by ADR-109's 2026-10-07 amendment.
 - Deferred: custom type mappers; `export(project(...))`; a supertype edge (ADR-101); letting
   `include` match a qualified name for own-module roots.
-- Not verified by anyone: behaviour against the real ktor and kermit klibs. If an admitted
+- Verified against the real ktor and kermit klibs (2026-10-07 amendment). If an admitted
   third-party class carries a member shape the fixtures do not, the failure mode is non-compiling C#
   caught by `nugetCompileInterop` at pack time (ADR-138), not silent wrong output.
+
+## Amendment (2026-10-07)
+
+`admit(...)` now runs against real Maven-published klibs. `:test-library` depends on
+`io.ktor:ktor-http:3.6.0` and `co.touchlab:kermit:2.2.0` and admits `io.ktor.http.Url` and
+`co.touchlab.kermit.Severity` by name, with no `include` for either package. `IntegrationTests`
+asserts the generated shapes and the behaviour both ways (`RealKlibAdmissionTests`).
+
+- **Verified:** `Severity` is a C# `enum` with six members under `TestLibrary.Co.Touchlab.Kermit`,
+  passed and returned by value. `Url` is a disposable handle class under
+  `TestLibrary.Io.Ktor.Http` with typed `Host`, `Port` and `EncodedPath`, no public constructor,
+  and its un-admitted `JvmSerializable` supertype skipped as `SKIPPED_UNEXPORTED_SUPERTYPE`.
+  Members typed `Parameters` and `URLProtocol` skip with the `add admit("...")` hint. A klib
+  admitted by name behaves like the `:test-models` fixture: nothing differs for a Maven klib.
+- **Verified:** both klibs were built by Kotlin 2.3.21 (ABI 2.3.0) and are consumed by the
+  repo's 2.4.x compilers, the supported direction. Packing costs about 15 s warm and 1.65 MB in
+  `kn_testlibrary.dll`.
+- **Correction:** ktor's `LogLevel` is not a fixture. It lives in `ktor-client-logging`, which
+  links the whole ktor client, and it has no companion object, contrary to what this ADR's
+  research and the `PurrLevel` fixture comment assumed. The `LogLevel` argument in the Decision
+  example is illustrative; `PurrLevel` remains the stand-in for an enum with constructor
+  properties and a companion.
+- **Finding, verified:** a nullable dependency property (`Url.protocolOrNull`) skips with the
+  generic `SKIPPED_UNSUPPORTED_PROPERTY` message and no `add admit(...)` hint, unlike
+  `Url.protocol`. Tracked in `ROADMAP.md`.
+- **Finding, verified:** a klib `internal` constructor (`Url.<init>`) is not visibility-filtered.
+  It reaches `SKIPPED_UNSUPPORTED_INPUT` and `WARNING_NO_PUBLIC_CONSTRUCTOR` does not fire. That
+  KSP reports it as public is inferred. Tracked in `ROADMAP.md`.

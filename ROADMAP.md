@@ -13,13 +13,13 @@ Two minor releases lead to 1.0.0: 0.9.0 carries every breaking change, 0.10.0 is
 
 ### 0.9.0: breaking changes
 
-Complete.
+- [ ] A nullable dependency property (`Url.protocolOrNull`) is skipped with the generic `SKIPPED_UNSUPPORTED_PROPERTY` message and no `add admit(...)` hint, unlike `Url.parameters` and `Url.protocol`, which name the admit entry that would bind them. Verified from the generated `NugetDiagnostics.json` of the ADR-154 real-klib fixture (2026-10-07).
+- [ ] A klib `internal` constructor (`Url.<init>`) is not visibility-filtered: it reaches `SKIPPED_UNSUPPORTED_INPUT` and `WARNING_NO_PUBLIC_CONSTRUCTOR` does not fire. Verified from `NugetDiagnostics.json`; that KSP reports the constructor as PUBLIC is inferred.
 
 ### 0.10.0: hardening
 
 - [ ] [ADR-165](docs/adr/165-publish-nuget-task.md)'s three Unverified claims need one real push to nuget.org and one to GitHub Packages before the next release ([details](docs/backlog/adr-165-unverified-claims-need-a-real-push.md))
 - [ ] Triage the backlog, then fix every live leak, wrong-behaviour and silent-omission item in the sections below; the 2026-09-29 audit counted seven leak or wrong-behaviour items and ten silent omissions, and found at least one entry, the triple-dispose one, already fixed. Verified.
-- [ ] [ADR-154](docs/adr/154-forward-dependency-type-admission.md)'s `admit(...)` was never exercised against a real published klib (ktor's `Url`/`LogLevel`, kermit's `Severity`, the shapes it was designed around); only the `:test-models` fixture proves it
 
 ### 1.0.0: policy and docs
 

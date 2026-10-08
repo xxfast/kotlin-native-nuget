@@ -4,6 +4,8 @@ ksp = "2.3.10"
 kotlinpoet = "2.2.0"
 coroutines = "1.10.2"
 kotlinxIo = "0.9.1"
+ktor = "3.6.0"
+kermit = "2.2.0"
 serialization = "1.11.0"
 mavenPublish = "0.37.0"
 junitJupiter = "5.10.1"
@@ -16,6 +18,8 @@ kotlinpoet = { module = "com.squareup:kotlinpoet", version.ref = "kotlinpoet" }
 kotlinpoet-ksp = { module = "com.squareup:kotlinpoet-ksp", version.ref = "kotlinpoet" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 kotlinx-io-core = { module = "org.jetbrains.kotlinx:kotlinx-io-core", version.ref = "kotlinxIo" }
+ktor-http = { module = "io.ktor:ktor-http", version.ref = "ktor" }
+kermit = { module = "co.touchlab:kermit", version.ref = "kermit" }
 kotlinx-serialization-core = { module = "org.jetbrains.kotlinx:kotlinx-serialization-core", version.ref = "serialization" }
 # ADR-060 Tier 1: the KSP2 programmatic entry point (`KotlinSymbolProcessing`) and its
 # `KSPJvmConfig` builder, plus the in-process JVM compiler used to compile generated
