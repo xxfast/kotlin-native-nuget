@@ -20,7 +20,6 @@ Complete.
 - [ ] [ADR-165](docs/adr/165-publish-nuget-task.md)'s three Unverified claims need one real push to nuget.org and one to GitHub Packages before the next release ([details](docs/backlog/adr-165-unverified-claims-need-a-real-push.md))
 - [ ] Triage the backlog, then fix every live leak, wrong-behaviour and silent-omission item in the sections below; the 2026-09-29 audit counted seven leak or wrong-behaviour items and ten silent omissions, and found at least one entry, the triple-dispose one, already fixed. Verified.
 - [ ] [ADR-154](docs/adr/154-forward-dependency-type-admission.md)'s `admit(...)` was never exercised against a real published klib (ktor's `Url`/`LogLevel`, kermit's `Severity`, the shapes it was designed around); only the `:test-models` fixture proves it
-- [ ] **`IntegrationTests.csproj` never copies `xunit.runner.json` to its output directory, so `parallelizeTestCollections: false` was never actually honoured; its test collections have run in parallel all along (trx per-test durations summed to 44.9s against a 15.6s wall clock).** Verified. This, not process sharing alone, is the real mechanism behind ADR-120's cross-test deltas. `LeakTests.csproj` copies the file explicitly; whether `IntegrationTests` should too is open, since it would roughly triple that suite's wall time by serializing it.
 
 ### 1.0.0: policy and docs
 

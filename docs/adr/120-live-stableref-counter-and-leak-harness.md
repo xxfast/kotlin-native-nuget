@@ -197,9 +197,9 @@ versa, fails KSP generation with the existing "missing Kotlin export"/"missing C
 
 ### Harness (`IntegrationTests/LiveHandleTests.cs`)
 
-**Verified**: `IntegrationTests/xunit.runner.json` sets `parallelizeTestCollections: false`, so
-no other test mints handles while a theory below runs; a `[Collection]` is not needed for
-isolation, only for grouping.
+**Verified**: `LeakTests` runs with `parallelizeTestCollections: false` (its own `xunit.runner.json`,
+copied to the output; see Amendment 2 and the 2026-10-07 amendment), so no other test mints handles
+while a theory below runs; a `[Collection]` is not needed for isolation, only for grouping.
 
 ```csharp
 public class LiveHandleTests
@@ -427,7 +427,7 @@ actual mechanism behind all three flakes above, not merely "sharing a process" i
 `LeakTests.csproj` copies `xunit.runner.json` explicitly
 (`<None Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />`), so this harness now
 gets genuine serial execution as well as its own process. Whether `IntegrationTests` should also copy
-the file is deliberately left open and tracked on the ROADMAP under Tooling & Test Integrity: doing so
+the file was left open here; resolved in the 2026-10-07 amendment (it stays parallel): copying it
 would serialize that suite, roughly tripling its wall time.
 
 `LiveHandleTests.cs` and `CollectabilityTests.cs` now live in `LeakTests/`, a separate xunit project
@@ -492,3 +492,17 @@ Evidence (**verified**, `scripts/verify.sh`): IntegrationTests 2974, LeakTests 1
 SharedException 2, Contract 3 and the six existing NativeAOT smoke cases passed. The fault scenario
 itself was not run under NativeAOT. Kover covered the new emitter lines except the sealed
 constructor forwarding branch for a retained superclass.
+
+## Amendment (2026-10-07): IntegrationTests runs its collections in parallel by design
+
+`IntegrationTests/xunit.runner.json` is deleted: it was never copied to the output directory, so it
+never took effect. `IntegrationTests` running its test collections in parallel is the stated design,
+which also keeps its wall time low. Only the `EnvVars` collection (`DisableParallelization = true`:
+`ForwardErrorTraceTests`, `RuntimeVersionTests`) is serial. `NugetMarshal.Factories` is mutated only
+by `CallbackFaultTests`, which restores it in `finally` and whose tests run serially within the
+class, so parallel classes cannot observe the change. `LeakTests` and `MultiPackageTests` keep their
+own `xunit.runner.json` copies, and `LeakTests` stays the serial harness in its own process, which
+is what the live-handle counts rely on. This closes the question Amendment 2 left open (whether
+`IntegrationTests` should copy the file): it should not. Evidence: file deletion and the
+`CallbackFaultTests.cs` comment in the shipped diff (verified); the class-level serial claims were
+stated by the decision and not re-run here (inferred).
