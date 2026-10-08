@@ -632,7 +632,7 @@ A `null` element crossing `await foreach` is a genuine emission, not the end of 
 a nullable element or a nullable member is not supported. A `suspend fun` returning a nullable
 `StateFlow` binds as described [above](#suspend-fun-returning-stateflow-t).
 
-## Parameters on `Flow`, `StateFlow`, and `suspend` members
+## Parameters on `Flow`, `StateFlow`, and `suspend` members {id="parameters-on-flow-stateflow-and-suspend-members"}
 
 A `List`/`Set`/`Map`, primitive, `String`, or class/object/sealed-type parameter on a `Flow`-,
 `StateFlow`-, or `suspend`-returning member crosses the same way it does anywhere else, spelled
@@ -659,6 +659,20 @@ fun snacks(limit: Int?): Flow<String> { /* ... */ }
 ```C#
 public Task<string> CountNapsAsync(int? limit, CancellationToken cancellationToken = default)
 await feeder.Snacks(null); // limit reaches Kotlin as null, not 0
+```
+
+A nullable `List`, `Set` or `Map` parameter binds as the nullable C# collection, and `null` reaches
+Kotlin as `null`, never an empty collection:
+
+```kotlin
+fun servingsFor(kinds: List<String>?, cats: List<Cat>?): Flow<String>
+suspend fun tallyFor(kinds: List<String>?, cats: List<Cat>?): String
+```
+
+```C#
+public KotlinFlow<string> ServingsFor(IReadOnlyList<string>? kinds, IReadOnlyList<Cat>? cats)
+public Task<string> TallyForAsync(IReadOnlyList<string>? kinds, IReadOnlyList<Cat>? cats,
+                                  CancellationToken cancellationToken = default)
 ```
 
 An enum parameter binds too, by ordinal (`(int)x` in C#, `Q.entries[x]` in Kotlin):
@@ -699,8 +713,10 @@ await bell.FeedAsync("Oreo"); // portion and treats: Kotlin evaluates bowl + ++s
 A defaulted handle parameter (a class, `object` or sealed type) widens the same way: a non-null
 declared type becomes `Placemat? mat = null` (`null` means unset), and an already-nullable one
 becomes `KotlinOptional<Placemat?> mat = default`, where an explicit `null` stays a value. Kotlin
-builds the default instance; you never construct it. A defaulted `List`, `Set` or `Map` parameter
-stays required; it does not widen. A same-name `suspend` overload whose shorter C# signature would
+builds the default instance; you never construct it. A defaulted non-null `List`, `Set` or `Map`
+parameter stays required; it does not widen, but a defaulted nullable one does (`tags: List<String>? = null`
+becomes `KotlinOptional<IReadOnlyList<string>?> tags = default`: omitted runs the Kotlin default, an
+explicit `null` arrives as `null`). A same-name `suspend` overload whose shorter C# signature would
 otherwise become ambiguous with the widened one (`CountAsync()` beside `CountAsync(int?, ...)`,
 CS0121) keeps the widened parameter required-but-nullable instead of gaining `= null`:
 

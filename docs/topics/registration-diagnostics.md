@@ -386,6 +386,12 @@ null case never reads. `LeakTests/LiveHandleTests.cs` row 9p
 (`Suspend_ReturningAListOfTheSealedBase_ReturnsToBaseline`) and row 9q
 (`Suspend_ReturningANullableCollection_ReturnsToBaseline`) cover them.
 
+A nullable `List`/`Set`/`Map` [parameter on a `suspend`, `Flow` or `StateFlow` member](coroutines-and-flow.md#parameters-on-flow-stateflow-and-suspend-members)
+mints one wire container per non-null argument and disposes it in the call's `finally`. A `null`
+argument is `IntPtr.Zero`, mints nothing, and the dispose skips it. `LeakTests/LiveHandleTests.cs`
+row 9r (`LegacyRoute_NullableCollectionParameter_ReturnsToBaseline`) covers null and non-null
+arguments on a `suspend` and a `Flow` member.
+
 A [top-level function returning a lambda](lambdas-and-callbacks.md#a-top-level-function-that-returns-a-lambda)
 adds one owned handle, the returned `KotlinFunc`, which `Dispose` releases. A parameter the lambda
 captures is not released when the call returns: a C#-implemented interface stays pinned until the
