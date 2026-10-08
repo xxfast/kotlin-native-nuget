@@ -14,6 +14,7 @@ import com.google.devtools.ksp.symbol.KSValueParameter
 import com.google.devtools.ksp.symbol.Modifier
 import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.MUTABLE_STATE_FLOW_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.READ_ONLY_STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 
@@ -741,9 +742,13 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
   }
 
   // ADR-068 peels a StateFlow return into its own bucket before the plain-async path sees it.
-  // ADR-123: that bucket reads every element through the module-wide `nuget_stateflow_value`
-  // export, which has no per-member projection seam, so a collection element cannot cross there
-  // even though the ADR-065 property and method routes now bind one. Refused, not half-bound.
+  // ADR-123 refused a collection element here, since the bucket read every element through the
+  // runtime's shared `nuget_stateflow_value`, which has no per-member projection seam. A
+  // read-only `StateFlow` of a collection now reads through its own handle-keyed `_value` /
+  // `_collect` pair (the seam ADR-202 gave the acquired `Flow`), so it is `Plain` here: the
+  // awaited result is still the flow handle, and the element reaches each half through
+  // `legacyFlowElementCollection`. A `MutableStateFlow` of a collection stays refused: its element
+  // has no write seam, and awaiting it to a read-only holder would drop the settable `.Value`.
   if (expanded.declaration.qualifiedName?.asString() in STATE_FLOW_TYPES) {
     val element: KSType? = expanded.arguments.firstOrNull()?.type?.resolve()?.expandAliases()
     // A NULLABLE scalar, string, object or sealed element binds: its `.Value` reads through the
@@ -758,7 +763,12 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
         "${expanded.legacyDescription()}$THROWABLE_RUNTIME_PAIR_REFUSAL",
       )
     }
-    return if (legacyFlowElementShape(element) is ForwardLegacyFlowElementShape.Plain) {
+    val readOnly: Boolean =
+      expanded.declaration.qualifiedName?.asString() in READ_ONLY_STATE_FLOW_TYPES
+    val elementShape: ForwardLegacyFlowElementShape = legacyFlowElementShape(element)
+    val bindsPerMember: Boolean =
+      readOnly && elementShape is ForwardLegacyFlowElementShape.Marshalled
+    return if (elementShape is ForwardLegacyFlowElementShape.Plain || bindsPerMember) {
       ForwardLegacyReturnShape.Plain
     } else {
       ForwardLegacyReturnShape.Refused(expanded.legacyDescription())

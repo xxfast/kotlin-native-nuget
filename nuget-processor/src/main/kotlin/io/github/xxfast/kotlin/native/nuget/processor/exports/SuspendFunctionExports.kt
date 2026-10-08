@@ -22,6 +22,7 @@ import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.TypeName
 import com.squareup.kotlinpoet.ParameterizedTypeName.Companion.parameterizedBy
 import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.READ_ONLY_STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollection
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
@@ -113,6 +114,7 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(
 
   addFunction(builder.build())
   addAcquiredFlowCollectExport(func, cname, returnType, classifier)
+  addAwaitedStateFlowCollectionExports(func, cname, returnType, classifier)
 }
 
 /**
@@ -205,6 +207,7 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
 
     addFunction(builder.build())
     addAcquiredFlowCollectExport(method, "${prefix}_${cname}", returnType, classifier)
+    addAwaitedStateFlowCollectionExports(method, "${prefix}_${cname}", returnType, classifier)
     // ADR-071 held-route amendment: an awaited `MutableStateFlow<T>` is written through the held
     // route's flow-keyed setter; the `_async` export above already hands the flow back by handle.
     if (method.awaitsSettableMutableStateFlow()) {
@@ -421,4 +424,63 @@ private fun FileSpec.Builder.addAcquiredFlowCollectExport(
     )
     .build()
   addFunction(export)
+}
+
+/**
+ * ADR-068, collection element: an awaited read-only `StateFlow<List<T>>` (or `Set`/`Map`) reads
+ * through its own `_value` / `_collect` pair keyed on the awaited flow handle, the seam ADR-202
+ * gave the acquired `Flow` ([addAcquiredFlowCollectExport]). The runtime's shared
+ * `nuget_stateflow_value` / `nuget_stateflow_collect` box the value unprojected, so a value-class
+ * or enum component would reach C# as the wrong thing; this pair boxes it through the same
+ * per-element projection the property and method routes use ([itemBoxExpr]). Only a collection
+ * element gets the pair: every other element keeps the shared runtime pair, so no member that
+ * bound before gains an export.
+ */
+private fun FileSpec.Builder.addAwaitedStateFlowCollectionExports(
+  method: KSFunctionDeclaration,
+  prefix: String,
+  returnType: KSType?,
+  classifier: ForwardBridgeTypeClassifier,
+) {
+  if (returnType?.declaration?.qualifiedName?.asString() !in READ_ONLY_STATE_FLOW_TYPES) return
+  val collection: BridgeType.Collection =
+    classifier.legacyFlowElementCollection(returnType) ?: return
+  val element: KSType = requireNotNull(returnType)
+    .arguments.firstOrNull()?.type?.resolve()?.expandAliases()
+    ?: error("Awaited StateFlow must declare an element type")
+  val type: TypeName = ClassName("kotlinx.coroutines.flow", "StateFlow").parameterizedBy(
+    element.toBridgeTypeName(),
+  )
+  val boxed: String = itemBoxExpr(elementNullable = false, collection = collection)
+
+  val value: FunSpec = FunSpec.builder("export_${prefix}_value")
+    .addAnnotation(cNameAnnotation("${prefix}_value", ownedBy(method)))
+    .addParameter("flowHandle", cOpaquePointer)
+    .returns(cOpaquePointer)
+    .addCode("val value = flowHandle.asStableRef<%T>().get().value\n", type)
+    .addCode("return $boxed\n")
+    .build()
+  addFunction(value)
+
+  val collect: FunSpec = FunSpec.builder("export_${prefix}_collect")
+    .addAnnotation(cNameAnnotation("${prefix}_collect", ownedBy(method)))
+    .addParameter("flowHandle", cOpaquePointer)
+    .addParameter("scopeHandle", cOpaquePointer.copy(nullable = true))
+    .addParameter("onNextPtr", cOpaquePointer)
+    .addParameter("onCompletePtr", cOpaquePointer)
+    .addParameter("onErrorPtr", cOpaquePointer)
+    .addParameter("userData", cOpaquePointer)
+    .returns(cOpaquePointer)
+    .addCode("val flow = flowHandle.asStableRef<%T>().get()\n", type)
+    .addCode(
+      "val scope = scopeHandle?.asStableRef<CoroutineScope>()?.get() " +
+        "?: CoroutineScope(Dispatchers.Default)\n",
+    )
+    .addCode(
+      "return collectForCSharp(scope, onNextPtr, onCompletePtr, onErrorPtr, " +
+        "userData, ::nugetMappedType) { emit ->\n" +
+        "  flow.collect { value -> emit($boxed) }\n}\n",
+    )
+    .build()
+  addFunction(collect)
 }

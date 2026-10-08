@@ -183,6 +183,38 @@ class CatMoodTracker(private val catName: String) {
     return MutableStateFlow("$prefix${_mood.value}").asStateFlow()
   }
 
+  // --- ADR-068, collection element: a `suspend fun` returning a read-only `StateFlow` of a
+  // collection. Its `.Value` and enumeration read through a per-member pair keyed on the awaited
+  // flow, because the runtime's shared pair boxes each list unprojected. One component needs no
+  // conversion (`Int`), one does (`CatId`, a value class that crosses as its underlying string).
+
+  private val _litterSizes: MutableStateFlow<List<Int>> = MutableStateFlow(listOf(3, 5))
+
+  /** `StateFlow<List<Int>>`: Oreo's and Mylo's litter sizes, no conversion at the seam. */
+  suspend fun awaitLitterSizes(): StateFlow<List<Int>> {
+    kotlinx.coroutines.delay(1)
+    return _litterSizes.asStateFlow()
+  }
+
+  /** Deterministic mutation -- records one more litter, observable through the awaited holder. */
+  fun recordLitter(size: Int) {
+    _litterSizes.value = _litterSizes.value + size
+  }
+
+  private val _housemates: MutableStateFlow<List<CatId>> =
+    MutableStateFlow(listOf(CatId(catName), CatId("mylo")))
+
+  /** `StateFlow<List<CatId>>`: a value-class component, projected to its underlying per element. */
+  suspend fun awaitHousemates(): StateFlow<List<CatId>> {
+    kotlinx.coroutines.delay(1)
+    return _housemates.asStateFlow()
+  }
+
+  /** Deterministic mutation -- a new housemate moves in. */
+  fun welcomeHousemate(id: String) {
+    _housemates.value = _housemates.value + CatId(id)
+  }
+
   // --- ADR-071: MutableStateFlow<T> declared PUBLICLY -- settable .Value from C#. Contrast with
   // [mood]/[energyLevel] above, which are MutableStateFlow-backed but declared as read-only
   // StateFlow views and must keep their get-only .Value. ---

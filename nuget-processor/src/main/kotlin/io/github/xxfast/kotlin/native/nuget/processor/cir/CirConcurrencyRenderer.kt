@@ -339,6 +339,13 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
   // lambda over the flow-keyed `_set_value` ([CirMethod.stateFlowWrite]).
   val isStateFlowReturn: Boolean = method.asyncReturnType.startsWith("KotlinStateFlow<") ||
     method.asyncReturnType.startsWith("KotlinMutableStateFlow<")
+  // A nullable element (`StateFlow<T?>`) reads through the null-aware sibling export; a collection
+  // element (ADR-068) reads through its own flow-handle-keyed pair, which projects each element.
+  val stateFlowCollect: String =
+    method.awaitedStateFlowCollectNativeName ?: "NugetStateFlowNative.Collect"
+  val stateFlowValue: String = method.awaitedStateFlowValueNativeName
+    ?: if (method.flowElementNullable) "NugetStateFlowNative.ValueOrNull"
+    else "NugetStateFlowNative.Value"
 
   val resultExtraction: String = when {
     isUnit -> "t.SetResult(true);"
@@ -381,8 +388,6 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
       val memberNullable: Boolean = method.asyncReturnType.endsWith("?")
       val holderType: String = method.asyncReturnType.removeSuffix("?")
       val indent: String = if (memberNullable) "    " else ""
-      // A nullable element (`StateFlow<T?>`) reads through the null-aware sibling export.
-      val valueRead: String = if (method.flowElementNullable) "ValueOrNull" else "Value"
       if (memberNullable) {
         appendLine("if (resultPtr == IntPtr.Zero)")
         appendLine("                    {")
@@ -403,8 +408,8 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
       appendLine("$indent                    NugetKotlinHandle collectScope = $collectScope;")
       appendLine("$indent                    t.SetResult(new $holderType(")
       appendLine("$indent                        (flowOnNext, flowOnComplete, flowOnError, flowUserData) =>")
-      appendLine("$indent                            NugetStateFlowNative.Collect(flowHandle, collectScope, flowOnNext, flowOnComplete, flowOnError, flowUserData),")
-      appendLine("$indent                        () => NugetStateFlowNative.$valueRead(flowHandle),")
+      appendLine("$indent                            $stateFlowCollect(flowHandle, collectScope, flowOnNext, flowOnComplete, flowOnError, flowUserData),")
+      appendLine("$indent                        () => $stateFlowValue(flowHandle),")
       // The write lambda sits between the read and `ownedHandle`, as on the held route.
       method.stateFlowWrite?.let { write ->
         appendLine("$indent                        v =>")

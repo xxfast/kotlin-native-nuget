@@ -2398,6 +2398,37 @@ public class LiveHandleTests
             iterations: 200);
     }
 
+    // Row 8d-suspend. ADR-068, collection element: an awaited read-only `StateFlow<List<T>>` reads
+    // through its own per-member `_value` / `_collect` pair keyed on the awaited flow. Each `.Value`
+    // read and each emission mints a collection handle (`ReadList` disposes it in its finally)
+    // plus, for `CatId`, one boxed underlying per element; the awaited flow's own StableRef is the
+    // holder's `ownedHandle`, freed by `Dispose()`. A read wired to the wrong export, or a holder
+    // that forgets its handle, leaks per crossing.
+    [Fact]
+    public async Task SuspendStateFlowCollectionElement_AwaitReadEnumerateDispose_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(
+            async () =>
+            {
+                using var tracker = new CatMoodTracker("oreo");
+                using (KotlinStateFlow<IReadOnlyList<int>> litters = await tracker.AwaitLitterSizesAsync())
+                {
+                    Assert.Equal(2, litters.Value.Count);
+                }
+
+                using KotlinStateFlow<IReadOnlyList<CatId>> housemates =
+                    await tracker.AwaitHousematesAsync();
+                Assert.Equal(2, housemates.Value.Count);
+                using var cts = new CancellationTokenSource();
+                await foreach (IReadOnlyList<CatId> page in housemates.WithCancellation(cts.Token))
+                {
+                    Assert.Equal(2, page.Count);
+                    cts.Cancel();
+                }
+            },
+            iterations: 50);
+    }
+
     // Row 8d-enum. ROADMAP line 74 (fromhandle-enum): an ENUM element on the StateFlow route. Each
     // `.Value` read mints one StableRef of the Kotlin enum object, which the `Factories` enum
     // entry must release after it reads the ordinal. A factory that forgets the release leaks one
@@ -2682,6 +2713,31 @@ public class LiveHandleTests
             using var level = dispenser.Level();
             level.Value = 7;
             Assert.Equal(7, level.Value);
+        });
+    }
+
+    // Row 8f-collection. ADR-114 on Row 8f's held route and on ADR-067's `_has_value` probe: the
+    // only crossings that wrap a call-scoped collection wire handle around a minting acquire.
+    // `Menu` builds the list's wire container, acquires (mints the held flow's StableRef, owned by
+    // the holder) and disposes the container; `MaybeRations` does the same around its probe, then
+    // again for each `.Value`. A container left undisposed on either arm, or a held handle the
+    // holder forgets, leaks per crossing.
+    [Fact]
+    public void CollectionParameterOnHeldAcquireAndHasValueProbe_ReturnsToBaseline()
+    {
+        string[] kinds = ["biscuit", "milo"];
+        AssertNoLeak(() =>
+        {
+            using var board = new TreatBoard();
+            using (KotlinMutableStateFlow<string> menu = board.Menu(kinds))
+            {
+                menu.Value = "tuna";
+                Assert.Equal("tuna", menu.Value);
+            }
+
+            Assert.Null(board.MaybeRations([]));
+            using KotlinStateFlow<int>? rations = board.MaybeRations([3, 5]);
+            Assert.Equal(8, rations!.Value);
         });
     }
 

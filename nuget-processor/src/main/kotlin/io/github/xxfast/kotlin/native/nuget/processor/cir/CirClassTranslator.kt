@@ -2661,6 +2661,10 @@ internal fun suspendMembers(
       acquiredFlowNullable = element.memberNullable,
       acquiredFlowCollectNativeName =
         if (element.asyncReturnType.startsWith("KotlinFlow<")) "${nativeStem}Collect" else null,
+      awaitedStateFlowCollectNativeName =
+        if (element.collection != null) "${nativeStem}Collect" else null,
+      awaitedStateFlowValueNativeName =
+        if (element.collection != null) "${nativeStem}Value" else null,
       stateFlowSetValueNativeName = if (write != null) "${nativeStem}SetValue" else "",
       stateFlowCompareAndSetNativeName =
         if (write != null) "${nativeStem}CompareAndSet" else "",
@@ -2678,7 +2682,15 @@ internal fun suspendMembers(
     } else {
       emptyList()
     }
-    listOfNotNull(nativeImport, setValueImport, compareAndSetImport, asyncMethod) + collector
+    // ADR-068, collection element: the per-member pair the awaited holder reads through.
+    val awaitedPair: List<CirMember> = if (element.collection != null) {
+      awaitedStateFlowCollectionImports(
+        libraryName, "${prefix}_${cname}", "${nativeStem}Collect", "${nativeStem}Value",
+      )
+    } else {
+      emptyList()
+    }
+    listOfNotNull(nativeImport, setValueImport, compareAndSetImport, asyncMethod) + collector + awaitedPair
   }
 
   return asyncMembers + suspendStateFlowMembers
@@ -2701,6 +2713,11 @@ internal data class SuspendStateFlowElement(
    * `KotlinFlow<T>?`. Kept off [asyncReturnType], which the completion reuses inside `new ...(`.
    */
   val memberNullable: Boolean = false,
+  /**
+   * A read-only `StateFlow` of a collection, which reads through its own per-member pair
+   * ([awaitedStateFlowCollectionImports]) rather than the runtime's shared one. Null otherwise.
+   */
+  val collection: BridgeType.Collection? = null,
 )
 
 internal fun suspendStateFlowElement(
@@ -2747,6 +2764,8 @@ internal fun suspendStateFlowElement(
   // route takes. A class element keeps `qualifiedElementCsType` byte for byte.
   val nullable: Boolean = element?.isMarkedNullable == true
   val memberNullable: Boolean = returnType?.expandAliases()?.isMarkedNullable == true
+  awaitedStateFlowCollectionElement(returnType, memberNullable, classifier, tracker)
+    ?.let { return it }
   val elementInterface: BridgeType.Interface? = classifier.legacyFlowElementInterface(element)
   val csElementType: String = elementInterface?.let { it.csharpType + if (nullable) "?" else "" }
     ?: classifier.legacyGenericSealedElement(element, nullable)
@@ -5566,6 +5585,9 @@ internal fun interfaceAsyncForwards(
             explicitInterface = spelling,
             nativeName = method.nativeName.carried(),
             acquiredFlowCollectNativeName = method.acquiredFlowCollectNativeName?.carried(),
+            awaitedStateFlowCollectNativeName =
+              method.awaitedStateFlowCollectNativeName?.carried(),
+            awaitedStateFlowValueNativeName = method.awaitedStateFlowValueNativeName?.carried(),
             stateFlowValueNativeName = method.stateFlowValueNativeName.carried(),
             stateFlowHasValueNativeName = method.stateFlowHasValueNativeName.carried(),
             stateFlowSetValueNativeName = method.stateFlowSetValueNativeName.carried(),
@@ -5721,3 +5743,53 @@ private fun sealedBaseSpelling(
   }
   return "${base.nestedCsName()}<$spelled>"
 }
+
+/**
+ * ADR-068, collection element: the awaited `KotlinStateFlow<IReadOnlyList<T>>` (or set, or
+ * dictionary) of a `suspend fun` returning a read-only `StateFlow` of a collection, or null for
+ * every other element. The holder reads each `.Value` and emission through the ordinary
+ * `NugetMarshal` helpers in ADR-123's `read:` slot (with the `release:` an abandoned element
+ * needs), off the per-member pair [awaitedStateFlowCollectionImports] binds.
+ */
+private fun awaitedStateFlowCollectionElement(
+  returnType: KSType?,
+  memberNullable: Boolean,
+  classifier: ForwardBridgeTypeClassifier,
+  tracker: CollectionHelperTracker?,
+): SuspendStateFlowElement? {
+  if (returnType?.expandAliases()?.declaration?.qualifiedName?.asString() !in
+    READ_ONLY_STATE_FLOW_TYPES
+  ) return null
+  val collection: BridgeType.Collection =
+    classifier.legacyFlowElementCollection(returnType) ?: return null
+  tracker?.trackCollection(collection)
+  return SuspendStateFlowElement(
+    asyncReturnType = "KotlinStateFlow<${collection.forwardPublicCsharpType()}>" +
+      if (memberNullable) "?" else "",
+    read = legacyFlowElementReadArgument(collection),
+    collection = collection,
+  )
+}
+
+/**
+ * The C# half of the per-member pair an awaited `StateFlow` of a collection reads through: the
+ * `_collect` keyed on the awaited flow handle (the shape of [acquiredFlowCollectImport]) and a
+ * `_value` that takes only that handle. Neither has an error slot: the Kotlin `_collect` reports
+ * through `onError`, and `StateFlow.value` cannot throw.
+ */
+internal fun awaitedStateFlowCollectionImports(
+  library: String,
+  prefix: String,
+  collectName: String,
+  valueName: String,
+): List<CirDllImport> = listOf(
+  acquiredFlowCollectImport(library, prefix, collectName),
+  CirDllImport(
+    libraryName = library,
+    entryPoint = "${prefix}_value",
+    returnType = "IntPtr",
+    name = valueName,
+    parameters = listOf(CirParameter("flowHandle", KOTLIN_HANDLE)),
+    visibility = CirVisibility.PRIVATE,
+  ),
+)

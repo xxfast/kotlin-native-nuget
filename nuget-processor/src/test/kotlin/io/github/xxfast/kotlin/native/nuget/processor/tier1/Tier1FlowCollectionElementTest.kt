@@ -268,46 +268,155 @@ class Tier1FlowCollectionElementTest {
   // `scripts/verify-runtime-exports.sh` checks the 69 names on the linked binary instead.
 
   /**
-   * ADR-068's `suspend fun` returning `StateFlow<T>` reads every element through the module-wide
-   * `nuget_stateflow_value` export, which has no per-member projection seam, so a collection
-   * element is refused there rather than half-bound. Before this ADR it rendered
-   * `Task<KotlinStateFlow<global::Interop.Sill.Kotlin.Collections.List>>`.
+   * ADR-068's `suspend fun` returning `StateFlow<T>` read every element through the runtime's
+   * shared `nuget_stateflow_value`/`nuget_stateflow_collect`, which box the value unprojected, so
+   * a collection element was refused there (`SKIPPED_UNSUPPORTED_RETURN`). It now binds through a
+   * per-member pair keyed on the awaited flow handle, the seam ADR-202 gave the acquired `Flow`:
+   * `.Value` and `await foreach` read each collection through the ordinary `NugetMarshal` helpers,
+   * and a projecting component (a value class) leaves as its underlying. Only a collection element
+   * takes the pair: a `Plain` element keeps the shared runtime pair byte for byte, and a
+   * `MutableStateFlow<List<T>>` (whose collection element has no write seam) stays refused rather
+   * than silently awaiting to a read-only holder.
    */
-  @Test
-  fun `a collection element on the suspend state flow route skips the member named`() {
-    val result = Tier1Harness.run(
+  private val awaited: Tier1Result by lazy {
+    Tier1Harness.run(
       """
       package tier1.awaited
 
       import kotlinx.coroutines.flow.MutableStateFlow
       import kotlinx.coroutines.flow.StateFlow
 
+      @JvmInline
+      value class NodeId(val value: Int)
+
       class Desk {
         suspend fun roster(): StateFlow<List<String>> = MutableStateFlow(listOf("Oreo"))
+        suspend fun ids(): StateFlow<Set<NodeId>> = MutableStateFlow(setOf(NodeId(1)))
+        suspend fun counts(): StateFlow<Map<String, Int>> = MutableStateFlow(mapOf("Oreo" to 4))
+        suspend fun maybeRoster(): StateFlow<List<Int>>? = null
         suspend fun lead(): StateFlow<String> = MutableStateFlow("Mylo")
+        suspend fun mutableRoster(): MutableStateFlow<List<String>> = MutableStateFlow(listOf("Mylo"))
       }
+
+      suspend fun deskRoster(): StateFlow<List<Int>> = MutableStateFlow(listOf(1, 2))
+
+      interface Ledger {
+        suspend fun pages(): StateFlow<List<Int>>
+      }
+
+      class Notebook : Ledger {
+        override suspend fun pages(): StateFlow<List<Int>> = MutableStateFlow(listOf(7))
+      }
+
+      fun ledger(): Ledger = Notebook()
       """.trimIndent(),
       fileName = "Desk.kt",
       processorOptions = mapOf("nuget.rootPackage" to "tier1"),
       libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
     )
+  }
 
-    assertFalse(
-      result.generatedCSharp.contains("RosterAsync"),
-      "expected no RosterAsync: the ADR-068 route has no per-member projection seam; got: " +
-          "${csharpLinesFor(result, "Roster")}",
-    )
+  private fun asyncBody(result: Tier1Result, name: String): String =
+    result.generatedCSharp.substringAfter(" ${name}Async(").substringBefore("private static extern")
+
+  @Test
+  fun `a collection element on the suspend state flow route awaits to the collection holder`() {
+    val cs: String = awaited.generatedCSharp
+
+    val missing: List<String> = listOf(
+      "public Task<KotlinStateFlow<IReadOnlyList<string>>> RosterAsync(",
+      "NodeId>>> IdsAsync(",
+      "public Task<KotlinStateFlow<IReadOnlyDictionary<string, int>>> CountsAsync(",
+      "public Task<KotlinStateFlow<IReadOnlyList<int>>?> MaybeRosterAsync(",
+      "public static Task<KotlinStateFlow<IReadOnlyList<int>>> DeskRosterAsync(",
+      // An interface a function returns: its backing wrapper reads through `LedgerNative`.
+      "Task<KotlinStateFlow<IReadOnlyList<int>>> PagesAsync(",
+      // Control: a scalar element is untouched.
+      "public Task<KotlinStateFlow<string>> LeadAsync(",
+    ).filterNot(cs::contains)
+    assertTrue(missing.isEmpty(), "missing: $missing; got: ${csharpLinesFor(awaited, "Async(")}")
+    assertTrue(cs.contains("IReadOnlySet<"), "expected the set element as IReadOnlySet")
     assertTrue(
-      result.generatedCSharp.contains("public Task<KotlinStateFlow<string>> LeadAsync("),
-      "expected a scalar element on that route to be untouched; got: " +
-          "${csharpLinesFor(result, "Lead")}",
-    )
-    assertTrue(
-      result.kspWarnings.any {
+      awaited.kspWarnings.none {
         it.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN.name}]") &&
-            it.contains("roster")
+            (it.contains("roster") && !it.contains("mutableRoster") || it.contains("ids") ||
+                it.contains("counts"))
       },
-      "expected a SKIPPED_UNSUPPORTED_RETURN naming Desk.roster; kspWarnings=${result.kspWarnings}",
+      "expected no skip for the bound members; kspWarnings=${awaited.kspWarnings}",
+    )
+  }
+
+  @Test
+  fun `a collection element on the suspend state flow route reads through its own pair`() {
+    listOf("Roster", "Ids", "Counts", "MaybeRoster", "DeskRoster").forEach { name ->
+      val body: String = asyncBody(awaited, name)
+      assertFalse(
+        body.contains("NugetStateFlowNative."),
+        "expected $name to read through its per-member pair, not the shared runtime one; got: " +
+            body,
+      )
+      assertTrue(body.contains("read: static h => NugetMarshal.Read"), "no read: slot in $body")
+      assertTrue(body.contains("release: static v =>"), "no release: slot in $body")
+    }
+    val roster: String = asyncBody(awaited, "Roster")
+    assertTrue(roster.contains("Native_RosterAsyncValue(flowHandle)"), roster)
+    assertTrue(roster.contains("Native_RosterAsyncCollect(flowHandle, collectScope,"), roster)
+
+    val missing: List<String> = listOf(
+      "_desk_roster_value\"", "_desk_roster_collect\"", "_desk_ids_value\"",
+      "_desk_counts_collect\"", "_desk_maybeRoster_value\"", "_ledger_pages_value\"",
+      "_ledger_pages_collect\"",
+    ).filterNot(awaited.generatedCSharp::contains)
+    assertTrue(missing.isEmpty(), "missing entry points: $missing; got: " +
+        csharpLinesFor(awaited, "EntryPoint"))
+  }
+
+  @Test
+  fun `a plain element on the suspend state flow route keeps the shared runtime pair`() {
+    val lead: String = asyncBody(awaited, "Lead")
+    assertTrue(lead.contains("NugetStateFlowNative.Collect(flowHandle"), lead)
+    assertTrue(lead.contains("NugetStateFlowNative.Value(flowHandle)"), lead)
+    val declarations: List<String> = awaited.generatedCSharp.lines()
+      .filter { it.contains("EntryPoint") && it.contains("_lead_") }
+    assertTrue(declarations.none { it.contains("_lead_value") || it.contains("_lead_collect") },
+      "expected no per-member pair for a Plain element; got: $declarations")
+    assertFalse(Regex("""@CName\("[a-z0-9_]*_lead_(value|collect)"""").containsMatchIn(
+      awaited.generated,
+    ), "expected no per-member Kotlin pair for a Plain element")
+  }
+
+  @Test
+  fun `a collection element on the suspend state flow route is projected in the Kotlin pair`() {
+    val kt: String = awaited.generated
+    val missing: List<String> = listOf(
+      "flowHandle.asStableRef<StateFlow<List<String>>>()",
+      "flowHandle.asStableRef<StateFlow<Map<String, Int>>>()",
+      "NugetHandles.retain(value.mapTo(mutableSetOf()) { it.value } as Any)",
+    ).filterNot(kt::contains)
+    assertTrue(missing.isEmpty(), "missing: $missing; got: " +
+        kt.lines().filter { it.contains("asStableRef<StateFlow") || it.contains("mapTo") })
+    assertTrue(
+      awaited.compiledClean,
+      "expected clean generated Kotlin; got: ${awaited.compileErrors}",
+    )
+  }
+
+  @Test
+  fun `a mutable state flow of a collection on the suspend route still skips named`() {
+    assertFalse(
+      awaited.generatedCSharp.lines().any {
+        it.contains("MutableRosterAsync(") && !it.trimStart().startsWith("//")
+      },
+      "expected no MutableRosterAsync: the collection element has no write seam; got: " +
+          "${csharpLinesFor(awaited, "MutableRoster")}",
+    )
+    assertTrue(
+      awaited.kspWarnings.any {
+        it.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN.name}]") &&
+            it.contains("mutableRoster")
+      },
+      "expected a SKIPPED_UNSUPPORTED_RETURN naming Desk.mutableRoster; " +
+          "kspWarnings=${awaited.kspWarnings}",
     )
   }
 
