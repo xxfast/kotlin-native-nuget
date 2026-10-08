@@ -286,30 +286,29 @@ private fun StringBuilder.renderClassDeclaration(cls: CirClass) {
     }
   }
 
-  if (cls.hasInternalHandleConstructor) {
+  // Every class carries the internal handle constructors the factories and handle reads call.
+  appendLine(
+    "        internal ${cls.name}(IntPtr handle, out NugetHandleTag tag) : " +
+        "this(new NugetKotlinHandle(handle), out tag)",
+  )
+  appendLine("        {")
+  appendLine("        }")
+  appendLine()
+  if (cls.superClass != null) {
     appendLine(
-      "        internal ${cls.name}(IntPtr handle, out NugetHandleTag tag) : " +
-          "this(new NugetKotlinHandle(handle), out tag)",
+      "        internal ${cls.name}(NugetKotlinHandle handle, out NugetHandleTag tag) : " +
+          "base(handle, out tag)"
     )
     appendLine("        {")
     appendLine("        }")
-    appendLine()
-    if (cls.superClass != null) {
-      appendLine(
-        "        internal ${cls.name}(NugetKotlinHandle handle, out NugetHandleTag tag) : " +
-            "base(handle, out tag)"
-      )
-      appendLine("        {")
-      appendLine("        }")
-    } else {
-      appendLine("        internal ${cls.name}(NugetKotlinHandle handle, out NugetHandleTag tag)")
-      appendLine("        {")
-      appendLine("            tag = default;")
-      appendLine("            _handle = handle;")
-      appendLine("        }")
-    }
-    appendLine()
+  } else {
+    appendLine("        internal ${cls.name}(NugetKotlinHandle handle, out NugetHandleTag tag)")
+    appendLine("        {")
+    appendLine("            tag = default;")
+    appendLine("            _handle = handle;")
+    appendLine("        }")
   }
+  appendLine()
 
   // ADR-204: this class is an arm of a sealed interface over declared arms.
   cls.handleInterfaces.forEach { iface ->

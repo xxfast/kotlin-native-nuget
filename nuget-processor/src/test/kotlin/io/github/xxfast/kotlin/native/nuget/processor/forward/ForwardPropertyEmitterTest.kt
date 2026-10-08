@@ -467,7 +467,6 @@ class ForwardPropertyEmitterTest {
                 constructor = null,
                 properties = listOf(ForwardCirPropertyProjection.classProperty(plan)),
                 methods = emptyList(),
-                hasInternalHandleConstructor = true,
               ),
             ),
           ),

@@ -227,7 +227,7 @@ always sets `externName`. Generated output is byte-identical. Pinned by `CirOrdi
 
 The dead `CirTranslator.translateExtensionFunction` applies `toCSharpName` *before* PascalCasing and
 stamps its own `Native_$csName`, so a revival could still mint `Native_@lock` outside this rule. It
-has no callers; deleting it is a separate change.
+has no callers; deleting it is a separate change (done, see the 2026-10-07 note at the end).
 
 ## Consequences
 
@@ -316,3 +316,9 @@ see the fixture's own comment). Tests: `IntegrationTests/InterfaceOverloadTests.
 handle kind: every numbered dispatch export or bridge slot borrows the one handle its route already
 mints, never one of its own. Verify: green, processor 1212/0, IntegrationTests 2294/0, LeakTests
 98/0, `GeneratedBindingsCheck` 0 warnings.
+
+## Amendment 2026-10-07
+
+The dead `CirTranslator.translateExtensionFunction` producer is gone, together with its two
+`CirMethod` constructions and `checkedExtensionBody`, so no `Native_@` extern name can be minted
+outside the plan-carried rule above.

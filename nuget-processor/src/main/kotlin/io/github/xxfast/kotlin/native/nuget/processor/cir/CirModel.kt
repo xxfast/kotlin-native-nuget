@@ -224,7 +224,6 @@ internal data class CirClass(
   val interfaceBridgeMethods: List<CirInterfaceBridgeMethod> = emptyList(),
   val interfaces: List<String> = emptyList(),
   val superClass: String? = null,
-  val hasInternalHandleConstructor: Boolean = true,
   val isDataClass: Boolean = false,
   val isAbstract: Boolean = false,
   // ADR-101 amendment (2026-09-10): a non-abstract Kotlin `open class`, i.e. one an exported
