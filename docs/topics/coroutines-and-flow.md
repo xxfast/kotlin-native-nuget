@@ -671,7 +671,10 @@ using var bell = new Dinnerbell(10);
 await bell.FeedAsync("Oreo"); // portion and treats: Kotlin evaluates bowl + ++served and 5
 ```
 
-A defaulted handle or collection parameter (a class, `object`, sealed type, or `List`/`Set`/`Map`)
+A defaulted handle parameter (a class, `object` or sealed type) widens the same way: a non-null
+declared type becomes `Placemat? mat = null` (`null` means unset), and an already-nullable one
+becomes `KotlinOptional<Placemat?> mat = default`, where an explicit `null` stays a value. Kotlin
+builds the default instance; you never construct it. A defaulted `List`, `Set` or `Map` parameter
 stays required; it does not widen. A same-name `suspend` overload whose shorter C# signature would
 otherwise become ambiguous with the widened one (`CountAsync()` beside `CountAsync(int?, ...)`,
 CS0121) keeps the widened parameter required-but-nullable instead of gaining `= null`:

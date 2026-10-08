@@ -290,8 +290,8 @@ function, or a `Flow`/`StateFlow`/held-`MutableStateFlow` member widens exactly 
 parameter (rules 1, 2 and 5 above), including an ADR-074 `expect`/`actual` default on a top-level
 function. Omitting the widened argument runs the *Kotlin* default, not a C# copy: the shared
 `forwardMaskArms` helper (`ForwardKotlinPlanEmitter.kt`) builds the same `when (mask)` dispatch used
-by the plan route, now shared by both. A defaulted handle or collection parameter stays required, as
-it was before this amendment:
+by the plan route, now shared by both. A defaulted collection parameter stays required, as
+it was before this amendment (a defaulted handle widens since [ADR-122](122-handle-parameters-on-the-legacy-routes.md)'s 2026-10-09 amendment):
 
 ```kotlin
 class Dinnerbell(val bowl: Int) {

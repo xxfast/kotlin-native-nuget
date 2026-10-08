@@ -452,7 +452,8 @@ C# declares the public parameter `T?` and passes `x?._handle ?? IntPtr.Zero`, an
 declares the slot `COpaquePointer?` and lowers it eagerly as `x?.asStableRef<T>()?.get()`, so the
 member receives `null`. A sealed base keeps ADR-105's rewrite (`sealedAsHandle()` already turned
 `Observation?` into a nullable handle). A defaulted nullable handle (`cat: Cat? = null`) is still
-not widened: the parameter stays required, as a non-null handle default already does.
+not widened: the parameter stays required, as a non-null handle default already does (widened by
+the 2026-10-09 amendment below).
 
 The `SKIPPED_UNSUPPORTED_INPUT` wording now says the route takes a handle "nullable or not".
 Verified by `nuget-processor`'s `Tier1LegacyRouteNullableHandleParameterTest` and the flipped
@@ -460,3 +461,33 @@ Verified by `nuget-processor`'s `Tier1LegacyRouteNullableHandleParameterTest` an
 `IntegrationTests/LegacyRouteNullableHandleParameterTests.cs` (consumer behaviour), and the
 `LeakTests` row `NullableHandleParameter_SuspendNullAndValue_ReturnsToBaseline` (a borrowed handle
 mints nothing, `null` included).
+
+### 2026-10-09: a defaulted handle widens
+
+A default on a class, `object` or sealed handle parameter of a legacy-route member now widens like
+the scalar defaults of [ADR-164](164-optional-default-parameters.md)'s 2026-09-27 amendment, so
+the parameter is no longer required in C#. This covers class, sealed-arm and top-level `suspend`
+members, `suspend` members returning `StateFlow`, and `Flow`/`StateFlow` members. The default
+expression is never spelled in C#: omitting the argument makes Kotlin evaluate its own default.
+
+- A non-null declared type (`mat: Placemat = Placemat("house")`) becomes `Placemat? mat = null`;
+  `null` means unset. It reuses the nullable pointer slot above, so the member receives the handle
+  or runs its default.
+- An already-nullable declared type (`mat: Placemat? = Placemat("house")`) becomes
+  `KotlinOptional<Placemat?> mat = default`. The export gains a leading `Boolean` `matIsSet` slot
+  before the pointer, so an omitted argument (Kotlin's default) differs from an explicit `null`
+  (the member receives `null`).
+- ADR-164 rule 5 and the CS0121 sibling-arity guard apply unchanged. `Dinnerbell.share` keeps `mat`
+  without a C# default because the defaulted `List` after it is still required.
+- A defaulted collection parameter still stays required (the nullable collection wire does not
+  exist on these routes). A sealed base takes the same two shapes; no sealed-base fixture member
+  covers it.
+
+No new `LeakTests` row (verified by reading source): an unset handle crosses as a null pointer and
+a set one is the borrowed handle already measured by
+`NullableHandleParameter_SuspendNullAndValue_ReturnsToBaseline` above, with the by-value `IsSet`
+flag adding nothing to track. The plan route's
+`WidenedDefaultHandleParameter_UnsetAndSet_ReturnsToBaseline`
+covers the unset/set pair. Verified by `Tier1LegacyRouteDefaultsTest` (generated text) and
+`IntegrationTests/LegacyRouteDefaultsTests.cs` (`Dinnerbell.settle`, `lounge`, `snooze`, `share`),
+with the native pipeline green.
