@@ -328,3 +328,26 @@ subclass gets its own export or a second `IAsyncDisposable`. No change was neede
   a consumer calling `GroomAsync` on each concrete type compiles.
 - Inferred, not pinned: only the suspend route was tested. The Flow route calls the same method
   through the same owner selection and should behave the same, but no cell covers it.
+
+## Amendment (2026-10-09): three scope-ownership outcomes pinned
+
+`Tier1ScopeOwnerChainBranchesTest` now covers three branches of the scope-ownership logic that had
+no fixture. No production change was needed; each cell was verified red by breaking its branch.
+
+- **Sealed-arm ancestor.** For an ordinary class below an open sealed arm, the arm owns the scope
+  and is the only declaration of it. The arm declares a `Flow` method and a `StateFlow` property
+  once, through `forwardArmFlowMethods`/`forwardArmFlowProperties`, and the subclass inherits both.
+  The suspend shape never reaches this branch because it returns earlier. Neither the sealed base
+  nor the subclass declares a scope.
+- **Open middle class.** With an abstract owner, a concrete `open` middle class and a leaf, the
+  owner declares the scope and the drain. The middle class and the leaf render
+  `override Dispose()` and `override DisposeAsync()`, no second scope appears, and the generated C#
+  compiles with warnings as errors.
+- **Override kept under a dropped base.** For `Canoe : Paddle : Hull`, where `Paddle` is outside
+  the export root and the kept `Hull` lacks the member, `Canoe` projects its own override and owns
+  the scope, on both the suspend and the `Flow` route. The same holds for `Raft : Plank` with no
+  kept base. This is the "stays the only carrier" outcome of the rule 4 amendment above.
+
+Not covered and not working: a kept **generic** base under a dropped middle class
+(`Barge : Keel : Crate<Int>`) fails generation with an internal error, because the base spelling
+reads only direct supertypes (verified; tracked in `ROADMAP.md`).
