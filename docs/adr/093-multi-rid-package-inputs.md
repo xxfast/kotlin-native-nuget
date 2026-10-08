@@ -284,3 +284,12 @@ Two decisions the implementation made beyond what this ADR specifies:
 - A first-class `stageRuntimes`/upload helper task; the staged `runtimes/` tree plus the CI glob
   above is sufficient for v1.
 - A per-RID `nativeLib(rid, dir)` DSL (alternative 2); can be added later without breaking this.
+
+## Amendment 2026-10-07: the generated-C# side fails the same way
+
+`packNuget` now fails when a configured `generatedCsDirs` entry does not exist or is not a
+directory, instead of silently dropping it, matching the `nativeLibDirs` fail-fast above. The error
+`[nuget] Generated C# directory <path> does not exist` names the expected producer
+(`kspKotlin<Target>` for the forward `Interop.cs`, `nugetGenerateShims` for the reverse shims). An
+existing directory with no `.cs` files stays legal. Verified: four `PackNugetTaskTest` cases and
+both real fixtures still pack.
