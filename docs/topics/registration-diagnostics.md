@@ -303,6 +303,13 @@ live until then, and `Completion` finishing means they are released. `LeakTests/
 row 6g-notifying, `StateFlowNotifyingAdapter_UpdatesThenDispose_ReturnsToBaseline`, starts an
 adapter, takes two updates, disposes it and returns to baseline.
 
+A class [`suspend fun` returning `MutableStateFlow<T>`](coroutines-and-flow.md#suspend-fun-returning-stateflow-t)
+awaits to a holder that owns the flow's handle and frees it on `Dispose`. Its write borrows the
+value's handle and mints nothing; each `.Value` read mints one element handle the caller releases.
+`LeakTests/LiveHandleTests.cs` row 8f-suspend, `SuspendMutableStateFlow_AwaitWriteReadDispose_ReturnsToBaseline`,
+covers an `Int` and a class element. A nullable `MutableStateFlow` element or member write adds no
+handle, so it has no row of its own.
+
 For a [cancellation-token-taking async call](instance-members.md#async-cancellation), this count
 only proves the pending-continuation and `Task` handles came back to baseline: the bridge-owned
 `CancellationTokenSource` is a plain .NET `GCHandle`, not one of the Kotlin `StableRef`s
