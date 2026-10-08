@@ -26,6 +26,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmLambdaMe
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardClassLegacyMembers
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyFlowReturn
+import io.github.xxfast.kotlin.native.nuget.processor.exports.hasNullableLegacyFlowReturn
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyGenericReturnRoute
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyLambdaParameter
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasPlannedCallbackParameter
@@ -1517,6 +1518,8 @@ internal class ForwardCallablePlanner(
       val structuralReason: ForwardPlanSkipReason? = when {
         method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
         method.typeParameters.isNotEmpty() -> ForwardPlanSkipReason.GENERIC
+        // ADR-067 / ADR-026 amendment (2026-10-09): the legacy Flow route binds it.
+        method.hasNullableLegacyFlowReturn() -> ForwardPlanSkipReason.FLOW_PROTOCOL
         else -> null
       }
       if (structuralReason != null) {
@@ -1643,6 +1646,8 @@ internal class ForwardCallablePlanner(
         method.isUnroutedGeneric(interfaceBridgeMethods + storedCallbackMethods) ->
           ForwardPlanSkipReason.GENERIC
         method in interfaceBridgeMethods || method in storedCallbackMethods -> ForwardPlanSkipReason.CALLBACK_PROTOCOL
+        // ADR-067 / ADR-026 amendment (2026-10-09): the legacy Flow route binds it.
+        method.hasNullableLegacyFlowReturn() -> ForwardPlanSkipReason.FLOW_PROTOCOL
         else -> null
       }
       fun plan(): ForwardCallableCatalogEntry = planOrSkip(
@@ -1847,6 +1852,8 @@ internal class ForwardCallablePlanner(
           ForwardPlanSkipReason.GENERIC
         method in interfaceBridgeMethods || method in storedCallbackMethods ->
           ForwardPlanSkipReason.CALLBACK_PROTOCOL
+        // ADR-067 / ADR-026 amendment (2026-10-09): the legacy Flow route binds it.
+        method.hasNullableLegacyFlowReturn() -> ForwardPlanSkipReason.FLOW_PROTOCOL
 
         else -> null
       }
@@ -1989,6 +1996,8 @@ internal class ForwardCallablePlanner(
           ForwardPlanSkipReason.GENERIC
         method in interfaceBridgeMethods || method in storedCallbackMethods ->
           ForwardPlanSkipReason.CALLBACK_PROTOCOL
+        // ADR-067 / ADR-026 amendment (2026-10-09): the legacy Flow route binds it.
+        method.hasNullableLegacyFlowReturn() -> ForwardPlanSkipReason.FLOW_PROTOCOL
 
         else -> null
       }

@@ -61,6 +61,16 @@ internal fun KSFunctionDeclaration.hasLegacyFlowReturn(): Boolean {
 }
 
 /**
+ * ADR-067 / ADR-026 amendment (2026-10-09): a [hasLegacyFlowReturn] member whose whole `Flow<T>?` /
+ * `StateFlow<T>?` can be absent. The legacy route binds it behind the `_has_value` probe, so every
+ * owner the route is keyed to (class, interface, sealed base and arm) skips its plan as
+ * `FLOW_PROTOCOL`, the silent deferral its non-null twin takes. Planned, it classifies as
+ * `Nullable(flow)` and names a NULLABLE drop for a member that is present in `Interop.cs`.
+ */
+internal fun KSFunctionDeclaration.hasNullableLegacyFlowReturn(): Boolean =
+  hasLegacyFlowReturn() && returnType?.resolve()?.expandAliases()?.isMarkedNullable == true
+
+/**
  * ADR-064 amendment (2026-09-13): the legacy per-call lambda-parameter route's own gate (the
  * `allNonFlowMethods.partition` below), hoisted for the same reason as [hasLegacyFlowReturn]. A
  * lambda carried by a collection *element* (`List<(Int) -> Unit>`) is not a lambda parameter and
