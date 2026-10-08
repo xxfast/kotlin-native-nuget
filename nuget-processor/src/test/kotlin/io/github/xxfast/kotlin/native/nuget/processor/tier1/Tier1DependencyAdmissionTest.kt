@@ -69,6 +69,10 @@ class Tier1DependencyAdmissionTest {
       fun rimguard(): Rimguard = Rimguard("silicone")
       fun eartag(): Eartag = Eartag("oreo-0001")
       fun doormat(): dep.never.Doormat = dep.never.Doormat(true)
+      val fixedGuard: Rimguard get() = Rimguard("steel")
+      val looseGuard: Rimguard? get() = null
+      fun lend(guard: Rimguard?): Boolean = guard != null
+      fun borrowed(): Rimguard? = null
     }
   """.trimIndent()
 
@@ -268,6 +272,37 @@ class Tier1DependencyAdmissionTest {
   }
 
   /**
+   * ROADMAP 0.9.0 (ktor's `Url.protocolOrNull: URLProtocol?`): the nullable twin of an unadmitted
+   * dependency property must carry the same admit hint as `fixedGuard`, not the generic
+   * "no property getter or setter shape" pair. Its nullability is not why it was refused.
+   */
+  @Test
+  fun `a nullable unadmitted dependency property names the admit entry`() {
+    val result = run(admittedOptions)
+
+    val fixed: String = skip(result, "fixedGuard", ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY)
+    assertTrue("""admit("dep.bytype.Rimguard")""" in fixed, "the non-null twin; got: $fixed")
+
+    val loose: String = skip(result, "looseGuard", ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY)
+    assertTrue("""admit("dep.bytype.Rimguard")""" in loose, "expected the admit hint; got: $loose")
+    assertFalse("getter or setter shape" in loose, "expected no generic wording; got: $loose")
+  }
+
+  /** The same gap, checked at the input and return positions of a nullable dependency type. */
+  @Test
+  fun `a nullable unadmitted dependency parameter and return name the admit entry`() {
+    val result = run(admittedOptions)
+
+    val input: String =
+      skip(result, "lend", ForwardDiagnosticKind.SKIPPED_UNEXPORTED_DEPENDENCY_TYPE)
+    assertTrue("""admit("dep.bytype.Rimguard")""" in input, "expected the admit hint; got: $input")
+
+    val output: String =
+      skip(result, "borrowed", ForwardDiagnosticKind.SKIPPED_UNEXPORTED_DEPENDENCY_TYPE)
+    assertTrue("""admit("dep.bytype.Rimguard")""" in output, "expected the admit hint; got: $output")
+  }
+
+  /**
    * The `List<T>` hint bug (research spike 1b): a collection-element refusal passed no detail at
    * all, so the hint printed its literal `"the dependency's package"` fallback — a remedy naming
    * no package and no type. Fixed at the source, in `unexportedDependencyDetail`, which now
@@ -315,6 +350,10 @@ class Tier1DependencyAdmissionTest {
       errors.any { "rim" in it },
       "expected the PROPERTY position escalated through the same reason-keyed rule; " +
           "got: ${result.kspErrors}",
+    )
+    assertTrue(
+      errors.any { "looseGuard" in it },
+      "expected the NULLABLE property escalated too; got: ${result.kspErrors}",
     )
 
     // The author's own exclude stays a warning under strict: they already decided.

@@ -238,7 +238,24 @@ asserts the generated shapes and the behaviour both ways (`RealKlibAdmissionTest
   properties and a companion.
 - **Finding, verified:** a nullable dependency property (`Url.protocolOrNull`) skips with the
   generic `SKIPPED_UNSUPPORTED_PROPERTY` message and no `add admit(...)` hint, unlike
-  `Url.protocol`. Tracked in `ROADMAP.md`.
+  `Url.protocol`. Fixed by the 2026-10-08 nullable-spelling amendment below.
 - **Finding, verified:** a klib `internal` constructor (`Url.<init>`) is not visibility-filtered.
   It reaches `SKIPPED_UNSUPPORTED_INPUT` and `WARNING_NO_PUBLIC_CONSTRUCTOR` does not fire. That
   KSP reports it as public is inferred. Tracked in `ROADMAP.md`.
+
+## Amendment (2026-10-08)
+
+The nullable dependency property finding above is fixed. A nullable spelling of an un-admitted
+dependency type now takes the type's own skip reason instead of the generic `NULLABLE` one, the
+rule issue #54 already applied to undeclared types: the type is refused at every position, so the
+nullability is not why it was dropped, and "expose a non-nullable wrapper" cannot fix it.
+
+- **Verified:** `Url.protocolOrNull: URLProtocol?` now skips with the same
+  `add admit("io.ktor.http.URLProtocol")` hint as `Url.protocol`.
+- **Verified:** the same gap existed at the parameter (`fun f(p: Dep?)`) and return
+  (`fun g(): Dep?`) positions, which reported `SKIPPED_UNSUPPORTED_INPUT` /
+  `SKIPPED_UNSUPPORTED_RETURN` with the `NULLABLE` hint. Both now report
+  `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` with the `admit(...)` hint.
+- **Verified:** because strict mode (section 6) keys on the reason, `strictDependencyTypes` now
+  escalates the nullable spellings too. A build that passed under strict mode only because its
+  un-admitted dependency types were nullable now fails, as it always should have.

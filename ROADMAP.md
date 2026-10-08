@@ -13,7 +13,6 @@ Two minor releases lead to 1.0.0: 0.9.0 carries every breaking change, 0.10.0 is
 
 ### 0.9.0: breaking changes
 
-- [ ] A nullable dependency property (`Url.protocolOrNull`) is skipped with the generic `SKIPPED_UNSUPPORTED_PROPERTY` message and no `add admit(...)` hint, unlike `Url.parameters` and `Url.protocol`, which name the admit entry that would bind them. Verified from the generated `NugetDiagnostics.json` of the ADR-154 real-klib fixture (2026-10-07).
 - [ ] A klib `internal` constructor (`Url.<init>`) is not visibility-filtered: it reaches `SKIPPED_UNSUPPORTED_INPUT` and `WARNING_NO_PUBLIC_CONSTRUCTOR` does not fire. Verified from `NugetDiagnostics.json`; that KSP reports the constructor as PUBLIC is inferred.
 
 ### 0.10.0: hardening
