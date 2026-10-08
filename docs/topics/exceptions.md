@@ -50,6 +50,10 @@ The first matching row wins, so `NumberFormatException` is a `FormatException` a
 `InvalidOperationException`. Anything else, including `IndexOutOfBoundsException` and a user-defined
 exception that extends none of these, arrives as the shared `KotlinException`.
 
+The exception to the table is a cancelled C# callback that escapes Kotlin uncaught: it reaches C# as
+the original `OperationCanceledException` type, see
+[Lambdas and callbacks](lambdas-and-callbacks.md).
+
 ```kotlin
 internal class LitterBoxJammedException(message: String) : kotlinx.io.IOException(message)
 

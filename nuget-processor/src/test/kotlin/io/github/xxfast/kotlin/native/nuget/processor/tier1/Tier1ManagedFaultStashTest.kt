@@ -98,7 +98,7 @@ class Tier1ManagedFaultStashTest {
       .substringBefore("\n        }")
     assertContains(take, "if (expected != message) return null;")
     assertContains(take, "_lastManagedFault = null;")
-    assertContains(cs, "Exception? original = TakeOriginalManagedFault(kotlinType, msg);")
+    assertContains(cs, ": TakeOriginalManagedFault(kotlinType, msg);")
   }
 
   @Test
