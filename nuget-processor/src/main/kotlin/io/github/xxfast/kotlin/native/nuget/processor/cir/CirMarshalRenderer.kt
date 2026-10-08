@@ -626,6 +626,27 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
     )
     appendLine("        }")
     appendLine()
+    // LeakTests row 16l: a flow collection element read but never handed to the consumer. Same
+    // ownership rule as above (only what the marshaller built, never a token-resolved C# original),
+    // walked through every nesting level and both halves of a map. A string or `byte[]` holds no
+    // handle, so it is not walked element by element.
+    appendLine("        internal static void ReleaseAbandoned(object? value)")
+    appendLine("        {")
+    appendLine("            if (value is INugetHandle && value is IDisposable disposable) { disposable.Dispose(); return; }")
+    appendLine("            if (value is string || value is byte[]) return;")
+    appendLine("            if (value is System.Collections.IDictionary map)")
+    appendLine("            {")
+    appendLine("                foreach (System.Collections.DictionaryEntry entry in map)")
+    appendLine("                {")
+    appendLine("                    ReleaseAbandoned(entry.Key);")
+    appendLine("                    ReleaseAbandoned(entry.Value);")
+    appendLine("                }")
+    appendLine("                return;")
+    appendLine("            }")
+    appendLine("            if (value is System.Collections.IEnumerable items)")
+    appendLine("                foreach (object? item in items) ReleaseAbandoned(item);")
+    appendLine("        }")
+    appendLine()
   }
   // ADR-040 sub-decision B: the one shared reflective helper for an interface-typed parameter
   // (e.g. `Cat.Befriend(IPet pet)`). The static parameter type is the projected interface, which

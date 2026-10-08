@@ -14,8 +14,12 @@ import io.github.xxfast.kotlin.native.nuget.test.models.StoryUri
 import io.github.xxfast.kotlin.native.nuget.test.models.TopStory
 import io.github.xxfast.kotlin.native.nuget.test.models.Whisker
 import io.github.xxfast.kotlin.native.nuget.test.models.catnip
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.withContext
 
 /**
  * ADR-066 fixture: the forward export set as a reachability closure from module roots.
@@ -40,6 +44,14 @@ class Newsroom {
     emit(TopStory("Oreo escapes the cardboard box (again)", 1, Byline("Mylo")))
     emit(TopStory("Mylo naps in a sunbeam for six hours straight", 2, null))
   }
+
+  /**
+   * Abandoned collection-element fixture (`LeakTests` row 16l): three editions of two
+   * [TopStory] wrappers each. The first two go out back to back, so the second is already queued
+   * when a reader that took only the first walks away; the third goes out after a
+   * non-cancellable pause, so it lands after the reader disposed its enumerator.
+   */
+  fun editions(): Flow<List<TopStory>> = LateEditions()
 
   /** Reachable via a collection type argument. */
   fun archive(): List<TopStory> = listOf(
@@ -167,4 +179,22 @@ class Newsroom {
 
     override fun city(edition: Int): String = "Windowsill, edition $edition"
   }
+}
+
+/**
+ * [Newsroom.editions]: a hand-written [Flow] rather than `flow {}`, because `flow {}` refuses to
+ * emit once its collector is cancelled and the third edition has to arrive after exactly that.
+ */
+private class LateEditions : Flow<List<TopStory>> {
+  override suspend fun collect(collector: FlowCollector<List<TopStory>>) {
+    collector.emit(edition(1))
+    collector.emit(edition(2))
+    withContext(NonCancellable) { delay(300) }
+    collector.emit(edition(3))
+  }
+
+  private fun edition(number: Int): List<TopStory> = listOf(
+    TopStory("Oreo files edition $number", number, Byline("Mylo")),
+    TopStory("Mylo naps through edition $number", number, null),
+  )
 }

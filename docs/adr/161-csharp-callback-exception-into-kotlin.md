@@ -48,9 +48,8 @@ generated closure itself. **No ABI change**: `NugetAsyncCallback` stays 4-ary
 gained an `errOut` slot, because none of them runs user C# code (finding 1 of the research memo:
 only the four user-code-invoking thunk families need a channel at all).
 
-Accepted residue: an item whose materialisation failed had already had its element handle handed
-over by Kotlin before the C# read failed, so that one `StableRef` per failed item leaks (recorded
-in `LeakTests/LiveHandleTests.cs`, not asserted as a passing row).
+Residue (closed, see the 2026-10-07 amendment): an item whose materialisation failed had already had
+its element handle handed over by Kotlin before the C# read failed; the read itself releases it.
 
 ### Part B: a trailing `IntPtr* errOut` on every user-code callback thunk
 
@@ -184,8 +183,8 @@ moment ago. That is ordinary late delivery, not a wrong-listener bug and not a u
   when the escaping Kotlin error is exactly `NugetManagedException`, otherwise `KotlinException`
   wrapping whatever Kotlin threw instead (including a Kotlin author's own wrapper exception).
 - A `Flow<T>`/`suspend` materialisation failure faults the stream/`Task` and cancels the Kotlin
-  collector instead of crashing; one `StableRef` per failed `Flow` item is an accepted, unfixed
-  leak (residual 2 below).
+  collector instead of crashing; the failed item's handle is released by the read
+  (residual 2 below, closed by the 2026-10-07 amendment).
 - A late callback invocation after `Dispose()`/`removeListener` is dropped (`void`) or reported as
   `ObjectDisposedException` (value-returning), never a use-after-free or a silently wrong listener.
 - An uncaught `NugetManagedException` on a Kotlin coroutine or worker with no handler still
@@ -207,9 +206,8 @@ moment ago. That is ordinary late delivery, not a wrong-listener bug and not a u
 1. The reverse template's `internal class NugetManagedException` (`NugetGenerateBindingsTask.kt`)
    is not folded onto the runtime class; two types share one simple name until the ADR-130
    expect/actual seam is spiked and applied.
-2. A `Flow<T>` item whose read failed leaks one `StableRef` (part A); a shared catch that also
-   tried to dispose it risks a double free, so per-branch ownership in `FromHandle` is needed
-   first.
+2. Closed 2026-10-07 (see the amendment at the end): a `Flow<T>` item whose read failed no longer
+   leaks its `StableRef`.
 3. A dropped late call whose payload was a handle-passed argument (`String`, an exported object)
    leaks that argument's `StableRef`: the delegate that would have read and released it never runs.
 4. A cancelled C# callback that a consumer catches, then does not itself catch again further up,
@@ -241,4 +239,21 @@ unhandled element type, and the `Flow<Mood>` fixture that exercised it, no longe
 [ADR-094](094-reflection-free-generic-dispatch.md)'s 2026-09-29 amendment registers enums. Part A's
 containment is unchanged. Its test now injects a throwing `NugetMarshal.Factories` entry for a
 test-only `Tantrum` type (`CallbackFaults.tantrumStream()`) instead of relying on a bridge gap.
-Residual 2 (a failed read leaks one `StableRef`) is unaffected.
+Residual 2 (a failed read leaks one `StableRef`) is unaffected by this amendment; it is closed by the
+2026-10-07 amendment below.
+
+## Amendment (2026-10-07): residual 2 is closed; the failed item's handle is released by the read
+
+The "accepted residue" in Part A and residual 2 no longer hold. A `Flow<T>` item whose
+materialisation throws does not leak its `StableRef`: each read owns its handle on its own failure
+branch (`Materialize<T>`'s `catch` disposes the item handle, added by #399 in
+`e0560a7f`; `ReadList`/`ReadSet`/`ReadMap` dispose the container in a `finally`). The `onNext`
+catch in `KotlinFlowEnumerator<T>` therefore still must not dispose the handle itself: that would
+be the second release, the double free the residual feared.
+
+Evidence. Verified: `LeakTests/LiveHandleTests.cs` row 14d,
+`FlowItemMaterialisationFailure_ReleasesTheItemHandle`, swaps a throwing factory for the test-only
+`Tantrum` into `NugetMarshal.Factories` (one that, unlike `CallbackFaultTests`' variant, does not
+dispose the handle it is given), enumerates `CallbackFaults.TantrumStream()` ten times and returns
+to the live-handle baseline. Inferred: the fix predates this amendment; the row only pins it, and
+the stale "accepted residue" comments in the generator and the test are replaced.

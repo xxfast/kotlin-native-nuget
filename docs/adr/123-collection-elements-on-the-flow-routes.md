@@ -332,8 +332,8 @@ Not touched:
   `internal` constructors, and the shipped `cat` / `catcam` flow members' generated text does not
   move.
 - The leak surface is the reason for `LeakTests/LiveHandleTests.cs` row 8d. Each emission and each
-  `.Value` read mints a fresh `StableRef` for the container plus one box per element, and none of
-  it is released by the flow enumerator: the container handle goes in `ReadList`/`ReadSet`'s
+  `.Value` read mints a fresh `StableRef` for the container plus one box per element, and the flow
+  enumerator releases none of it for a delivered item (an abandoned one is the 2026-10-07 amendment): the container handle goes in `ReadList`/`ReadSet`'s
   `finally` and the element boxes are owned by whatever the read returns. A read lambda wired wrong
   leaks one handle per emission, which shows up nowhere else.
 - ROADMAP: the Phase 6 line about generic type arguments on the legacy routes narrows a third time
@@ -360,3 +360,28 @@ The "Not touched" note above, that a bare enum element (`StateFlow<Mood>`) stays
 at runtime, no longer holds. [ADR-094](094-reflection-free-generic-dispatch.md)'s 2026-09-29
 amendment registers every exported enum in `NugetMarshal.Factories`, so `FromHandle<Mood>` resolves
 without a per-member delegate. This design's collection routing is unchanged.
+
+## Amendment (2026-10-07): the enumerator releases abandoned collection items
+
+A collection element that was read but never reaches the consumer is now released immediately
+instead of waiting for finalizers. Two positions are abandoned: an item still queued when
+`DisposeAsync` completes the channel, and an item that arrives after it, which `TryWrite` refuses
+(or after an earlier materialisation fault completed the channel). The member that knows its
+element is a `List`, `Set` or `Map` passes an optional trailing `Action<T>? release` to
+`KotlinFlow<T>`, `KotlinStateFlow<T>` and `KotlinFlowEnumerator<T>`; the generated
+`ReleaseAbandoned` helper disposes the wrappers an element list, set or map holds. `DisposeAsync`
+completes the writer first and then drains the queue, so a write that landed before completion is
+released by the drain and one after it by `onNext`, never both. Every other element passes no
+`release`, so shipped members' text is unchanged.
+
+The earlier claim that an abandoned item's container handle and boxes belong to nothing was wrong:
+`ReadList`/`ReadSet`/`ReadMap` dispose the container in a `finally`, and each box is disposed or
+owned by a wrapper. What leaked was the element wrappers, held only by a dropped list until their
+finalizers ran. `ReleaseAbandoned` skips `string` and `byte[]` elements on purpose, since they hold
+no handle. A wrapper-typed element is unchanged: it stays on the GC fallback of
+[ADR-187](187-forward-finalizer-contract.md) (row 16c).
+
+Evidence. Verified: `LeakTests/LiveHandleTests.cs` row 16l,
+`AbandonedCollectionFlowItems_AreReleasedByTheEnumerator`, was red before the change (30 live
+handles against a baseline of 10) and is green after. Not covered by any row: the `Map` branch,
+nested collection recursion, and the `string`/`byte[]` skip in `ReleaseAbandoned`.

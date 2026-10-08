@@ -3612,11 +3612,6 @@ public class LiveHandleTests
     // reaches `Environment.FailFast` and kills the test host before the count is read. A FailFast
     // aborts the whole harness rather than reporting one failure, so all four rows carry `Skip`
     // until the error channel lands; removing the attributes is that PR's first step.
-    //
-    // Not measured, accepted residue named by the ADR-161 research memo: a `Flow<T>` item whose
-    // materialisation throws leaks one StableRef per failed item, because the Kotlin side already
-    // handed the item handle over when the C# read failed. That is a known cost of PR A's
-    // fault-the-stream answer, not something a row here should pin as correct.
 
     // Row 14. Per-call lambda, `String` payload, the throw uncaught in Kotlin. Fifty crossings, each
     // minting one payload handle that the callback never reads because it throws first. Oreo objects
@@ -3662,6 +3657,35 @@ public class LiveHandleTests
             using IDisposable sub = faults.AddFaultListener(_ => throw new ArgumentException("Mylo refuses"));
             Assert.ThrowsAny<Exception>(() => faults.Emit("dinner"));
         });
+    }
+
+    // Row 14d. ADR-161's flow residue, now a measured row: a `Flow<T>` item whose materialisation
+    // throws. Kotlin has already handed the item's handle over when the C# read fails, so the only
+    // release is the one the read owns on its failure branch (`Materialize<T>`'s single owner,
+    // which a factory that did construct a wrapper shares, so the two never both fire). The swapped
+    // factory throws WITHOUT disposing the handle it was given: `CallbackFaultTests`' variant
+    // disposes it, which would hide the very handle this row measures. Oreo's tantrum, ten times.
+    [Fact]
+    public async Task FlowItemMaterialisationFailure_ReleasesTheItemHandle()
+    {
+        Func<NugetKotlinHandle, object> original = NugetMarshal.Factories[typeof(Tantrum)];
+        NugetMarshal.Factories[typeof(Tantrum)] =
+            _ => throw new InvalidOperationException("Oreo hid under the sofa mid-tantrum");
+        try
+        {
+            await AssertNoLeakAsync(async () =>
+            {
+                using var faults = new CallbackFaults();
+                await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                {
+                    await foreach (Tantrum tantrum in faults.TantrumStream()) tantrum.Dispose();
+                });
+            });
+        }
+        finally
+        {
+            NugetMarshal.Factories[typeof(Tantrum)] = original;
+        }
     }
 
     // Row 14c. The ADR-084 interface bridge slot, whose ctx is a per-slot GCHandle in `_pins` and
@@ -4097,7 +4121,7 @@ public class LiveHandleTests
     // landed after `DisposeAsync`, `TryWrite` returned false and the wrapper was dropped on the
     // spot. Both are the same leak (an undisposed wrapper over an owned box), and the GC is the only
     // thing that can return it. The newsroom itself is disposed. The ADR-123 collection-element half
-    // of that ROADMAP item stays open under ADR-187 and is deliberately not measured here.
+    // is row 16l, released by the enumerator rather than the GC.
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static async Task DropAbandonedTopStory()
     {
@@ -4115,6 +4139,44 @@ public class LiveHandleTests
     [Fact]
     public async Task AbandonedWrapperTypedFlowItem_AfterDisposeAsync_IsReleasedByTheGc() =>
         await AssertReleasedByTheGcAsync("abandoned TopStory flow items", DropAbandonedTopStory);
+
+    // Row 16l. The ADR-123 collection-element half of row 16c's abandoned-Flow item. A
+    // `Flow<List<TopStory>>` item read but never handed to the consumer is a list nobody can
+    // reach, holding one owned wrapper per element; the enumerator, not the GC, has to release
+    // them. `Newsroom.Editions()` (`LateEditions`) sends edition 1 and 2 back to back and edition 3
+    // after a non-cancellable pause, so one crossing covers both abandoned positions: edition 2 is
+    // still queued when the reader walks away, edition 3 arrives after `DisposeAsync` and its
+    // `TryWrite` fails. Measured WITHOUT a GC on purpose: under `AssertNoLeakAsync` the dropped
+    // wrappers' finalizers (ADR-187) would hide a release the enumerator never made.
+    [Fact]
+    public async Task AbandonedCollectionFlowItems_AreReleasedByTheEnumerator()
+    {
+        for (int attempt = 1; ; attempt++)
+        {
+            Settle();
+            long before = NugetMarshal.LiveHandles;
+
+            for (int i = 0; i < 5; i++) await AbandonEditions();
+
+            long after = NugetMarshal.LiveHandles;   // no Settle: a finalizer must not count
+            if (after == before) return;
+            if (after < before && attempt < MeasurementAttempts) continue;
+
+            Assert.Fail(
+                $"expected {before} live handles after 5 abandoned edition streams, got {after} (delta {after - before}) on attempt {attempt}; the queued and the late edition's wrappers must be released by the enumerator");
+        }
+    }
+
+    private static async Task AbandonEditions()
+    {
+        using var newsroom = new Newsroom();
+        IAsyncEnumerator<IReadOnlyList<TopStory>> editions = newsroom.Editions().GetAsyncEnumerator();
+        Assert.True(await editions.MoveNextAsync());
+        foreach (TopStory story in editions.Current) story.Dispose();
+        await Task.Delay(100);   // edition 2 is queued before the reader walks away
+        await editions.DisposeAsync();
+        await Task.Delay(500);   // edition 3 lands after the dispose, its TryWrite fails
+    }
 
     // Row 16d. A sealed ARM, both ways one is obtained: constructed from C# (Row 1c's
     // `new Nap.Deep(minutes: 12)`, whose handle lives on the BASE's field) and returned from Kotlin

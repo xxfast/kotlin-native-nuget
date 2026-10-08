@@ -281,6 +281,10 @@ often you dispose it. `LeakTests/LiveHandleTests.cs`'s
 `ListReturn_ThrowingElementFactory_ReleasesTheListHandle` and
 `ListReturn_ConstructThenThrowFactory_SavedWrapperDisposalReturnsToBaseline` cover them.
 
+A `Flow` item that cannot be materialized releases its handle as the enumeration faults.
+`LeakTests/LiveHandleTests.cs` row 14d, `FlowItemMaterialisationFailure_ReleasesTheItemHandle`,
+swaps in a factory that throws without disposing and returns to baseline.
+
 A top-level [`suspend fun` returning `StateFlow<T>`](coroutines-and-flow.md#suspend-fun-returning-stateflow-t)
 adds no new handle kind either: the awaited holder owns the flow's own handle and releases it on
 `Dispose`, each `.Value` and each collected emission mints one element handle the caller releases,
@@ -469,7 +473,8 @@ GC fallback is covered by `UndisposedSuspendFlowHolder_IsReleasedByTheGc`.
 | 16i | `DiscardedSubscription_KeepsDeliveringAfterTheGc_AndKeepsItsToken` | a discarded `AddX` subscription keeps delivering and keeps its token |
 | 16j | `UndisposedWrapperWithASuspendScope_IsReleasedByTheGc` | a wrapper that owns a suspend scope |
 | 16k | `DisposedWrappers_ThenFinalized_AreNotReleasedTwice` | no double release after `Dispose()` |
-| 16l | `UndisposedSuspendFlowHolder_IsReleasedByTheGc` | an acquired suspend-returning `Flow` holder |
+| 16l | `AbandonedCollectionFlowItems_AreReleasedByTheEnumerator` | a `List`, `Set` or `Map` `Flow` item abandoned after `DisposeAsync`, released by the enumerator |
+| 16m | `UndisposedSuspendFlowHolder_IsReleasedByTheGc` | an acquired suspend-returning `Flow` holder |
 
 The subscription token is the exception: row 16i pins that nothing releases it until you dispose the
 subscription, so a discarded subscription holds one handle for the life of the process. The
