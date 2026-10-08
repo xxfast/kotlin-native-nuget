@@ -370,3 +370,10 @@ sibling of `nuget_stateflow_value` for a nullable `StateFlow` element on the sus
 in `NUGET_RUNTIME_EXPORTS` and the "67" in `NugetRuntimeApi`'s doc comment became "68". The
 "67 names" above (and in ADR-128's PR-E notes) describe the count at the time they were written.
 `NugetRuntimeAbi1` is unchanged: an added export is ABI-compatible.
+
+## Amendment (2026-10-09): the runtime ABI is now 69 names
+
+`nuget_flow_resume` ([ADR-207](207-flow-backpressure.md)) is the 69th export; the 68th is `nuget_stateflow_value_or_null` (previous amendment).
+It is an additive, runtime-fixed sibling of `nuget_job_cancel` that returns one flow credit, is in
+`NUGET_RUNTIME_EXPORTS`, and `NugetRuntimeApi`'s "68" became "69". `NugetRuntimeAbi1` is unchanged:
+the generator and runtime stay version-locked and an added export is ABI-compatible.

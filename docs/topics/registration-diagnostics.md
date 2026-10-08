@@ -489,6 +489,10 @@ The suspend-returning-Flow path is covered by `SuspendFlow_AcquireCollectDispose
 `SuspendFlow_ImmediateAcquisitionAndCompletion_ThousandsReturnToBaseline`. The acquired holder's
 GC fallback is covered by `UndisposedSuspendFlowHolder_IsReleasedByTheGc`.
 
+A producer parked on an unread credit ([backpressure](coroutines-and-flow.md#flow-backpressure)) holds
+the item it already minted. `Flow_AbandonedWhileProducerParked_ReturnsToBaseline` (row 8l) reads one
+item, waits, disposes the enumerator, and returns to baseline: the cancel releases the held item.
+
 A hot [`SharedFlow<T>`](coroutines-and-flow.md#shared-flow-t) never completes, so its leak row is the
 abandoned shape: `SharedFlow_AbandonedAfterReplay_ReturnsToBaseline` (row 8k) takes the replayed
 item from a property and a `suspend` return, disposes each enumerator, and returns to baseline.

@@ -634,3 +634,21 @@ Flow collection uses the class's `CoroutineScope` (same as suspend methods). Thi
 (`Task<KotlinFlow<T>>` at a `suspend` return) through this ADR's `_collect` export, unchanged.
 `SharedFlow.collect` replays the Kotlin replay cache and never completes, so no `IObservable<T>` and
 no C#-side replay buffer are needed. **Verified** by the 2026-10-09 integration and leak tests.
+
+## Amendment (2026-10-09): backpressure shipped, and SKIE does have it
+
+[ADR-207](207-flow-backpressure.md) implements the deferred backpressure. The bridge keeps
+`Channel.CreateUnbounded<T>` on the C# side, but `collectForCSharp` holds one credit per collection:
+`emit` suspends until the generated `MoveNextAsync` calls the runtime export `nuget_flow_resume`,
+so at most one unread item sits on the C# side and the Kotlin flow body parks inside the next
+`emit`. This is the "synchronization round-trip" the Consequences below called a cost; the shipped
+export is `nuget_flow_resume`, not the `nuget_flow_next` sketched under Backpressure.
+
+Correction: the Backpressure section's claim that the unbounded channel "matches how SKIE handles it
+(no explicit backpressure)" was wrong. **Verified** by reading SKIE's `SkieColdFlowIterator.kt`: it
+collects through `buffer(Channel.RENDEZVOUS)` into a pull-based `AsyncIteratorProtocol`, and
+KMP-NativeCoroutines suspends the producer until Swift's `next` continuation resumes. Both are
+rendezvous. The "Unbounded `Channel<T>` consumes memory" consequence no longer applies, and the v1
+"unbounded" decision is superseded. **Verified** by the ADR-207 spike (before: 19 items buffered
+ahead of a sleeping reader, 8 handed out after a cancel) and by `FlowBackpressureTests.cs` (after:
+one item ahead, a post-cancel drain of exactly one).
