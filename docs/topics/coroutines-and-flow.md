@@ -738,6 +738,34 @@ elements stay read-only.
 Reassigning the whole `MutableStateFlow<T>` member itself (a `var` holding a different flow
 instance) is not supported; only writes through `.Value` are.
 
+### Atomic updates
+
+`CompareAndSet(expect, update)` swaps only if the current value equals `expect` (Kotlin `equals`)
+and returns whether it did. `Update`, `UpdateAndGet` and `GetAndUpdate` retry it until the
+transform lands, like Kotlin's `update { }`, so concurrent callers lose nothing:
+
+```C#
+tracker.TreatCount.Value = 3;
+bool moved = tracker.TreatCount.CompareAndSet(expect: 3, update: 4);
+
+Parallel.For(0, 200, _ => tracker.TreatCount.Update(n => n + 1));
+int now = tracker.TreatCount.UpdateAndGet(n => n * 2);   // the new value
+int before = tracker.TreatCount.GetAndUpdate(n => n + 1); // the previous value
+```
+
+They work on every settable form above, nullable elements and members included. Things that differ
+from a plain C# CAS:
+
+- An object element is compared with Kotlin `equals`, which is identity for a plain class. A
+  wrapper read back from `.Value` is the same Kotlin instance, so it matches; a second `Cat` with
+  the same fields does not.
+- A throwing Kotlin `equals` surfaces as `KotlinInvalidOperationException`, never as `false`.
+- An absent `MutableStateFlow<T>?` throws on `CompareAndSet`, as the setter does.
+- The transform may run more than once under contention, so keep it free of side effects. An
+  exception it throws propagates unchanged and leaves the value alone.
+- `Update` never disposes the value passed to the transform. Dispose any object wrapper you
+  create or read yourself.
+
 ## Nullable `StateFlow<T?>` and `StateFlow<T>?`
 
 A `StateFlow` can be nullable in the **element** (`StateFlow<T?>`) or the **member** itself
@@ -892,8 +920,8 @@ members. A `Throwable`, `Exception` or `RuntimeException` parameter does bind, a
   are not exposed; publish through a Kotlin member instead.
 - `MutableStateFlow<ByteArray>` surfaces as read-only `KotlinStateFlow<byte[]>`, not
   `KotlinMutableStateFlow<byte[]>`: `.Value` is not settable for a `ByteArray` element.
-- `CompareAndSet`, `Update`, `Emit`, `TryEmit`, `ReplayCache`, and `SubscriptionCount` on
-  `MutableStateFlow<T>` are not exposed.
+- `Emit`, `TryEmit`, `ReplayCache`, and `SubscriptionCount` on
+  `MutableStateFlow<T>` are not exposed (`CompareAndSet` and `Update` are; see [Atomic updates](#atomic-updates)).
 - A `suspend fun` returning `MutableStateFlow<T?>` or `MutableStateFlow<T>?`, and a top-level
   `suspend fun` returning `MutableStateFlow<T>`, bind a read-only holder.
 - `StateFlow<T>` or `Flow<T>` as a function parameter, or as a generic type argument, is not
