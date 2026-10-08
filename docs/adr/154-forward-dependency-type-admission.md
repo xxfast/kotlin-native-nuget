@@ -241,9 +241,9 @@ asserts the generated shapes and the behaviour both ways (`RealKlibAdmissionTest
   `Url.protocol`. Fixed by the 2026-10-08 nullable-spelling amendment below.
 - **Finding, verified:** a klib `internal` constructor (`Url.<init>`) is not visibility-filtered.
   It reaches `SKIPPED_UNSUPPORTED_INPUT` and `WARNING_NO_PUBLIC_CONSTRUCTOR` does not fire. That
-  KSP reports it as public is inferred. Tracked in `ROADMAP.md`.
+  KSP reports it as public is inferred. Corrected by the 2026-10-08 primary-constructor amendment below.
 
-## Amendment (2026-10-08)
+## Amendment (2026-10-08): nullable dependency spellings
 
 The nullable dependency property finding above is fixed. A nullable spelling of an un-admitted
 dependency type now takes the type's own skip reason instead of the generic `NULLABLE` one, the
@@ -259,3 +259,23 @@ nullability is not why it was dropped, and "expose a non-nullable wrapper" canno
 - **Verified:** because strict mode (section 6) keys on the reason, `strictDependencyTypes` now
   escalates the nullable spellings too. A build that passed under strict mode only because its
   un-admitted dependency types were nullable now fails, as it always should have.
+
+## Amendment (2026-10-08): the primary constructor's visibility
+
+The 2026-10-07 `Url.<init>` finding is closed, and its inferred cause was wrong.
+
+- **Verified:** KSP reports the klib constructor as non-public. Probed inside the processor during
+  `:test-library:kspKotlinMingwX64`, `Url`'s only constructor has `modifiers=[INTERNAL, FINAL]`,
+  `getVisibility()=INTERNAL`, `origin=KOTLIN_LIB`. Klib metadata keeps `internal`.
+- **Verified cause:** `constructorEntries` filtered the secondary constructors by visibility but
+  took `cls.primaryConstructor` unfiltered, so any non-public primary was planned. This was not
+  klib-specific. In the author's own module an `internal` primary bound as a public C#
+  constructor, and a `private` one generated a Kotlin export that did not compile. Removing that
+  C# constructor is a consumer-visible break, which is why this ships in 0.9.0.
+- **Fix:** the primary comes off the same visibility-filtered list as the secondaries. `Url` now
+  has no `<init>` row in `NugetDiagnostics.json`. `Tier1InternalPrimaryConstructorTest` pins the
+  same-module shapes, and `verifyForwardDiagnostics` checks that the real-klib manifest has no
+  `io.ktor.http.Url.<init>` row.
+- **Not changed:** `WARNING_NO_PUBLIC_CONSTRUCTOR` still does not fire for `Url`. It reports a
+  class whose public constructors were *all skipped*, and `Url` declares none, the same as an
+  own-module class with only an `internal` constructor. C# still sees no public constructor.

@@ -13,7 +13,7 @@ Two minor releases lead to 1.0.0: 0.9.0 carries every breaking change, 0.10.0 is
 
 ### 0.9.0: breaking changes
 
-- [ ] A klib `internal` constructor (`Url.<init>`) is not visibility-filtered: it reaches `SKIPPED_UNSUPPORTED_INPUT` and `WARNING_NO_PUBLIC_CONSTRUCTOR` does not fire. Verified from `NugetDiagnostics.json`; that KSP reports the constructor as PUBLIC is inferred.
+Complete.
 
 ### 0.10.0: hardening
 

@@ -35,6 +35,14 @@ abstract class VerifyForwardDiagnostics : DefaultTask() {
   @get:Input
   abstract val sharedType: Property<String>
 
+  /**
+   * Module directory -> declarations no manifest entry may name. ADR-154 amendment (2026-10-08):
+   * ktor's `Url` has only an `internal` primary constructor, which must be filtered before planning
+   * rather than planned and then skipped; this pins it on a real published klib.
+   */
+  @get:Input
+  abstract val unplanned: MapProperty<String, List<String>>
+
   // Internal, not an input directory: a missing directory must reach the check below with its own
   // message, and no producer may be inferred from it.
   @get:Internal
@@ -63,6 +71,10 @@ abstract class VerifyForwardDiagnostics : DefaultTask() {
             "$sibling NuGet package" in entry["message"].toString()
         }
         check(warned) { "Missing shared TopStory warning in $manifest" }
+        for (declaration in unplanned.get()[module].orEmpty()) {
+          val named = entries.filter { entry -> (entry as Map<*, *>)["declaration"] == declaration }
+          check(named.isEmpty()) { "$manifest names $declaration, which is never planned: $named" }
+        }
       }
 
       for (interop in interops) {
@@ -152,6 +164,7 @@ abstract class VerifyReverseDiagnostics : DefaultTask() {
 tasks.register<VerifyForwardDiagnostics>("verifyForwardDiagnostics") {
   root.set(layout.projectDirectory)
   siblings.set(mapOf("test-library" to "TestCompanion", "test-companion" to "TestLibrary"))
+  unplanned.set(mapOf("test-library" to listOf("io.ktor.http.Url.<init>")))
   sharedType.set(
     providers.gradleProperty("sharedType")
       .orElse("io.github.xxfast.kotlin.native.nuget.test.models.TopStory"),
