@@ -48,6 +48,7 @@ class Tier1CollectionHandleCleanupTest {
       |                {
       |                    throw NugetErrorNative.BuildException(error);
       |                }
+      |                NugetErrorNative.ClearManagedFault();
       |                return nativeResult;
       |            }
       |            finally
@@ -91,6 +92,7 @@ class Tier1CollectionHandleCleanupTest {
       |                {
       |                    throw NugetErrorNative.BuildException(error);
       |                }
+      |                NugetErrorNative.ClearManagedFault();
       |                _handle = new NugetKotlinHandle(handle);
       |            }
       |            finally
@@ -133,6 +135,7 @@ class Tier1CollectionHandleCleanupTest {
       |                    {
       |                        throw NugetErrorNative.BuildException(error);
       |                    }
+      |                    NugetErrorNative.ClearManagedFault();
       |                }
       |                finally
       |                {
@@ -257,6 +260,7 @@ class Tier1CollectionHandleCleanupTest {
       |            {
       |                throw NugetErrorNative.BuildException(error);
       |            }
+      |            NugetErrorNative.ClearManagedFault();
       |            return nativeResult;
       """.trimMargin(),
     )

@@ -221,8 +221,8 @@ moment ago. That is ordinary late delivery, not a wrong-listener bug and not a u
    reaches an uncaught-in-Kotlin C# caller typed `KotlinType ==
    "kotlin.coroutines.cancellation.CancellationException"`, not the original
    `OperationCanceledException`.
-5. `NugetErrorNative._lastManagedFault` ([ThreadStatic]) keeps one exception rooted per thread
-   until the next fault on that thread overwrites it or reads it back.
+5. `NugetErrorNative._lastManagedFault` ([ThreadStatic]) kept one exception rooted per thread until
+   the next fault overwrote it or read it back. Mostly fixed, see the 2026-10-07 amendment.
 6. `NugetManagedException` carries no `@NugetRuntimeApi`, unlike every other public runtime export;
    left for a human decision (above).
 
@@ -282,3 +282,27 @@ handle or zero. Verified by measurement: one leaked handle per late call before,
 `LeakTests/LiveHandleTests.cs` rows 14e (`DroppedLateCallbackArgument_ReturnsToBaseline`, a dropped
 `void` call) and 14f (`ReportedLateCallbackArgument_ReturnsToBaseline`, the value-returning
 report) pin it; the Tier 1 cells in `Tier1CallbackLateInvocationTest.kt` pin the emitted preamble.
+
+## Amendment (2026-10-07): the stash is cleared when an export returns
+
+Residual 5 is mostly fixed. The generated `NugetErrorNative` gains `ClearManagedFault()`. `Check<T>`
+calls it on its success path, and every synchronous export call site calls it after each error arm
+(23 arms), once `BuildException` has run. A callback exception that was thrown and caught is
+therefore released when the export returns, instead of staying rooted on the thread. The error-arm
+consumption (`TakeOriginalManagedFault`, `BuildException`) is unchanged.
+
+Two cases are knowingly left:
+
+- When Kotlin wraps the managed exception and the arm does not match it, the stash stays until the
+  next successful export call on that thread clears it.
+- When Kotlin catches the managed exception, makes another export call that succeeds, and then
+  rethrows the original, the successful call has already cleared the stash. The C# caller gets the
+  mapped `KotlinException`, not the original object. This fits the "a moment ago" wording of the
+  late-delivery rule above: the original is rethrown only when nothing intervened.
+
+A callback that throws on a Kotlin dispatcher thread (suspend or `Flow` routes) is not covered: that
+thread never runs a C# export call site, so its stash is never cleared. Tracked in ROADMAP Phase 7.
+
+Verified: `Tier1ManagedFaultStashTest` (emitted shape, and the wrapped-throw case pinned by
+`WrappedThrow_ManagedFaultStashIsClearedByTheNextSuccessfulCrossing`) and two cells in
+`CallbackFaultTests.cs`. Inferred, not reproduced: the dispatcher-thread gap.

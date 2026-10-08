@@ -519,6 +519,8 @@ var ex = Assert.Throws<InvalidOperationException>(
 If Kotlin caught the exception and threw its own instead, the C# caller sees that Kotlin exception
 (a `KotlinException`, or one of its mapped subtypes, see [Exceptions](exceptions.md)) rather than
 the original, so a Kotlin author's own wrapper is never silently replaced.
+The same holds if Kotlin catches the callback exception, makes another successful call into C#, and
+only then rethrows the original: the C# caller gets the `KotlinException`, not the original object.
 
 An `OperationCanceledException` thrown from a callback cancels the Kotlin coroutine that invoked
 it; if that cancellation is never caught, it reaches C# again as `KotlinType ==

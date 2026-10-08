@@ -609,6 +609,7 @@ internal object ForwardCirPropertyProjection {
       appendLine("            ${inner.wireType().csharpWireType()} value = $value($valueArgs);")
       appendLine("            if (error2 != IntPtr.Zero)"); appendLine("            {")
       appendLine("                throw NugetErrorNative.BuildException(error2);"); appendLine("            }")
+      appendLine("            NugetErrorNative.ClearManagedFault();")
       append("            return $returnExpression;")
     }
   }
@@ -616,7 +617,8 @@ internal object ForwardCirPropertyProjection {
   private fun checkedVoidBody(native: String, args: String, indent: String = "            "): String = buildString {
     val callArgs: String = listOf(args, "out IntPtr error").filter { it.isNotBlank() }.joinToString(", ")
     appendLine("$indent$native($callArgs);"); appendLine("${indent}if (error != IntPtr.Zero)")
-    appendLine("$indent{"); appendLine("${indent}    throw NugetErrorNative.BuildException(error);"); append("$indent}")
+    appendLine("$indent{"); appendLine("${indent}    throw NugetErrorNative.BuildException(error);"); appendLine("$indent}")
+    append("${indent}NugetErrorNative.ClearManagedFault();")
   }
 
   private fun appendErrorCheck(builder: StringBuilder) {
@@ -624,6 +626,7 @@ internal object ForwardCirPropertyProjection {
     builder.appendLine("            {")
     builder.appendLine("                throw NugetErrorNative.BuildException(error);")
     builder.appendLine("            }")
+    builder.appendLine("            NugetErrorNative.ClearManagedFault();")
   }
 
   /** ADR-120: same routing as the callable half. The read runs through ADR-099's

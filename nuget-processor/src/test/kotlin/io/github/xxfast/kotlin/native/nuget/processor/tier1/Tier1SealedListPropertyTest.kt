@@ -91,6 +91,7 @@ class Tier1SealedListPropertyTest {
       |                    {
       |                        throw NugetErrorNative.BuildException(error);
       |                    }
+      |                    NugetErrorNative.ClearManagedFault();
       |                    return nativeResult;
       """.trimMargin(),
     )

@@ -168,6 +168,7 @@ private fun StringBuilder.renderBridgeState(libraryName: String, entry: CirBridg
   appendLine("            state.KotlinHandle = Native_Create(")
   appendLine("                ${callArgs.joinToString(", ")});")
   appendLine("            if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
+  appendLine("            NugetErrorNative.ClearManagedFault();")
   appendLine("            return state;")
   appendLine("        }")
   appendLine("    }")

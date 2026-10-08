@@ -52,6 +52,7 @@ class Tier1PropertyAccessorBodyLayoutTest {
       |                {
       |                    throw NugetErrorNative.BuildException(error);
       |                }
+      |                NugetErrorNative.ClearManagedFault();
       |                return Marshal.PtrToStringUTF8(nativeResult)!;
       |            }
       |        }
@@ -78,6 +79,7 @@ class Tier1PropertyAccessorBodyLayoutTest {
       |                {
       |                    throw NugetErrorNative.BuildException(error);
       |                }
+      |                NugetErrorNative.ClearManagedFault();
       |                if (!hasValue) return null;
       |                int value = Native_Get_level_value(_handle, out IntPtr error2);
       """.trimMargin(),

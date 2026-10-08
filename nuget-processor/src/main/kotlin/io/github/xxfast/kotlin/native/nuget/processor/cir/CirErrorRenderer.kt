@@ -203,8 +203,14 @@ internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
   appendLine("        {")
   // The caller is forwarded explicitly: left to the attribute, every `Check` site reports "Check".
   appendLine("            if (error != IntPtr.Zero) throw BuildException(error, caller);")
+  appendLine("            ClearManagedFault();")
   appendLine("            return result;")
   appendLine("        }")
+  appendLine()
+  // The success arm of every synchronous crossing calls this once the export returned without an
+  // error, so a stash set by a callback whose throw Kotlin caught never outlives the crossing that
+  // set it. The error arm keeps consuming it through `TakeOriginalManagedFault` as before.
+  appendLine("        internal static void ClearManagedFault() => _lastManagedFault = null;")
   appendLine("    }")
   appendLine()
 }
@@ -259,6 +265,7 @@ internal fun StringBuilder.renderSyncErrorCheckMethod(method: CirMethod, classNa
   appendLine("            {")
   appendLine("                throw NugetErrorNative.BuildException(error);")
   appendLine("            }")
+  appendLine("            NugetErrorNative.ClearManagedFault();")
 
   when {
     !isVoid && isString -> appendLine("            return Marshal.PtrToStringUTF8(nativeResult)!;")

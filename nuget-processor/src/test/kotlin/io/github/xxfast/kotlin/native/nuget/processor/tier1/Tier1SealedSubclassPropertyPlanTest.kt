@@ -117,6 +117,7 @@ class Tier1SealedSubclassPropertyPlanTest {
       |                    {
       |                        throw NugetErrorNative.BuildException(error);
       |                    }
+      |                    NugetErrorNative.ClearManagedFault();
       |                    return nativeResult == IntPtr.Zero ? null : new global::Interop.Friend(nativeResult, out _);
       """.trimMargin(),
     )
@@ -164,6 +165,7 @@ class Tier1SealedSubclassPropertyPlanTest {
       |                    {
       |                        throw NugetErrorNative.BuildException(error);
       |                    }
+      |                    NugetErrorNative.ClearManagedFault();
       |                    return Marshal.PtrToStringUTF8(nativeResult)!;
       """.trimMargin(),
     )
