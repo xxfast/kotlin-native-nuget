@@ -19,7 +19,11 @@
  * `Optional<int?>` plus an `IsSet` slot: omitted is 5, an explicit `null` is `null`).
  *
  * Decided scope, pinned here:
- * - a defaulted class (handle) or collection parameter stays **required** ([Dinnerbell.share]),
+ * - a defaulted class (handle) parameter widens like a scalar: `Placemat? mat = null` for a
+ *   non-null default ([Dinnerbell.share], [Dinnerbell.snooze]), `Optional<Placemat?>` for an
+ *   already-nullable one ([Dinnerbell.settle], [Dinnerbell.lounge]); a defaulted collection stays
+ *   **required**, so [Dinnerbell.share]'s `mat` is required-but-nullable in front of it (ADR-164
+ *   rule 5),
  * - a suspend overload pair whose shorter sibling is a strict prefix keeps the widened parameter
  *   required-but-nullable, so `CountAsync()` is not CS0121 ([Dinnerbell.count]),
  * - ADR-164 rule 5: a default followed by a required parameter stays required-but-nullable
@@ -105,14 +109,29 @@ class Dinnerbell(val bowl: Int) {
     MutableStateFlow("$grams|$flavour|$topUp")
 
   /**
-   * A defaulted **handle** and **collection** stay required (decided scope); the trailing
-   * `grams` default still widens behind them.
+   * A defaulted **handle** widens to `Placemat?`, `null` making Kotlin build its own `house` mat;
+   * the defaulted **collection** after it stays required, so `mat` gets no C# default (ADR-164
+   * rule 5). The trailing `grams` default still widens behind both.
    */
   suspend fun share(
     mat: Placemat = Placemat("house"),
     cats: List<String> = listOf("Oreo"),
     grams: Int = bowl,
   ): String = "${mat.owner}|${cats.joinToString(",")}|$grams"
+
+  /**
+   * An already-nullable **handle** default on the **suspend** route: `Optional<Placemat?>`, so an
+   * omitted `mat` (Kotlin's `house`) reads back apart from an explicit `null` (`floor`).
+   */
+  suspend fun settle(cat: String, mat: Placemat? = Placemat("house")): String =
+    "$cat|${mat?.owner ?: "floor"}"
+
+  /** [settle]'s shape on the **Flow** route. */
+  fun lounge(cat: String, mat: Placemat? = Placemat("house")): Flow<String> =
+    flow { emit("$cat|${mat?.owner ?: "floor"}") }
+
+  /** A non-null **handle** default on the **StateFlow** route, `Placemat? mat = null` in C#. */
+  fun snooze(mat: Placemat = Placemat("house")): StateFlow<String> = MutableStateFlow(mat.owner)
 
   /** The CS0121 pair, shorter half. */
   suspend fun count(): Int = -1

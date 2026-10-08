@@ -183,19 +183,34 @@ private fun legacyRouteParameter(
     // same class already use, and the native argument is the `internal IntPtr _handle` the wrapper
     // (or, for a sealed arm, the base it inherits from) already declares. Nothing is allocated
     // here, so nothing is disposed here either.
-    is ForwardLegacyParameterShape.Handle -> CirParameter(
-      name,
+    // ADR-164 on the legacy routes: a widened handle default is this same nullable wire, null
+    // meaning unset; an already-nullable one is `Optional<T?>` over a leading `IsSet` slot.
+    is ForwardLegacyParameterShape.Handle -> {
       // Issue #365: a nullable handle is public `T?`, `null` crossing as `IntPtr.Zero`.
-      type = if (shape.nullable) {
+      val type: String = if (shape.nullable) {
         BridgeType.Nullable(shape.type).forwardPublicCsharpType()
       } else {
         shape.type.forwardPublicCsharpType()
-      },
-      // ADR-187: typed as the owned handle, so the call keeps it alive; a null is the zero sentinel.
-      nativeType = KOTLIN_HANDLE,
-      nativeArgumentExpression =
-        if (shape.nullable) "$name?._handle ?? NugetKotlinHandle.Null" else "$name._handle",
-    )
+      }
+      CirParameter(
+        name,
+        type = if (shape.optional) "global::Kotlin.Native.Interop.KotlinOptional<$type>" else type,
+        // ADR-187: typed as the owned handle, so the call keeps it alive; null is the zero value.
+        nativeType = KOTLIN_HANDLE,
+        isReferenceType = !shape.optional,
+        nativeArgumentExpression = when {
+          shape.optional -> "$name.HasValue, $name.Value?._handle ?? NugetKotlinHandle.Null"
+          shape.nullable -> "$name?._handle ?? NugetKotlinHandle.Null"
+          else -> "$name._handle"
+        },
+        defaultValue = when {
+          !optional -> null
+          shape.optional -> "default"
+          else -> "null"
+        },
+        isSetSlot = names.isSetSlots[index],
+      )
+    }
 
     // Issue #299: the plan route's wire. A nullable primitive or `Char` is public `int?` / `char?`
     // over a `bool` has-value slot plus the inner value slot (`char` keeps its U2 marshalling,

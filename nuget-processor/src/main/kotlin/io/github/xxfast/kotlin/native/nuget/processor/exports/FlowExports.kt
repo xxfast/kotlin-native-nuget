@@ -10,6 +10,7 @@ import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
+import com.squareup.kotlinpoet.BOOLEAN
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
@@ -325,6 +326,8 @@ internal fun FileSpec.Builder.addFlowMethodExports(
       // type here and cross as a pinned `kref` struct against C#'s `IntPtr` (issue #126).
       if (paramShapes[index].isLegacyLowered()) {
         val nullable: Boolean = paramShapes[index].isLegacyNullableSlot
+        // ADR-164 rule 2: an optional handle's leading `IsSet` slot.
+        names.isSetSlots[index]?.let { isSet -> addParameter(isSet, BOOLEAN) }
         addParameter(paramName, cOpaquePointer.copy(nullable = nullable))
         return@forEachIndexed
       }

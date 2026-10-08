@@ -21,9 +21,13 @@ class Tier1LegacyRouteDefaultsTest {
     package tier1.legacydefaults
 
     import kotlinx.coroutines.flow.Flow
+    import kotlinx.coroutines.flow.MutableStateFlow
+    import kotlinx.coroutines.flow.StateFlow
     import kotlinx.coroutines.flow.flow
 
     enum class Hunger { PECKISH, STARVING }
+
+    class Placemat(val owner: String)
 
     class Bell(val bowl: Int) {
       suspend fun feed(cat: String, portion: Int = bowl, note: String = "n", treats: Int? = 5): String =
@@ -34,7 +38,15 @@ class Tier1LegacyRouteDefaultsTest {
       suspend fun count(): Int = -1
       suspend fun count(limit: Int = 3): Int = limit
       suspend fun ration(portion: Int = bowl, mask: Int): String = "" + portion + mask
+      suspend fun share(mat: Placemat = Placemat("house"), grams: Int = bowl): String =
+        mat.owner + grams
+      suspend fun settle(cat: String, mat: Placemat? = Placemat("house")): String = cat + mat?.owner
+      fun lounge(cat: String, mat: Placemat? = Placemat("house")): Flow<String> =
+        flow { emit(cat + mat?.owner) }
+      fun snooze(mat: Placemat = Placemat("house")): StateFlow<String> = MutableStateFlow(mat.owner)
     }
+
+    suspend fun tuck(cat: String, mat: Placemat? = Placemat("house")): String = cat + mat?.owner
 
     suspend fun weighIn(name: String, grams: Int = name.length): String = name + grams
   """.trimIndent()
@@ -130,6 +142,64 @@ class Tier1LegacyRouteDefaultsTest {
   }
 
   @Test
+  fun `a defaulted handle parameter widens to a nullable handle that Kotlin defaults when null`() {
+    val share: String = exportEndingWith("__bell_share_async")
+    assertTrue(share.contains("mat: COpaquePointer?,"), share)
+    val lowered = "val matArg = mat?.asStableRef<tier1.legacydefaults.Placemat>()?.get()"
+    assertTrue(share.indexOf(lowered) in 0 until share.indexOf("launchForCSharp"), share)
+    assertTrue(share.contains("val mask = (if (mat != null) 1 else 0) or"), share)
+    assertTrue(share.contains("0 -> obj.share()"), share)
+    assertTrue(share.contains("1 -> obj.share(mat = matArg!!)"), share)
+
+    assertCsharp(
+      "public Task<string> ShareAsync($PLACEMAT? mat = null, int? grams = null, " +
+          "CancellationToken cancellationToken = default)"
+    )
+    assertCsharp("mat?._handle ?? NugetKotlinHandle.Null, grams.HasValue,")
+
+    val snooze: String = exportEndingWith("__bell_snooze_collect")
+    assertTrue(snooze.contains("mat: COpaquePointer?,"), snooze)
+    assertTrue(snooze.contains("1 -> obj.snooze(mat = matArg!!)"), snooze)
+    assertCsharp("public KotlinStateFlow<string> Snooze($PLACEMAT? mat = null)")
+  }
+
+  @Test
+  fun `an already-nullable defaulted handle parameter is optional behind an IsSet slot`() {
+    val settle: String = exportEndingWith("__bell_settle_async")
+    assertTrue(settle.contains("matIsSet: Boolean,\n  mat: COpaquePointer?,"), settle)
+    assertTrue(settle.contains("val mask = (if (matIsSet) 1 else 0)"), settle)
+    assertTrue(settle.contains("0 -> obj.settle(cat)"), settle)
+    assertTrue(settle.contains("1 -> obj.settle(cat, mat = matArg)"), settle)
+
+    assertCsharp(
+      "public Task<string> SettleAsync(string cat, " +
+          "global::Kotlin.Native.Interop.KotlinOptional<$PLACEMAT?> mat = default, " +
+          "CancellationToken cancellationToken = default)"
+    )
+    assertCsharp("cat, mat.HasValue, mat.Value?._handle ?? NugetKotlinHandle.Null,")
+    // The handle slot after the `IsSet` slot is spelled exactly as a required handle's is.
+    assertCsharp(
+      "[MarshalAs(UnmanagedType.I1)] bool matIsSet, NugetKotlinHandle mat, IntPtr callback"
+    )
+
+    val lounge: String = exportEndingWith("__bell_lounge_collect")
+    assertTrue(lounge.contains("matIsSet: Boolean,\n  mat: COpaquePointer?,"), lounge)
+    assertTrue(lounge.contains("1 -> obj.lounge(cat, mat = matArg)"), lounge)
+    assertCsharp(
+      "public KotlinFlow<string> Lounge(string cat, " +
+          "global::Kotlin.Native.Interop.KotlinOptional<$PLACEMAT?> mat = default)"
+    )
+
+    val tuck: String = exportEndingWith("__tuck_async")
+    assertTrue(tuck.contains("matIsSet: Boolean,\n  mat: COpaquePointer?,"), tuck)
+    assertTrue(tuck.contains("1 -> tier1.legacydefaults.tuck(cat, mat = matArg)"), tuck)
+    assertCsharp(
+      "public static Task<string> TuckAsync(string cat, " +
+          "global::Kotlin.Native.Interop.KotlinOptional<$PLACEMAT?> mat = default, "
+    )
+  }
+
+  @Test
   fun `a suspend prefix-overload pair keeps the defaulted parameter required so the call is not CS0121`() {
     assertCsharp("public Task<int> CountAsync(CancellationToken cancellationToken = default)")
     assertCsharp("public Task<int> CountAsync(int? limit, CancellationToken cancellationToken = default)")
@@ -202,6 +272,10 @@ class Tier1LegacyRouteDefaultsTest {
     assertTrue(start >= 0, "no export ending with $suffix in:\n${result.generated}")
     val end: Int = result.generated.indexOf("\n@CName", start).takeIf { it >= 0 } ?: result.generated.length
     return result.generated.substring(start, end)
+  }
+
+  private companion object {
+    const val PLACEMAT: String = "global::Interop.Legacydefaults.Placemat"
   }
 
   private fun assertCsharp(expected: String) {

@@ -183,6 +183,8 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
       // ADR-122: so does a class/object/sealed parameter, as the borrowed handle C# already holds.
       if (paramShapes[index].isLegacyLowered()) {
         val nullable: Boolean = paramShapes[index].isLegacyNullableSlot
+        // ADR-164 rule 2: an optional handle's leading `IsSet` slot.
+        names.isSetSlots[index]?.let { isSet -> builder.addParameter(isSet, BOOLEAN) }
         builder.addParameter(paramName, cOpaquePointer.copy(nullable = nullable))
         return@forEachIndexed
       }
@@ -330,6 +332,8 @@ private fun FunSpec.Builder.addLegacySuspendParameters(
   func.parameters.forEachIndexed { index, param ->
     val name: String = param.name?.asString() ?: "_"
     if (shapes[index].isLegacyLowered()) {
+      // ADR-164 rule 2: an optional handle's leading `IsSet` slot.
+      names.isSetSlots[index]?.let { isSet -> addParameter(isSet, BOOLEAN) }
       addParameter(name, cOpaquePointer.copy(nullable = shapes[index].isLegacyNullableSlot))
       return@forEachIndexed
     }

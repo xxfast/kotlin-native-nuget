@@ -258,7 +258,7 @@ public class LegacyRouteDefaultsTests
         Assert.Equal("40|chicken|null", chicken.Value);
     }
 
-    // ---- defaulted handle and collection stay required ----
+    // ---- defaulted handle parameters widen; a defaulted collection stays required ----
 
     [Fact]
     public async Task ShareAsync_HandleAndCollectionSupplied_TrailingScalarStillDefaults()
@@ -272,7 +272,19 @@ public class LegacyRouteDefaultsTests
     }
 
     [Fact]
-    public void ShareAsync_DefaultedHandleAndCollection_AreNotOptional()
+    public async Task ShareAsync_MatNull_KotlinBuildsTheHouseMat()
+    {
+        using var bell = new Dinnerbell(40);
+
+        Assert.Equal(
+            "house|Oreo,Mylo|40",
+            await bell.ShareAsync(null, new List<string> { "Oreo", "Mylo" }));
+    }
+
+    // ADR-164 rule 5: `mat` widens to `Placemat?` but the required `cats` after it keeps it
+    // required-but-nullable; only the trailing `grams` gets a C# default.
+    [Fact]
+    public void ShareAsync_HandleBeforeRequiredCollection_IsNotOptional()
     {
         ParameterInfo[] parameters = typeof(Dinnerbell).GetMethod(nameof(Dinnerbell.ShareAsync))!.GetParameters();
 
@@ -282,6 +294,60 @@ public class LegacyRouteDefaultsTests
         Assert.False(parameters[1].IsOptional);
         Assert.Equal("grams", parameters[2].Name);
         Assert.True(parameters[2].IsOptional);
+    }
+
+    [Fact]
+    public async Task SettleAsync_MatOmitted_KotlinRunsTheDefault()
+    {
+        using var bell = new Dinnerbell(40);
+
+        Assert.Equal("Oreo|house", await bell.SettleAsync("Oreo"));
+    }
+
+    [Fact]
+    public async Task SettleAsync_MatNull_IsAValueNotUnset()
+    {
+        using var bell = new Dinnerbell(40);
+
+        Assert.Equal("Oreo|floor", await bell.SettleAsync("Oreo", mat: null));
+    }
+
+    [Fact]
+    public async Task SettleAsync_MatSupplied_CrossesAsABorrowedHandle()
+    {
+        using var bell = new Dinnerbell(40);
+        using var mat = new Placemat("porch");
+
+        Assert.Equal("Oreo|porch", await bell.SettleAsync("Oreo", mat));
+    }
+
+    [Fact]
+    public async Task Lounge_FlowMatOmittedNullOrSupplied_EachReadsBackApart()
+    {
+        using var bell = new Dinnerbell(40);
+        using var mat = new Placemat("porch");
+        var heard = new List<string>();
+
+        await foreach (string spot in bell.Lounge("Mylo"))
+            heard.Add(spot);
+        await foreach (string spot in bell.Lounge("Mylo", mat: null))
+            heard.Add(spot);
+        await foreach (string spot in bell.Lounge("Mylo", mat))
+            heard.Add(spot);
+
+        Assert.Equal(new List<string> { "Mylo|house", "Mylo|floor", "Mylo|porch" }, heard);
+    }
+
+    [Fact]
+    public void Snooze_StateFlowMatOmitted_ReadsTheHouseMat()
+    {
+        using var bell = new Dinnerbell(40);
+        using var mat = new Placemat("porch");
+        using KotlinStateFlow<string> house = bell.Snooze();
+        using KotlinStateFlow<string> porch = bell.Snooze(mat);
+
+        Assert.Equal("house", house.Value);
+        Assert.Equal("porch", porch.Value);
     }
 
     // ---- the CS0121 suspend prefix-overload pair ----

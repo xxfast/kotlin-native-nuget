@@ -67,6 +67,13 @@ internal sealed interface ForwardLegacyParameterShape {
      * `IntPtr.Zero` (`x?._handle ?? IntPtr.Zero` in C#) and Kotlin receives `null`.
      */
     val nullable: Boolean = false,
+    /**
+     * ADR-164 on the legacy routes: a defaulted non-null handle carried as the nullable slot above,
+     * `null` meaning unset. Always paired with [nullable].
+     */
+    val widened: Boolean = false,
+    /** ADR-164 rule 2: a defaulted nullable handle, `Optional<T?>` behind an `IsSet` slot. */
+    val optional: Boolean = false,
   ) : ForwardLegacyParameterShape
 
   /**
@@ -265,8 +272,11 @@ internal fun legacyRefusedCallbackMember(method: KSFunctionDeclaration): String?
  *    ([ForwardLegacyParameterShape.NullableScalar.widened]);
  *  - a defaulted nullable one gains the `IsSet` slot
  *    ([ForwardLegacyParameterShape.NullableScalar.optional]);
- *  - a defaulted handle or collection stays required, unchanged (these routes have no nullable
- *    encoding for either, ADR-114's deferral).
+ *  - a defaulted handle does the same on its nullable pointer slot
+ *    ([ForwardLegacyParameterShape.Handle.widened] /
+ *    [ForwardLegacyParameterShape.Handle.optional]);
+ *  - a defaulted collection stays required, unchanged (these routes have no nullable encoding for
+ *    it, ADR-114's deferral).
  *
  * At most [MAX_OPTIONAL_DEFAULTS] widen, the last ones in declaration order (ADR-164 rule 6).
  * Both halves call this one function, so they cannot disagree on a slot.
@@ -288,6 +298,9 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShapes(
       is ForwardLegacyParameterShape.Enum ->
         ForwardLegacyParameterShape.NullableScalar(shape.type, widened = true)
       is ForwardLegacyParameterShape.NullableScalar -> shape.copy(optional = true)
+      is ForwardLegacyParameterShape.Handle ->
+        if (shape.nullable) shape.copy(optional = true)
+        else shape.copy(nullable = true, widened = true)
       else -> shape
     }
   }
@@ -314,8 +327,8 @@ private fun legacyWidenedIndices(
 ): List<Int> = shapes.indices.filter { index ->
   defaults.getOrElse(index) { false } && when (shapes[index]) {
     ForwardLegacyParameterShape.Plain, is ForwardLegacyParameterShape.Enum,
-    is ForwardLegacyParameterShape.NullableScalar -> true
-    is ForwardLegacyParameterShape.Handle, is ForwardLegacyParameterShape.Marshalled,
+    is ForwardLegacyParameterShape.NullableScalar, is ForwardLegacyParameterShape.Handle -> true
+    is ForwardLegacyParameterShape.Marshalled,
     is ForwardLegacyParameterShape.ManagedException,
     is ForwardLegacyParameterShape.Refused -> false
   }
@@ -368,7 +381,15 @@ internal fun KSType.overloadKey(): String {
 
 /** Whether this parameter is dispatched by the ADR-164 `when (mask)`: set or unset per call. */
 internal val ForwardLegacyParameterShape.isLegacyDefaulted: Boolean
-  get() = this is ForwardLegacyParameterShape.NullableScalar && (widened || optional)
+  get() = when (this) {
+    is ForwardLegacyParameterShape.NullableScalar -> widened || optional
+    is ForwardLegacyParameterShape.Handle -> widened || optional
+    ForwardLegacyParameterShape.Plain,
+    is ForwardLegacyParameterShape.Enum,
+    is ForwardLegacyParameterShape.Marshalled,
+    is ForwardLegacyParameterShape.ManagedException,
+    is ForwardLegacyParameterShape.Refused -> false
+  }
 
 /** The first refused parameter of a member, as `name: Type`, or null when every one binds. */
 internal fun ForwardBridgeTypeClassifier.legacyRefusedParameter(
@@ -1149,7 +1170,10 @@ internal class ForwardLegacyNames(
    */
   val isSetSlots: List<String?> = parameters.mapIndexed { index, name ->
     val shape: ForwardLegacyParameterShape = shapes[index]
-    val optional: Boolean = shape is ForwardLegacyParameterShape.NullableScalar && shape.optional
+    val scalarOptional: Boolean =
+      shape is ForwardLegacyParameterShape.NullableScalar && shape.optional
+    val handleOptional: Boolean = shape is ForwardLegacyParameterShape.Handle && shape.optional
+    val optional: Boolean = scalarOptional || handleOptional
     if (optional) mint("${name}IsSet") else null
   }
 
@@ -1271,8 +1295,13 @@ internal fun ForwardLegacyParameterShape.isLegacyLowered(): Boolean = when (this
  * parameter itself.
  */
 internal fun ForwardLegacyNames.legacyArgument(index: Int, parameter: String): String {
-  loweredLocals[index]?.let { local -> return local }
   val shape: ForwardLegacyParameterShape = shapes[index]
+  loweredLocals[index]?.let { local ->
+    // ADR-164: a widened handle's local is `T?` off its nullable slot, but it is only passed in
+    // the arms that set it, where the member declares `T`.
+    val widened: Boolean = shape is ForwardLegacyParameterShape.Handle && shape.widened
+    return if (widened) "$local!!" else local
+  }
   if (shape is ForwardLegacyParameterShape.Enum) return legacyEnumValue(shape.type, parameter)
   // ADR-201 amendment: the sync route's lowering of the managed-exception text.
   if (shape is ForwardLegacyParameterShape.ManagedException) {
@@ -1300,7 +1329,7 @@ private fun legacyEnumValue(type: BridgeType.Enum, parameter: String): String =
 /**
  * ADR-164: the Kotlin test for whether defaulted parameter [index] was set by the C# caller: the
  * `IsSet` slot of an `Optional`, the has-value slot of a widened value, or the widened `String?`
- * slot being non-null.
+ * or handle pointer slot being non-null.
  */
 private fun ForwardLegacyNames.legacyPresence(index: Int, parameter: String): String =
   isSetSlots[index] ?: hasValueSlots[index] ?: "$parameter != null"
