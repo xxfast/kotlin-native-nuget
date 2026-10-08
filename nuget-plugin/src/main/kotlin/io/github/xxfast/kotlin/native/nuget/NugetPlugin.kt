@@ -30,6 +30,10 @@ internal val KONAN_TO_RID = mapOf(
 private const val KMP_PLUGIN: String = "org.jetbrains.kotlin.multiplatform"
 private const val KSP_PLUGIN: String = "com.google.devtools.ksp"
 
+// KGP's shared-source-set metadata compiles: `compileKotlinMetadata`,
+// `compile<SourceSet>KotlinMetadata`.
+private val METADATA_COMPILE_TASK: Regex = Regex("compile[A-Za-z0-9]*KotlinMetadata")
+
 // #469: KGP's `baseName` is a plain `String`, so "set explicitly" means "differs from what KGP
 // assigned". `sharedLib()` defaults to the project name; `sharedLib("prefix")` to the prefix, and
 // names the binary `<prefix><BuildType>Shared` (KGP 2.4.10 `AbstractKotlinNativeBinaryContainer`).
@@ -450,6 +454,14 @@ private fun registerReverse(project: Project, extension: NugetExtension) {
       project.tasks.matching { it.name == kspTaskName }.configureEach { task ->
         task.dependsOn(nugetGenerateBindings)
       }
+    }
+
+    // The shared-source-set metadata compiles (`compileNativeMainKotlinMetadata` and kin) read
+    // the same srcDir and have no KSP task in front of them, so the literal Provider above gives
+    // them no inferred producer either. Without this a clean metadata compile fails with
+    // `Unresolved reference` until `nugetGenerateBindings` happens to run first.
+    project.tasks.matching { METADATA_COMPILE_TASK.matches(it.name) }.configureEach { task ->
+      task.dependsOn(nugetGenerateBindings)
     }
   }
 }

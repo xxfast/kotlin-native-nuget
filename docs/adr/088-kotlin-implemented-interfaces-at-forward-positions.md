@@ -356,3 +356,11 @@ and patched by inspection rather than by the compiler:
 Recorded as a new ROADMAP item (Tooling & Test Integrity) rather than folded into the ADR-062
 "route legacy protocols through `BridgeType`" item, since it is a distinct hazard: exhaustive-`when`
 coverage, not `BridgeType` adoption.
+
+## Amendment 2026-10-07: metadata compiles depend on the bindings
+
+Every task matching `compile[A-Za-z0-9]*KotlinMetadata` now also depends on `nugetGenerateBindings`
+(lazy `tasks.matching`), beside `kspKotlin{Target}`, so a clean metadata compile or IDE import no
+longer fails with `Unresolved reference`. The srcDir stays a plain directory, not a task-output
+provider, because KSP resolves source directories early. Verified: a clean
+`:test-companion:compileNativeMainKotlinMetadata` failed before and succeeds after.
