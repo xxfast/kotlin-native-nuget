@@ -65,7 +65,6 @@ Complete.
 - [ ] Map `Flow<T>` as a function parameter (C#→Kotlin direction; requires Phase 7 bidirectional support)
 - [ ] Map `Flow<T>` as a generic type argument (e.g., `Box<Flow<String>>`)
 - [ ] Flow backpressure support (bounded `Channel<T>` with explicit resume signaling)
-- [ ] Re-evaluate the generated `@OptIn` for `CoroutineStart.ATOMIC` (marker moved since kotlinx.coroutines 1.9) ([details](docs/backlog/coroutine-optin-atomic-delicate.md))
 - [ ] The `_has_value`/`_set_value` StateFlow exports gained collection-parameter support alongside `_collect`/`_value` ([ADR-114](docs/adr/114-collection-parameters-on-legacy-flow-and-suspend-routes.md)), but no fixture reaches either arm: both need a nullable-or-`MutableStateFlow` return **plus** a collection parameter on the same member, a combination nothing in `test-library` declares. Cold on purpose, discovered alongside ADR-114.
 - [ ] A collection element on ADR-068's `suspend fun` returning `StateFlow<T>` is refused, not bound, since `nuget_stateflow_collect`/`nuget_stateflow_value` are emitted once per module keyed on an already-obtained handle and box `value as Any` generically, with no per-member seam to hang a projection on the way the property and method routes now have. Giving that route its own per-member export pair would fix it but multiplies a module-wide pair by every suspend-StateFlow member for a shape no issue has asked for. Verified by reading, split out of [ADR-123](docs/adr/123-collection-elements-on-the-flow-routes.md) Alternative 5.
 
