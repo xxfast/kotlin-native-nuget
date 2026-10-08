@@ -313,6 +313,7 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
     appendLine()
     appendLine("    }")
     appendLine()
+    renderStateFlowObservable()
 
     if (helper.includesMutableStateFlow) {
       // ADR-071: settable `.Value`. `new`, not `override` -- KotlinStateFlow<T>.Value has no
@@ -343,6 +344,153 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
       appendLine()
     }
   }
+}
+
+/**
+ * ADR-206: the opt-in `INotifyPropertyChanged` adapter over `KotlinStateFlow<T>`, emitted beside it
+ * under the same `includesStateFlow` gate. Per module, not in the contract library, because only
+ * this file can name `KotlinStateFlow<T>` and an adapter needs no cross-package identity (ADR-178).
+ * `System.ComponentModel` is spelled `global::` rather than added to the file's usings, so no
+ * consumer type name can become ambiguous with one of its many simple names.
+ */
+private fun StringBuilder.renderStateFlowObservable() {
+  val componentModel: String = "global::System.ComponentModel"
+  appendLine("    /// <summary>")
+  appendLine(
+    "    /// Opt-in XAML data-binding view of a <see cref=\"KotlinStateFlow{T}\"/> (ADR-206)."
+  )
+  appendLine("    /// </summary>")
+  appendLine("    public static class KotlinStateFlowExtensions")
+  appendLine("    {")
+  appendLine("        /// <summary>")
+  appendLine(
+    "        /// Starts one collection of <paramref name=\"flow\"/> and exposes its latest " +
+      "element as an"
+  )
+  appendLine(
+    "        /// <c>INotifyPropertyChanged</c> <c>Value</c>. Dispose the result to stop the " +
+      "collection."
+  )
+  appendLine("        /// </summary>")
+  appendLine("        /// <param name=\"flow\">The state flow to observe.</param>")
+  appendLine(
+    "        /// <param name=\"context\">Where <c>PropertyChanged</c> is raised. Defaults to " +
+      "<see cref=\"SynchronizationContext.Current\"/>"
+  )
+  appendLine(
+    "        /// at this call; when that is also null the event is raised inline on the thread " +
+      "that delivered the element.</param>"
+  )
+  appendLine("        public static KotlinStateFlowObservable<T> AsNotifying<T>(")
+  appendLine("            this KotlinStateFlow<T> flow, SynchronizationContext? context = null)")
+  appendLine(
+    "            => new KotlinStateFlowObservable<T>(flow, context ?? " +
+      "SynchronizationContext.Current);"
+  )
+  appendLine("    }")
+  appendLine()
+  appendLine("    /// <summary>")
+  appendLine(
+    "    /// An <c>INotifyPropertyChanged</c> adapter over a <see cref=\"KotlinStateFlow{T}\"/>, " +
+      "made by <c>AsNotifying()</c> (ADR-206)."
+  )
+  appendLine(
+    "    /// <c>Value</c> is seeded from the flow's current value and then holds the last " +
+      "delivered element;"
+  )
+  appendLine(
+    "    /// <c>PropertyChanged(\"Value\")</c> is posted to the captured " +
+      "<see cref=\"SynchronizationContext\"/>, or raised inline"
+  )
+  appendLine("    /// on the delivering thread when there is none.")
+  appendLine("    /// </summary>")
+  appendLine("    /// <remarks>")
+  appendLine(
+    "    /// Call <see cref=\"Dispose\"/> when the binding goes away. Until then the running " +
+      "collection keeps the Kotlin collect job,"
+  )
+  appendLine(
+    "    /// this adapter and the flow's owner rooted for the life of the process, and it keeps " +
+      "delivering; there is no finalizer"
+  )
+  appendLine(
+    "    /// because the running collection itself roots the adapter. A replaced wrapper-typed " +
+      "element is not disposed here."
+  )
+  appendLine(
+    "    /// <see cref=\"Completion\"/> completes after <see cref=\"Dispose\"/> and faults if " +
+      "the Kotlin collection fails."
+  )
+  appendLine("    /// </remarks>")
+  appendLine(
+    "    public sealed class KotlinStateFlowObservable<T> : " +
+      "$componentModel.INotifyPropertyChanged, IDisposable"
+  )
+  appendLine("    {")
+  appendLine("        private readonly SynchronizationContext? _context;")
+  appendLine(
+    "        private readonly CancellationTokenSource _cts = new CancellationTokenSource();"
+  )
+  appendLine()
+  appendLine("        public event $componentModel.PropertyChangedEventHandler? PropertyChanged;")
+  appendLine()
+  appendLine("        public T Value { get; private set; }")
+  appendLine()
+  appendLine("        public Task Completion { get; }")
+  appendLine()
+  appendLine(
+    "        internal KotlinStateFlowObservable(KotlinStateFlow<T> flow, " +
+      "SynchronizationContext? context)"
+  )
+  appendLine("        {")
+  appendLine("            _context = context;")
+  appendLine("            Value = flow.Value;")
+  appendLine("            Completion = RunAsync(flow);")
+  appendLine("        }")
+  appendLine()
+  appendLine("        private async Task RunAsync(KotlinStateFlow<T> flow)")
+  appendLine("        {")
+  appendLine("            try")
+  appendLine("            {")
+  appendLine(
+    "                await foreach (T item in " +
+      "flow.WithCancellation(_cts.Token).ConfigureAwait(false))"
+  )
+  appendLine("                {")
+  appendLine("                    SynchronizationContext? context = _context;")
+  appendLine("                    if (context == null) Deliver(item);")
+  appendLine("                    else context.Post(static state =>")
+  appendLine("                    {")
+  appendLine(
+    "                        (KotlinStateFlowObservable<T> self, T value) = " +
+      "((KotlinStateFlowObservable<T>, T))state!;"
+  )
+  appendLine("                        self.Deliver(value);")
+  appendLine("                    }, (this, item));")
+  appendLine("                }")
+  appendLine("            }")
+  appendLine(
+    "            catch (OperationCanceledException) when (_cts.IsCancellationRequested) { }"
+  )
+  appendLine("        }")
+  appendLine()
+  appendLine("        private void Deliver(T item)")
+  appendLine("        {")
+  appendLine("            if (_cts.IsCancellationRequested) return;")
+  appendLine("            Value = item;")
+  appendLine(
+    "            PropertyChanged?.Invoke(this, " +
+      "new $componentModel.PropertyChangedEventArgs(nameof(Value)));"
+  )
+  appendLine("        }")
+  appendLine()
+  appendLine("        public void Dispose()")
+  appendLine("        {")
+  appendLine("            if (_cts.IsCancellationRequested) return;")
+  appendLine("            _cts.Cancel();")
+  appendLine("        }")
+  appendLine("    }")
+  appendLine()
 }
 
 // ADR-068: shared static class holding the two generic exports keyed on an already-obtained

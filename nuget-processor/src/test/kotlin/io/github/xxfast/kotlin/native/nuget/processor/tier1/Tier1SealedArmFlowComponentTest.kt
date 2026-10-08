@@ -53,7 +53,7 @@ class Tier1SealedArmFlowComponentTest {
     assertTrue(missing.isEmpty(), "expected the arm's flow properties; missing: $missing")
 
     val leaked: List<String> = result.generatedCSharp.lines()
-      .filter { line -> line.contains("Component") }
+      .filter { line -> COMPONENT_N.containsMatchIn(line) }
 
     assertTrue(
       leaked.isEmpty(),
@@ -75,5 +75,13 @@ class Tier1SealedArmFlowComponentTest {
     val named: List<String> = result.kspWarnings.filter { it.contains("component") }
 
     assertTrue(named.isEmpty(), "expected no componentN diagnostic; got: $named")
+  }
+
+  private companion object {
+    /**
+     * A destructuring `componentN` in either spelling (`Component2()` or a `..._component2_...`
+     * entry point). `System.ComponentModel` (ADR-206) is not one.
+     */
+    val COMPONENT_N: Regex = Regex("(?i)component\\d")
   }
 }
