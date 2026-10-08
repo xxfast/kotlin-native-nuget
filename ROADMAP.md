@@ -17,7 +17,6 @@ Complete.
 
 ### 0.10.0: hardening
 
-- [ ] CI links and tests a Linux leg; today two of five RIDs run end to end. Verified.
 - [ ] `release.yml` runs `packNuget` and `IntegrationTests` before it publishes; today it runs neither. Verified.
 - [ ] [ADR-165](docs/adr/165-publish-nuget-task.md)'s three Unverified claims need one real push to nuget.org and one to GitHub Packages before the next release ([details](docs/backlog/adr-165-unverified-claims-need-a-real-push.md))
 - [ ] Triage the backlog, then fix every live leak, wrong-behaviour and silent-omission item in the sections below; the 2026-09-29 audit counted seven leak or wrong-behaviour items and ten silent omissions, and found at least one entry, the triple-dispose one, already fixed. Verified.
@@ -183,6 +182,8 @@ Everything but the C# twin has shipped: bullets 1 to 3 in [ADR-127](docs/adr/127
 - [ ] The C# twin: `Interop.cs`'s roughly 1.8k fixed lines as a runtime NuGet package. Blocked on a per-library `DllImportResolver` (every `DllImport` names its library at compile time and one .NET process can host several Kotlin libraries); decide together with the opt-in compiled-assembly packaging mode under Future Improvements. The block holds for an assembly containing P/Invokes only, so [ADR-178](docs/adr/178-multi-package-coexistence.md)'s contract assembly (exception family and `KotlinOptional<T>`, no P/Invoke) is not blocked by it.
 
 ## Tooling & Test Integrity
+
+- [ ] Kotlin stack traces are unsymbolized on linuxX64: the release `.so` reports frames as `libkn_testlibrary.so 0x... 0x0 + N` and `???`, so `KotlinStackTrace` names no Kotlin function and the ADR-200 `kn_<stem>_` export anchor never matches, leaving host frames in place. Verified on the first ubuntu CI leg (2026-10-07); four `StackTraceTrimTests`/`ExceptionPropagationTests` tests skip on Linux. Candidate fix, inferred: build the Linux target with `-Xadd-light-debug=enable` or ship symbols, then lift the gates.
 
 Fallout from [ADR-053](docs/adr/053-nullable-reference-types-in-kotlin.md) (reverse nullability), the first fixture to exercise the reverse bridge realistically. It flushed out four latent defects, **two of which were phantoms of stale build state**, and the debugging cost was dominated by having no way to observe the bridge and no way to trust the build. These items exist so the next feature does not pay that cost again.
 

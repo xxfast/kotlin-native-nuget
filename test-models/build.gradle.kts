@@ -17,6 +17,8 @@ plugins {
 kotlin {
   mingwX64()
   macosArm64()
+  // Linux hosts only, matching the fixtures that link against this klib.
+  if (org.jetbrains.kotlin.konan.target.HostManager.hostIsLinux) linuxX64()
 
   sourceSets {
     nativeMain.dependencies {

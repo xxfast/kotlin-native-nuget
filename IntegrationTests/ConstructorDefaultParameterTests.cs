@@ -17,6 +17,10 @@ namespace IntegrationTests;
 public class ConstructorDefaultParameterTests
 {
     private static readonly bool IsMacOs = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
+    private static readonly bool IsLinux = OperatingSystem.IsLinux();
+
+    // The word each target's actual body appends; only the host's target is loaded.
+    private static readonly string PlatformWord = IsMacOs ? "macos" : IsLinux ? "linux" : "mingw";
 
     // --- One trailing default: Cat(name: String, lives: Int = 9) ---
 
@@ -192,9 +196,7 @@ public class ConstructorDefaultParameterTests
         // The value 5 exists only on the expect side.
         using var beacon = new Beacon("Oreo's collar");
 
-        string expected = IsMacOs
-            ? "Oreo's collar every 5s on macos"
-            : "Oreo's collar every 5s on mingw";
+        string expected = $"Oreo's collar every 5s on {PlatformWord}";
         Assert.Equal(expected, beacon.Describe());
     }
 
@@ -203,9 +205,7 @@ public class ConstructorDefaultParameterTests
     {
         using var beacon = new Beacon("Mylo's collar", 30);
 
-        string expected = IsMacOs
-            ? "Mylo's collar every 30s on macos"
-            : "Mylo's collar every 30s on mingw";
+        string expected = $"Mylo's collar every 30s on {PlatformWord}";
         Assert.Equal(expected, beacon.Describe());
     }
 

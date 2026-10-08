@@ -23,6 +23,11 @@ CANDIDATES=(
   "test-library/build/bin/mingwX64/releaseShared/kn_testlibrary.dll"
   "test-library/build/bin/linuxX64/releaseShared/libkn_testlibrary.so"
 )
+# A Linux host cross-links mingwX64 as well, and its GNU `nm` cannot read that PE binary, so the
+# host's own `.so` goes first there. macOS and Windows keep the order above.
+if [ "$(uname -s)" = Linux ]; then
+  CANDIDATES=("${CANDIDATES[2]}" "${CANDIDATES[0]}" "${CANDIDATES[1]}")
+fi
 
 if [ ! -f "$RUNTIME_SOURCE" ]; then
   echo "runtime source not found: $RUNTIME_SOURCE" >&2
@@ -98,9 +103,14 @@ case "$LIBRARY" in
   # PE (x86_64) and ELF exports carry no leading underscore, so the names come out verbatim.
   # The lookup is its own statement: folded into the command position, a failed lookup would run
   # the empty string and bury the message above under a `: command not found`.
-  *.dll | *.so)
+  *.dll)
     NM_TOOL="$(find_gnu_nm)"
     ACTUAL="$("$NM_TOOL" --defined-only --extern-only "$LIBRARY" | awk '{print $NF}' | sort -u)"
+    ;;
+  # ELF: the host's own GNU nm. A Linux host that cross-linked mingwX64 also has the msys2
+  # `nm.exe` under `~/.konan`, which it cannot execute, so that candidate is for `.dll` only.
+  *.so)
+    ACTUAL="$(nm --defined-only --extern-only "$LIBRARY" | awk '{print $NF}' | sort -u)"
     ;;
   # Mach-O: BSD nm, and every C symbol is prefixed with an underscore.
   *) ACTUAL="$(nm -gU "$LIBRARY" | awk '{print $NF}' | sed 's/^_//' | sort -u)" ;;

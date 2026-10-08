@@ -132,7 +132,7 @@ echo "==> confirmed: both publishers delivered warnings while KSP was cached"
 
 # The other half of "exactly once": force every KSP task run 2 found cached to execute (`--rerun`
 # on each, never `--rerun-tasks`, which would also relink), so KSP's own console channel is live.
-# On macOS that is two targets per module (the host and the cross-compiled mingwX64).
+# That is one task per declared target per module (the host and every cross-compiled target).
 forced=()
 while IFS= read -r task; do
   forced+=("$task" --rerun)

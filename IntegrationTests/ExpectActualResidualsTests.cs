@@ -10,9 +10,9 @@ namespace IntegrationTests;
 /// actual files, which declare an identical public surface and differ only in returned values.
 ///
 /// Oreo and Mylo wear radio collars. Only one target's actual bodies ever ship in the running
-/// package (macosArm64 on macos-latest, mingwX64 elsewhere), so — exactly like
-/// <see cref="PlatformTests"/> — every value expectation is selected by RID. A collar that reports
-/// the other platform's numbers means the wrong body ran.
+/// package (macosArm64 on macos-latest, linuxX64 on ubuntu-latest, mingwX64 on Windows), so —
+/// exactly like <see cref="PlatformTests"/> — every value expectation is selected by RID. A collar
+/// that reports another platform's numbers means the wrong body ran.
 ///
 /// The static class is <c>PlatformResiduals</c> (Decision 3: the EXPECT's file name), and top-level
 /// functions are PascalCase (ADR-110), as everywhere else in this fixture library.
@@ -21,10 +21,13 @@ public class ExpectActualResidualsTests
 {
     private static readonly bool IsMacOs = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
 
-    private static readonly int ExpectedBoost = IsMacOs ? 42 : 24;
-    private static readonly string ExpectedPong = IsMacOs ? "pong from macos" : "pong from mingw";
+    private static readonly bool IsLinux = OperatingSystem.IsLinux();
+
+    private static readonly int ExpectedBoost = IsMacOs ? 42 : IsLinux ? 33 : 24;
+    private static readonly string ExpectedPong =
+        IsMacOs ? "pong from macos" : IsLinux ? "pong from linux" : "pong from mingw";
     private static readonly Band ExpectedBand = IsMacOs ? Band.Low : Band.High;
-    private static readonly int ExpectedHertz = IsMacOs ? 2400 : 5800;
+    private static readonly int ExpectedHertz = IsMacOs ? 2400 : IsLinux ? 3300 : 5800;
 
     // --- Item 1: `expect sealed class Signal`, subclasses declared on the actual side ---
 

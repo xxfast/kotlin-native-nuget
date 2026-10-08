@@ -98,21 +98,37 @@ jobs:
   bridge:
     name: Bridge end to end (${{ matrix.os }})
     strategy:
+      # One leg's failure must not cancel the others and hide whether they pass.
+      fail-fast: false
       matrix:
         include:
+          # `runtime_extra` names further runtime tasks for the leg; `native_library` is the host's
+          # linked test-library binary, which the runtime-exports check reads.
           - os: macos-latest
             runtime_test: macosArm64Test
+            runtime_extra: ""
+            native_library: test-library/build/bin/macosArm64/releaseShared/libkn_testlibrary.dylib
             aot_rid: osx-arm64
             aot_binary: ./AotSmokeTest/bin/Release/net10.0/osx-arm64/publish/AotSmokeTest
           - os: windows-latest
             runtime_test: mingwX64Test
+            runtime_extra: ""
+            native_library: test-library/build/bin/mingwX64/releaseShared/kn_testlibrary.dll
             aot_rid: win-x64
             aot_binary: ./AotSmokeTest/bin/Release/net10.0/win-x64/publish/AotSmokeTest.exe
+          # The Linux leg also compiles the linuxArm64 runtime klib: nothing else on a pull request
+          # builds that target, and `linux-arm64` is a RID the plugin maps.
+          - os: ubuntu-latest
+            runtime_test: linuxX64Test
+            runtime_extra: ":nuget-runtime:compileKotlinLinuxArm64"
+            native_library: test-library/build/bin/linuxX64/releaseShared/libkn_testlibrary.so
+            aot_rid: linux-x64
+            aot_binary: ./AotSmokeTest/bin/Release/net10.0/linux-x64/publish/AotSmokeTest
 
     runs-on: ${{ matrix.os }}
     # The weekly schedule and workflow_dispatch above exist only for the `reverse-census` job, and a
-    # workflow-level trigger fires every job in the file. This matrix pays for two Kotlin/Native
-    # links and two AOT publishes, so it stays on push and pull_request only.
+    # workflow-level trigger fires every job in the file. This matrix pays for three Kotlin/Native
+    # links and three AOT publishes, so it stays on push and pull_request only.
     if: github.event_name == 'push' || github.event_name == 'pull_request'
 
     steps:
@@ -130,10 +146,10 @@ jobs:
           dotnet-version: 10.0.x
 
       # ADR-128: the `launchForCSharp` / `collectForCSharp` runtime helpers run in-process here, on
-      # both legs, so a broken coroutine arm fails before the pack rather than inside a dotnet test.
-      # The host's test task by name: `allTests` also links the three targets it cannot run.
+      # every leg, so a broken coroutine arm fails before the pack rather than inside a dotnet test.
+      # The host's test task by name: `allTests` also links the targets it cannot run.
       - name: "Runtime: helper tests"
-        run: ./gradlew :nuget-runtime:${{ matrix.runtime_test }}
+        run: ./gradlew :nuget-runtime:${{ matrix.runtime_test }} ${{ matrix.runtime_extra }}
 
       - name: "Contract: verify and pack the shared compiled contract"
         run: |
@@ -151,13 +167,15 @@ jobs:
         run: scripts/verify-forward-diagnostics.sh
         shell: bash
 
-      # ADR-127 seam 3 runs on both matrix legs: the runtime's `nuget_*` exports were only ever
-      # spiked on macosArm64, so checking the linked library here turns a missing Windows export
-      # into a build failure instead of an `EntryPointNotFoundException` in the dotnet tests below.
+      # ADR-127 seam 3 runs on every matrix leg: the runtime's `nuget_*` exports were only ever
+      # spiked on macosArm64, so checking the linked library here turns a missing export into a
+      # build failure instead of an `EntryPointNotFoundException` in the dotnet tests below.
+      # The library is named per leg because every host cross-links the other targets too, and
+      # the script's no-argument search would otherwise pick a binary the host's `nm` cannot read.
       # Under Git Bash on the Windows runner `$HOME` is the user profile, so the script's
       # `~/.konan/dependencies/msys2-mingw-w64-x86_64-*/bin/nm.exe` glob resolves there too.
       - name: "Pack: runtime exports present in the linked library"
-        run: scripts/verify-runtime-exports.sh
+        run: scripts/verify-runtime-exports.sh ${{ matrix.native_library }}
         shell: bash
 
       - name: "Compile: generated bindings as a consumer (net10.0, warnings as errors)"
@@ -282,16 +300,20 @@ jobs:
       # No kotlinVersion override here: these are the artifacts a release ships, built on the pin.
       # The link needs the runtime and annotations klibs too. The smoke consumer targets macosArm64
       # only, but the fixtures pack a mingwX64 library as well and a macOS host links it, so both
-      # targets' publications go up beside the metadata one.
+      # targets' publications go up beside the metadata one. The linuxX64 ones are not linked on
+      # this macOS leg (the fixtures declare that target on Linux hosts only); they are published so
+      # the local repo carries every target the fixtures can declare.
       - name: "Published artifacts: publish plugin, processor, runtime and annotations to a local maven repo"
         run: >
           ./gradlew
           :nuget-processor:publishAllPublicationsToLocalTestRepository
           :nuget-runtime:publishMacosArm64PublicationToLocalTestRepository
           :nuget-runtime:publishMingwX64PublicationToLocalTestRepository
+          :nuget-runtime:publishLinuxX64PublicationToLocalTestRepository
           :nuget-runtime:publishKotlinMultiplatformPublicationToLocalTestRepository
           :nuget-annotations:publishMacosArm64PublicationToLocalTestRepository
           :nuget-annotations:publishMingwX64PublicationToLocalTestRepository
+          :nuget-annotations:publishLinuxX64PublicationToLocalTestRepository
           :nuget-annotations:publishKotlinMultiplatformPublicationToLocalTestRepository
           :nuget-plugin:publishAllPublicationsToLocalTestRepository
 

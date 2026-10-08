@@ -20,6 +20,10 @@ namespace IntegrationTests;
 public class FunctionDefaultParameterTests
 {
     private static readonly bool IsMacOs = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
+    private static readonly bool IsLinux = OperatingSystem.IsLinux();
+
+    // The word each target's actual body appends; only the host's target is loaded.
+    private static readonly string PlatformWord = IsMacOs ? "macos" : IsLinux ? "linux" : "mingw";
 
     // ---- Route 1: class methods (Announcer) ----
 
@@ -262,9 +266,7 @@ public class FunctionDefaultParameterTests
         // Kotlin forbids an `actual` from restating a default, so every parameter of the EXPORTED
         // declaration reports hasDefault = false. Without the expectsByName lookup the planner
         // concludes "no defaults" and this line is CS7036. The value 7 exists only on the expect.
-        string expected = IsMacOs
-            ? "Oreo's collar at level 7 on macos"
-            : "Oreo's collar at level 7 on mingw";
+        string expected = $"Oreo's collar at level 7 on {PlatformWord}";
 
         Assert.Equal(expected, PlatformApi.BeaconLabel("Oreo's collar"));
     }
@@ -272,9 +274,7 @@ public class FunctionDefaultParameterTests
     [Fact]
     public void BeaconLabel_FullSignature_StillWorks()
     {
-        string expected = IsMacOs
-            ? "Mylo's collar at level 30 on macos"
-            : "Mylo's collar at level 30 on mingw";
+        string expected = $"Mylo's collar at level 30 on {PlatformWord}";
 
         Assert.Equal(expected, PlatformApi.BeaconLabel("Mylo's collar", 30));
     }
@@ -287,7 +287,7 @@ public class FunctionDefaultParameterTests
         // Two `expect fun nuzzle(...)` namesakes, each with its own trailing default. A name-keyed
         // expect index collapses them and reports "no defaults" for both, so this line is CS7036.
         // Oreo gets the quiet nuzzle; he is asleep on the keyboard.
-        string expected = IsMacOs ? "Oreo on macos" : "Oreo on mingw";
+        string expected = $"Oreo on {PlatformWord}";
 
         Assert.Equal(expected, PlatformApi.Nuzzle("Oreo"));
     }
@@ -297,7 +297,7 @@ public class FunctionDefaultParameterTests
     {
         // The Int overload's own default is "n", declared only on its own expect. Resolving it off
         // the String overload's expect would yield the wrong value rather than no overload at all.
-        string expected = IsMacOs ? "n3 on macos" : "n3 on mingw";
+        string expected = $"n3 on {PlatformWord}";
 
         Assert.Equal(expected, PlatformApi.Nuzzle(3));
     }
@@ -305,8 +305,8 @@ public class FunctionDefaultParameterTests
     [Fact]
     public void Nuzzle_FullSignatures_StillWork()
     {
-        string loud = IsMacOs ? "Mylo! on macos" : "Mylo! on mingw";
-        string counted = IsMacOs ? "cats:2 on macos" : "cats:2 on mingw";
+        string loud = $"Mylo! on {PlatformWord}";
+        string counted = $"cats:2 on {PlatformWord}";
 
         Assert.Equal(loud, PlatformApi.Nuzzle("Mylo", true));
         Assert.Equal(counted, PlatformApi.Nuzzle(2, "cats:"));
