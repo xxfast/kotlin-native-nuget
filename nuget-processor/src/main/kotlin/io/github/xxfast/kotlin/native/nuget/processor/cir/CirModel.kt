@@ -1034,6 +1034,9 @@ internal data class CirMethod(
   // fills them with (by value, an object handle, or a nullable element's wire). Non-null exactly
   // when [isMutableStateFlow].
   val stateFlowWrite: CirStateFlowWrite? = null,
+  // ADR-071 Alternative 4: the native method name of the flow-keyed `_compare_and_set` sibling
+  // DllImport. Empty unless [isMutableStateFlow].
+  val stateFlowCompareAndSetNativeName: String = "",
   // ADR-067: true when the StateFlow member itself is nullable (`StateFlow<T>?` return). Renders
   // the return type as `KotlinStateFlow<T>?` and gates a `_has_value` presence-probe DllImport /
   // null-check before construction. Since 2026-10-09 (ADR-026 amendment) a plain
@@ -1107,6 +1110,22 @@ internal data class CirStateFlowWrite(
   val arguments: String,
   val rejectsNull: Boolean = false,
 )
+
+/**
+ * ADR-071 Alternative 4: [this] write re-labelled for one `compareAndSet` slot, so the
+ * `_compare_and_set` extern and its lambda cross `expect` and `update` through the setter's own
+ * slots. [stem] renames the native parameters (`value` to `expect`, `valueHasValue` to
+ * `expectHasValue`); [variable] is the lambda parameter that replaces the setter lambda's `v`.
+ */
+internal fun CirStateFlowWrite.relabelled(stem: String, variable: String): CirStateFlowWrite {
+  val name = Regex("""(?<![.\w])value(HasValue)?\b""")
+  return copy(
+    parameters = parameters.map { param ->
+      param.copy(name = name.replace(param.name) { "$stem${it.groupValues[1]}" })
+    },
+    arguments = Regex("""(?<![.\w])v\b""").replace(arguments, variable),
+  )
+}
 
 internal data class CirProperty(
   val name: String,

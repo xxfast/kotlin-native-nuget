@@ -209,4 +209,98 @@ public class MutableStateFlowTests
         Assert.Throws<KotlinInvalidOperationException>(() => diary.Value = "day two");
         Assert.Null(tracker.Diary);
     }
+
+    // ADR-071 Alternative 4: CompareAndSet over a per-member `_compare_and_set` export, and
+    // Update / UpdateAndGet / GetAndUpdate as C# retry loops over it.
+
+    [Fact]
+    public void CompareAndSet_IntElement_OnlyMovesFromTheExpectedValue_MylosTreatCount()
+    {
+        using var tracker = new CatMoodTracker("Mylo");
+        tracker.TreatCount.Value = 3;
+        Assert.False(tracker.TreatCount.CompareAndSet(expect: 9, update: 4)); // stale expect
+        Assert.Equal(3, tracker.TreatCount.Value);
+        Assert.True(tracker.TreatCount.CompareAndSet(expect: 3, update: 4));
+        Assert.Equal(4, tracker.TreatsGivenSoFar()); // the swap landed in Kotlin
+    }
+
+    [Fact]
+    public void CompareAndSet_StringElement_NeedsConversion_MylosCollarSwapsOnlyFromTartan()
+    {
+        using var tracker = new CatMoodTracker("Mylo");
+        tracker.CollarColour.Value = "tartan";
+        Assert.False(tracker.CollarColour.CompareAndSet("blue", "green"));
+        Assert.True(tracker.CollarColour.CompareAndSet("tartan", "red"));
+        Assert.Equal("red", tracker.CollarColour.Value);
+    }
+
+    [Fact]
+    public void CompareAndSet_ObjectElement_ComparesByKotlinEquals_MylosToyIsReplaced()
+    {
+        // Cat is a plain class, so Kotlin equals is identity: a wrapper read back from .Value is
+        // the same Kotlin instance, another Cat with the same name is not.
+        using var tracker = new CatMoodTracker("Mylo");
+        using var mouse = new Cat("Mouse", 9);
+        tracker.FavouriteToy.Value = mouse;
+        using var lookalike = new Cat("Mouse", 9);
+        using var ball = new Cat("Ball", 1);
+        Assert.False(tracker.FavouriteToy.CompareAndSet(lookalike, ball));
+        using var current = tracker.FavouriteToy.Value; // fresh wrapper, same Kotlin instance
+        Assert.True(tracker.FavouriteToy.CompareAndSet(current, ball));
+        using var toy = tracker.FavouriteToy.Value;
+        Assert.Equal("Ball", toy.Name);
+    }
+
+    [Fact]
+    public void CompareAndSet_ThrowingEquals_Throws_OreosGrudgeIsNotAMissedSwap()
+    {
+        // A throwing Kotlin equals must surface as an exception, never read as `false`.
+        using var tracker = new CatMoodTracker("Oreo");
+        using var expect = new Grudge("the vet");
+        using var update = new Grudge("the carrier");
+        Assert.Throws<KotlinInvalidOperationException>(
+            () => tracker.Grudge.CompareAndSet(expect, update));
+    }
+
+    [Fact]
+    public void Update_ScalarElement_ConcurrentIncrementsLoseNothing_OreoCountsEveryTreat()
+    {
+        using var tracker = new CatMoodTracker("Oreo");
+        tracker.TreatCount.Value = 0;
+        Parallel.For(0, 200, _ => tracker.TreatCount.Update(n => n + 1));
+        Assert.Equal(200, tracker.TreatCount.Value);
+        Assert.Equal(200, tracker.TreatsGivenSoFar());
+    }
+
+    [Fact]
+    public void Update_ObjectElement_IdentityEquals_ConvergesFirstTime_MylosToyIsSwappedForABall()
+    {
+        using var tracker = new CatMoodTracker("Mylo");
+        using var ball = new Cat("Ball", 1);
+        int calls = 0;
+        tracker.FavouriteToy.Update(_ => { calls++; return ball; });
+        Assert.Equal(1, calls);
+        using var toy = tracker.FavouriteToy.Value;
+        Assert.Equal("Ball", toy.Name);
+    }
+
+    [Fact]
+    public void UpdateAndGet_GetAndUpdate_ReturnTheNewAndThePreviousValue_MylosTreatCount()
+    {
+        using var tracker = new CatMoodTracker("Mylo");
+        tracker.TreatCount.Value = 5;
+        Assert.Equal(6, tracker.TreatCount.UpdateAndGet(n => n + 1));
+        Assert.Equal(6, tracker.TreatCount.GetAndUpdate(n => n * 2));
+        Assert.Equal(12, tracker.TreatsGivenSoFar());
+    }
+
+    [Fact]
+    public void Update_TransformThrows_PropagatesUnchanged_MylosTreatCountIsLeftAlone()
+    {
+        using var tracker = new CatMoodTracker("Mylo");
+        tracker.TreatCount.Value = 2;
+        Assert.Throws<InvalidOperationException>(
+            () => tracker.TreatCount.Update(_ => throw new InvalidOperationException("no treats")));
+        Assert.Equal(2, tracker.TreatCount.Value);
+    }
 }

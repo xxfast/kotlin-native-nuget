@@ -2015,6 +2015,7 @@ internal fun flowProperty(
       val valueNativeName = "${nativeCarrier}Native_Get${csPropName}Value"
       val hasValueNativeName = "${nativeCarrier}Native_Get${csPropName}HasValue"
       val setValueNativeName = "${nativeCarrier}Native_Set${csPropName}Value"
+      val compareAndSetNativeName = "${nativeCarrier}Native_CompareAndSet${csPropName}Value"
       val ctorName: String =
         if (isMutableStateFlowProperty) "KotlinMutableStateFlow" else "KotlinStateFlow"
       buildString {
@@ -2037,7 +2038,13 @@ internal fun flowProperty(
           appendLine("                        $setValueNativeName(_handle, ${stateFlowWrite.arguments}, out IntPtr error);")
           appendLine("                        if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
           appendLine("                        NugetErrorNative.ClearManagedFault();")
-          appendLine("                    });")
+          appendLine("                    },")
+          appendLine(
+            stateFlowCompareAndSetLambda(
+              compareAndSetNativeName, "_handle", stateFlowWrite, taken = emptySet(),
+              indent = "                    ",
+            ) + ");",
+          )
         } else if (flowElementRead != null) {
           // ADR-123: `read:` is named, so it skips the ADR-068-only `ownedHandle` slot.
           appendLine("                    () => $valueNativeName(_handle),")
@@ -2244,9 +2251,13 @@ internal fun flowMembers(
         stateFlowWrite = heldWrite,
         // A nullable element reads through the null-aware `nuget_stateflow_value_or_null`.
         flowElementNullable = isNullableElement,
+        stateFlowCompareAndSetNativeName = "${nativeStem}CompareAndSet",
+      )
+      val heldCompareAndSetImport: CirDllImport = heldStateFlowCompareAndSetImport(
+        libraryName, "${prefix}_$cname", "${nativeStem}CompareAndSet", heldWrite,
       )
 
-      return@flatMap listOf(acquireImport, heldSetValueImport, heldMethod)
+      return@flatMap listOf(acquireImport, heldSetValueImport, heldCompareAndSetImport, heldMethod)
     }
 
     // The fixed slots and the collect lambda's parameters move off a user parameter spelled like
@@ -2623,6 +2634,11 @@ internal fun suspendMembers(
         hasSyncErrorOut = true,
       )
     }
+    val compareAndSetImport: CirDllImport? = write?.let {
+      heldStateFlowCompareAndSetImport(
+        libraryName, "${prefix}_${cname}", "${nativeStem}CompareAndSet", it,
+      )
+    }
 
     val asyncMethod = CirMethod(
       // ADR-150: the suspend function's own KDoc, on its `Async` projection. `@return` documents
@@ -2646,6 +2662,8 @@ internal fun suspendMembers(
       acquiredFlowCollectNativeName =
         if (element.asyncReturnType.startsWith("KotlinFlow<")) "${nativeStem}Collect" else null,
       stateFlowSetValueNativeName = if (write != null) "${nativeStem}SetValue" else "",
+      stateFlowCompareAndSetNativeName =
+        if (write != null) "${nativeStem}CompareAndSet" else "",
       stateFlowWrite = write,
     )
 
@@ -2660,7 +2678,7 @@ internal fun suspendMembers(
     } else {
       emptyList()
     }
-    listOfNotNull(nativeImport, setValueImport, asyncMethod) + collector
+    listOfNotNull(nativeImport, setValueImport, compareAndSetImport, asyncMethod) + collector
   }
 
   return asyncMembers + suspendStateFlowMembers
@@ -5551,6 +5569,8 @@ internal fun interfaceAsyncForwards(
             stateFlowValueNativeName = method.stateFlowValueNativeName.carried(),
             stateFlowHasValueNativeName = method.stateFlowHasValueNativeName.carried(),
             stateFlowSetValueNativeName = method.stateFlowSetValueNativeName.carried(),
+            stateFlowCompareAndSetNativeName =
+              method.stateFlowCompareAndSetNativeName.carried(),
           )
         },
         properties = projected.properties.map { prop ->
