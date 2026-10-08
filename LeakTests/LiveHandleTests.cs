@@ -2222,6 +2222,25 @@ public class LiveHandleTests
         });
     }
 
+    // Row 8l. ADR-207: Row 8's abandoned shape with the producer PARKED. The reader takes one crate
+    // and waits, so crate 1 sits unread on the C# side and the Kotlin body is parked inside the
+    // next `emit` on a credit nobody returns, holding the crate it already minted. Disposing the
+    // enumerator cancels the parked producer, which releases that minted crate on the Kotlin side;
+    // the unread crate is released by the enumerator's drain (row 16l).
+    [Fact]
+    public async Task Flow_AbandonedWhileProducerParked_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await using var conveyor = new TreatConveyor();
+            IAsyncEnumerator<IReadOnlyList<string>> crates = conveyor.Crates.GetAsyncEnumerator();
+            Assert.True(await crates.MoveNextAsync());
+            Assert.Equal(new[] { "treat 0" }, crates.Current);
+            await Task.Delay(100);
+            await crates.DisposeAsync();
+        });
+    }
+
     // Row 8k. ADR-205: a `SharedFlow<T>` never completes, so Row 7 cannot apply; this is Row 8's
     // abandoned shape on the hot stream. The replayed headline (a per-item box) and the replayed
     // sighting (a per-item object handle, disposed by the caller) are taken, then each enumerator
@@ -4333,9 +4352,10 @@ public class LiveHandleTests
     // reach, holding one owned wrapper per element; the enumerator, not the GC, has to release
     // them. `Newsroom.Editions()` (`LateEditions`) sends edition 1 and 2 back to back and edition 3
     // after a non-cancellable pause, so one crossing covers both abandoned positions: edition 2 is
-    // still queued when the reader walks away, edition 3 arrives after `DisposeAsync` and its
-    // `TryWrite` fails. Measured WITHOUT a GC on purpose: under `AssertNoLeakAsync` the dropped
-    // wrappers' finalizers (ADR-187) would hide a release the enumerator never made.
+    // still queued when the reader walks away, edition 3 is minted after `DisposeAsync` and, with
+    // the one-credit gate (ADR-207), parks on the credit and is released Kotlin-side. Measured
+    // WITHOUT a GC on purpose: under `AssertNoLeakAsync` the dropped wrappers' finalizers
+    // (ADR-187) would hide a release the enumerator never made.
     [Fact]
     public async Task AbandonedCollectionFlowItems_AreReleasedByTheEnumerator()
     {
@@ -4363,7 +4383,7 @@ public class LiveHandleTests
         foreach (TopStory story in editions.Current) story.Dispose();
         await Task.Delay(100);   // edition 2 is queued before the reader walks away
         await editions.DisposeAsync();
-        await Task.Delay(500);   // edition 3 lands after the dispose, its TryWrite fails
+        await Task.Delay(500);   // edition 3 parks on the credit, released Kotlin-side
     }
 
     // Row 16d. A sealed ARM, both ways one is obtained: constructed from C# (Row 1c's

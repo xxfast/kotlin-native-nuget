@@ -526,10 +526,16 @@ public fun export_nuget_scope_drain(
         (COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()
   val drainJob = scope.launch(start = CoroutineStart.ATOMIC) {
     val self = coroutineContext[Job]
-    scope.coroutineContext[Job]
+    val children: List<Job> = scope.coroutineContext[Job]
       ?.children
       ?.filter { it != self }
-      ?.forEach { it.join() }
+      ?.toList()
+      .orEmpty()
+    // ADR-207: a Flow collection parks on a credit only its reader returns. An enumerator nobody
+    // reads or disposes would park it forever and hang this join, so collections are cancelled
+    // first; each still reaches its cancel arm. The suspend calls are waited for, as before.
+    children.filter(NugetFlowCollections::isCollection).forEach { it.cancel() }
+    children.forEach { it.join() }
     callback.invoke(null, null, 0.toByte(), userData)
   }
   return NugetHandles.retain(drainJob)
@@ -542,6 +548,20 @@ public fun export_nuget_job_cancel(handle: COpaquePointer?) {
     return
   }
   handle.asStableRef<Job>().get().cancel()
+}
+
+/**
+ * ADR-207: returns the one credit a Flow collection's next `emit` parks on. The generated C#
+ * `MoveNextAsync` calls it after each item it hands out. A full credit channel makes a repeated
+ * call a silent no-op, and a finished collection simply never takes the credit.
+ */
+@NugetRuntimeApi
+@CName("nuget_flow_resume")
+public fun export_nuget_flow_resume(handle: COpaquePointer?) {
+  if (handle == null) {
+    return
+  }
+  handle.asStableRef<NugetFlowCollection>().get().credits.trySend(Unit)
 }
 
 @NugetRuntimeApi

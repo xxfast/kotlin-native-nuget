@@ -151,7 +151,7 @@ internal object ForwardAbiContract {
   ): List<ForwardAbiCollision> {
     val csharpByName: Map<String, List<ForwardAbiSignature>> = csharp.groupBy { it.exportName }
     val kotlinByName: Map<String, List<ForwardAbiSignature>> = kotlin.groupBy { it.exportName }
-    // ADR-127 (+ADR-129): the 68 fixed names are exported by the `nuget-runtime` klib, which the
+    // ADR-127 (+ADR-129): the 69 fixed names are exported by the `nuget-runtime` klib, which the
     // plugin adds as `api` and `export()`s, so the C# side imports them and the generated Kotlin
     // does not declare them. Their presence in the linked binary is checked by
     // `scripts/verify-runtime-exports.sh`, against the runtime source, not here. What this check
@@ -659,6 +659,8 @@ internal val NUGET_RUNTIME_EXPORTS: Set<String> = setOf(
   "nuget_error_message",
   "nuget_error_stacktrace",
   "nuget_error_type",
+  // ADR-207: the Flow enumerator returns a credit to its gated Kotlin producer through it.
+  "nuget_flow_resume",
   "nuget_func0_invoke",
   "nuget_func1_invoke",
   "nuget_func2_invoke",
