@@ -47,7 +47,7 @@ internal object ForwardCirPropertyProjection {
    * declaration can be projected from the *same* call the implementing class's property goes
    * through. A second spelling of the same plan is what CS0738 is made of.
    */
-  fun publicType(plan: ForwardPropertyPlan): String = plan.type.csharpType()
+  fun publicType(plan: ForwardPropertyPlan): String = plan.type.forwardPublicCsharpType()
 
   fun staticProperty(plan: ForwardPropertyPlan, libraryName: String): List<CirMember> {
     // ROADMAP Phase 4: an `object`'s own property is the third static position, projected by this
@@ -67,7 +67,7 @@ internal object ForwardCirPropertyProjection {
   fun extension(plan: ForwardPropertyPlan, libraryName: String): List<CirMember> {
     require(plan.position == ForwardPropertyPosition.EXTENSION) { "Expected extension property plan" }
     val receiver = plan.receiver as ForwardPropertyReceiver.Value
-    val publicReceiver: String = receiver.type.csharpType()
+    val publicReceiver: String = receiver.type.forwardPublicCsharpType()
     // ADR-132 (2026-09-20): spelled through the SHARED nullable-string-wire rule, not off the bare
     // wire type. A `String?` / `Uuid?` / `ValueClass(String)?` receiver hands the import a nullable
     // expression, and `STRING -> "string"` made that a CS8604 under the generated file's
@@ -117,7 +117,7 @@ internal object ForwardCirPropertyProjection {
     val property = CirExtensionProperty(
       receiverType = publicReceiver,
       name = plan.publicName,
-      type = plan.type.csharpType(),
+      type = plan.type.forwardPublicCsharpType(),
       getter = getterBody(plan, receiverArgument, receiverStep, receiverCleanup),
       setter = plan.setter?.let {
         setterBody(plan, receiverArgument, receiverStep, receiverCleanup)
@@ -145,7 +145,7 @@ internal object ForwardCirPropertyProjection {
       "Expected enum member property plan"
     }
     val receiver = plan.receiver as ForwardPropertyReceiver.Value
-    val publicReceiver: String = receiver.type.csharpType()
+    val publicReceiver: String = receiver.type.forwardPublicCsharpType()
     val nativeReceiver: String = plan.calls().first().parameters
       .first { parameter -> parameter.role == ForwardAbiRole.RECEIVER }
       .wireType.csharpWireType()
@@ -156,7 +156,7 @@ internal object ForwardCirPropertyProjection {
     val getter = CirMethod(
       doc = plan.doc?.toCirDoc(),
       name = plan.publicName,
-      returnType = plan.type.csharpType(),
+      returnType = plan.type.forwardPublicCsharpType(),
       nativeReturnType = plan.getter.calls().first().result.csharpWireType(),
       parameters = listOf(CirParameter(receiverName, publicReceiver)),
       body = getterBody(plan, receiverArgument),
@@ -170,7 +170,7 @@ internal object ForwardCirPropertyProjection {
         returnType = "void",
         parameters = listOf(
           CirParameter(receiverName, publicReceiver),
-          CirParameter("value", plan.type.csharpType()),
+          CirParameter("value", plan.type.forwardPublicCsharpType()),
         ),
         body = setterBody(plan, receiverArgument),
         isStatic = true,
@@ -192,7 +192,7 @@ internal object ForwardCirPropertyProjection {
     val directGetter: ForwardNativeCall = plan.getter.calls().first()
     return CirProperty(
       name = plan.publicName,
-      type = plan.type.csharpType(),
+      type = plan.type.forwardPublicCsharpType(),
       nativeReturnType = directGetter.result.csharpWireType(),
       nativeSetterType = if (plan.setter != null) setterNativeType(plan.type) else directGetter.result.csharpWireType(),
       nativeName = plan.kotlinName.asCSymbol(),
@@ -416,7 +416,7 @@ internal object ForwardCirPropertyProjection {
         // ADR-040: construct via the backing wrapper class, not the interface spelling.
         is BridgeType.Interface -> append(
           "            return nativeResult == IntPtr.Zero ? null : " +
-              "${interfaceReturnExpression(inner.csharpType(), inner.backingType)};",
+              "${interfaceReturnExpression(inner.forwardPublicCsharpType(), inner.backingType)};",
         )
 
         // ADR-075: a null handle means Kotlin `null`, guarded before the ordinary
@@ -443,7 +443,8 @@ internal object ForwardCirPropertyProjection {
         else -> append("            return nativeResult;")
       }
 
-      is BridgeType.Enum -> append("            return (${value.csharpType()})nativeResult;")
+      is BridgeType.Enum ->
+        append("            return (${value.forwardPublicCsharpType()})nativeResult;")
       // ADR-076: nativeResult is a raw `long` of ticks (see the first `when` above); lift it into
       // a DateTimeOffset rather than casting (a `long -> DateTimeOffset` C# cast is illegal).
       BridgeType.Instant -> append("            return ${instantLiftCs("nativeResult")};")
@@ -460,7 +461,10 @@ internal object ForwardCirPropertyProjection {
       is BridgeType.TypeParameter ->
         append("            return NugetMarshal.FromHandle<${value.name}>(nativeResult);")
       is BridgeType.Interface ->
-        append("            return ${interfaceReturnExpression(value.csharpType(), value.backingType)};")
+        append(
+          "            return " +
+            "${interfaceReturnExpression(value.forwardPublicCsharpType(), value.backingType)};",
+        )
 
       is BridgeType.Collection -> append(collectionMaterialize(value))
       // ADR-151: materialize and dispose the handle the getter minted.
@@ -480,9 +484,9 @@ internal object ForwardCirPropertyProjection {
   private fun BridgeType.ObjectHandle.handleReconstruction(
     wireValue: String = "nativeResult",
   ): String = if (viaDiscriminator) {
-    "${csharpType()}.FromHandle($wireValue)"
+    "${forwardPublicCsharpType()}.FromHandle($wireValue)"
   } else {
-    "new ${constructType ?: csharpType()}($wireValue, out _)"
+    "new ${constructType ?: forwardPublicCsharpType()}($wireValue, out _)"
   }
 
   /**
@@ -505,7 +509,7 @@ internal object ForwardCirPropertyProjection {
         "Forward CIR property projection has no value-class reconstruction for $underlying",
       )
     }
-    return "new ${type.csharpType()}($inner)"
+    return "new ${type.forwardPublicCsharpType()}($inner)"
   }
 
   private fun legacyGetter(presence: String, value: String, args: String, type: BridgeType): String {
@@ -535,7 +539,7 @@ internal object ForwardCirPropertyProjection {
       // ADR-079: rebuild the record struct from the underlying wire value the `_value` call read.
       inner is BridgeType.ValueClass -> valueClassGetterReconstruction(inner, "value")
       // ADR-080: lift the `int` ordinal back into the enum.
-      inner is BridgeType.Enum -> "(${inner.csharpType()})value"
+      inner is BridgeType.Enum -> "(${inner.forwardPublicCsharpType()})value"
       else -> "value"
     }
     // ROADMAP:29: no leading `appendLine()` here. [forwardCirHandleScope] owns the newline that
@@ -568,7 +572,7 @@ internal object ForwardCirPropertyProjection {
    *  `finally`-guarded helpers, so the result handle goes even when an element read throws. */
   private fun collectionMaterialize(type: BridgeType.Collection): String {
     val read: String =
-      componentCollectionRead("nativeResult", type, csharpType = { it.csharpType() })
+      componentCollectionRead("nativeResult", type, csharpType = { it.forwardPublicCsharpType() })
     return "            return $read;"
   }
 
@@ -664,7 +668,7 @@ internal object ForwardCirPropertyProjection {
         }
         // ADR-081: the setter's elements are projected to their underlying before boxing, the same
         // per-element projection a collection *parameter* uses.
-        val source: String = collectionCreateArgument(name, value) { it.csharpType() }
+        val source: String = collectionCreateArgument(name, value) { it.forwardPublicCsharpType() }
         // ADR-075 Decision 3: a null source ships the null pointer rather than an empty collection.
         val built: String = if (nullable) {
           "$name != null ? NugetMarshal.$factory($source) : IntPtr.Zero"
@@ -810,61 +814,6 @@ internal object ForwardCirPropertyProjection {
     PrimitiveKind.FLOAT -> ForwardAbiWireType.FLOAT32; PrimitiveKind.DOUBLE -> ForwardAbiWireType.FLOAT64
   }
 
-  private fun BridgeType.csharpType(): String = when (this) {
-    // ADR-147 amendment: a nullable-bounded bare `T` spells `T`, as on the callable route.
-    is BridgeType.Nullable ->
-      if ((type as? BridgeType.TypeParameter)?.nullableFromBound == true) type.name
-      else "${type.csharpType()}?"
-    is BridgeType.Primitive -> kind.csharpType()
-    BridgeType.Char -> "char"
-    BridgeType.String -> "string"
-    // ADR-076: the public C# type is always System.DateTimeOffset, fully qualified so no "using
-    // System;" is required in the generated file.
-    BridgeType.Instant -> "global::System.DateTimeOffset"
-    // ADR-103: likewise System.TimeSpan.
-    BridgeType.Duration -> "global::System.TimeSpan"
-    // ADR-107: the public C# type is System.Exception; the value is always an IKotlinException
-    // (KotlinException or one of the ADR-029 mapped subclasses), never a bare Exception.
-    is BridgeType.Throwable -> "global::System.Exception"
-    // ADR-106: System.Guid, a value type, so `Uuid?` renders `Guid?` (Nullable<Guid>).
-    BridgeType.Uuid -> "global::System.Guid"
-    is BridgeType.Enum -> this.csharpType
-    // ADR-066: mirrors `BridgeType.Enum.csharpType` — the classifier already qualified this.
-    is BridgeType.ObjectHandle -> csharpType
-    // ADR-147: the type parameter's own name, on the generic carrier.
-    is BridgeType.TypeParameter -> name
-    // ADR-040: the public C# spelling is the projected interface, never the backing class.
-    is BridgeType.Interface -> csharpType
-    // ADR-088: the ORIGINAL bound C# interface, as the plugin's manifest spells it -- the same
-    // spelling `forwardPublicCsharpType` gives it on the callable route.
-    is BridgeType.BoundInterface -> csharpType
-    // The public C# spelling is the value class itself (e.g. `ChartId`), never its underlying
-    // wire value: true for an extension property's receiver (ADR-075) and for an ordinary
-    // value-class-typed property (ADR-077 sub-item 2).
-    is BridgeType.ValueClass -> csharpType
-    // ADR-151: the public spelling is `byte[]`; `ByteArray?` renders `byte[]?` through the
-    // nullable arm above, because a C# array is a reference type.
-    BridgeType.ByteArray -> "byte[]"
-    is BridgeType.Collection -> when (kind) {
-      CollectionKind.LIST -> "IReadOnlyList<${requireNotNull(element).csharpType()}>"
-      CollectionKind.MUTABLE_LIST -> "IList<${requireNotNull(element).csharpType()}>"
-      CollectionKind.MAP ->
-        "IReadOnlyDictionary<${requireNotNull(key).csharpType()}, ${requireNotNull(value).csharpType()}>"
-
-      CollectionKind.MUTABLE_MAP ->
-        "IDictionary<${requireNotNull(key).csharpType()}, ${requireNotNull(value).csharpType()}>"
-
-      CollectionKind.SET -> "IReadOnlySet<${requireNotNull(element).csharpType()}>"
-      CollectionKind.MUTABLE_SET -> "ISet<${requireNotNull(element).csharpType()}>"
-    }
-
-    else -> error("No C# property type for $this")
-  }
-
-  private fun PrimitiveKind.csharpType(): String = when (this) {
-    PrimitiveKind.BOOLEAN -> "bool"; PrimitiveKind.BYTE -> "sbyte"; PrimitiveKind.UBYTE -> "byte"; PrimitiveKind.SHORT -> "short"; PrimitiveKind.USHORT -> "ushort"
-    PrimitiveKind.INT -> "int"; PrimitiveKind.UINT -> "uint"; PrimitiveKind.LONG -> "long"; PrimitiveKind.ULONG -> "ulong"; PrimitiveKind.FLOAT -> "float"; PrimitiveKind.DOUBLE -> "double"
-  }
 
   private fun ForwardAbiWireType.csharpWireType(): String = when (this) {
     ForwardAbiWireType.VOID -> "void"; ForwardAbiWireType.BOOLEAN -> "bool"; ForwardAbiWireType.INT8 -> "sbyte"; ForwardAbiWireType.UINT8 -> "byte"

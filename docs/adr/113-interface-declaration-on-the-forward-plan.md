@@ -515,7 +515,7 @@ shared function, a `Throwable`-typed interface property would have crashed KSP w
 direct-value projection cannot render public type". Verified by reading. Merging the two copies is
 a separate refactor; [ADR-114](114-collection-parameters-on-legacy-flow-and-suspend-routes.md)
 extracted one of the two copies already, so together they are one item, not two. See
-[ROADMAP.md](../../ROADMAP.md) / [details](../backlog/two-divergent-public-csharp-type-spellers.md).
+[ROADMAP.md](../../ROADMAP.md). Superseded: see the 2026-10-07 amendment at the end of this ADR.
 
 ### Deliberately uncovered
 
@@ -566,3 +566,7 @@ super's own planning pass already recorded it.
 Pinned by `Tier1InterfaceVarPropertyTest.kt`, `test-library/.../test/perchvar/TrainingClicker.kt`,
 `IntegrationTests/InterfaceVarPropertyTests.cs`, and the `aviary`/`Feathered` control in
 `AbstractInterfacePropertyTests.cs`.
+
+## Amendment 2026-10-07: one public C# speller
+
+The assumption that interface properties share one public C# type speller now holds by construction. The private copy in `ForwardCirPropertyProjection.kt` is deleted, all its call sites use `forwardPublicCsharpType()`, and that `when` is exhaustive with no `else`; the four `BridgeType` variants that never reach a public signature raise a named error. Verified by reading: both copies already spelled `Throwable` and `BoundInterface` identically, so the divergence described above was stale and no generated output changed.
