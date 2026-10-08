@@ -146,3 +146,24 @@ Verified in the feature run (`scripts/verify.sh --plugin`): 2,954 IntegrationTes
 9 MultiPackageTests, 2 SharedExceptionTests, 3 ContractTests, and all six NativeAOT shapes passed.
 The processor manifest output and plugin package comparison were exercised by real target output
 and package-path tests. No new C# API or bridge route was added, so no leak-test row is needed.
+
+## Amendment 2026-10-07: declaration order is a generator guarantee
+
+The comparison above preserves declaration order, so the generator must emit the same order on
+every host. It now guarantees this: source files are sorted by separator-normalised `filePath` at
+the single `getAllFiles()` walk that feeds `Interop.cs`, `CNameExports.kt` and `ForwardAbi.json`,
+and declarations keep source order within a file. Nothing downstream depends on the order KSP
+enumerates files.
+
+**Verified.** On the first Linux CI run, the `linux-x64` and `win-x64` `Interop.cs` disagreed and
+`packNuget`'s per-RID contract check failed. KSP lists files in directory order, which is sorted on
+NTFS and APFS and hash-based on ext4. `Tier1DeterministicFileOrderTest` feeds the same two files in
+both orders and requires byte-identical outputs.
+
+**Inferred residual.** The sort key includes the source-set folder name. A future target whose
+folder sorts after `nativeMain` (`tvos*`, `watchos*`) would move its platform classes relative to
+the shared ones and could trip the check again. Tracked in `ROADMAP.md` under Tooling & Test
+Integrity.
+
+A contract difference that is only a reordering therefore no longer means host nondeterminism; the
+Consequences bullet above on conservative rejection still applies to real order differences.

@@ -1360,7 +1360,16 @@ internal class NugetProcessor(
     // `expect`/`actual` pair as two files of one compilation (Verified, spike finding 1), so this
     // raw list is the shared input for the `isExpect` filter below, the by-name expect index, and
     // Decision 2's `actual typealias` target map.
+    //
+    // Ordering invariant: every generated file (`Interop.cs`, `CNameExports.kt`, `ForwardAbi.json`)
+    // takes its declaration order from this list, so files are sorted by path here, once, and
+    // nothing downstream depends on the order KSP enumerated them. KSP hands files over in
+    // directory-listing order, which is hash-based on ext4, so without this a Linux pack ordered a
+    // RID's `actual` files differently from a Windows or macOS pack and the cross-RID contract
+    // check failed. Within a file, declarations keep source order. Separators are normalised so
+    // the order is the same on every host, not merely stable on each.
     val allFilesDeclarations: List<KSDeclaration> = resolver.getAllFiles()
+      .sortedBy { file -> file.filePath.replace('\\', '/') }
       .flatMap { it.declarations }
       .toList()
 
