@@ -17,11 +17,11 @@ Read the announcement: [Bring your KMP library to NuGet](https://medium.com/proa
 
 ## Stability
 
-Alpha, in [Kotlin's stability terms](https://kotlinlang.org/docs/components-stability.html): the forward direction (Kotlin to C#) is here to stay but has not reached its final shape. A `0.x` release can still break you, and its release notes say how to migrate. The reverse direction (C# to Kotlin) stays experimental, behind `@ExperimentalNugetBindingApi`.
+[Alpha](https://kotlinlang.org/docs/components-stability.html). Kotlin to C# can still break in a `0.x` release; the release notes say how to migrate. C# to Kotlin is experimental, behind `@ExperimentalNugetBindingApi`.
 
-The generated bindings are the public API of **your** NuGet package. Your consumers see your version, never the plugin's. A plugin upgrade that changes how Kotlin renders into C# breaks them at your version, not ours.
-
-Pin the plugin version. Diff the generated `Interop.cs` when you bump it.
+> [!WARNING]
+> The generated bindings are your package's public API, so a plugin bump can break your consumers.
+> Pin the plugin and diff `Interop.cs` on every bump.
 
 ## Setup
 
@@ -51,12 +51,8 @@ nuget {
 }
 ```
 
-Applying the plugin also adds `nuget-runtime`, a small Kotlin/Native library carrying the fixed
-`nuget_*` ABI (handles, errors, collections, callbacks, coroutines), as a dependency and exports it
-into your shared library; you never reference it yourself. It also adds `nuget-annotations`, which carries `@CSharpName`, to `commonMainApi`. A dependency module that only needs the annotation can apply
-`io.github.xxfast.kotlin.native.nuget.annotations` instead. `nuget-runtime` is the project's first published
-artifact that's a real klib rather than a JVM jar, which makes it indexable on
-[klibs.io](https://klibs.io). See [ADR-127](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/127-nuget-runtime-library.md).
+> [!NOTE]
+> The plugin adds `nuget-runtime` and `nuget-annotations` for you; nothing to declare.
 
 ## Usage
 
@@ -105,9 +101,13 @@ IPet pet = oreo;                            // interface polymorphism
 Animal animal = oreo;                       // abstract class hierarchy
 ```
 
-By default the processor bridges every public declaration it can see in the module, not just the ones under `rootPackage`. `rootPackage` only names the generated C# namespace. If your module has unrelated public API, scope it with `publish { include(...); exclude(...) }`.
+> [!TIP]
+> Everything public in the module is bridged, not just `rootPackage`. Scope it with
+> `publish { include(...); exclude(...) }`.
 
-Not everything bridges. The forward direction has a defined bridgeable subset; declarations outside it are skipped with a named diagnostic rather than silently dropped or miscompiled. See [Publishing Kotlin to C#](https://xxfast.github.io/kotlin-native-nuget/forward-overview.html) for the full mapping and its limits.
+> [!IMPORTANT]
+> Not everything bridges. Unsupported declarations are skipped with a named diagnostic. See
+> [Publishing Kotlin to C#](https://xxfast.github.io/kotlin-native-nuget/forward-overview.html) for the limits.
 
 ## C# -> Kotlin
 
