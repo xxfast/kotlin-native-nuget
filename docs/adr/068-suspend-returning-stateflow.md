@@ -417,3 +417,18 @@ The v1 scope line that spells a `suspend fun` returning `MutableStateFlow<T>` as
 to a settable `Task<KotlinMutableStateFlow<T>>`. The `_async` export and the holder's read seams are
 unchanged; only a flow-keyed write is added. See ADR-071's 2026-10-09 amendment. A nullable element
 or member, and the top-level route, keep the read-only view.
+
+## Amendment (2026-10-09): a collection element binds
+
+A class `suspend fun (): StateFlow<List<T>>` (also `Set` and `Map`) is no longer refused. It awaits
+to `KotlinStateFlow<IReadOnlyList<T>>` (or the set or dictionary equivalent), and `.Value` and
+`await foreach` return the collection, value-class elements such as `CatId` included. The reads go
+through ADR-202's per-member, handle-keyed export pair instead of the module-wide
+`nuget_stateflow_value` / `nuget_stateflow_collect`, which stay unchanged in nuget-runtime. See
+ADR-123's amendment of the same date.
+
+Still not bound: `MutableStateFlow<List<T>>` (no write seam, on purpose). An awaited nullable
+`StateFlow<List<T>>?` is covered by Tier 1 only. Evidence: verified for the non-null class route
+(`SuspendStateFlowCollectionElementTests`, LeakTests row 8d-suspend); inferred, not run, that the
+awaited branch's literal `flowHandle` / `collectScope` locals collide with a parameter of that name
+(CS0136), recorded in ROADMAP Phase 6.

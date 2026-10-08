@@ -315,6 +315,16 @@ the presence check on a property or method, and a `suspend` completion with no f
 handle behind, and a present one is the ordinary holder you dispose.
 `LeakTests/LiveHandleTests.cs`'s `NullableFlowMember_AbsentAndPresent_ReturnToBaseline` covers the
 property, method and `suspend` (class and top-level) shapes.
+An awaited [`StateFlow<List<T>>`](coroutines-and-flow.md#suspend-stateflow-collection-element)
+reads each `.Value` and each emission through a per-member pair keyed on the awaited flow. Every
+read mints a collection handle (plus one boxed underlying per element for a value class such as
+`CatId`), and the holder's own handle is freed by `Dispose`. `LeakTests/LiveHandleTests.cs` row
+8d-suspend, `SuspendStateFlowCollectionElement_AwaitReadEnumerateDispose_ReturnsToBaseline`, covers
+it.
+
+A collection parameter on a held `MutableStateFlow` method or a nullable `StateFlow<T>?` method
+wraps its acquire, and the `_has_value` probe, in a call-scoped collection handle. Row 8f-collection
+covers both: `CollectionParameterOnHeldAcquireAndHasValueProbe_ReturnsToBaseline`.
 
 For a [cancellation-token-taking async call](instance-members.md#async-cancellation), this count
 only proves the pending-continuation and `Task` handles came back to baseline: the bridge-owned

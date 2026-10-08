@@ -268,6 +268,23 @@ Both work on class methods and top-level functions, and combine as `StateFlow<T?
 `suspend fun` returning `MutableStateFlow<T?>` or `MutableStateFlow<T>?` binds as a read-only holder;
 its `.Value` setter is not available.
 
+### Collection element {id="suspend-stateflow-collection-element"}
+
+A `List`, `Set` or `Map` element awaits to the same read-only collection a `StateFlow` property
+gives, so `.Value` and `await foreach` return the collection, value-class elements included:
+
+```kotlin
+suspend fun awaitLitterSizes(): StateFlow<List<Int>>
+```
+
+```C#
+using KotlinStateFlow<IReadOnlyList<int>> litters = await tracker.AwaitLitterSizesAsync();
+IReadOnlyList<int> sizes = litters.Value;
+```
+
+`suspend fun (): MutableStateFlow<List<T>>` is not bound, and an awaited nullable
+`StateFlow<List<T>>?` is not covered by an end-to-end test.
+
 ## `suspend fun` returning `Flow<T>` {id="suspend-fun-returning-flow-t"}
 
 A suspend function that returns `Flow<T>` stays asynchronous: await it once to acquire a

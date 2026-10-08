@@ -385,3 +385,13 @@ Evidence. Verified: `LeakTests/LiveHandleTests.cs` row 16l,
 `AbandonedCollectionFlowItems_AreReleasedByTheEnumerator`, was red before the change (30 live
 handles against a baseline of 10) and is green after. Not covered by any row: the `Map` branch,
 nested collection recursion, and the `string`/`byte[]` skip in `ReleaseAbandoned`.
+
+## Amendment (2026-10-09): Alternative 5 reconsidered, the per-member seam now exists
+
+Alternative 5 rejected a per-member export pair on ADR-068's route because it would multiply a
+module-wide pair by every suspend-StateFlow member. ADR-202 has since given the awaited holder a
+per-member, handle-keyed export pair, so a collection element on a class
+`suspend fun (): StateFlow<List<T>>` (and `Set`, `Map`) now binds as
+`Task<KotlinStateFlow<IReadOnlyList<T>>>` instead of being refused. See ADR-068's amendment of
+the same date. `MutableStateFlow<List<T>>` stays refused. Evidence: verified
+(`SuspendStateFlowCollectionElementTests`, LeakTests row 8d-suspend).
