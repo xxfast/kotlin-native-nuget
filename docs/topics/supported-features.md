@@ -158,6 +158,7 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | `Flow<T>` of an interface element type (top-level or nested interface, class-method `Flow` positions only) | ⇄ | `KotlinFlow<IFoo>` | → the element is spelled with the interface itself, nullable included · ← a value stored through a C# implementation comes back as the caller's own instance | [Coroutines and Flow](coroutines-and-flow.md) · [Interfaces, abstract and sealed](interfaces-abstract-sealed.md) |
 | `StateFlow<T>` / `MutableStateFlow<T>` | → | `KotlinStateFlow<T>` / `KotlinMutableStateFlow<T>` (`.Value` + `IAsyncEnumerable<T>`) | Hot, always current. The declared type wins: `StateFlow<T>` is get-only `.Value`, a publicly declared `MutableStateFlow<T>` gets a settable one. | [Coroutines and Flow](coroutines-and-flow.md) |
 | `StateFlow<T?>` / `StateFlow<T>?` | → | `KotlinStateFlow<T?>` / `KotlinStateFlow<T>?` | A nullable element and a nullable member, independently or combined. | [Coroutines and Flow](coroutines-and-flow.md) |
+| `SharedFlow<T>` / `MutableSharedFlow<T>` | → | `KotlinFlow<T>` / `Task<KotlinFlow<T>>` | Enumeration replays the Kotlin replay cache first and never completes, so bound it. A declared `MutableSharedFlow<T>` is a read-only view. | [Coroutines and Flow](coroutines-and-flow.md) |
 | `StateFlow<E>` / `Flow<E>` of an enum or value class element (nullable included) | → | `KotlinStateFlow<E>` / `KotlinFlow<E>` | `.Value` and `await foreach` return the C# enum or record struct. `MutableStateFlow<E>` of an enum stays a get-only `KotlinStateFlow<E>`. | [Coroutines and Flow](coroutines-and-flow.md) |
 | `suspend fun` returning `StateFlow<T>` | → | `Task<KotlinStateFlow<T>>` | The outer suspend stays a `Task`, not collapsed to a synchronous return. Class methods and top-level functions; a nullable element skips, named. | [Coroutines and Flow](coroutines-and-flow.md) |
 | `suspend fun` returning `Flow<T>` | → | `Task<KotlinFlow<T>>` | Await acquisition once; dispose the acquired holder separately from its owner. | [Coroutines and Flow](coroutines-and-flow.md) |
@@ -172,7 +173,7 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | `IAsyncEnumerable<T>` method return, instance or static | ← | `Flow<T>` | Pull-based and cold: the C# method runs at `collect`, not at the call that returned the `Flow`. A mid-stream throw arrives as `NugetManagedException`. | [Instance members](instance-members.md) |
 
 <note>
-<p>Hot streams (<code>SharedFlow</code>), <code>Flow</code> parameters, and <code>Flow</code> as a generic argument are not yet supported. See <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a> Phase 6.</p>
+<p><code>Flow</code> parameters and <code>Flow</code> as a generic argument are not yet supported. See <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a> Phase 6.</p>
 </note>
 
 ## Documentation comments

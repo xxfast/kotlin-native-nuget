@@ -52,7 +52,7 @@ Complete.
 
 ## Phase 6: Async support
 - [ ] A kept generic base under a dropped middle class (`Barge : Keel : Crate<Int>` with `Keel` unexported, both overriding the same `suspend fun`) fails generation with an internal error in `forwardBaseSpelling` (`cir/CirClassTranslator.kt`), which reads only direct supertypes; widening it to `getAllSuperTypes()` then yields `CS0506` on the override ([details](docs/backlog/kept-generic-base-under-dropped-middle.md))
-- [ ] Map `SharedFlow<T>` (hot stream with subscribers – may map to `IAsyncEnumerable<T>` with replay or `IObservable<T>`)
+- [ ] `ReplayCache` / `SubscriptionCount` on `SharedFlow<T>` and `Emit` / `TryEmit` on `MutableSharedFlow<T>` are not surfaced (ADR-205 alternative; `KotlinFlow<T>` was chosen so a later `KotlinSharedFlow<T>` subclass is source-compatible)
 - [ ] `MutableStateFlow<SomeEnum>` binds a read-only `KotlinStateFlow<SomeEnum>`: `isMutableStateFlowElementSupported` returns false for `ENUM_CLASS` (`cir/CirTypeMapping.kt`), so the settable `.Value` needs a `value: Int` set shim (`Mood.entries[value]`, `(int)v` in C#). ADR-071's enum deferral, left open by the ADR-094 2026-09-29 amendment.
 - [ ] `CompareAndSet` / `Update` / `Emit` / `TryEmit` / `ReplayCache` / `SubscriptionCount` on `MutableStateFlow<T>`: deferred, additive; mirrors SKIE's wider `SkieSwiftMutableStateFlow<T>` surface (ADR-071 Alternative 4)
 - [ ] Nullable element write (`MutableStateFlow<T?>.Value = ...`) and nullable member write, and `suspend fun` returning `MutableStateFlow<T>`: deferred, mirror the read-side nullable/suspend items above

@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
@@ -77,8 +77,8 @@ items as ordinary `onNext` callbacks. **Verified by spike** that no C#-side stat
 
 ## Decision
 
-Alternative 1 for this item, with Alternative 2 recorded as the end state on the existing ROADMAP
-line that already names `ReplayCache`/`SubscriptionCount`.
+Alternative 1 for this item, with Alternative 2 recorded as the end state on a ROADMAP
+line naming `ReplayCache`, `SubscriptionCount`, `Emit` and `TryEmit`.
 
 ### Consumer API
 
@@ -129,7 +129,7 @@ Generated-per-module exports only; nothing in the `nuget_*` runtime ABI changes.
   body `obj.member.collect { value -> emit(box) }` inside `collectForCSharp` (ADR-128). Suspend
   return: the ADR-194 pair, `_async` retaining the `SharedFlow` as `Any` and `_collect` reading it
   back with `flowHandle.asStableRef<Flow<T>>()`, an unchecked reinterpretation that holds because
-  `SharedFlow` is-a `Flow` (**verified by reading, not run**).
+  `SharedFlow` is-a `Flow` (verified by reading, then by the native `suspend` round trip).
 - Element vocabulary (nullable element, collections, enums, value classes, `Throwable` envelope,
   interface elements) is the shared route's, peeled at `ForwardLegacyRouteCollections.kt:907`, so
   ADR-067/123/201's admissions and refusals apply unchanged (**inferred**, the spike's elements were
@@ -167,11 +167,13 @@ public Task<KotlinFlow<int>> TickSuspendAsync(CancellationToken cancellationToke
 against the fixture, and `MutableSharedFlow<T>` binds as a read-only `KotlinFlow<T>` through the
 identical seam.
 
-**Inferred, not run (the walking-skeleton integration test must confirm, the caveat ADR-065
-carried):** the real mingwX64 / macosArm64 round trip. Tier 1 compiles the generated Kotlin, not the
-C#, and runs nothing; the generated C# is shape-identical to the shipped `Flow` members. Also
-inferred: interface (ADR-174), sealed-arm (ADR-124) and top-level (ADR-194,
-`cir/CirFunctionTranslator.kt:746`) owners, which consult the same sets but were not in the spike.
+**Confirmed after implementation (2026-10-09):** the real native round trip passed. A property,
+a method return and a `suspend` return of `SharedFlow<Int>`, `SharedFlow<Cat>` and a declared
+`MutableSharedFlow<String>` replay the cache first, in order, in `IntegrationTests/SharedFlowTests.cs`.
+The leak and AOT legs are green. Interface (ADR-174), sealed-arm (ADR-124) and top-level (ADR-194)
+owners, and a nullable element `SharedFlow<String?>` binding `KotlinFlow<string?>`, are pinned only
+by `Tier1SharedFlowTest` (generated Kotlin compiles, generated C# compiles against a consumer), not
+by a native round trip.
 
 ### Prior art
 
@@ -187,31 +189,32 @@ inferred: interface (ADR-174), sealed-arm (ADR-124) and top-level (ADR-194,
 
 ### Fixture and tests
 
-- `test-library/.../cat/CatBulletin.kt`: `SharedFlow<String>` property (conversion), `SharedFlow<Int>`
-  property (none), a public `MutableSharedFlow<Int>` (read-only view), `fun editionReport(): SharedFlow<Int>`,
-  all backed by `MutableSharedFlow(replay = 1)` with a synchronous `publish` doing `tryEmit`. Replay
-  is what makes the test deterministic: there is no bridge-visible "collector subscribed" signal, so a
-  `replay = 0` subscribe-then-emit test would race.
-- `IntegrationTests/SharedFlowTests.cs`: publish first, `await foreach`, assert the replayed item is
-  the first element, cancel or `break`.
-- `LeakTests/LiveHandleTests.cs`: one row mirroring Row 8 (`:2134`, enumerator abandoned after one
-  item); Row 7's completion shape cannot apply, a `SharedFlow` never completes.
-- `Tier1SuspendFlowTest.kt:38, :87`: `shared` moves from the refused list to the bound list; a new
-  `Tier1SharedFlowTest` covers property, method, `MutableSharedFlow` view, nullable element, and one
-  interface / sealed-arm / top-level owner each.
+- `test-library/.../cat/CatBulletin.kt`: `SharedFlow<Int>` and `SharedFlow<Cat>` properties, a
+  declared `MutableSharedFlow<String>` (read-only view, `replay = 2`), `fun editionReport():
+  SharedFlow<Int>` and `suspend fun latestSightings(): SharedFlow<Cat>`, with a synchronous
+  `publish` doing `tryEmit`. Replay is what makes the test deterministic: there is no
+  bridge-visible "collector subscribed" signal, so a `replay = 0` subscribe-then-emit test would race.
+- `IntegrationTests/SharedFlowTests.cs`: publish first, `await foreach`, assert the replayed items
+  arrive first and in order, then `break` or cancel; one test pins that the stream never completes.
+- `LeakTests/LiveHandleTests.cs` row 8k, `SharedFlow_AbandonedAfterReplay_ReturnsToBaseline`:
+  Row 8's abandoned shape on the hot stream (property and `suspend` return). Row 7's completion
+  shape cannot apply, a `SharedFlow` never completes.
+- `Tier1SuspendFlowTest.kt`: `shared` moves from the refused list to the bound list. The new
+  `Tier1SharedFlowTest` covers property, method, `suspend`, `MutableSharedFlow` view, nullable
+  element, and an interface, sealed-arm and top-level owner.
 
 ## Consequences
 
 - `SharedFlow<T>` and `MutableSharedFlow<T>` bind at a class property, class method return and
-  `suspend` return (plus the inferred interface / sealed-arm / top-level owners) as `KotlinFlow<T>`
+  `suspend` return, and on interface, sealed-arm and top-level `suspend` owners, as `KotlinFlow<T>`
   and `Task<KotlinFlow<T>>`, with the full shared-route element vocabulary. Purely additive: every
   shape was a named skip before.
-- `docs/topics/coroutines-and-flow.md:683` and `docs/topics/supported-features.md:175` retire the
-  "not supported" statements; the topic page documents that a `SharedFlow` enumeration starts with
-  the replay cache and never completes on its own, as it does for `StateFlow`.
-- ADR-026, ADR-065, ADR-071 and ADR-194 get dated amendments pointing here; ADR-065's "C#-side replay
-  buffer" sketch is retired.
-- Deferred, on the existing ROADMAP line re-worded to name `SharedFlow`: `KotlinSharedFlow<T>` with
-  `ReplayCache` (Alternative 2), `SubscriptionCount`, `Emit`/`TryEmit`. Nullable member
-  `SharedFlow<T>?` follows the open `Flow<T>?` line; `SharedFlow` as a parameter or type argument
-  follows the `Flow` parameter / type-argument lines.
+- `docs/topics/coroutines-and-flow.md` and `docs/topics/supported-features.md` retire the "not
+  supported" statements; the topic page documents that a `SharedFlow` enumeration starts with the
+  replay cache and never completes on its own, as it does for `StateFlow`.
+- ADR-026 and ADR-065 carry dated amendments pointing here; ADR-065's "C#-side replay buffer" sketch
+  is retired. ADR-071 and ADR-194 are unchanged and still accurate.
+- Deferred, on one ROADMAP line: `ReplayCache` and `SubscriptionCount` on `SharedFlow<T>`, and
+  `Emit` / `TryEmit` on `MutableSharedFlow<T>` (Alternative 2's `KotlinSharedFlow<T>`). Nullable
+  member `SharedFlow<T>?` follows the open `Flow<T>?` line; `SharedFlow` as a parameter or type
+  argument follows the `Flow` parameter / type-argument lines.
