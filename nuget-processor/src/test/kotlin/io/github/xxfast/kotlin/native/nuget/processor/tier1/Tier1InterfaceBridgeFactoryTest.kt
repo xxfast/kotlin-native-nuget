@@ -179,11 +179,12 @@ class Tier1InterfaceBridgeFactoryTest {
 
     assertContains(cs, "return NugetBridge.HandleFor(value, declared);")
     assertFalse(
-      cs.contains("passing a C#-implemented interface is not supported yet"),
+      cs.contains("{value.GetType().Name} is not a Kotlin-backed object"),
       "the ADR-040 boundary exception must be gone once a bridge layer is emitted",
     )
     assertContains(cs, "return Tier1BridgefactoryPetBridgeState.Create(tier1bridgefactorypetImpl).KotlinHandle;")
-    assertContains(cs, "implements no bridgeable Kotlin interface.")
+    assertContains(cs, "{impl.GetType().Name} is not a Kotlin-backed object")
+    assertContains(cs, "and {declared.Name} has no bridge for C# implementations; ")
   }
 
   @Test
@@ -256,7 +257,19 @@ class Tier1InterfaceBridgeFactoryTest {
     assertTrue(result.compiledClean, "expected the unplanned interface to still bind; got: ${result.compileErrors}")
     assertFalse(result.generated.contains("pet_bridge_create"), "no factory for an unplanned interface")
     assertFalse(result.generatedCSharp.contains("NugetBridge"), "no bridge layer for an unplanned interface")
-    assertContains(result.generatedCSharp, "passing a C#-implemented interface is not supported yet")
+    assertContains(
+      result.generatedCSharp,
+      "{value.GetType().Name} is not a Kotlin-backed object",
+    )
+    // No longer silent: the build names the interface and the member that keeps the bridge out.
+    assertContains(
+      result.generatedCSharp,
+      "and {declared.Name} has no bridge for C# implementations; ",
+    )
+    val skip: String =
+      result.kspWarnings.single { it.contains("SKIPPED_UNIMPLEMENTABLE_INTERFACE") }
+    assertContains(skip, "Skipping tier1.bridgefactoryskip.Pet:")
+    assertContains(skip, "`var mood: String` is a `var`")
   }
 
   /**
@@ -295,7 +308,10 @@ class Tier1InterfaceBridgeFactoryTest {
       "private static extern IntPtr Native_Create(IntPtr releasePtr, IntPtr releaseCtx, " +
           "IntPtr token, out IntPtr error);",
     )
-    assertFalse(cs.contains("passing a C#-implemented interface is not supported yet"), cs)
+    assertFalse(
+      cs.contains("{value.GetType().Name} is not a Kotlin-backed object"),
+      cs,
+    )
     Tier1CSharpCompile.assertCompiles(
       result,
       """

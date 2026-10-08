@@ -377,9 +377,20 @@ returning `Unit`, a primitive, `Boolean`, an enum, or `String`/`String?`. A `Thr
 `Exception` or `RuntimeException` parameter or result crosses too, as a `System.Exception` (see
 [Throwable values](exceptions.md#throwable-values)); a result declared narrower than
 `RuntimeException` is named on a build warning. An interface with a `var`
-property, an object- or collection-typed member, a `suspend` member, or a generic member has **no
-bridge at all**: passing an implementation of it throws `NotSupportedException`, naming the C#
-type, the first time it crosses, not at build time. A marker interface with no members bridges too:
+property, an object- or collection-typed member, a `suspend` or `Flow` member, a generic member, or
+a member with more than two parameters has **no bridge at all**. The build warns once with
+`SKIPPED_UNIMPLEMENTABLE_INTERFACE`, naming every such member and how to fix it, and passing an
+implementation of it throws `NotSupportedException` the first time it crosses:
+
+```
+[nuget:SKIPPED_UNIMPLEMENTABLE_INTERFACE] Skipping tier1.refusevar.Pet: a C# class implementing
+    `IPet` cannot be passed to Kotlin, because `var mood: String` is a `var`, and the bridge carries
+    a property through a getter slot only. For `var mood: String`, declare it `val`, or hand the
+    value over through a member function. Kotlin-backed `IPet` values are unaffected
+```
+
+Kotlin-backed implementations of the interface still cross as usual, and `IPet` still declares every
+member. A marker interface with no members bridges too:
 Kotlin receives an empty object that implements it, and handing it back to C# returns your
 original instance. (Before, passing one threw.)
 
@@ -1605,8 +1616,8 @@ like the same member on any [generic class](generics.md#limitations).
   `Unit`, a primitive, `Boolean`, an enum, `String`/`String?`, or a `Throwable`/`Exception`/
   `RuntimeException` as a `System.Exception`. Anything else (a `var` property,
   an object- or collection-typed member, `suspend`, generics) throws `NotSupportedException` the
-  first time an implementation is passed, naming the C# type, with nothing at build time naming
-  which member disqualified it.
+  first time an implementation is passed. The build names each disqualifying member on one
+  `SKIPPED_UNIMPLEMENTABLE_INTERFACE` warning per interface.
 - A C#-implemented object's bridge is released on Kotlin's next garbage-collection round, not
   deterministically; there is no `IDisposable`-style prompt release for it.
 - An interface member whose own return type is another interface or a class handle (chained

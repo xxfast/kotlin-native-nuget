@@ -289,9 +289,20 @@ class Tier1UnroutedPositionsTest {
     // sweep it up: a skip naming a member the consumer can call is a false positive. Asserted
     // against every warning, not just [named]: they are not in [cells], so filtering first would
     // make this vacuous.
+    // ADR-084: `Manifest` has members no bridge slot carries, so a C# class cannot implement
+    // `IManifest`. That one line names the members keeping the BRIDGE out, not a skipped member,
+    // so it is set aside here and pinned on its own.
+    val bridgeCode: String = ForwardDiagnosticKind.SKIPPED_UNIMPLEMENTABLE_INTERFACE.name
+    assertEquals(
+      1,
+      result.kspWarnings.count { warning ->
+        warning.contains(bridgeCode) && warning.contains("tier1.unrouted.Manifest:")
+      },
+      "kspWarnings=${result.kspWarnings}",
+    )
     partMembers.forEach { member ->
       assertFalse(
-        result.kspWarnings.any { it.contains(member) },
+        result.kspWarnings.filterNot { it.contains(bridgeCode) }.any { it.contains(member) },
         "$member binds on IManifest (ADR-160 / ADR-174), so it must not become a " +
             "skip here; kspWarnings=${result.kspWarnings}",
       )

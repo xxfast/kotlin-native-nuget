@@ -56,7 +56,11 @@ internal fun StringBuilder.renderBridgeHelper(helper: CirBridgeHelper) {
     appendLine("            }")
   }
   appendLine("            throw new NotSupportedException(")
-  appendLine("                \$\"{impl.GetType().Name} implements no bridgeable Kotlin interface.\");")
+  // ADR-084: names the declared interface and where the build said why, never only the C# type.
+  appendLine("                $\"{impl.GetType().Name} is not a Kotlin-backed object, \" +")
+  appendLine("                $\"and {declared.Name} has no bridge for C# implementations; \" +")
+  appendLine("                \"the Kotlin build names the members that keep it out \" +")
+  appendLine("                \"(SKIPPED_* in NugetDiagnostics.json).\");")
   appendLine("        }")
   // ADR-186: the `nuget_gc_collect` import lives on `NugetMarshal` (CirMarshalRenderer), which
   // every library renders, not here behind the bridge-plan gate.

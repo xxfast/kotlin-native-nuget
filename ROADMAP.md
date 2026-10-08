@@ -74,7 +74,6 @@ Complete.
 
 ## Phase 7: Bidirectional support (C# → Kotlin)
 - [ ] `Flow<T>` / suspend lambda (`suspend (T) -> R`) as a function parameter, including on sealed arms
-- [ ] **The `add*/remove*` subscription route silently mis-handles two member shapes it doesn't restrict for.** ([details](docs/backlog/add-remove-subscription-route-silently-mis-handles.md))
 - [ ] **The same route's object/string parameter marshalling disposes the argument `StableRef` up to three times.** ([details](docs/backlog/same-route-s-object-string-parameter-marshalling.md))
 - [ ] Fold the reverse template's internal `NugetManagedException` onto the runtime class over the ADR-130 expect/actual seam ([details](docs/backlog/fold-reverse-managed-exception-onto-runtime-class.md))
 - [ ] A cancelled C# callback re-crosses to an uncaught C# caller typed as Kotlin's `CancellationException`, not the original .NET cancellation type ([details](docs/backlog/cancelled-callback-loses-original-exception-type.md))
@@ -191,7 +190,6 @@ Fallout from [ADR-053](docs/adr/053-nullable-reference-types-in-kotlin.md) (reve
 - [ ] A `CancellationToken` at C# parameter index 0 is covered only by the plugin's inline reader fixture, not by `TestDependency`/`KennelRoundTripTests` (whose token-taking methods use index 1 or a lone token). Discovered alongside [ADR-153](docs/adr/153-reverse-cancellation-token.md).
 - [ ] **`NugetPlugin.kt`'s `packNuget` `afterEvaluate` block computes a local `baseName` that is never read afterwards** ([details](docs/backlog/nugetplugin-kt-s-packnuget-afterevaluate-block-computes.md))
 - [ ] **`PackNugetTask.kt`'s `generatedCsDirs` merge silently drops a missing directory with `?: emptyList()`** ([details](docs/backlog/packnugettask-kt-s-generatedcsdirs-merge-packnugettask-kt.md))
-- [ ] **An interface with a member outside ADR-084's v1 slot vocabulary silently gets no bridge factory at all** ([details](docs/backlog/interface-var-property-any-other-member-outside.md))
 - [ ] The forward generator's file-order sort key includes the source-set folder name, so a future target whose folder sorts after `nativeMain` (`tvos*`, `watchos*`) would reorder its platform classes against the shared ones and fail the per-RID contract check (ADR-189). Inferred, not reproduced; discovered fixing the Linux file-order nondeterminism.
 - [ ] **Route the composed inner types of the legacy protocols through `BridgeType`.** ([details](docs/backlog/route-composed-inner-types-legacy-protocols-through.md))
 - [ ] **Two independently-maintained private `BridgeType.csharpType()` copies can render different C# type strings for the same Kotlin member, since each has an `else -> error(...)` blind spot the other doesn't.** ([details](docs/backlog/two-divergent-public-csharp-type-spellers.md))
