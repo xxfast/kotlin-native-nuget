@@ -54,15 +54,17 @@ internal data class PackageScope(
 /**
  * ADR-109: another forward publisher in this same Gradle build, as the processor sees it — a
  * NuGet package id plus the [PackageScope] its own `publish { rootPackage / include / exclude }`
- * lowers to. Delivered by the plugin as the `nuget.publishedScopes` option, because neither
- * module's KSP run can see the other's.
+ * lowers to, and the ADR-154 `admit(...)` entries (packages or qualified type names) it adds to
+ * its dependency admission. Delivered by the plugin as the `nuget.publishedScopes` option, because
+ * neither module's KSP run can see the other's.
  *
  * A cross-module declaration carries no module identity (`containingFile == null`,
- * `origin == KOTLIN_LIB`, ADR-066), so *by package* is the only match available.
+ * `origin == KOTLIN_LIB`, ADR-066), so a package or a qualified name is the only match available.
  */
 internal data class PublishedScope(
   val packageId: String,
   val scope: PackageScope,
+  val admit: List<String> = emptyList(),
 ) {
   /**
    * Deliberately stricter than [PackageScope.covers] in one place: an empty `include` means "all
@@ -72,12 +74,25 @@ internal data class PublishedScope(
    * makes that silence a documented gap instead.
    */
   fun covers(packageName: String, qualifiedName: String?): Boolean =
-    scope.include.isNotEmpty() && scope.covers(packageName, qualifiedName)
+    matchedBy(packageName, qualifiedName) != null
+
+  /**
+   * How this publisher reaches the declaration, for the warning to quote: `null` when it does
+   * not, else the `admit` entry that matched, else the empty string for its include scope. ADR-154
+   * §1: the publisher's own `exclude` wins over both, and an empty `admit` admits nothing.
+   */
+  fun matchedBy(packageName: String, qualifiedName: String?): String? = when {
+    scope.excludes(packageName, qualifiedName) -> null
+    scope.include.isNotEmpty() && scope.covers(packageName, qualifiedName) -> ""
+    else -> admit.matchesDeclaration(packageName, qualifiedName)
+  }
 }
 
 /**
  * ADR-109 Decision 2's wire format: entries `;`-separated, fields `:`-separated, lists
- * `|`-separated, `<packageId>:<include1|include2>:<exclude1|exclude2>`.
+ * `|`-separated, `<packageId>:<include1|include2>:<exclude1|exclude2>`, plus an optional fourth
+ * field `:<admit1|admit2>` (ADR-154 entries, packages or qualified names) the plugin writes only
+ * when the publisher admits something, so every admission-free encoding is unchanged.
  *
  * Two entries are dropped rather than carried: this module's own (its `packageId` is
  * [selfPackageId], i.e. `nuget.namespace` — the plugin lists self deliberately so the
@@ -85,9 +100,9 @@ internal data class PublishedScope(
  * all, which no hint could name.
  *
  * A wrong field count fails loudly: package names are `[A-Za-z0-9_.]` and NuGet ids
- * `[A-Za-z0-9._-]`, so neither can contain a delimiter, and a split that does not yield three
- * fields means the two halves of this contract disagree — guessing which field is missing would
- * silently warn about the wrong packages.
+ * `[A-Za-z0-9._-]`, so neither can contain a delimiter, and a split that does not yield three or
+ * four fields means the two halves of this contract disagree — guessing which field is missing
+ * would silently warn about the wrong packages.
  */
 internal fun parsePublishedScopes(
   encoded: String?,
@@ -98,9 +113,10 @@ internal fun parsePublishedScopes(
   .filter { it.isNotBlank() }
   .map { entry ->
     val fields: List<String> = entry.split(":")
-    require(fields.size == 3) {
-      "Malformed nuget.publishedScopes entry \"$entry\": expected 3 ':'-separated fields " +
-          "(<packageId>:<include1|include2>:<exclude1|exclude2>), got ${fields.size}"
+    require(fields.size == 3 || fields.size == 4) {
+      "Malformed nuget.publishedScopes entry \"$entry\": expected 3 or 4 ':'-separated fields " +
+          "(<packageId>:<include1|include2>:<exclude1|exclude2>[:<admit1|admit2>]), " +
+          "got ${fields.size}"
     }
     PublishedScope(
       packageId = fields[0],
@@ -108,6 +124,7 @@ internal fun parsePublishedScopes(
         include = fields[1].split("|").filter { it.isNotBlank() },
         exclude = fields[2].split("|").filter { it.isNotBlank() },
       ),
+      admit = fields.getOrNull(3).orEmpty().split("|").filter { it.isNotBlank() },
     )
   }
   .filter { it.packageId.isNotBlank() && it.packageId != selfPackageId }

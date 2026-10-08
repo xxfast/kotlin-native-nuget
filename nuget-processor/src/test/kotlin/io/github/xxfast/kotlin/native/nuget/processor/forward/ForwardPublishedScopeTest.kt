@@ -88,4 +88,48 @@ class ForwardPublishedScopeTest {
     assertTrue("nuget.publishedScopes" in failure.message.orEmpty(), failure.message.orEmpty())
     assertTrue("OtherLib:dep.models" in failure.message.orEmpty(), failure.message.orEmpty())
   }
+
+  /**
+   * ADR-154 meets ADR-109: an optional fourth field carries the publisher's `admit(...)` entries,
+   * packages or qualified names, so a type it admits by name is matched too. Three-field entries
+   * keep parsing exactly as before.
+   */
+  @Test
+  fun `a fourth field carries admissions, and covers matches them by package or by name`() {
+    val scope: PublishedScope = parsePublishedScopes(
+      "OtherLib:dev.otherlib:dev.other.bykind.Hidden:dev.other.bykind.SomeType|dev.pkg",
+      selfPackageId = "Lib",
+    ).single()
+
+    assertEquals(listOf("dev.other.bykind.SomeType", "dev.pkg"), scope.admit)
+    assertTrue(scope.covers("dev.other.bykind", "dev.other.bykind.SomeType"))
+    assertTrue(scope.covers("dev.pkg.deep", "dev.pkg.deep.Thing"))
+    assertFalse(scope.covers("dev.other.bykind", "dev.other.bykind.OtherType"))
+    assertEquals(
+      "dev.other.bykind.SomeType",
+      scope.matchedBy("dev.other.bykind", "dev.other.bykind.SomeType"),
+    )
+  }
+
+  /** ADR-154 §1: `exclude` still wins over `admit`. */
+  @Test
+  fun `the publisher's exclude wins over its own admission`() {
+    val scope: PublishedScope = parsePublishedScopes(
+      "OtherLib:dev.otherlib:dev.other.bykind.SomeType:dev.other.bykind",
+      selfPackageId = "Lib",
+    ).single()
+
+    assertFalse(scope.covers("dev.other.bykind", "dev.other.bykind.SomeType"))
+    assertTrue(scope.covers("dev.other.bykind", "dev.other.bykind.Another"))
+  }
+
+  /** Admission alone covers even with an empty include, unlike the documented empty-scope gap. */
+  @Test
+  fun `an admission covers even when the include is empty`() {
+    val scope: PublishedScope =
+      parsePublishedScopes("OtherLib:::dev.other.bykind.SomeType", selfPackageId = "Lib").single()
+
+    assertTrue(scope.covers("dev.other.bykind", "dev.other.bykind.SomeType"))
+    assertFalse(scope.covers("dev.other.bykind", "dev.other.bykind.OtherType"))
+  }
 }

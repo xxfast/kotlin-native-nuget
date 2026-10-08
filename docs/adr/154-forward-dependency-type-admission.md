@@ -207,8 +207,8 @@ routes cannot disagree about which value classes bind. See
 - The ROADMAP items on the top-level dependency value class and on the `EXCLUDED_DEPENDENCY_TYPE`
   hint not knowing which exclude entry matched (#53) close with this feature; the nested-generic
   klib owner item does not (different route).
-- ADR-109's cross-publisher duplicate warning lowers scopes by package; a by-name `admit` in another
-  publisher is not seen. Documented gap.
+- ADR-109's cross-publisher duplicate warning originally lowered scopes by package only, so a
+  by-name `admit` in another publisher was not seen; closed by ADR-109's 2026-10-07 amendment.
 - Deferred: custom type mappers; `export(project(...))`; a supertype edge (ADR-101); letting
   `include` match a qualified name for own-module roots.
 - Not verified by anyone: behaviour against the real ktor and kermit klibs. If an admitted
