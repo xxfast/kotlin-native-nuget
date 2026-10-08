@@ -4,6 +4,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDoc
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDocBlock
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDocInline
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDocParam
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDocText
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDocThrows
 import io.github.xxfast.kotlin.native.nuget.processor.cir.KOTLIN_EXCEPTION_TYPES
 
@@ -58,7 +59,28 @@ internal data class ForwardKdoc(
   val properties: Map<String, String> = emptyMap(),
   val constructor: String? = null,
   val seeAlso: List<String> = emptyList(),
+  /**
+   * Each `[link]` target to the dotted type path Kotlin resolves it to at the documented
+   * declaration (its own class scope, then its package), filled in where the KSP declaration is in
+   * hand. A target absent here names no type KSP could find from that declaration.
+   */
+  val linkPaths: Map<String, String> = emptyMap(),
 )
+
+/**
+ * Every `[link]` target written anywhere in this comment, in any slot `toCirDoc` renders. The
+ * `@see` entries are targets as written.
+ */
+internal fun ForwardKdoc.linkTargets(): Set<String> {
+  val texts: List<String> = listOfNotNull(summary, returns, constructor) +
+    remarks.filterIsInstance<ForwardKdocBlock.Para>().map { block -> block.text } +
+    params.values + properties.values + throws.map { entry -> entry.text }
+  val linked: List<String> = texts
+    .flatMap { text -> text.docInlines() }
+    .filterIsInstance<CirDocInline.Link>()
+    .map { link -> link.target }
+  return (linked + seeAlso).toSet()
+}
 
 /**
  * ADR-150: parses [docString] as KSP 2.3.10 hands it over, which is the comment body with `/**`,
@@ -263,7 +285,29 @@ internal fun ForwardKdoc.toCirDoc(
     // file proves it declares, and the rest close the `<remarks>` as prose.
     seeAlso = seeAlso.map { CirDocInline.Link(it) },
   )
-  return if (doc.isEmpty()) null else doc
+  return if (doc.isEmpty()) null else doc.scopedBy(linkPaths)
+}
+
+/** Stamps each `[link]` whose target KSP resolved at the declaration with that type's path. */
+private fun CirDoc.scopedBy(paths: Map<String, String>): CirDoc {
+  if (paths.isEmpty()) return this
+  fun CirDocText.scoped(): CirDocText = map { segment ->
+    val link: CirDocInline.Link = segment as? CirDocInline.Link ?: return@map segment
+    paths[link.target]?.let { path -> link.copy(scopedPath = path) } ?: link
+  }
+  return copy(
+    summary = summary?.scoped(),
+    remarks = remarks.map { block ->
+      when (block) {
+        is CirDocBlock.Para -> CirDocBlock.Para(block.text.scoped())
+        is CirDocBlock.Code -> block
+      }
+    },
+    params = params.map { param -> param.copy(text = param.text.scoped()) },
+    returns = returns?.scoped(),
+    throws = throws.map { thrown -> thrown.copy(text = thrown.text.scoped()) },
+    seeAlso = seeAlso.scoped(),
+  )
 }
 
 /**

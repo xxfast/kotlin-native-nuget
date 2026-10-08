@@ -21,7 +21,17 @@ internal sealed interface CirDocInline {
    * cref naming a type the generated file does not declare is a CS1574 in a *consumer's* build of
    * a file they cannot edit, so an unresolved link never guesses one.
    */
-  data class Link(val target: String, val label: String? = null) : CirDocInline
+  data class Link(
+    val target: String,
+    val label: String? = null,
+    /**
+     * The dotted type path, relative to the documented declaration's own package, that Kotlin
+     * resolves [target] to there (its own class scope, then its package), or null when KSP found
+     * no such type. Set, it confines `CirFile.resolveDocLinks()` to that one type in the
+     * documented declaration's own namespace: a same-named type elsewhere is never borrowed.
+     */
+    val scopedPath: String? = null,
+  ) : CirDocInline
 
   /**
    * A link `CirFile.resolveDocLinks()` proved against the declarations the finished file really

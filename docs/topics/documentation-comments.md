@@ -79,7 +79,7 @@ its members), enum (and a documented entry), sealed base and arm, value class, c
 | a later paragraph | a `<para>` inside one `<remarks>` element (see below) |
 | `` `code` `` | `<c>code</c>`, escaped |
 | a fenced code block | a `<code>` element: a child of `<remarks>`, or of `<summary>` when the fence sits in the first paragraph; the language tag (`` ```kotlin ``) is discarded |
-| `[Type]` | `<see cref="global::...">` when `Type` is a non-generic type this generated file itself declares and the name is unambiguous; otherwise `<c>Type</c>` with the author's own spelling |
+| `[Type]` | `<see cref="global::...">` when `Type`, looked up from the documented declaration (enclosing classes, then its own package), is a non-generic type in that declaration's generated namespace; otherwise `<c>Type</c>` with the author's own spelling. A same-named type in another package never captures the link |
 | `[label][Type]` | as above, with the C# `<see>`/`<c>` carrying `label` instead of `Type` |
 | `@param name text` | `<param name="name">text</param>` |
 | `@return text` | `<returns>text</returns>`, omitted on a `void` member; the same text on a `suspend` function's `Async` projection |
@@ -236,6 +236,9 @@ fun secretTreat(): String = "$cat gets a churu"
   spelling.** `[book]`, `[nights]`, and `[Crate]` (a generic class) never become a `cref`: a member
   needs an overload-qualified spelling the bridge doesn't produce yet, and a bare cref to a generic
   type doesn't resolve.
+- **A link Kotlin would resolve through an `import` can pick the wrong type.** With `import
+  other.Odd` beside a same-package `Odd`, `[Odd]` links the same-package type, because the
+  processor cannot see file imports. Rename one of the types to avoid the clash.
 - **`[label](url)` is left as literal prose**, not a `<see href>`.
 
 ## `expect`/`actual` {id="expectactual"}
