@@ -929,7 +929,10 @@ public fun export_nuget_stateflow_collect(
     userData,
     ::nugetRuntimeMappedType,
   ) { emit ->
-    flow.collect { value -> emit(NugetHandles.retain(value as Any)) }
+    // A null value (a `StateFlow<T?>` element) crosses as a null item with `isCancelled = 0`,
+    // ADR-067's null-element wire, instead of faulting the channel with a NullPointerException.
+    // A non-null value is boxed exactly as before.
+    flow.collect { value -> emit(value?.let { NugetHandles.retain(it) }) }
   }
 }
 
@@ -937,3 +940,15 @@ public fun export_nuget_stateflow_collect(
 @CName("nuget_stateflow_value")
 public fun export_nuget_stateflow_value(flowHandle: COpaquePointer): COpaquePointer =
   NugetHandles.retain(flowHandle.asStableRef<StateFlow<*>>().get().value as Any)
+
+/**
+ * The 68th export: the null-aware sibling of [export_nuget_stateflow_value], for a
+ * `suspend fun (): StateFlow<T?>`. A null `.value` returns a null handle, which C#'s
+ * `FromHandle<T?>` reads as null; a non-null value is boxed exactly as the sibling boxes it. A
+ * sibling rather than a widened return: `nuget_stateflow_value` keeps its "never returns NULL"
+ * contract byte for byte for anything that already binds it.
+ */
+@NugetRuntimeApi
+@CName("nuget_stateflow_value_or_null")
+public fun export_nuget_stateflow_value_or_null(flowHandle: COpaquePointer): COpaquePointer? =
+  flowHandle.asStableRef<StateFlow<*>>().get().value?.let { NugetHandles.retain(it) }

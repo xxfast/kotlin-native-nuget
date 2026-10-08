@@ -2625,6 +2625,7 @@ internal fun suspendMembers(
       // The `read:` the awaited `KotlinStateFlow<T>` is constructed with (ADR-123's slot,
       // ADR-136's expression). Null for a class element, which keeps the ctor's default read.
       flowElementRead = element.read,
+      flowElementNullable = element.elementNullable,
       acquiredFlowCollectNativeName =
         if (element.asyncReturnType.startsWith("KotlinFlow<")) "${nativeStem}Collect" else null,
     )
@@ -2656,6 +2657,8 @@ internal data class SuspendStateFlowElement(
   val asyncReturnType: String,
   /** The `read:` the holder is constructed with (ADR-123's slot), or null for the default read. */
   val read: String?,
+  /** True for a `StateFlow<T?>` element, which reads through `nuget_stateflow_value_or_null`. */
+  val elementNullable: Boolean = false,
 )
 
 internal fun suspendStateFlowElement(
@@ -2688,24 +2691,24 @@ internal fun suspendStateFlowElement(
     return SuspendStateFlowElement("KotlinFlow<$cs>", read)
   }
 
-  // v1 scope (ADR-068): nullable element/member is deferred; mirror ADR-065's plain (non-null)
-  // shape only. The `false` passed to `legacyInterfaceElementReadArgument` below is safe rather
-  // than optimistic: since 2026-09-20 `legacyReturnShape` REFUSES a nullable element on this
-  // bucket by name, so a `suspend fun (): StateFlow<T?>` never reaches here at all. It has to be
-  // refused, not threaded: this bucket reads through the module-wide `nuget_stateflow_value`,
-  // which boxes `value as Any` with no null arm and no `try`, so a null would throw out of a
-  // `@CName` export. The ADR-065 property/method routes thread it because they own per-member
-  // exports they can widen to `COpaquePointer?`.
+  // A nullable element (`StateFlow<T?>`) is spelled `KotlinStateFlow<T?>` and read through the
+  // runtime's null-aware `nuget_stateflow_value_or_null` (the renderer picks it off
+  // [SuspendStateFlowElement.elementNullable]); `nuget_stateflow_collect` sends a null value as a
+  // null item. A nullable MEMBER (`StateFlow<T>?`) is `KotlinStateFlow<T>?`: the `_async` export
+  // already sends a null flow as a zero `resultPtr`, which the renderer tests before wrapping.
   // ADR-040 / ADR-133 amendment (2026-09-14): an interface element is DECLARED with the projected
   // interface and READ through the backing wrapper, the same split the property `Flow`/`StateFlow`
   // route takes. A class element keeps `qualifiedElementCsType` byte for byte.
+  val nullable: Boolean = element?.isMarkedNullable == true
+  val memberNullable: Boolean = returnType?.expandAliases()?.isMarkedNullable == true
   val elementInterface: BridgeType.Interface? = classifier.legacyFlowElementInterface(element)
-  val csElementType: String = elementInterface?.csharpType
-    ?: classifier.legacyGenericSealedElement(element, nullable = false)
-    ?: qualifiedElementCsType(element, context)
+  val csElementType: String = elementInterface?.let { it.csharpType + if (nullable) "?" else "" }
+    ?: classifier.legacyGenericSealedElement(element, nullable)
+    ?: qualifiedElementCsType(element, context, nullable)
   return SuspendStateFlowElement(
-    asyncReturnType = "KotlinStateFlow<$csElementType>",
-    read = elementInterface?.let { iface -> legacyInterfaceElementReadArgument(iface, false) },
+    asyncReturnType = "KotlinStateFlow<$csElementType>" + if (memberNullable) "?" else "",
+    read = elementInterface?.let { iface -> legacyInterfaceElementReadArgument(iface, nullable) },
+    elementNullable = nullable,
   )
 }
 

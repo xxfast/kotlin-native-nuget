@@ -151,7 +151,7 @@ internal object ForwardAbiContract {
   ): List<ForwardAbiCollision> {
     val csharpByName: Map<String, List<ForwardAbiSignature>> = csharp.groupBy { it.exportName }
     val kotlinByName: Map<String, List<ForwardAbiSignature>> = kotlin.groupBy { it.exportName }
-    // ADR-127 (+ADR-129): the 67 fixed names are exported by the `nuget-runtime` klib, which the
+    // ADR-127 (+ADR-129): the 68 fixed names are exported by the `nuget-runtime` klib, which the
     // plugin adds as `api` and `export()`s, so the C# side imports them and the generated Kotlin
     // does not declare them. Their presence in the linked binary is checked by
     // `scripts/verify-runtime-exports.sh`, against the runtime source, not here. What this check
@@ -690,6 +690,8 @@ internal val NUGET_RUNTIME_EXPORTS: Set<String> = setOf(
   "nuget_set_element_at",
   "nuget_stateflow_collect",
   "nuget_stateflow_value",
+  // The null-aware sibling a `suspend fun (): StateFlow<T?>` reads `.Value` through.
+  "nuget_stateflow_value_or_null",
   "nuget_suspend_func0_invoke",
   "nuget_suspend_func1_invoke",
   "nuget_suspend_func2_invoke",

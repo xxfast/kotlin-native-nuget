@@ -148,15 +148,16 @@ class Tier1NullablePlainFlowElementTest {
   }
 
   /**
-   * The one route that does NOT gain a nullable element, and skips named rather than binding one:
-   * `suspend fun (): StateFlow<T?>` (ROADMAP's deferred line). It reads every element through the
-   * module-wide `nuget_stateflow_value`, `NugetHandles.retain(flow.value as Any)` with no null arm
-   * and no `try` -- a null there throws out of a `@CName` export, which aborts the process instead
-   * of faulting a channel. Widening it is a shared runtime export's return type, not a per-member
-   * spelling, so until that happens the member must be absent and named, never half-bound.
+   * The suspend route, `suspend fun (): StateFlow<T?>`, which reads every element through the
+   * runtime's shared pair rather than per-member exports. Until 2026-10-08 it skipped named,
+   * because `nuget_stateflow_value` boxes `flow.value as Any` with no null arm. It now reads
+   * through the runtime's `nuget_stateflow_value_or_null` instead, and the class-method twin of
+   * the top-level cells (`Tier1TopLevelSuspendStateFlowTest`) binds with the same spelling,
+   * collecting on the owner's scope. A nullable MEMBER on the same route is guarded on the wire
+   * pointer.
    */
   @Test
-  fun `a suspend fun returning a nullable-element StateFlow skips named`() {
+  fun `a suspend fun returning a nullable-element StateFlow binds through the null-aware read`() {
     val result = Tier1Harness.run(
       """
       package tier1.window
@@ -168,10 +169,11 @@ class Tier1NullablePlainFlowElementTest {
       class Window {
         private val onWatch: MutableStateFlow<String?> = MutableStateFlow(null)
 
-        // Refused: the shared StateFlow value export cannot send null.
         suspend fun awaitWatch(): StateFlow<String?> = onWatch.asStateFlow()
 
-        // The non-null twin on the same route, so the cell cannot pass by refusing everything.
+        suspend fun awaitShutters(): StateFlow<Int>? = null
+
+        // The non-null twin on the same route keeps the shipped read.
         suspend fun awaitLead(): StateFlow<String> = MutableStateFlow("Mylo").asStateFlow()
       }
       """.trimIndent(),
@@ -179,31 +181,35 @@ class Tier1NullablePlainFlowElementTest {
       libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
     )
 
+    assertTrue(
+      result.compiledClean,
+      "expected the class-method route to compile; " +
+          "got: ${result.compileErrors} ${result.kspErrors}",
+    )
     val csharp: String = result.generatedCSharp
-    assertTrue(
-      csharp.contains("AwaitLeadAsync("),
-      "expected the non-null twin to still bind; csharp=" +
-          "${csharp.lines().filter { it.contains("Async(") }}",
+    assertContains(csharp, "public Task<KotlinStateFlow<string?>> AwaitWatchAsync(")
+    assertContains(csharp, "public Task<KotlinStateFlow<int>?> AwaitShuttersAsync(")
+    assertContains(csharp, "public Task<KotlinStateFlow<string>> AwaitLeadAsync(")
+    assertEquals(
+      1,
+      Regex(Regex.escape("NugetStateFlowNative.ValueOrNull(flowHandle)")).findAll(csharp).count(),
+      "expected exactly the nullable-element member on the null-aware read; csharp=" +
+          "${csharp.lines().filter { it.contains("NugetStateFlowNative.Value") }}",
     )
     assertEquals(
-      0,
-      Regex(Regex.escape("AwaitWatchAsync")).findAll(csharp).count(),
-      "expected no half-bound nullable-element suspend StateFlow; csharp=" +
-          "${csharp.lines().filter { it.contains("AwaitWatch") }}",
+      2,
+      Regex(Regex.escape("NugetStateFlowNative.Value(flowHandle)")).findAll(csharp).count(),
+      "expected the two non-null elements on the shipped read; csharp=" +
+          "${csharp.lines().filter { it.contains("NugetStateFlowNative.Value") }}",
     )
     assertEquals(
-      0,
-      Regex(Regex.escape("await_watch")).findAll(result.generated).count(),
-      "expected the Kotlin half to drop it on the same rule; kotlin=" +
-          "${result.generated.lines().filter { it.contains("await_watch") }}",
+      1,
+      Regex(Regex.escape("if (resultPtr == IntPtr.Zero)")).findAll(csharp).count(),
+      "expected only the nullable member guarded on the wire; csharp=$csharp",
     )
     assertTrue(
-      result.kspWarnings.any {
-        it.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN.name}]") &&
-            it.contains("awaitWatch")
-      },
-      "expected a SKIPPED_UNSUPPORTED_RETURN naming Window.awaitWatch; " +
-          "kspWarnings=${result.kspWarnings}",
+      result.kspWarnings.none { it.contains("awaitWatch") || it.contains("awaitShutters") },
+      "expected no skip for either nullable shape; kspWarnings=${result.kspWarnings}",
     )
   }
 }

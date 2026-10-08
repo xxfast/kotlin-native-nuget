@@ -732,23 +732,17 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
   // even though the ADR-065 property and method routes now bind one. Refused, not half-bound.
   if (expanded.declaration.qualifiedName?.asString() in STATE_FLOW_TYPES) {
     val element: KSType? = expanded.arguments.firstOrNull()?.type?.resolve()?.expandAliases()
-    // 2026-09-20: a NULLABLE element is refused here for the same reason a collection element is,
-    // and more sharply. This bucket reads through the module-wide `nuget_stateflow_value`, which
-    // is `NugetHandles.retain(flow.value as Any)` with no null arm and no `try` around it: a null
-    // `.Value` would throw *out of a `@CName` export*, which aborts the process rather than
-    // faulting a channel. The ADR-065 property/method routes now thread a nullable element
-    // (ADR-067's encoding, per-member exports they can widen to `COpaquePointer?`); this one
-    // cannot without widening a shared runtime export's return type, so it skips NAMED instead of
-    // binding a `KotlinStateFlow<T>` that dies on the first absent value.
+    // A NULLABLE scalar, string, object or sealed element binds: its `.Value` reads through the
+    // runtime's null-aware `nuget_stateflow_value_or_null` and `nuget_stateflow_collect` sends a
+    // null value as a null item (ADR-067's null-element wire). It was refused by name from
+    // 2026-09-20 until the runtime gained that pair. A nullable collection or ByteArray element
+    // is still not `Plain` below, so it stays refused.
     // ADR-201 amendment: a Throwable element is refused here for the runtime-pair reason first,
     // whatever its nullability, so the diagnostic names the real constraint.
     if (legacyFlowElementShape(element) is ForwardLegacyFlowElementShape.Envelope) {
       return ForwardLegacyReturnShape.Refused(
         "${expanded.legacyDescription()}$THROWABLE_RUNTIME_PAIR_REFUSAL",
       )
-    }
-    if (element?.isMarkedNullable == true) {
-      return ForwardLegacyReturnShape.Refused(expanded.legacyDescription())
     }
     return if (legacyFlowElementShape(element) is ForwardLegacyFlowElementShape.Plain) {
       ForwardLegacyReturnShape.Plain

@@ -81,11 +81,74 @@ public class TopLevelSuspendStateFlowTests
         purrs.Dispose();
     }
 
+    // Nullable element: `.Value` reads through the runtime's null-aware export and `await foreach`
+    // yields the null as an item, never a fault. The nap streak is process-wide state, so each
+    // test sets it before reading.
     [Fact]
-    public void WatchNickname_NullableElementIsRefusedNotBound()
+    public async Task WatchNapStreak_NullableValueElement_ValueAndCollectCarryNull_MyloBreaksTheStreak()
     {
-        // The shared `nuget_stateflow_value` this route reads through has no null arm, so the
-        // nullable element is skipped by name rather than bound to a holder that dies on null.
-        Assert.Null(typeof(CatWatch).GetMethod("WatchNicknameAsync"));
+        using KotlinStateFlow<int?> streak = await CatWatch.WatchNapStreakAsync();
+        CatWatch.CountNapStreak(null);
+        Assert.Null(streak.Value);
+        CatWatch.CountNapStreak(3);
+        Assert.Equal(3, streak.Value);
+
+        var seen = new List<int?>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await foreach (int? days in streak.WithCancellation(cts.Token))
+        {
+            seen.Add(days);
+            if (seen.Count == 1)
+            {
+                CatWatch.CountNapStreak(null);
+            }
+            else if (days == null)
+            {
+                break;
+            }
+        }
+
+        Assert.Equal(3, seen[0]);
+        Assert.Null(seen[^1]);
+    }
+
+    [Fact]
+    public async Task WatchNickname_NullableReferenceElement_ValueIsNullThenAString_OreoBecomesMylo()
+    {
+        using KotlinStateFlow<string?> nickname = await CatWatch.WatchNicknameAsync();
+        CatWatch.CallNickname(null);
+        Assert.Null(nickname.Value);
+        CatWatch.CallNickname("Mylo");
+        Assert.Equal("Mylo", nickname.Value);
+    }
+
+    [Fact]
+    public async Task WatchLapCat_NullableObjectElement_ValueIsNullThenAFreshWrapper_OreoClimbsUp()
+    {
+        using KotlinStateFlow<global::TestLibrary.Cat.Cat?> lap = await CatWatch.WatchLapCatAsync();
+        CatWatch.AdoptLapCat(null);
+        Assert.Null(lap.Value);
+
+        CatWatch.AdoptLapCat("Oreo");
+        using global::TestLibrary.Cat.Cat? oreo = lap.Value;
+        Assert.NotNull(oreo);
+        Assert.Equal("Oreo", oreo!.Name);
+    }
+
+    // Nullable member: the awaited holder itself is null while no den is open; the completion tests
+    // the wire pointer before it owns or wraps anything.
+    [Fact]
+    public async Task WatchDen_NullableMember_AwaitsNullThenAHolder_OreoOpensTheDen()
+    {
+        CatWatch.CloseDen();
+        KotlinStateFlow<global::TestLibrary.Cat.Cat>? none = await CatWatch.WatchDenAsync();
+        Assert.Null(none);
+
+        CatWatch.OpenDen("Oreo");
+        using KotlinStateFlow<global::TestLibrary.Cat.Cat>? den = await CatWatch.WatchDenAsync();
+        Assert.NotNull(den);
+        using global::TestLibrary.Cat.Cat cat = den!.Value;
+        Assert.Equal("Oreo", cat.Name);
+        CatWatch.CloseDen();
     }
 }

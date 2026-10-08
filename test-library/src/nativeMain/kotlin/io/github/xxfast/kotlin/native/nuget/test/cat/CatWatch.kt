@@ -39,10 +39,62 @@ fun swapNapBuddy(name: String) {
 }
 
 /**
- * Nullable element: refused by name (`SKIPPED_UNSUPPORTED_RETURN`), not bound. The shared
- * `nuget_stateflow_value` this route reads through has no null arm yet.
+ * Nullable reference element: awaits to `KotlinStateFlow<string?>`. `.Value` reads through the
+ * runtime's null-aware `nuget_stateflow_value_or_null`, and `await foreach` yields the null.
  */
 suspend fun watchNickname(): StateFlow<String?> {
   delay(1)
   return nickname.asStateFlow()
+}
+
+/** Deterministic mutation for [watchNickname]; null clears the nickname. */
+fun callNickname(name: String?) {
+  nickname.value = name
+}
+
+private val napStreak: MutableStateFlow<Int?> = MutableStateFlow(null)
+
+/** Nullable value element: awaits to `KotlinStateFlow<int?>`, which needs the boxed read. */
+suspend fun watchNapStreak(): StateFlow<Int?> {
+  delay(1)
+  return napStreak.asStateFlow()
+}
+
+/** Deterministic mutation for [watchNapStreak]; null breaks the streak. */
+fun countNapStreak(days: Int?) {
+  napStreak.value = days
+}
+
+private val lapCat: MutableStateFlow<Cat?> = MutableStateFlow(null)
+
+/** Nullable object element: awaits to `KotlinStateFlow<Cat?>`; each present value is new. */
+suspend fun watchLapCat(): StateFlow<Cat?> {
+  delay(1)
+  return lapCat.asStateFlow()
+}
+
+/** Deterministic mutation for [watchLapCat]; null empties the lap. */
+fun adoptLapCat(name: String?) {
+  lapCat.value = name?.let { Cat(it) }
+}
+
+private var den: MutableStateFlow<Cat>? = null
+
+/**
+ * Nullable member: awaits to `KotlinStateFlow<Cat>?`, null while no den is open. The `Task`
+ * completion tests the wire pointer before it wraps anything.
+ */
+suspend fun watchDen(): StateFlow<Cat>? {
+  delay(1)
+  return den?.asStateFlow()
+}
+
+/** Opens a den with [name] curled up inside, so [watchDen] hands back a holder. */
+fun openDen(name: String) {
+  den = MutableStateFlow(Cat(name))
+}
+
+/** Closes the den, so [watchDen] hands back null again. */
+fun closeDen() {
+  den = null
 }
