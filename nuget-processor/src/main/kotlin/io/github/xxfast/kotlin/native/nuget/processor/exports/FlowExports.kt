@@ -11,6 +11,7 @@ import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.BOOLEAN
+import com.squareup.kotlinpoet.INT
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
@@ -19,7 +20,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.MUTABLE_STATE_FLOW_TYP
 import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
-import io.github.xxfast.kotlin.native.nuget.processor.cir.isMutableStateFlowElementObject
+import io.github.xxfast.kotlin.native.nuget.processor.cir.MutableStateFlowElement
+import io.github.xxfast.kotlin.native.nuget.processor.cir.writableMutableStateFlowElement
 import io.github.xxfast.kotlin.native.nuget.processor.cir.isMutableStateFlowElementWritable
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
@@ -249,8 +251,8 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
 
     // ADR-071: a genuinely DECLARED MutableStateFlow<T> (not narrowed through .asStateFlow())
     // additionally gains a settable `.Value`, gated on a writable element (primitive/String/
-    // object, a nullable one included bar `Boolean?`/`Char?`; enum stays deferred). A nullable
-    // member is settable too: the write throws when it finds the member absent.
+    // object, a non-null enum as its ordinal; a nullable one bar `Boolean?`/`Char?`/enum). A
+    // nullable member is settable too: the write throws when it finds the member absent.
     val isMutableStateFlowProperty: Boolean = propType in MUTABLE_STATE_FLOW_TYPES &&
         isMutableStateFlowElementWritable(flowElementType)
     if (isMutableStateFlowProperty) {
@@ -639,41 +641,50 @@ private data class MutableStateFlowWriteSlot(
 )
 
 /**
- * ADR-071: classifies a (already-[isMutableStateFlowElementWritable]) MutableStateFlow<T>
- * element for the settable `.Value` write seam. Primitive/`Char`/`String` cross by value (no
- * conversion, or the one conversion `String` already needs); an ordinary class/object element
- * crosses as a `COpaquePointer` and is unwrapped via `asStableRef`, byte-for-byte the same shape
- * as `ForwardPropertyKotlinEmitter.valueExpression`'s `ObjectHandle` branch.
+ * ADR-071: the Kotlin half of the write seam for a (already-[isMutableStateFlowElementWritable])
+ * MutableStateFlow<T> element, one arm per [MutableStateFlowElement.Writable]. Primitive/`Char`/
+ * `String` cross by value (no conversion, or the one conversion `String` already needs); an enum
+ * crosses as its ordinal and is read back with `entries[value]`, byte-for-byte the synchronous
+ * enum setter's shape (`ForwardPropertyKotlinEmitter`); an ordinary class/object element crosses
+ * as a `COpaquePointer` and is unwrapped via `asStableRef`, the same shape as
+ * `ForwardPropertyKotlinEmitter.valueExpression`'s `ObjectHandle` branch.
  *
  * Nullable element write: a `String?` is one nullable slot, an object a nullable pointer unwrapped
  * null-safely, and a scalar the has-value pair `addLegacyScalarParameter` gives every sibling
- * legacy-route slot (`valueHasValue, value`), so a null is never a zero.
+ * legacy-route slot (`valueHasValue, value`), so a null is never a zero. A nullable enum never
+ * reaches here: the gate keeps it read-only.
  */
 private fun mutableStateFlowWriteSlot(elementType: KSType?): MutableStateFlowWriteSlot {
   val declaration = elementType?.expandAliases()?.declaration
   val simpleName: String = declaration?.simpleName?.asString() ?: "Any"
   val nullable: Boolean = elementType?.isMarkedNullable == true
-  return when {
-    isMutableStateFlowElementObject(elementType) -> {
-      val qualifiedElementName: String = (declaration as KSClassDeclaration)
-        .qualifiedName?.asString() ?: simpleName
+  val element: MutableStateFlowElement.Writable = writableMutableStateFlowElement(elementType)
+  return when (element) {
+    is MutableStateFlowElement.Handle -> {
       val unwrap: String = if (nullable) {
-        "value?.asStableRef<$qualifiedElementName>()?.get()"
+        "value?.asStableRef<${element.qualifiedName}>()?.get()"
       } else {
-        "value.asStableRef<$qualifiedElementName>().get()"
+        "value.asStableRef<${element.qualifiedName}>().get()"
       }
       MutableStateFlowWriteSlot(listOf("value" to cOpaquePointer.copy(nullable = nullable)), unwrap)
     }
 
-    nullable && simpleName != "String" -> MutableStateFlowWriteSlot(
-      listOf("valueHasValue" to BOOLEAN, "value" to ClassName("kotlin", simpleName)),
-      "if (valueHasValue) value else null",
-    )
+    is MutableStateFlowElement.Enum -> {
+      require(!nullable) { "nullable enum element ${element.qualifiedName} is not writable" }
+      MutableStateFlowWriteSlot(listOf("value" to INT), "${element.qualifiedName}.entries[value]")
+    }
 
-    else -> MutableStateFlowWriteSlot(
-      listOf("value" to ClassName("kotlin", simpleName).copy(nullable = nullable)),
-      "value",
-    )
+    MutableStateFlowElement.Scalar -> if (nullable && simpleName != "String") {
+      MutableStateFlowWriteSlot(
+        listOf("valueHasValue" to BOOLEAN, "value" to ClassName("kotlin", simpleName)),
+        "if (valueHasValue) value else null",
+      )
+    } else {
+      MutableStateFlowWriteSlot(
+        listOf("value" to ClassName("kotlin", simpleName).copy(nullable = nullable)),
+        "value",
+      )
+    }
   }
 }
 

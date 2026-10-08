@@ -2402,7 +2402,9 @@ public class LiveHandleTests
     // `.Value` read mints one StableRef of the Kotlin enum object, which the `Factories` enum
     // entry must release after it reads the ordinal. A factory that forgets the release leaks one
     // handle per read, so the crossing reads many times: repeated non-nullable and nullable
-    // `.Value` reads after Oreo sulks, and a generic `Box<Mood>.Value` read (ADR-147).
+    // `.Value` reads after Oreo sulks, and a generic `Box<Mood>.Value` read (ADR-147). The ADR-071
+    // enum element write crosses by ordinal and mints nothing, so one settable `Outlook` write and
+    // its read-back ride along: the write must not leak and the read must still release its entry.
     [Fact]
     public void EnumStateFlowElement_RepeatedValueReads_ReturnToBaseline()
     {
@@ -2412,10 +2414,12 @@ public class LiveHandleTests
                 using var tracker = new CatMoodTracker("Oreo");
                 Assert.Equal(Mood.Sleepy, tracker.Temper.Value);
                 tracker.Sulk();
+                tracker.Outlook.Value = Mood.Grumpy;
                 for (int i = 0; i < 5; i++)
                 {
                     Assert.Equal(Mood.Grumpy, tracker.Temper.Value);
                     Assert.Equal(Mood.Grumpy, tracker.MaybeTemper.Value);
+                    Assert.Equal(Mood.Grumpy, tracker.Outlook.Value);
                 }
                 using Box<Mood> box = CatMoodTrackerKt.SulkBox();
                 Assert.Equal(Mood.Grumpy, box.Value);
