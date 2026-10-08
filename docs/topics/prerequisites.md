@@ -68,12 +68,10 @@ Releases up to `0.8.0` shipped one Kotlin Gradle plugin and silently upgraded yo
 
 <note>
   <p>
-    Declare this plugin and the Kotlin Multiplatform plugin in the same project's
-    <code>plugins {}</code> block. If the root project declares this plugin with
-    <code>apply false</code> and only a child project declares Kotlin Multiplatform, the build
-    fails with <code>Could not generate a decorated class for type NugetPlugin</code> before the
-    version check runs. Declare both plugins with <code>apply false</code> in the root project to
-    work around it.
+    The plugin can be declared with <code>apply false</code> in the root project while only a
+    child project declares Kotlin Multiplatform. Earlier versions failed this setup with
+    <code>Could not generate a decorated class for type NugetPlugin</code>. If you hit that
+    error, declare both plugins with <code>apply false</code> in the root project.
   </p>
 </note>
 

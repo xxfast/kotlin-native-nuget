@@ -153,7 +153,7 @@ No coverage and no NativeAOT run: the `bridge` job owns those on the pinned vers
 ## Consequences
 
 - A consumer may declare any Kotlin from 2.4.0 up; the plugin no longer changes which KGP they get. A consumer who was silently upgraded from 2.3.x to 2.4.10 by `0.8.0` now gets the below-floor error instead. That is a behaviour change worth a release note.
-- **Verified by execution**: this plugin declared `apply false` in a root project with KGP only in a child fails with `Could not create plugin of type 'NugetPlugin' > Could not generate a decorated class for type NugetPlugin > org/jetbrains/kotlin/gradle/dsl/KotlinMultiplatformExtension`, before `apply()` runs, so the version check cannot explain it. Cause (verified): Gradle's `AbstractClassGenerator.inspectType` reflects every declared method of `NugetPlugin`, and `private fun registerPublish(` plus its local funs and lambdas carry KGP types in their signatures. Workaround, verified: declare both plugins `apply false` in the root project; `prerequisites.md` says so. The fix (about 165 lines out of the plugin class) is split out to the ROADMAP. The `buildSrc` shape was not run.
+- **Verified by execution**: this plugin declared `apply false` in a root project with KGP only in a child fails with `Could not create plugin of type 'NugetPlugin' > Could not generate a decorated class for type NugetPlugin > org/jetbrains/kotlin/gradle/dsl/KotlinMultiplatformExtension`, before `apply()` runs, so the version check cannot explain it. Cause (verified): Gradle's `AbstractClassGenerator.inspectType` reflects every declared method of `NugetPlugin`, and `private fun registerPublish(` plus its local funs and lambdas carry KGP types in their signatures. Workaround, verified: declare both plugins `apply false` in the root project; `prerequisites.md` says so. The fix shipped; see the 2026-10-07 amendment below. The `buildSrc` shape was not run.
 - **Inferred**: below KGP 2.3.20 the plugin's own classes may fail to load before the check runs (a type the plugin references not existing in a much older KGP). Verified only down to 2.3.20 and 2.3.21, where configuration succeeds and the check would be reached.
 - The smoke version read was spiked with `--no-configuration-cache`. As built it uses `providers.gradleProperty("smoke.kotlin")`, and the configuration cache was on in every verification run and resolved it correctly. Verified.
 - Raising the repo's Kotlin pin to a new minor raises the floor. The guard test fails until `kotlinFloor` follows.
@@ -220,3 +220,18 @@ Caveats on the spike: the klib in the 2.3.21 failure resolved from the Gradle mo
 ### Implementation verification (2026-10-04, commit `569c285d` plus this change, macosArm64)
 
 Verified by execution: `scripts/verify.sh --plugin` green at the pinned 2.4.10, at the floor 2.4.0 and at tested 2.4.20. `IntegrationTests` 3036/3036 and `LeakTests` 164/164 at each; plugin tests 822/822 at the pinned version; `test-library` klib manifest `compiler_version` 2.4.10, 2.4.0 and 2.4.20 respectively. The smoke consumer links at floor and tested with 73 `nuget_` exports; 2.3.21 fails at configuration time; 2.5.0-Beta1 warns and builds. Not exercised: Windows (`mingwX64`) at floor or tested.
+
+## Amendment 2026-10-07: the plugin class no longer carries KGP types
+
+The `apply false` restriction recorded above is lifted. Rule: `NugetPlugin` declares only `apply`;
+`registerConsume`, `registerReverse`, `registerKspArgs`, `publishedScopes`, `registerPublish` and
+`registerPublishing` are private top-level functions in the same file, compiled into
+`NugetPluginKt`, which Gradle never decorates. Gradle therefore has no Kotlin Gradle plugin type
+to resolve when it inspects the plugin class, whichever project declares KGP.
+
+- **Verified by execution**: `NugetPluginClassSignatureTest` finds no KGP type in the plugin
+  class's declared members, and loading the plugin class in a classloader that cannot see KGP no
+  longer throws `NoClassDefFoundError`.
+- **Inferred, not run**: that the two-project build (plugin `apply false` in the root, KGP only in
+  a child) now applies. `ProjectBuilder` cannot reproduce the original failure; a TestKit
+  two-project build would be the end-to-end proof.
