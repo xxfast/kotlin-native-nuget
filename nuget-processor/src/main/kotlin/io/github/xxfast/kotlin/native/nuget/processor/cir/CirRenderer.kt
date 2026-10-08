@@ -76,11 +76,69 @@ internal class CirRenderer {
     appendLine()
     appendLine("    internal NugetKotlinHandle(IntPtr handle) : base(IntPtr.Zero, ownsHandle: true) => SetHandle(handle);")
     appendLine()
+    // The `AddXxx` subscriptions still attached to this owner. A discarded subscription keeps
+    // delivering while its owner lives (ADR-187 gate, 2026-10-02), so nothing frees its Kotlin
+    // token earlier; but the token's unregister closure captures the Kotlin owner, so once the
+    // owner goes, every subscription it still holds is unregistered through the same remove export
+    // an explicit `Dispose()` calls. Typed `IDisposable` so this class, rendered for every package,
+    // does not depend on `NugetSubscription`, which only a package with subscriptions renders. One
+    // lock for the whole package: subscribe and unsubscribe are rare, and the set is touched from
+    // the consumer's threads and the finalizer thread.
+    appendLine("    private static readonly object AttachedLock = new object();")
+    appendLine("    private System.Collections.Generic.HashSet<IDisposable>? _attached;")
+    appendLine("    private bool _released;")
+    appendLine()
     appendLine("    public override bool IsInvalid => handle == IntPtr.Zero;")
     appendLine()
+    // A subscription that arrives after the release (a concurrent `Dispose()` of the owner won the
+    // race with the subscribe call), or on the never-released `Null` handle, is unregistered on the
+    // spot rather than kept by an owner that will never drain it.
+    appendLine("    internal void Attach(IDisposable subscription)")
+    appendLine("    {")
+    appendLine("        if (!IsInvalid)")
+    appendLine("        {")
+    appendLine("            lock (AttachedLock)")
+    appendLine("            {")
+    appendLine("                if (!_released)")
+    appendLine("                {")
+    appendLine("                    (_attached ??= new System.Collections.Generic.HashSet<IDisposable>()).Add(subscription);")
+    appendLine("                    return;")
+    appendLine("                }")
+    appendLine("            }")
+    appendLine("        }")
+    appendLine("        subscription.Dispose();")
+    appendLine("    }")
+    appendLine()
+    appendLine("    internal void Detach(IDisposable subscription)")
+    appendLine("    {")
+    appendLine("        lock (AttachedLock) _attached?.Remove(subscription);")
+    appendLine("    }")
+    appendLine()
+    // The snapshot is taken under the lock and disposed outside it, because each unregister calls
+    // into Kotlin. A subscription its consumer disposes concurrently is safe either way: its own
+    // `Interlocked.Exchange` lets exactly one of the two disposals run the unregister. The owner
+    // is freed last, whatever an unregister does, so the remove calls run against a live owner.
     appendLine("    protected override bool ReleaseHandle()")
     appendLine("    {")
-    appendLine("        NugetMarshal.Dispose(handle);")
+    appendLine("        IDisposable[]? attached = null;")
+    appendLine("        lock (AttachedLock)")
+    appendLine("        {")
+    appendLine("            _released = true;")
+    appendLine("            if (_attached != null)")
+    appendLine("            {")
+    appendLine("                attached = new IDisposable[_attached.Count];")
+    appendLine("                _attached.CopyTo(attached);")
+    appendLine("                _attached = null;")
+    appendLine("            }")
+    appendLine("        }")
+    appendLine("        try")
+    appendLine("        {")
+    appendLine("            if (attached != null) foreach (IDisposable subscription in attached) subscription.Dispose();")
+    appendLine("        }")
+    appendLine("        finally")
+    appendLine("        {")
+    appendLine("            NugetMarshal.Dispose(handle);")
+    appendLine("        }")
     appendLine("        return true;")
     appendLine("    }")
     appendLine("}")

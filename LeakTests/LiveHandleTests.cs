@@ -4278,18 +4278,18 @@ public class LiveHandleTests
     public void UndisposedKotlinStateFlow_IsReleasedByTheGc() =>
         AssertReleasedByTheGc("KotlinStateFlow returns", DropUndisposedStateFlow);
 
-    // Row 16i. The one kind ADR-187 deliberately does NOT release on the GC (human gate,
-    // 2026-10-02): a discarded subscription keeps delivering, as a discarded .NET event
-    // subscription does. Only an explicit `Dispose()` unregisters. So this row pins the opposite of
-    // its neighbours: Oreo stays alive, the `IDisposable`s from `AddMoodListener` are dropped, the
-    // GC and finalizers run, and every dropped listener must still hear the mood change.
+    // Row 16i. The one kind ADR-187 deliberately does NOT release on the GC while its owner lives
+    // (human gate, 2026-10-02): a discarded subscription keeps delivering, as a discarded .NET event
+    // subscription does. So the alive half pins the opposite of its neighbours: Oreo stays alive,
+    // the `IDisposable`s from `AddMoodListener` are dropped, the GC and finalizers run, and every
+    // dropped listener must still hear the mood change.
     //
-    // The count half pins today's behaviour rather than inventing one. The token is the
-    // `NugetHandles.retain(unregister)` ref Kotlin mints on subscribe (StoredCallbackExports.kt),
-    // released only by the remove export that `Dispose()` calls, and disposing the owner does not
-    // release it (Row 5 is the disposed half). So after Oreo is disposed the count sits at exactly
-    // one live token per dropped subscription: a dropped subscription is a pinned leak by design,
-    // and a finalizer that frees the token (with or without unregistering) turns this row red.
+    // The disposed half: the token is the `NugetHandles.retain(unregister)` ref Kotlin mints on
+    // subscribe (StoredCallbackExports.kt), and the owner's handle now unregisters every
+    // subscription still attached to it, through the same remove export `Dispose()` calls, before
+    // it releases itself. So disposing Oreo returns the count to the baseline, not to one token
+    // per dropped subscription. A subscription the consumer kept and disposes AFTER the owner is a
+    // silent no-op: its unregister already ran, and running it twice would release the token twice.
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void DropSubscriptions(Cat oreo, StrongBox<int> heard)
     {
@@ -4300,15 +4300,17 @@ public class LiveHandleTests
     }
 
     [Fact]
-    public void DiscardedSubscription_KeepsDeliveringAfterTheGc_AndKeepsItsToken()
+    public void DiscardedSubscription_KeepsDeliveringAfterTheGc_AndIsReleasedWithItsOwner()
     {
         Settle();
         long baseline = NugetMarshal.LiveHandles;
         var heard = new StrongBox<int>(0);
+        var keptHeard = new StrongBox<int>(0);
 
         var oreo = new Cat("Oreo", 9);
         DropSubscriptions(oreo, heard);
-        Assert.Equal(baseline + 1 + Drops, NugetMarshal.LiveHandles);
+        IDisposable kept = oreo.AddMoodListener(_ => Interlocked.Increment(ref keptHeard.Value));
+        Assert.Equal(baseline + 1 + Drops + 1, NugetMarshal.LiveHandles);
 
         for (int round = 0; round < FinalizerRounds / 5; round++)
         {
@@ -4318,11 +4320,37 @@ public class LiveHandleTests
 
         oreo.TriggerMoodChange(Mood.Happy);
         Assert.Equal(Drops, heard.Value);
+        Assert.Equal(1, keptHeard.Value);
 
         oreo.Dispose();
         Settle();
-        Assert.Equal(baseline + Drops, NugetMarshal.LiveHandles);
+        Assert.Equal(baseline, NugetMarshal.LiveHandles);
+
+        kept.Dispose();
+        kept.Dispose();
+        Settle();
+        Assert.Equal(baseline, NugetMarshal.LiveHandles);
     }
+
+    // Row 16n. The GC half of row 16i: Oreo herself is dropped undisposed, with subscriptions the
+    // consumer discarded and whose listeners capture only a `StrongBox`, so nothing C#-side roots
+    // the wrapper. Finalizing Oreo's handle unregisters each subscription and frees its token before
+    // the handle itself goes. A listener that captured Oreo would keep her reachable through the
+    // thunk key table, which is why these capture nothing of hers.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void DropOwnerWithDiscardedSubscriptions()
+    {
+        var heard = new StrongBox<int>(0);
+        var oreo = new Cat("Oreo", 9);
+        Assert.NotNull(oreo.AddMoodListener(_ => Interlocked.Increment(ref heard.Value)));
+        Assert.NotNull(oreo.AddMoodListener(_ => Interlocked.Increment(ref heard.Value)));
+        oreo.TriggerMoodChange(Mood.Happy);
+        Assert.Equal(2, heard.Value);
+    }
+
+    [Fact]
+    public void UndisposedOwnerWithDiscardedSubscriptions_IsReleasedByTheGc() =>
+        AssertReleasedByTheGc("Cats with discarded subscriptions", DropOwnerWithDiscardedSubscriptions);
 
     // Row 16j. The suspend SCOPE handle: a wrapper whose first `suspend` call lazily created
     // `_scopeHandle`, awaited to completion and then dropped, so there is no call in flight and

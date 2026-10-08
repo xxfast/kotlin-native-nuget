@@ -41,7 +41,7 @@ Implementable because the generated `.cs` compiles in the consumer (`contentFile
 
 ## Decision
 
-The forward contract is: **dispose a wrapper to release its Kotlin object promptly; a wrapper dropped without disposing is released when the .NET GC finalizes its handle, eventually, on the finalizer thread, and not at process exit.** The one exception is a stored-callback subscription token (see below). No public member signature changes.
+The forward contract is: **dispose a wrapper to release its Kotlin object promptly; a wrapper dropped without disposing is released when the .NET GC finalizes its handle, eventually, on the finalizer thread, and not at process exit.** The one exception is a stored-callback subscription, which keeps delivering while its owner lives (see below and the 2026-10-07 amendment). No public member signature changes.
 
 Shape (generated, lifted from the verified TestLibrary `Interop.cs`):
 
@@ -110,11 +110,11 @@ Verified by reading and by `DroppedWrapper_InFlightSuspendCall_CompletesAndIsNot
 
 ### Subscription token
 
-Human gate decision, 2026-10-02, superseding the earlier "subscription token subclass" decision: **a discarded subscription keeps delivering.** `NugetSubscription`'s token has no finalizer release at all; only an explicit `Dispose()` unregisters it and frees the token. A finalizer that unregistered would have silently stopped `cat.AddListener(x => ...)` with the returned `IDisposable` discarded at the next GC, a silent behaviour change on a common C# pattern. Row 16i, `DiscardedSubscription_KeepsDeliveringAfterTheGc_AndKeepsItsToken`, pins both the delivery and that the token stays live after its owner is disposed (today's behaviour). The cost is that a discarded subscription's token `StableRef` is never freed.
+Human gate decision, 2026-10-02, superseding the earlier "subscription token subclass" decision: **a discarded subscription keeps delivering.** `NugetSubscription`'s token has no finalizer release at all; only an explicit `Dispose()` unregisters it and frees the token. A finalizer that unregistered would have silently stopped `cat.AddListener(x => ...)` with the returned `IDisposable` discarded at the next GC, a silent behaviour change on a common C# pattern. Row 16i pinned both the delivery and that the token stays live after its owner is disposed. The cost stated here, one never-freed token `StableRef`, was incomplete and is superseded by the 2026-10-07 amendment.
 
 ## Consequences
 
-- Gate decisions (2026-10-02): adopt SafeHandle; one shared `NugetKotlinHandle` per package with a scope subclass; `INugetHandle.Handle` stays `IntPtr` with the keep-alive at the users of the pointer; in-flight `suspend`/Flow/StateFlow calls keep what they need alive until completion; subscription tokens are not finalizer-released.
+- Gate decisions (2026-10-02): adopt SafeHandle; one shared `NugetKotlinHandle` per package with a scope subclass; `INugetHandle.Handle` stays `IntPtr` with the keep-alive at the users of the pointer; in-flight `suspend`/Flow/StateFlow calls keep what they need alive until completion; a discarded subscription is not finalizer-released on its own (amended 2026-10-07: owner release now frees it).
 - Behaviour change: an undisposed wrapper's Kotlin object becomes collectible. A held or awaited `KotlinStateFlow` used after its own `Dispose()`, or collected after its parent was disposed, now throws `ObjectDisposedException` where it used to pass a released pointer to Kotlin (the second case was found by reading and never reproduced). `KotlinFunc`, `KotlinAction`, `KotlinSuspend*` and a non-suspending sealed arm's `Dispose()` are now atomic.
 - The callback-payload leak closes with no extra code (rows 16a and 16b). The abandoned `Flow` item closes only for its wrapper-typed half (row 16c); its ADR-123 collection-element half (a raw container handle and per-element boxes no wrapper owns) stays open under either contract.
 - ADR-003's finalizer line and ADR-121's "No finalizer" sentence carry an amendment pointing here.
@@ -133,3 +133,37 @@ compiles the `LeakTests` sources, including rows 16 to 16k, and `AotIntegrationT
 linux-x64 are exercised by CI only (pending at writing). The suites root the test assembly, so
 this verifies runtime behaviour, not trimming. This supersedes "the keep-alive and finalizer
 release are exercised under the JIT on osx-arm64 only" in Consequences.
+
+## Amendment 2026-10-07: releasing an owner releases its subscriptions
+
+**Rule.** Releasing an owner, by an explicit `Dispose()` or by the finalizer path, unregisters every
+`AddXxx` subscription still attached to it through the existing remove export and frees each token.
+A discarded subscription still keeps delivering while its owner is alive; the 2026-10-02 "keeps
+delivering" decision stands. A consumer `Dispose()` of the subscription after its owner was released
+is a silent no-op.
+
+**Mechanism.** The internal `NugetKotlinHandle` keeps a set of attached subscriptions behind a
+package-wide lock. `ReleaseHandle` takes a snapshot under the lock, drains it outside the lock, and
+only then calls `nuget_dispose`. Each subscription's `Interlocked.Exchange` makes the explicit
+`Dispose()` and the owner drain race-safe: the second path is a no-op. `NugetSubscription` detaches
+itself from the owner after it runs, and both `AddXxx` emission sites attach. The `nuget_*` ABI and
+the `DllImport`s are unchanged.
+
+**Correction to the cost statement.** "One token `StableRef`" understated the leak. Verified by row
+16n: before the change the owner itself was never finalized, because the unregister closure captured
+`_handle` and shared a closure object with the listener delegate that the thunk key table holds
+(the explanation is inferred and was confirmed when the change turned 16n green). A discarded
+subscription therefore pinned its whole owner, not only a token.
+
+**Rule for the remove exports.** The unregister now passes `IntPtr.Zero` as the receiver, because
+it runs where the owner's handle is being released. Both generated remove exports ignore that
+parameter (verified by reading and by row 16i). A Kotlin remove export must not read its receiver
+parameter; a future change that does would break this path.
+
+**Tests.** Row 16i is renamed `DiscardedSubscription_KeepsDeliveringAfterTheGc_AndIsReleasedWithItsOwner`.
+Row 16n, `UndisposedOwnerWithDiscardedSubscriptions_IsReleasedByTheGc`, is new. `CollectabilityTests`
+splits into `StoredCallbackReceiver_DiscardedToken_IsReleasedWithItsOwner` and
+`StoredCallbackReceiver_TokenHeldPastItsOwner_DoesNotRootTheSource`.
+
+**Residual (inferred).** A throwing Kotlin `removeX` has no error slot and fails the process. That
+now also holds on the finalizer thread, not only for an explicit `Dispose()`.

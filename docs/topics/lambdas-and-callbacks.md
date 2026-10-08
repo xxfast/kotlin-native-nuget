@@ -299,6 +299,11 @@ lambda type, is generated as a single `AddXxx` that returns `IDisposable` instea
 methods: dispose it to unsubscribe, there is no public `RemoveXxx` method generated for you to call
 directly.
 
+Dropping the `IDisposable` without disposing it leaves the listener registered, and it keeps
+delivering while the receiver is alive. Disposing the receiver, or letting the GC finalize it,
+unregisters every subscription still attached to it. Disposing the subscription after that is a
+silent no-op.
+
 `AddXxx(null!)` throws `ArgumentNullException` naming the parameter, before anything subscribes,
 whatever the Kotlin listener type's own nullability; a Kotlin subscription never has a way to mean
 "subscribe to nothing", so there is no null spelling to honour. Calling `AddXxx` on an already

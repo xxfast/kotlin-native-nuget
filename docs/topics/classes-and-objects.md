@@ -73,8 +73,9 @@ call in flight keeps what it needs alive until it completes, so `await new Desk(
 needs no local for the desk.
 
 One exception: the `IDisposable` an `AddX` [stored-callback](lambdas-and-callbacks.md#c-kotlin-stored-callbacks)
-subscription returns has no finalizer release. Dropping it leaves the listener registered and
-delivering; only its own `Dispose()` unsubscribes and frees it.
+subscription returns is not released by its own finalizer. Dropping it leaves the listener
+registered and delivering while the owner lives; disposing or finalizing the owner unsubscribes it,
+and a later `Dispose()` of the subscription does nothing.
 
 A held or awaited `KotlinStateFlow` used after its own `Dispose()`, or collected after the object
 it came from was disposed, throws `ObjectDisposedException`.

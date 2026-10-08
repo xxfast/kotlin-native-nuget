@@ -995,12 +995,11 @@ private fun StringBuilder.renderStoredCallbackMethod(method: CirStoredCallbackMe
     "            if (error != IntPtr.Zero) { NugetThunks.UnregisterCtx(cbKey); " +
         "throw NugetErrorNative.BuildException(error); }"
   )
-  // ADR-187 (gate, 2026-10-02): the token is NOT finalizer-released. A discarded subscription keeps
-  // delivering; only an explicit `Dispose()` unregisters. The remove export ignores the receiver,
-  // which is passed raw so a subscription disposed after its owner still unregisters.
-  appendLine(
-    "            return new NugetSubscription(() => { " +
-        "${method.csRemoveNativeName}(_handle.DangerousGetHandle(), sub); NugetThunks.UnregisterCtx(cbKey); });"
+  // ADR-187 (gate, 2026-10-02): the token is NOT finalizer-released on its own. A discarded
+  // subscription keeps delivering while its owner lives; it is unregistered by an explicit
+  // `Dispose()` or, at the latest, when the owner's handle is released (`Attach`).
+  appendSubscriptionReturn(
+    "${method.csRemoveNativeName}(IntPtr.Zero, sub); NugetThunks.UnregisterCtx(cbKey);",
   )
   appendLine("        }")
   appendLine()
@@ -1068,12 +1067,29 @@ private fun StringBuilder.renderInterfaceBridgeMethod(method: CirInterfaceBridge
     method.entries.indices.joinToString(" ") { "NugetThunks.UnregisterCtx(k$it);" }
   appendLine("            if (error != IntPtr.Zero) { $freeHandles throw NugetErrorNative.BuildException(error); }")
 
-  // Return NugetSubscription
-  appendLine(
-    "            return new NugetSubscription(() => { ${method.csRemoveNativeName}(_handle.DangerousGetHandle(), sub); $freeHandles });"
+  appendSubscriptionReturn(
+    "${method.csRemoveNativeName}(IntPtr.Zero, sub); $freeHandles",
   )
   appendLine("        }")
   appendLine()
+}
+
+/**
+ * The tail every `AddXxx` shares: the subscription, attached to the owner handle it was made on,
+ * so releasing the owner unregisters it. The owner is read once: a concurrent `Dispose()` of the
+ * wrapper swaps `_handle` to the never-released `Null`, whose `Attach` unregisters on the spot.
+ *
+ * The unregister passes `IntPtr.Zero` as the receiver, which the remove export ignores (it
+ * invokes the token's own closure), and must not read `_handle`: the C# compiler puts the
+ * unregister's captures in the same closure object as the listener delegate the thunk key table
+ * holds for good, so a `this` or `owner` capture there would root the owner and its finalizer
+ * would never run (LeakTests row 16m measured exactly that: 30 of 30 dropped handles live).
+ */
+private fun StringBuilder.appendSubscriptionReturn(unregister: String) {
+  appendLine("            NugetKotlinHandle owner = _handle;")
+  appendLine("            var subscription = new NugetSubscription(() => { $unregister }, owner);")
+  appendLine("            owner.Attach(subscription);")
+  appendLine("            return subscription;")
 }
 
 private fun StringBuilder.renderCallbackMethod(method: CirCallbackMethod) {
