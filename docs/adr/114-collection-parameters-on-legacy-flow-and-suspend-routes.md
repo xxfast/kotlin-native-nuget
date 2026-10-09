@@ -687,7 +687,8 @@ parameter route (processor 1889, IntegrationTests 3289, LeakTests 216, AOT both 
 covered: a nullable `Map`, a nullable `Mutable*` kind, an optional collection followed by a
 required parameter, and an optional collection on a `StateFlow` member.
 Left for a later change (ROADMAP): the `SKIPPED_UNSUPPORTED_INPUT` text says "nullable or not" only
-of a handle.
+of a handle. Resolved 2026-10-10: the text now reads "a List/Set/Map or a class/object/sealed-type
+handle, each nullable or not", so nullability covers both.
 `test-library` declared. Cold on purpose, not untested by oversight.
 
 ## Amendment (2026-10-09): both arms now have fixtures; `_set_value` wording corrected
