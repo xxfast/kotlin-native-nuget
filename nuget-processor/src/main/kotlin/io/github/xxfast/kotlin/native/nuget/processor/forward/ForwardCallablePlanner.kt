@@ -4645,9 +4645,9 @@ internal class ForwardCallablePlanner(
       // diagnostic kind is SKIPPED_UNSUPPORTED_RETURN and whose hint talks about Booleans.
       is BridgeType.BoundInterface -> ForwardPlanSkipReason.BOUND_INTERFACE_POSITION
 
-      // Issue #54: the return side's rule, at an input position.
+      // Issue #54 and ADR-154's 2026-10-08 amendment: the return side's rule, at an input position.
       is BridgeType.Unsupported ->
-        if (inner.isUndeclared()) requireNotNull(inner.skipReason())
+        if (inner.isRefusedAnywhere()) requireNotNull(inner.skipReason())
         else ForwardPlanSkipReason.NULLABLE
 
       BridgeType.Unit,
@@ -5504,6 +5504,12 @@ internal fun BridgeType.isUndeclared(): Boolean {
       unsupported.isUndeclaredClass || unsupported.isUndeclaredValueClass
 }
 
+/** ADR-154's 2026-10-08 amendment: a type refused for its own sake, at every position, so a
+ *  nullable spelling of it takes the type's reason rather than [ForwardPlanSkipReason.NULLABLE].
+ *  The undeclared flags above, plus a dependency type the closure did not admit. */
+internal fun BridgeType.isRefusedAnywhere(): Boolean =
+  isUndeclared() || (this as? BridgeType.Unsupported)?.isUnexportedDependency == true
+
 /** The undeclared type's qualified name, when this (possibly nullable-wrapped, possibly
  *  collection-wrapped) type is the direct reason a callable was dropped by
  *  [ForwardPlanSkipReason.UNDECLARED_ENUM] or [ForwardPlanSkipReason.UNDECLARED_INTERFACE].
@@ -5680,9 +5686,10 @@ internal fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
     // Issue #54: `Listener?` is not skipped *because* it is nullable -- a non-nullable
     // `Listener` is just as undeclarable -- so the NULLABLE bucket's "expose a non-nullable
     // wrapper" hint would send the author after a fix that cannot work. An undeclared inner
-    // type wins over the position. Narrow on purpose: every other nullable Unsupported keeps
-    // the shipped NULLABLE wording.
-    type.isUndeclared() -> requireNotNull(type.skipReason())
+    // type wins over the position. ADR-154's 2026-10-08 amendment widens it to an unadmitted
+    // dependency type (`Url.protocolOrNull: URLProtocol?`), which needs the `admit(...)` hint its
+    // non-null twin gets. Every other nullable Unsupported keeps the shipped NULLABLE wording.
+    type.isRefusedAnywhere() -> requireNotNull(type.skipReason())
     // ADR-061 (2026-09-16 amendment): `List<T>?` now has a return route, so a nullable collection
     // whose component is ineligible was refused for the *component's* reason, not for being
     // nullable. Attribute it there, the same way the non-nullable Collection arm below does; the
