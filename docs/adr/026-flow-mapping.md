@@ -3,7 +3,8 @@
 2026-10-03 amendment: a `suspend fun` returning `Flow<T>` keeps asynchronous acquisition as
 `Task<KotlinFlow<T>>`; the returned holder owns its acquired Flow handle. See
 [ADR-194](194-suspend-returning-flow.md). This does not change the original plain-Flow mapping or
-deferred `SharedFlow` scope. Amended 2026-10-09: ADR-205 maps `SharedFlow<T>`.
+deferred `SharedFlow` scope. Amended 2026-10-09: ADR-205 maps `SharedFlow<T>`, and a nullable
+`Flow<T>?` member binds as `KotlinFlow<T>?` (see the nullable-member amendment at the end).
 
 ## Status
 
@@ -623,7 +624,7 @@ Flow collection uses the class's `CoroutineScope` (same as suspend methods). Thi
   outer suspend is kept as `Task`, because a `suspend fun` cannot be called from a non-suspend
   `@CName` export in the first place. When this `Flow<T>` item lands it should follow ADR-068's
   `Task<KotlinFlow<T>>` shape, not the "treat as non-suspend" phrasing above. Not yet implemented.
-- **Nullable `Flow<T>?`** — deferred (requires the two-call nullable pattern from ADR-002, combined with the flow export).
+- **Nullable `Flow<T>?`** — deferred (requires the two-call nullable pattern from ADR-002, combined with the flow export). **Amendment (2026-10-09):** mapped as `KotlinFlow<T>?`, see the nullable-member amendment below.
 - **Backpressure** — bounded `Channel<T>` with explicit resume signaling; deferred for v1 (unbounded channel is safe for most use cases).
 - **`Flow<T>` as a generic type argument** — e.g., `Box<Flow<String>>`; deferred (generics containing Flow types).
 
@@ -652,3 +653,36 @@ rendezvous. The "Unbounded `Channel<T>` consumes memory" consequence no longer a
 "unbounded" decision is superseded. **Verified** by the ADR-207 spike (before: 19 items buffered
 ahead of a sleeping reader, 8 handed out after a cancel) and by `FlowBackpressureTests.cs` (after:
 one item ahead, a post-cancel drain of exactly one).
+## Amendment (2026-10-09): a nullable `Flow<T>?` member is mapped
+
+The "Nullable `Flow<T>?`" deferral above is closed by reusing
+[ADR-067](067-nullable-stateflow-mapping.md)'s per-member `_has_value` presence probe unchanged, on
+the routes where the non-null `Flow<T>` already binds:
+
+- A `Flow<T>?` property or method (class, interface carrier, sealed arm) binds as `KotlinFlow<T>?`.
+  The C# side calls `_has_value` first and returns `null` when it is false; otherwise it builds the
+  ordinary lazy `KotlinFlow<T>`. The `_collect` accessor is null-safe, so a race after a true probe
+  ends the collection instead of crashing the coroutine.
+- A `suspend fun` returning `Flow<T>?` (class and top-level, [ADR-194](194-suspend-returning-flow.md)'s
+  acquired route) awaits to `Task<KotlinFlow<T>?>`. Presence rides the completion pointer, as for
+  `suspend fun (): StateFlow<T>?`, so no probe is generated; the C# completion tests for a zero
+  pointer before it owns any handle.
+- `SharedFlow<T>?` and `MutableSharedFlow<T>?` members take the same probe, because
+  [ADR-205](205-shared-flow-mapping.md) routes them through the `Flow` types.
+- The nullable element `Flow<T?>` is independent and composes (`Flow<T?>?` is two flags).
+- A method's probe calls the member once and the collection calls it again, so ADR-067's purity
+  caveat for `StateFlow<T>?` methods applies: the member must return the same answer both times.
+
+Not changed: a top-level non-suspend `fun f(): Flow<T>?` and object or companion members still have
+no Flow route and stay named skips.
+
+Separate fix in the same change: `fun f(): StateFlow<T>?` was both bound and warned
+`SKIPPED_UNSUPPORTED_RETURN`, because the planner classed it as a nullable drop. It now takes the
+silent `FLOW_PROTOCOL` skip its non-null twin takes, so the legacy route owns it and no warning is
+raised.
+
+**Verified:** before this change a class-member `Flow<T>?` produced non-compiling generated Kotlin
+with no diagnostic (an unsafe call on the nullable receiver). Processor, integration (property,
+method, suspend class and top-level), leak (`NullableFlowMember_AbsentAndPresent_ReturnToBaseline`)
+and AOT suites pass. **Not covered by a fixture (Tier 1 only):** interface carrier, sealed arm,
+`SharedFlow<T>?` and `MutableSharedFlow<T>?`.

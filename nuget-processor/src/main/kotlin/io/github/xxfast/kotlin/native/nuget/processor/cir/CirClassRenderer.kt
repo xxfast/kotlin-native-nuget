@@ -416,14 +416,17 @@ internal fun StringBuilder.renderFlowPropertyNativeImports(
     appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$valueEntryPoint\")]")
     appendLine("        private static extern IntPtr Native_Get${prop.nativeStem}Value(NugetKotlinHandle handle);")
     appendLine()
-    if (prop.isNullableMember) {
-      // ADR-067: nullable member -- sibling `_has_value` presence-probe export.
-      val hasValueEntryPoint = "${nativePrefix}_get_${prop.nativeName}_has_value"
-      appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$hasValueEntryPoint\")]")
-      appendLine("        [return: MarshalAs(UnmanagedType.I1)]")
-      appendLine("        private static extern bool Native_Get${prop.nativeStem}HasValue(NugetKotlinHandle handle);")
-      appendLine()
-    }
+  }
+  if (prop.isNullableMember) {
+    // ADR-067: nullable member -- sibling `_has_value` presence-probe export. Since 2026-10-09
+    // (ADR-026 amendment) a plain `Flow<T>?` member takes it too.
+    val hasValueEntryPoint = "${nativePrefix}_get_${prop.nativeName}_has_value"
+    appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$hasValueEntryPoint\")]")
+    appendLine("        [return: MarshalAs(UnmanagedType.I1)]")
+    appendLine("        private static extern bool Native_Get${prop.nativeStem}HasValue(NugetKotlinHandle handle);")
+    appendLine()
+  }
+  if (prop.isStateFlow) {
     if (prop.isMutableStateFlow) {
       // ADR-071: sibling `_set_value` export -- handle + the element's own wire type + a
       // trailing `out IntPtr error` (the Kotlin setter can throw, MutableStateFlow.value

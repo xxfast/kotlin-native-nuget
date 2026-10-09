@@ -216,5 +216,6 @@ by a native round trip.
   is retired. ADR-071 and ADR-194 are unchanged and still accurate.
 - Deferred, on one ROADMAP line: `ReplayCache` and `SubscriptionCount` on `SharedFlow<T>`, and
   `Emit` / `TryEmit` on `MutableSharedFlow<T>` (Alternative 2's `KotlinSharedFlow<T>`). Nullable
-  member `SharedFlow<T>?` follows the open `Flow<T>?` line; `SharedFlow` as a parameter or type
+  member `SharedFlow<T>?` binds with `Flow<T>?` (ADR-026 amendment, 2026-10-09); `SharedFlow` as a
+  parameter or type
   argument follows the `Flow` parameter / type-argument lines.

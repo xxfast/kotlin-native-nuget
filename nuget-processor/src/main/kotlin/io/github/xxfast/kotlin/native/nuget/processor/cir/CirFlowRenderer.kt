@@ -524,14 +524,18 @@ internal fun StringBuilder.renderFlowMethod(method: CirMethod, className: String
 
   val paramStr: String = method.parameters.joinToString(", ") { it.declaration }
   val nativeName: String = method.nativeName
+  // ADR-026 amendment (2026-10-09): a nullable member (`Flow<T>?` return) is `KotlinFlow<T>?`,
+  // probed exactly as ADR-067's `StateFlow<T>?` return is.
+  val nullableSuffix: String = if (method.isStateFlowNullableMember) "?" else ""
 
   appendLine(
-    "        ${method.memberHead("public ")}KotlinFlow<${method.flowElementType}> " +
+    "        ${method.memberHead("public ")}KotlinFlow<${method.flowElementType}>$nullableSuffix " +
         "${method.explicitName}($paramStr)",
   )
   appendLine("        {")
   appendLine("            if (_handle.IsInvalid)")
   appendLine("                throw new ObjectDisposedException(nameof($className));")
+  appendHasValueProbe(method)
   appendLine("            return new KotlinFlow<${method.flowElementType}>((${method.flowCallbackNames.joinToString(", ")}) =>")
   // ADR-114: the collect delegate runs per subscription, so the wire container is built inside it
   // and disposed the moment the native call returns. Kotlin has already copied it out.
@@ -597,23 +601,7 @@ internal fun StringBuilder.renderStateFlowMethod(method: CirMethod, className: S
   appendLine("        {")
   appendLine("            if (_handle.IsInvalid)")
   appendLine("                throw new ObjectDisposedException(nameof($className));")
-  if (method.isStateFlowNullableMember) {
-    val hasValueNativeName: String = method.stateFlowHasValueNativeName
-    val probe: String = "$hasValueNativeName($valueCallArgs)"
-    // ADR-114: the presence probe is a synchronous call like any other, so it gets its own
-    // call-scoped handle rather than sharing one with the collect delegate below.
-    val scoped: List<String>? = method.parameters
-      .collectionScopedCall("            ", "hasValue = $probe", returns = false)
-    if (scoped == null) {
-      appendLine("            if (!$probe)")
-      appendLine("                return null;")
-    } else {
-      appendLine("            bool hasValue;")
-      scoped.forEach { appendLine(it) }
-      appendLine("            if (!hasValue)")
-      appendLine("                return null;")
-    }
-  }
+  appendHasValueProbe(method)
   appendLine("            return new KotlinStateFlow<${method.flowElementType}>((${method.flowCallbackNames.joinToString(", ")}) =>")
   appendScopedNativeCall(method, "                ", "$nativeName(${method.body})", ",")
   // ADR-123: `read:` is named, so it skips the optional `ownedHandle` slot only the ADR-068
@@ -623,6 +611,30 @@ internal fun StringBuilder.renderStateFlowMethod(method: CirMethod, className: S
   if (read != null) appendLine("                $read);")
   appendLine("        }")
   appendLine()
+}
+
+// ADR-067: a nullable member's `_has_value` presence probe, ahead of construction; returns null
+// when absent. Shared by the `StateFlow<T>?` and (2026-10-09) `Flow<T>?` method returns. Nothing
+// is emitted for a non-null member.
+private fun StringBuilder.appendHasValueProbe(method: CirMethod) {
+  if (!method.isStateFlowNullableMember) return
+  // ADR-114: the native call passes the wire handle, not the public collection.
+  val paramNames: String = method.parameters.joinToString(", ") { it.nativeArgument }
+  val callArgs: String = if (paramNames.isEmpty()) "_handle" else "_handle, $paramNames"
+  val probe: String = "${method.stateFlowHasValueNativeName}($callArgs)"
+  // ADR-114: the presence probe is a synchronous call like any other, so it gets its own
+  // call-scoped handle rather than sharing one with the collect delegate below.
+  val scoped: List<String>? = method.parameters
+    .collectionScopedCall("            ", "hasValue = $probe", returns = false)
+  if (scoped == null) {
+    appendLine("            if (!$probe)")
+    appendLine("                return null;")
+  } else {
+    appendLine("            bool hasValue;")
+    scoped.forEach { appendLine(it) }
+    appendLine("            if (!hasValue)")
+    appendLine("                return null;")
+  }
 }
 
 /**

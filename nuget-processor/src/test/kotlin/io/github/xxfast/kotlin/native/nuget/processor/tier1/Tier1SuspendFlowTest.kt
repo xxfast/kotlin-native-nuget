@@ -61,6 +61,9 @@ class Tier1SuspendFlowTest {
     assertTrue("MenuNative.Native_SpecialsAsyncCollect" in cs, cs)
     assertTrue("shared_collect" in result.generated, result.generated)
     assertTrue("Task<KotlinFlow<int>>" in cs, cs)
+    // 2026-10-09 (ADR-026 amendment): a nullable acquired Flow binds, absent as null.
+    assertTrue("Task<KotlinFlow<int>?> NullableContainerAsync(" in cs, cs)
+    assertTrue("source_nullableContainer_collect" in result.generated, result.generated)
     // 2026-10-08: a nullable StateFlow element now binds through the runtime's null-aware read.
     assertTrue("Task<KotlinStateFlow<string?>> StateNullableAsync(" in cs, cs)
     assertTrue("public class KotlinFlow<T> : IAsyncEnumerable<T>, IDisposable" in cs, cs)
@@ -92,7 +95,7 @@ class Tier1SuspendFlowTest {
 
   @Test fun `refused combinations name their refusal and emit neither half`() {
     val refused = listOf(
-      "nullableContainer", "nullableCollection", "unsupported",
+      "nullableCollection", "unsupported",
       "stateCollection", "input", "extensionFlow",
     )
     refused.forEach { name ->

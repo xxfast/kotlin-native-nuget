@@ -1,3 +1,4 @@
+using TestLibrary;
 using TestLibrary.Cat;
 
 namespace IntegrationTests;
@@ -163,5 +164,82 @@ public class FlowTests
         using var feeder = new CatFeeder("Mylo");
         IAsyncEnumerable<string> treats = feeder.Treats(5);
         Assert.NotNull(treats);
+    }
+
+    // ADR-026 amendment (2026-10-09): a nullable `Flow<T>?` member is `KotlinFlow<T>?`, null when
+    // the Kotlin member is null, on the property, method and suspend positions.
+
+    [Fact]
+    public async Task NullableFlowProperty_StringElement_OreoHasADietMyloDoesNot()
+    {
+        using var oreo = new CatFeeder("Oreo");
+        KotlinFlow<string>? diet = oreo.SpecialDiet;
+        Assert.NotNull(diet);
+        var items = new List<string>();
+        await foreach (var item in diet!)
+            items.Add(item);
+        Assert.Equal(new[] { "Oreo: salmon", "Oreo: tuna" }, items);
+
+        using var mylo = new CatFeeder("Mylo");
+        Assert.Null(mylo.SpecialDiet);
+    }
+
+    [Fact]
+    public async Task NullableFlowMethod_ObjectElement_NoMealsNoVisitors()
+    {
+        using var feeder = new CatFeeder("Oreo");
+        Assert.Null(feeder.VisitorsAfter(0));
+
+        KotlinFlow<Cat>? visitors = feeder.VisitorsAfter(2);
+        Assert.NotNull(visitors);
+        var names = new List<string>();
+        await foreach (Cat cat in visitors!)
+        {
+            using (cat) names.Add(cat.Name);
+        }
+        Assert.Equal(new[] { "Mylo", "Oreo" }, names);
+    }
+
+    [Fact]
+    public async Task NullableSuspendFlow_StringElement_NullAndPresent()
+    {
+        await using var cafe = new SuspendFlowCafe();
+        Assert.Null(await cafe.MaybeNicknamesAsync(0));
+
+        using KotlinFlow<string>? names = await cafe.MaybeNicknamesAsync(2);
+        Assert.NotNull(names);
+        var seen = new List<string>();
+        await foreach (string name in names!)
+            seen.Add(name);
+        Assert.Equal(new[] { "Oreo", "Mylo" }, seen);
+    }
+
+    [Fact]
+    public async Task NullableSuspendFlow_ObjectElement_NullAndPresent()
+    {
+        await using var cafe = new SuspendFlowCafe();
+        Assert.Null(await cafe.MaybeCompanionsAsync(0));
+
+        using KotlinFlow<Cat>? companions = await cafe.MaybeCompanionsAsync(2);
+        Assert.NotNull(companions);
+        var seen = new List<string>();
+        await foreach (Cat cat in companions!)
+        {
+            using (cat) seen.Add(cat.Name);
+        }
+        Assert.Equal(new[] { "Oreo", "Mylo" }, seen);
+    }
+
+    [Fact]
+    public async Task NullableSuspendFlow_TopLevel_NullAndPresent()
+    {
+        Assert.Null(await SuspendFlowSample.CafeMaybePortionsAsync(0));
+
+        using KotlinFlow<int>? portions = await SuspendFlowSample.CafeMaybePortionsAsync(2);
+        Assert.NotNull(portions);
+        var seen = new List<int>();
+        await foreach (int portion in portions!)
+            seen.Add(portion);
+        Assert.Equal(new[] { 71, 83 }, seen);
     }
 }

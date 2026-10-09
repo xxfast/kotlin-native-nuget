@@ -70,6 +70,23 @@ class CatFeeder(val catName: String) {
     emit(200)
   }
 
+  // ADR-026 amendment (2026-10-09): a nullable `Flow<T>?` member binds as `KotlinFlow<T>?`, null
+  // when the Kotlin member is null, through ADR-067's `_has_value` probe.
+
+  /** `Flow<String>?` property: Oreo has a special diet, Mylo eats whatever lands in the bowl. */
+  val specialDiet: Flow<String>?
+    get() = if (catName == "Mylo") null else flow {
+      emit("$catName: salmon")
+      emit("$catName: tuna")
+    }
+
+  /** `Flow<Cat>?` method with a parameter: nobody visits a bowl that was never filled. */
+  fun visitorsAfter(meals: Int): Flow<Cat>? =
+    if (meals == 0) null else flow {
+      emit(Cat("Mylo"))
+      emit(Cat("Oreo"))
+    }
+
   // Issue #299: the Flow/StateFlow member routes share the legacy parameter classifier with the
   // suspend route, so a nullable parameter was exported as non-null here too.
 

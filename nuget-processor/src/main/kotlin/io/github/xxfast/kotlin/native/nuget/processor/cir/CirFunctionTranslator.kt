@@ -803,7 +803,14 @@ internal fun translateSuspendFunction(
     visibility = CirVisibility.PRIVATE,
   )
 
-  val taskReturnType: String = if (isUnit) "Task" else "Task<$asyncReturnType>"
+  // ADR-026 amendment (2026-10-09): a nullable acquired `Flow<T>?` awaits to `KotlinFlow<T>?`; the
+  // `?` stays off [asyncReturnType], which the completion reuses inside `new ...(`.
+  val acquiredFlowNullable: Boolean = stateFlowElement?.memberNullable == true
+  val taskReturnType: String = when {
+    isUnit -> "Task"
+    acquiredFlowNullable -> "Task<$asyncReturnType?>"
+    else -> "Task<$asyncReturnType>"
+  }
 
   val asyncMethod = CirMethod(
     name = func.csharpAsyncMemberName(),
@@ -816,6 +823,7 @@ internal fun translateSuspendFunction(
     asyncReturnType = asyncReturnType,
     flowElementRead = stateFlowElement?.read,
     flowElementNullable = stateFlowElement?.elementNullable == true,
+    acquiredFlowNullable = acquiredFlowNullable,
     acquiredFlowCollectNativeName =
       if (asyncReturnType.startsWith("KotlinFlow<")) "${nativeName}_collect" else null,
     // ADR-119 / ADR-131: the top-level route's own copy of the class route's decision, exhaustive

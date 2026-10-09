@@ -729,11 +729,10 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
 
   if (expanded.arguments.isEmpty()) return ForwardLegacyReturnShape.Plain
 
-  // ADR-194: an acquired plain Flow gets a typed per-member collector.
+  // ADR-194: an acquired plain Flow gets a typed per-member collector. A nullable container
+  // (`Flow<T>?`) binds too since 2026-10-09 (ADR-026 amendment): the export already sends a null
+  // flow as a zero pointer, which the C# completion tests before owning any handle.
   if (expanded.declaration.qualifiedName?.asString() in FLOW_TYPES) {
-    if (expanded.isMarkedNullable) {
-      return ForwardLegacyReturnShape.Refused(expanded.legacyDescription())
-    }
     val element = expanded.arguments.firstOrNull()?.type?.resolve()?.expandAliases()
     val shape = legacyFlowElementShape(element)
     return if (shape is ForwardLegacyFlowElementShape.Refused) {

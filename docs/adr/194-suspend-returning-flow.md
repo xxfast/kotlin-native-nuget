@@ -145,7 +145,8 @@ the same symbol numbering and namespace rules as acquisition.
   string and handle elements, ByteArray, and admitted non-null collection elements. Preserve named
   refusals for nullable collections and unsupported generic elements. Do not widen StateFlow's
   narrower suspend-return element set.
-- Nullable Flow containers, SharedFlow, Flow parameters/type arguments, and backpressure redesign
+- Nullable Flow containers (since mapped, see the amendment at the end), SharedFlow, Flow
+  parameters/type arguments, and backpressure redesign
   stay deferred. This decision adds IDisposable to the fixed KotlinFlow type, an additive surface
   usable on the Task's actual advertised result type.
 - Integration tests cover repeated enumeration of one acquired Flow, projected elements,
@@ -161,3 +162,11 @@ Prior art, **inferred from official documentation**: SKIE maps
 is consistent with retaining both phases. [.NET disposal guidance](https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/implementing-dispose)
 supports explicit ownership plus SafeHandle fallback. No generated Swift signature or new native
 header was spiked for this ADR.
+
+## Amendment (2026-10-09): nullable Flow containers are mapped
+
+"Nullable Flow containers ... stay deferred" in the Consequences no longer holds for the container.
+`suspend fun (): Flow<T>?` awaits to `Task<KotlinFlow<T>?>` on the class and top-level routes, null
+when Kotlin returns no flow; see [ADR-026](026-flow-mapping.md)'s 2026-10-09 amendment. The
+`SharedFlow` deferral was closed by ADR-205; Flow parameters/type arguments and backpressure stay
+deferred.

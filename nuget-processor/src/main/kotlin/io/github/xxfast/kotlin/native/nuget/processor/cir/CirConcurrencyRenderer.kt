@@ -282,7 +282,12 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
   val visibility: String = if (method.visibility == CirVisibility.PRIVATE) "private" else "public"
   val static: String = if (method.isStatic) "static " else ""
   val isUnit: Boolean = method.asyncReturnType.isEmpty()
-  val innerType: String = if (isUnit) "bool" else method.asyncReturnType
+  // ADR-026 amendment (2026-10-09): a nullable acquired `Flow<T>?` completes as `KotlinFlow<T>?`.
+  val innerType: String = when {
+    isUnit -> "bool"
+    method.acquiredFlowNullable -> "${method.asyncReturnType}?"
+    else -> method.asyncReturnType
+  }
   val tcsType: String = "TaskCompletionSource<$innerType>"
   val nativeName: String = method.nativeName
 
@@ -338,6 +343,17 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
   val resultExtraction: String = when {
     isUnit -> "t.SetResult(true);"
     acquiredFlow -> buildString {
+      // ADR-026 amendment (2026-10-09): a nullable member (`Flow<T>?`) arrives as a zero
+      // `resultPtr` when absent, tested before any handle is owned, so a null Kotlin return never
+      // becomes a live `KotlinFlow<T>` over a zero handle.
+      if (method.acquiredFlowNullable) {
+        appendLine("if (resultPtr == IntPtr.Zero)")
+        appendLine("                    {")
+        appendLine("                        t.SetResult(null);")
+        appendLine("                        return;")
+        appendLine("                    }")
+        append("                    ")
+      }
       appendLine("var $ownedFlow = new NugetKotlinHandle(resultPtr);")
       appendLine("                    try")
       appendLine("                    {")

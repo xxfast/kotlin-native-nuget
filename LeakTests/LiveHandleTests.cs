@@ -1967,6 +1967,54 @@ public class LiveHandleTests
         });
     }
 
+    // Row 9-nullable-flow. The nullable MEMBER on the three plain-Flow positions (ADR-026
+    // amendment). The property and method probes (`_has_value`) mint nothing, so an absent read a
+    // thousand times over must leave no handle behind; the present reads are the usual lazy
+    // `KotlinFlow<T>` with one wrapper per object emission. On the suspend route the null
+    // completion is the one new path: the callback `GCHandle` and job cell are freed and no owned
+    // flow handle is minted; the present arm is the usual acquired holder.
+    //
+    // Mylo's bowl stays plain a thousand times, Oreo's diet and visitors are served once.
+    [Fact]
+    public async Task NullableFlowMember_AbsentAndPresent_ReturnToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using (var mylo = new CatFeeder("Mylo"))
+            {
+                for (int i = 0; i < 1000; i++)
+                {
+                    Assert.Null(mylo.SpecialDiet);
+                    Assert.Null(mylo.VisitorsAfter(0));
+                }
+            }
+
+            using (var oreo = new CatFeeder("Oreo"))
+            {
+                await foreach (string meal in oreo.SpecialDiet!) Assert.StartsWith("Oreo", meal);
+                await foreach (Cat cat in oreo.VisitorsAfter(2)!) cat.Dispose();
+            }
+
+            await using var cafe = new SuspendFlowCafe();
+            for (int i = 0; i < 50; i++)
+            {
+                Assert.Null(await cafe.MaybeNicknamesAsync(0));
+                Assert.Null(await cafe.MaybeCompanionsAsync(0));
+                Assert.Null(await SuspendFlowSample.CafeMaybePortionsAsync(0));
+            }
+            using (KotlinFlow<Cat>? companions = await cafe.MaybeCompanionsAsync(2))
+            {
+                await foreach (Cat cat in companions!) cat.Dispose();
+            }
+            using (KotlinFlow<int>? portions = await SuspendFlowSample.CafeMaybePortionsAsync(2))
+            {
+                int total = 0;
+                await foreach (int portion in portions!) total += portion;
+                Assert.Equal(154, total);
+            }
+        });
+    }
+
     // Row 6h. The same minted receiver handle as Row 6b, but read through an extension PROPERTY
     // getter rather than an extension function. The getter body is the new surface: the setter
     // route already owns a handle scope, the getter body is flat, so without a `finally`-dispose

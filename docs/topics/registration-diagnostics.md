@@ -310,6 +310,12 @@ value's handle and mints nothing; each `.Value` read mints one element handle th
 covers an `Int` and a class element. A nullable `MutableStateFlow` element or member write adds no
 handle, so it has no row of its own.
 
+An absent [nullable `Flow<T>?` member](coroutines-and-flow.md#flow-nullable-member) mints nothing:
+the presence check on a property or method, and a `suspend` completion with no flow, leave no
+handle behind, and a present one is the ordinary holder you dispose.
+`LeakTests/LiveHandleTests.cs`'s `NullableFlowMember_AbsentAndPresent_ReturnToBaseline` covers the
+property, method and `suspend` (class and top-level) shapes.
+
 For a [cancellation-token-taking async call](instance-members.md#async-cancellation), this count
 only proves the pending-continuation and `Task` handles came back to baseline: the bridge-owned
 `CancellationTokenSource` is a plain .NET `GCHandle`, not one of the Kotlin `StableRef`s

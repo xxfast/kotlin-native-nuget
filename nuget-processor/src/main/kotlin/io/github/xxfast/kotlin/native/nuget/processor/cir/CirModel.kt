@@ -1010,6 +1010,10 @@ internal data class CirMethod(
   val flowElementNullable: Boolean = false,
   /** ADR-194: collector keyed on the acquired Flow, with no acquisition parameters. */
   val acquiredFlowCollectNativeName: String? = null,
+  // ADR-026 amendment (2026-10-09): the acquired Flow is a nullable member (`Flow<T>?`), so the
+  // task yields `KotlinFlow<T>?` and a zero `resultPtr` completes with null. A flag, never a `?`
+  // on [asyncReturnType], which the completion reuses inside `new ...(`.
+  val acquiredFlowNullable: Boolean = false,
   // The collect lambda's four parameters (`onNext, onComplete, onError, userData`), minted apart
   // from this method's own parameters (`ForwardLegacyNames`): a lambda parameter spelled like a
   // user parameter would shadow it, and the native call inside the lambda would pass the callback
@@ -1032,7 +1036,8 @@ internal data class CirMethod(
   val stateFlowWrite: CirStateFlowWrite? = null,
   // ADR-067: true when the StateFlow member itself is nullable (`StateFlow<T>?` return). Renders
   // the return type as `KotlinStateFlow<T>?` and gates a `_has_value` presence-probe DllImport /
-  // null-check before construction. Empty (false) unless [isStateFlow].
+  // null-check before construction. Since 2026-10-09 (ADR-026 amendment) a plain
+  // `Flow<T>?` return sets it too, rendering `KotlinFlow<T>?` behind the same probe.
   val isStateFlowNullableMember: Boolean = false,
   // The native method name (e.g. "Native_MoodReportHasValue") of the sibling `_has_value`
   // presence-probe DllImport. Empty unless [isStateFlowNullableMember].
@@ -1153,7 +1158,8 @@ internal data class CirProperty(
   val hasSyncErrorOut: Boolean = false,
   // ADR-067: true when the StateFlow member itself is nullable (`StateFlow<T>?` property). Renders
   // the property type as `KotlinStateFlow<T>?` and gates a `_has_value` presence-probe DllImport /
-  // null-check before construction. False unless [isStateFlow].
+  // null-check before construction. Since 2026-10-09 (ADR-026 amendment) a plain
+  // `Flow<T>?` property sets it too, rendering `KotlinFlow<T>?` behind the same probe.
   val isNullableMember: Boolean = false,
   // ADR-071: true when this is a MutableStateFlow property whose element/member is not nullable
   // (v1 scope) -- renders KotlinMutableStateFlow<T> instead of KotlinStateFlow<T> and additionally
