@@ -2120,7 +2120,11 @@ internal class ForwardCallablePlanner(
     val constructors: List<KSFunctionDeclaration> = cls.getConstructors()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .toList()
-    val primary = cls.primaryConstructor
+    // ADR-154 amendment (2026-10-08): the primary comes off the same visibility-filtered list as
+    // the secondaries. Taken from `cls.primaryConstructor` directly, an `internal` or `private`
+    // primary was planned: a public C# constructor onto it in the author's module, and a
+    // `Url.<init>` SKIPPED row on ktor's klib `Url`, whose internal constructor KSP does report.
+    val primary: KSFunctionDeclaration? = cls.primaryConstructor?.takeIf { it in constructors }
     val secondaries: List<KSFunctionDeclaration> = constructors.filter { it != primary }
     // ADR-115: a marked primary-constructor `val`. The invariant is that the marked declaration
     // never appears in a C# signature. ADR-164: a marked parameter in the trailing all-defaulted
