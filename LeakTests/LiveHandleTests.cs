@@ -1933,6 +1933,40 @@ public class LiveHandleTests
         });
     }
 
+    // Row 6g-notifying. ADR-206: `AsNotifying()` starts ONE collection behind the adapter (a job
+    // cell, a rooted callbacks GCHandle, the enumerator) plus one seed `.Value` read, and
+    // `Dispose()` is the only thing that ends it. The adapter's `Completion` finishing is what runs
+    // the enumerator's `DisposeAsync`, so it is awaited before the count is taken. An adapter whose
+    // Dispose does not reach `NugetJobNative.Cancel`, or a seed read that keeps its handle, leaks
+    // per crossing here. The element is `int` on purpose: a wrapper minted between the cancel and
+    // Kotlin's cancelled callback falls to the GC (ADR-187) and would make the count noisy.
+    // Built off any SynchronizationContext so delivery is inline and nothing outlives the crossing.
+    //
+    // Oreo gets two snacks while somebody is watching, then the watcher looks away.
+    [Fact]
+    public async Task StateFlowNotifyingAdapter_UpdatesThenDispose_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var tracker = new CatMoodTracker("Oreo");
+            KotlinStateFlowObservable<int> energy =
+                await Task.Run(() => tracker.EnergyLevel.AsNotifying());
+            var snacked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            energy.PropertyChanged += (_, _) =>
+            {
+                if (energy.Value == 102) snacked.TrySetResult();
+            };
+
+            tracker.BumpEnergy(1);
+            tracker.BumpEnergy(1);
+            await snacked.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+            energy.Dispose();
+            await energy.Completion.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(102, energy.Value);
+        });
+    }
+
     // Row 6h. The same minted receiver handle as Row 6b, but read through an extension PROPERTY
     // getter rather than an extension function. The getter body is the new surface: the setter
     // route already owns a handle scope, the getter body is flat, so without a `finally`-dispose
