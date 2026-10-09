@@ -440,7 +440,7 @@ sealed class Job {
     fun removeWatcher(w: JobWatcher) { watchers -= w }
 
     /** The trigger: Mylo stirs and tells every watcher why, `String` across the bridged slot. */
-    fun wake(reason: String) { watchers.forEach { it.onWake(reason) } }
+    fun wake(reason: String) { watchers.toList().forEach { it.onWake(reason) } }
 
     /** Declared `override` of [Job.describe]: renders as a plain `public` method on the arm. */
     override fun describe(): String = "idle"
