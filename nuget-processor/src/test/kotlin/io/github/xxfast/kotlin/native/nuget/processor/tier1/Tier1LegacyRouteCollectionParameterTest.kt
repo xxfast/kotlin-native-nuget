@@ -254,6 +254,14 @@ class Tier1LegacyRouteCollectionParameterTest {
       "expected the diagnostic to name the offending type, so the author knows what to change; " +
           "got: $diagnostic",
     )
+    // Since the ADR-114 amendment a nullable List/Set/Map binds too, so "nullable or not" must
+    // read as covering the collections as well as the handles.
+    assertTrue(
+      diagnostic.contains(
+        "a List/Set/Map or a class/object/sealed-type handle, each nullable or not, but not",
+      ),
+      "expected nullability to cover both collections and handles; got: $diagnostic",
+    )
   }
 
   /**
