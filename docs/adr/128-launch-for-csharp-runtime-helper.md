@@ -403,3 +403,19 @@ prevented any build); PR-D's and PR-E's runs, both 2026-09-12, confirmed every o
 - Deferred: `nuget_scope_drain` (different semantics), a helper for the synchronous `errorOut`
   shape (`_bridge_create` and every ordinary route; a separate decision), and any change to the
   callback wire protocol.
+
+## Amendment (2026-10-09): the runtime opts in to `DelicateCoroutinesApi`
+
+Moving the `CoroutineStart.ATOMIC` launches into `nuget-runtime` moved the opt-in with them. Since
+kotlinx.coroutines 1.9 the marker on `ATOMIC` is `@DelicateCoroutinesApi` (a `WARNING`-level
+`@RequiresOptIn`), so `NugetLaunch.kt` and `NugetRuntime.kt` now list `DelicateCoroutinesApi::class`
+in their file-level `@OptIn`. A clean runtime compile reports no `DelicateCoroutinesApi` warnings
+(it had three: `NugetLaunch.kt` twice and `NugetRuntime.kt` once, the `nuget_scope_drain` launch).
+
+The generated file-level `@OptIn(ExperimentalCoroutinesApi::class)` in `CNameExports.kt` is
+unchanged.
+
+Correction to ADR-021's 2026-08-20 addendum, which predicted that generated output "likely emits" a
+`DelicateCoroutinesApi` warning. Verified by a clean `:test-library:compileKotlinMingwX64
+--rerun-tasks`: the generated code emits none, because it no longer contains an `ATOMIC` launch.
+The warning only ever appeared in the runtime. Verified: `:nuget-runtime:mingwX64Test` passes (51).

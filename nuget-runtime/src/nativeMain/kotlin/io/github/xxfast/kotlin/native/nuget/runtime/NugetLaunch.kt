@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalForeignApi::class, NugetRuntimeApi::class)
+@file:OptIn(ExperimentalForeignApi::class, NugetRuntimeApi::class, DelicateCoroutinesApi::class)
 
 package io.github.xxfast.kotlin.native.nuget.runtime
 
@@ -10,6 +10,7 @@ import kotlinx.cinterop.reinterpret
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 

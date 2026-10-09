@@ -426,7 +426,7 @@ Creating a scope on class instantiation adds memory and GC overhead, even if no 
 
 **The file-level `@OptIn(ExperimentalCoroutinesApi::class)` this ADR's refinement introduced alongside `CoroutineStart.ATOMIC` was unconditional in the generated `CNameExports.kt`**, while the `kotlinx.coroutines` imports next to it were already gated on `hasSuspendFunctions || needsFlowImports`. A library with zero suspend/Flow surface therefore failed its own Kotlin compile unless the author hand-added `org.jetbrains.kotlinx:kotlinx-coroutines-core`. The `ExperimentalCoroutinesApi` member is now emitted only under that same gate in `NugetProcessor.kt`.
 
-**Since kotlinx.coroutines 1.9, `CoroutineStart.ATOMIC`'s opt-in marker is `@DelicateCoroutinesApi`, not `@ExperimentalCoroutinesApi`.** Both are `WARNING`-level `@RequiresOptIn` annotations, so this was never the cause of the gating bug above, but it means suspend/Flow-using generated output built against coroutines >= 1.9 likely emits a `DelicateCoroutinesApi` warning today. Adding that marker to the now-gated `@OptIn` is deferred, tracked in ROADMAP.md's Phase 6.
+**Since kotlinx.coroutines 1.9, `CoroutineStart.ATOMIC`'s opt-in marker is `@DelicateCoroutinesApi`, not `@ExperimentalCoroutinesApi`.** Both are `WARNING`-level `@RequiresOptIn` annotations, so this was never the cause of the gating bug above. The generated `CNameExports.kt` no longer launches with `ATOMIC` (ADR-128 moved the launches into `nuget-runtime`), so it emits no `DelicateCoroutinesApi` warning; the runtime opts in instead (see ADR-128's 2026-10-09 amendment).
 
 ## Implementation Addendum (2026-09-22)
 
@@ -460,5 +460,5 @@ Neither inferred claim is load-bearing for the drop: nothing is implemented on t
 
 ### Not affected
 
-- The processor-emitted file-level `@OptIn` for `CoroutineStart.ATOMIC` in the generated `CNameExports.kt` (Implementation Addendum 2026-08-20, ROADMAP Phase 6 "Re-evaluate the generated `@OptIn`") is a different thing: generated, not author-facing.
+- The processor-emitted file-level `@OptIn` for `CoroutineStart.ATOMIC` in the generated `CNameExports.kt` (Implementation Addendum 2026-08-20) is a different thing: generated, not author-facing.
 - The reverse direction's opt-in (ADR-181, designed in parallel) is coherent where this one was not, because it gates *use* of generated Kotlin declarations. If a Kotlin-side forward marker is ever reintroduced, `ExperimentalNuget*Api` is the naming prefix.
