@@ -41,6 +41,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.mapPackageToNamespace
 import io.github.xxfast.kotlin.native.nuget.processor.cir.NugetContext
 import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.MUTABLE_STATE_FLOW_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.MutableStateFlowElement
+import io.github.xxfast.kotlin.native.nuget.processor.cir.classifyMutableStateFlowElement
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.translate
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addClassExports
@@ -1054,6 +1057,59 @@ internal fun warnRefusedLegacyRouteMembers(
       }
   }
 
+  // ADR-071 amendment (enum element write): a `MutableStateFlow<ValueClass>` member binds the
+  // read-only `KotlinStateFlow<T>`, because no write arm carries a value class's unwrapped
+  // underlying. Before the write classifier went exhaustive it passed the gate as an ordinary class
+  // and took the handle arm (`v._handle` on a C# record struct); it is named now, never silent.
+  // The property SURVIVES read-only, so its remark goes on the C# property (ADR-075's partial
+  // skip); a method has no such owner, and a type-level remark would call a callable member absent.
+  fun MutableList<ForwardDiagnostic>.nameRefusedValueClassWrite(
+    member: KSDeclaration,
+    declaration: String,
+    owner: ForwardDiagnosticOwner?,
+  ) {
+    val property: KSPropertyDeclaration? = member as? KSPropertyDeclaration
+    val function: KSFunctionDeclaration? = member as? KSFunctionDeclaration
+    val type: KSType = (property?.type ?: function?.returnType)?.resolve()?.expandAliases()
+      ?: return
+    if (type.declaration.qualifiedName?.asString() !in MUTABLE_STATE_FLOW_TYPES) return
+    val element: KSType? = type.arguments.firstOrNull()?.type?.resolve()?.expandAliases()
+    val refused: MutableStateFlowElement.RefusedValueClass =
+      classifyMutableStateFlowElement(element) as? MutableStateFlowElement.RefusedValueClass
+        ?: return
+    // A held or awaited method holder is settable only with a non-null member (and, awaited, a
+    // non-null element); outside that it was never a write candidate, so there is nothing to name.
+    if (function != null && type.isMarkedNullable) return
+    val awaited: Boolean = function?.modifiers?.contains(Modifier.SUSPEND) == true
+    if (awaited && element?.isMarkedNullable == true) return
+    val reason: String = "a MutableStateFlow element of value class ${refused.qualifiedName} " +
+        "has no write arm, so its `.Value` is not settable from C#"
+    val publicName: String = member.csharpMemberName()
+    val diagnostic: ForwardDiagnostic = if (property != null) {
+      ForwardDiagnostic(
+        kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
+        symbol = property,
+        declaration = declaration,
+        reason = "its setter is not generated because $reason",
+        hint = "the C# property $publicName is a read-only KotlinStateFlow; expose a function " +
+            "taking ${refused.qualifiedName} to write it",
+        owner = owner?.let { container -> ForwardDiagnosticOwner.Property(container, publicName) },
+        member = property.simpleName.asString(),
+      )
+    } else {
+      ForwardDiagnostic(
+        kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
+        symbol = member,
+        declaration = declaration,
+        reason = "its returned holder's setter is not generated because $reason",
+        hint = "$publicName returns a read-only KotlinStateFlow; expose a function taking " +
+            "${refused.qualifiedName} to write it",
+        owner = null,
+      )
+    }
+    add(diagnostic)
+  }
+
   val diagnostics: List<ForwardDiagnostic> = buildList {
     classes.forEach { cls ->
       val owner: String = cls.simpleName.asString()
@@ -1096,6 +1152,21 @@ internal fun warnRefusedLegacyRouteMembers(
             refusedFlowProperty(
               property, "$owner.${property.simpleName.asString()}", refused, ownerDeclaration,
             ),
+          )
+        }
+      cls.getAllProperties()
+        .filter { property -> property.getVisibility() == Visibility.PUBLIC }
+        .forEach { property ->
+          nameRefusedValueClassWrite(
+            property, "$owner.${property.simpleName.asString()}", ownerDeclaration,
+          )
+        }
+      cls.getAllFunctions()
+        .filter { method -> method.getVisibility() == Visibility.PUBLIC }
+        .filter { method -> method.isForwardLegacyAsyncRoute() }
+        .forEach { method ->
+          nameRefusedValueClassWrite(
+            method, "$owner.${method.simpleName.asString()}", ownerDeclaration,
           )
         }
     }
@@ -1176,6 +1247,20 @@ internal fun warnRefusedLegacyRouteMembers(
               refusedFlowProperty(
                 property, "$owner.${property.simpleName.asString()}", refused, ownerDeclaration,
               ),
+            )
+          }
+        subclass.getAllProperties()
+          .filter { property -> property.getVisibility() == Visibility.PUBLIC }
+          .forEach { property ->
+            nameRefusedValueClassWrite(
+              property, "$owner.${property.simpleName.asString()}", ownerDeclaration,
+            )
+          }
+        armMembers
+          .filter { method -> method.isForwardLegacyAsyncRoute() }
+          .forEach { method ->
+            nameRefusedValueClassWrite(
+              method, "$owner.${method.simpleName.asString()}", ownerDeclaration,
             )
           }
       }

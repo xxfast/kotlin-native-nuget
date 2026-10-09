@@ -594,7 +594,8 @@ machinery that has been in the repo since ADR-030. The item belongs in Phase 6 n
   `suspend fun` returning `MutableStateFlow<T>` keeps ADR-068's read-only `KotlinStateFlow<T>`
   mapping in the meantime. The class route shipped with a flow-keyed setter instead (2026-10-09
   amendment below); the generic runtime setter was not needed.
-- **Enum element types** (`MutableStateFlow<SomeEnum>`): out of scope in **both** directions. Note
+- **Enum element types** (`MutableStateFlow<SomeEnum>`): deferred when written, shipped in the
+  2026-10-09 amendment below. The deferral then read: out of scope in both directions. Note
   a pre-existing gap: `NugetMarshal.FromHandle<T>` has no enum branch and would fall through to its
   `Activator.CreateInstance` route (verified, `CirMarshalRenderer.kt:104-259`), so
   `StateFlow<SomeEnum>` is already unsupported/untested on the ADR-065 **read** path. Fixing that is
@@ -782,7 +783,7 @@ crosses as a nullable `String?` slot, an object element as a null `COpaquePointe
 valueHasValue, T value`, with the Kotlin assignment `if (valueHasValue) value else null`. The pair
 is the legacy-route convention the sibling flow and `suspend` parameters already use, so a null is
 never a zero. The C# lambda drops the `ArgumentNullException` for a nullable object and passes
-`v?._handle ?? NugetKotlinHandle.Null`. `Boolean?`, `Char?` and enum elements stay read-only,
+`v?._handle ?? NugetKotlinHandle.Null`. `Boolean?`, `Char?` and nullable enum elements stay read-only,
 mirroring ADR-067's read side; the declared nullable type must not degrade to a non-null write.
 
 Verified: `Tier1MutableStateFlowNullableElementWriteTest`; `IntegrationTests/MutableStateFlowTests.cs`
@@ -819,8 +820,36 @@ third write lambda before its `ownedHandle`, so `Dispose()` still frees the flow
 
 Still read-only on purpose: `suspend fun (): MutableStateFlow<T?>`,
 `suspend fun (): MutableStateFlow<T>?` (the nullable-suspend-return guard) and the top-level
-suspend route. `Boolean?`, `Char?` and enum elements stay as above.
+suspend route. `Boolean?`, `Char?` and nullable enum elements stay as above.
 
 Verified: `Tier1SuspendMutableStateFlowTest`; `IntegrationTests/SuspendStateFlowTests.cs`
 (`awaitTreatJar`, `awaitFavouriteToy`); LeakTests row 8f-suspend
 `SuspendMutableStateFlow_AwaitWriteReadDispose_ReturnsToBaseline`.
+
+## Amendment (2026-10-09): enum elements are settable
+
+Closes the "Enum element types" deferral above. A non-null `MutableStateFlow<SomeEnum>` on a class
+property, a held method return and a sealed-arm member binds `KotlinMutableStateFlow<SomeEnum>`.
+Because the gate is shared, a class `suspend fun (): MutableStateFlow<SomeEnum>` awaits to a
+settable holder as well (processor Tier 1 only; no IntegrationTests fixture awaits one). The read
+side needed no change: ADR-094 registered enums in `Factories`, so `.Value` already read an enum.
+
+The write crosses by value as the entry's ordinal, as the synchronous enum setter does: C# sends
+`(int)v`, the export takes `value: Int` and assigns `Mood.entries[value]`. The write classifier is
+now a sealed three-way (`Scalar`, `Enum`, `Handle`) with two non-writing arms, `RefusedValueClass`
+and `ReadOnly`, replacing the old object/non-object boolean, which would have sent an enum down the
+handle arm (`v._handle` on a C# enum). An out-of-range ordinal throws `KotlinException` from the
+existing `errorOut` slot and the write does not land. A nullable enum element stays read-only
+(the nullable-element gate sits upstream), as do `ByteArray` and the other cases listed above.
+
+A `MutableStateFlow<ValueClass>` used to pass the gate as an ordinary class and take the handle arm
+(`v._handle` on a C# record struct). It now binds the read-only `KotlinStateFlow<T>` with a named
+`SKIPPED_UNSUPPORTED_INPUT`: a property carries the remark on the C# property, a method has no
+owner for it, so its remark is unowned.
+
+Verified: processor Tier 1 `Tier1MutableStateFlowEnumElementTest`;
+`IntegrationTests/MutableStateFlowEnumElementTests.cs` (`CatMoodTracker.outlook`, `outlookDial`,
+`currentOutlook`, including the out-of-range write); LeakTests row 8d-enum
+`EnumStateFlowElement_RepeatedValueReads_ReturnToBaseline` extended with one write (the ordinal
+mints no handle, so no new row). The sibling `StateFlow<Enum?>`-on-suspend question was checked and
+is not broken.

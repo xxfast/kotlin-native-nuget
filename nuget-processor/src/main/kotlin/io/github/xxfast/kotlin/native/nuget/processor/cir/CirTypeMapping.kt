@@ -24,6 +24,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPla
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyReceiver
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedInterface
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isValueClass
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.isUnderPackage
 
@@ -207,86 +208,152 @@ internal class CollectionHelperTracker {
 }
 
 /**
- * ADR-071 v1 scope: a `MutableStateFlow<T>` element the settable-`.Value` write seam supports --
- * a primitive/`Char`/`String` (crosses by value, no conversion or one conversion) or an ordinary
- * class/object element (crosses as a handle). Enum elements are explicitly out of scope in both
- * directions (a pre-existing gap: `NugetMarshal.FromHandle<T>` has no enum branch) and everything
- * else (collections, lambdas, nullable) is deferred, so this deliberately returns `false` for them
- * -- the declared `MutableStateFlow<T>` keeps ADR-065/067's read-only `KotlinStateFlow<T>` mapping.
+ * ADR-071: how a `MutableStateFlow<T>` element crosses the settable-`.Value` write seam, decided
+ * once (nullability stripped) and read by every half: the gates, the Kotlin `_set_value` slot and
+ * the C# extern plus write lambda. Sealed so every consumer `when`s over it exhaustively, which is
+ * the point: a value class used to pass a boolean "is it a class" gate and fall into the handle
+ * arm, spelling `v._handle` on a C# record struct. A new arm now fails to compile everywhere it is
+ * not handled instead of silently taking a neighbour's wire.
  */
-internal fun isMutableStateFlowElementSupported(elementType: KSType?): Boolean {
-  val declaration = elementType?.expandAliases()?.declaration ?: return false
+internal sealed interface MutableStateFlowElement {
+
+  /** An element with a settable `.Value`. */
+  sealed interface Writable : MutableStateFlowElement
+
+  /** A [KOTLIN_TO_CSHARP_PARAM] primitive, `Char` or `String`: crosses by value. */
+  data object Scalar : Writable
+
+  /** An enum (ADR-071 amendment): crosses as its ordinal, as the synchronous enum setter does. */
+  data class Enum(val qualifiedName: String) : Writable
+
+  /** An ordinary exported class or object: crosses as its handle (`v._handle`). */
+  data class Handle(val qualifiedName: String) : Writable
+
+  /**
+   * A value class: no write arm carries its unwrapped underlying, so the member binds read-only
+   * and the refusal is named (`SKIPPED_UNSUPPORTED_INPUT`) rather than silent.
+   */
+  data class RefusedValueClass(val qualifiedName: String) : MutableStateFlowElement
+
+  /**
+   * Everything else (collections, `ByteArray`, lambdas, interfaces): the declared
+   * `MutableStateFlow<T>` keeps ADR-065/067's read-only `KotlinStateFlow<T>` mapping, unnamed.
+   */
+  data object ReadOnly : MutableStateFlowElement
+}
+
+/**
+ * Classifies a `MutableStateFlow<T>` element for the write seam, ignoring its nullability (the
+ * nullable rule lives in [isMutableStateFlowElementWritable]).
+ */
+internal fun classifyMutableStateFlowElement(elementType: KSType?): MutableStateFlowElement {
+  val declaration: KSDeclaration =
+    elementType?.expandAliases()?.declaration ?: return MutableStateFlowElement.ReadOnly
   val simpleName: String = declaration.simpleName.asString()
-  if (KOTLIN_TO_CSHARP_PARAM.containsKey(simpleName)) return true
-  // ROADMAP Phase 4: `kotlin.ByteArray` is a `CLASS`, so it would fall into the handle arm below --
+  if (KOTLIN_TO_CSHARP_PARAM.containsKey(simpleName)) return MutableStateFlowElement.Scalar
+  // ROADMAP Phase 4: `kotlin.ByteArray` is a `CLASS`, so it would fall into the handle arm below,
   // but it crosses as a *bytes* handle (`nuget_bytes_create`/`ReadBytes`), not as the `v._handle`
   // an exported wrapper carries, and the ADR-071 write seam has no arm that mints one. Its READ
   // side binds (ADR-151 amendment), through the read-only `KotlinStateFlow<byte[]>` mapping.
-  if (declaration.qualifiedName?.asString() == "kotlin.ByteArray") return false
-  val classDeclaration: KSClassDeclaration = declaration as? KSClassDeclaration ?: return false
-  if (classDeclaration.classKind == ClassKind.ENUM_CLASS) return false
-  return classDeclaration.classKind == ClassKind.CLASS ||
-      classDeclaration.classKind == ClassKind.OBJECT
+  if (declaration.qualifiedName?.asString() == "kotlin.ByteArray") {
+    return MutableStateFlowElement.ReadOnly
+  }
+  val classDeclaration: KSClassDeclaration =
+    declaration as? KSClassDeclaration ?: return MutableStateFlowElement.ReadOnly
+  val qualifiedName: String = classDeclaration.qualifiedName?.asString() ?: simpleName
+  return when {
+    classDeclaration.classKind == ClassKind.ENUM_CLASS ->
+      MutableStateFlowElement.Enum(qualifiedName)
+
+    // Before the CLASS arm: a value class is a `CLASS` too.
+    classDeclaration.isValueClass() -> MutableStateFlowElement.RefusedValueClass(qualifiedName)
+
+    classDeclaration.classKind == ClassKind.CLASS ||
+        classDeclaration.classKind == ClassKind.OBJECT ->
+      MutableStateFlowElement.Handle(qualifiedName)
+
+    else -> MutableStateFlowElement.ReadOnly
+  }
+}
+
+/** The [MutableStateFlowElement.Writable] arm of an element a gate already admitted. */
+internal fun writableMutableStateFlowElement(
+  elementType: KSType?,
+): MutableStateFlowElement.Writable {
+  val element: MutableStateFlowElement = classifyMutableStateFlowElement(elementType)
+  return requireNotNull(element as? MutableStateFlowElement.Writable) {
+    "MutableStateFlow element ${elementType?.declaration?.simpleName?.asString()} reached the " +
+        "write seam without a write arm"
+  }
 }
 
 /**
- * True when a (already-[isMutableStateFlowElementSupported]) element crosses the write seam as an
- * object handle rather than by value -- i.e. it is not one of the [KOTLIN_TO_CSHARP_PARAM]
- * primitive/`Char`/`String` scalars.
- */
-internal fun isMutableStateFlowElementObject(elementType: KSType?): Boolean {
-  val declaration = elementType?.expandAliases()?.declaration ?: return false
-  val simpleName: String = declaration.simpleName.asString()
-  return !KOTLIN_TO_CSHARP_PARAM.containsKey(simpleName)
-}
-
-/**
- * ADR-071 amendment (nullable element write): whether a `MutableStateFlow<T>` element gets a
- * settable `.Value`. A non-null element is exactly [isMutableStateFlowElementSupported]. A nullable
- * one additionally refuses `Boolean?` and `Char?`, mirroring ADR-067's read-side width deferral;
- * those keep the read-only `KotlinStateFlow<T?>` mapping. Read by every gate on both halves, so a
- * setter export and its C# import cannot disagree.
+ * ADR-071: whether a `MutableStateFlow<T>` element gets a settable `.Value`. A non-null element is
+ * exactly a [MutableStateFlowElement.Writable] one. A nullable one additionally refuses `Boolean?`
+ * and `Char?`, mirroring ADR-067's read-side width deferral, and an enum (whose ordinal wire has no
+ * null), so those keep the read-only `KotlinStateFlow<T?>` mapping. Read by every gate on both
+ * halves, so a setter export and its C# import cannot disagree.
  */
 internal fun isMutableStateFlowElementWritable(elementType: KSType?): Boolean {
-  if (!isMutableStateFlowElementSupported(elementType)) return false
+  val element: MutableStateFlowElement = classifyMutableStateFlowElement(elementType)
+  if (element !is MutableStateFlowElement.Writable) return false
   if (elementType?.isMarkedNullable != true) return true
   val simpleName: String = elementType.expandAliases().declaration.simpleName.asString()
-  return simpleName != "Boolean" && simpleName != "Char"
+  return when (element) {
+    MutableStateFlowElement.Scalar -> simpleName != "Boolean" && simpleName != "Char"
+    is MutableStateFlowElement.Enum -> false
+    is MutableStateFlowElement.Handle -> true
+  }
 }
 
 /**
  * ADR-071: the C# half of the write seam for a (already-[isMutableStateFlowElementWritable])
- * element whose public spelling is [csElementType]. A scalar crosses by value, an object as its
- * handle; a nullable `String?` stays one nullable slot, a nullable object passes a null handle,
- * and a nullable scalar crosses as the legacy route's has-value pair (`valueHasValue, value`).
+ * element whose public spelling is [csElementType]. A scalar crosses by value, an enum as its
+ * `(int)` ordinal, an object as its handle; a nullable `String?` stays one nullable slot, a
+ * nullable object passes a null handle, and a nullable scalar crosses as the legacy route's
+ * has-value pair (`valueHasValue, value`).
  */
 internal fun mutableStateFlowWrite(elementType: KSType?, csElementType: String): CirStateFlowWrite {
   val nullable: Boolean = elementType?.isMarkedNullable == true
   val simpleName: String? = elementType?.expandAliases()?.declaration?.simpleName?.asString()
-  return when {
-    isMutableStateFlowElementObject(elementType) && nullable -> CirStateFlowWrite(
-      parameters = listOf(CirParameter("value", KOTLIN_HANDLE)),
-      arguments = "v?._handle ?? NugetKotlinHandle.Null",
-    )
+  val element: MutableStateFlowElement.Writable = writableMutableStateFlowElement(elementType)
+  return when (element) {
+    is MutableStateFlowElement.Handle -> if (nullable) {
+      CirStateFlowWrite(
+        parameters = listOf(CirParameter("value", KOTLIN_HANDLE)),
+        arguments = "v?._handle ?? NugetKotlinHandle.Null",
+      )
+    } else {
+      CirStateFlowWrite(
+        parameters = listOf(CirParameter("value", KOTLIN_HANDLE)),
+        arguments = "v._handle",
+        rejectsNull = true,
+      )
+    }
 
-    isMutableStateFlowElementObject(elementType) -> CirStateFlowWrite(
-      parameters = listOf(CirParameter("value", KOTLIN_HANDLE)),
-      arguments = "v._handle",
-      rejectsNull = true,
-    )
+    is MutableStateFlowElement.Enum -> {
+      // The gate keeps a nullable enum read-only: the ordinal wire has no null.
+      require(!nullable) { "nullable enum element ${element.qualifiedName} is not writable" }
+      CirStateFlowWrite(
+        parameters = listOf(CirParameter("value", "int")),
+        arguments = "(int)v",
+      )
+    }
 
-    nullable && simpleName != "String" -> CirStateFlowWrite(
-      parameters = listOf(
-        CirParameter("valueHasValue", "bool"),
-        CirParameter("value", csElementType.removeSuffix("?")),
-      ),
-      arguments = "v.HasValue, v.GetValueOrDefault()",
-    )
-
-    else -> CirStateFlowWrite(
-      parameters = listOf(CirParameter("value", csElementType)),
-      arguments = "v",
-    )
+    MutableStateFlowElement.Scalar -> if (nullable && simpleName != "String") {
+      CirStateFlowWrite(
+        parameters = listOf(
+          CirParameter("valueHasValue", "bool"),
+          CirParameter("value", csElementType.removeSuffix("?")),
+        ),
+        arguments = "v.HasValue, v.GetValueOrDefault()",
+      )
+    } else {
+      CirStateFlowWrite(
+        parameters = listOf(CirParameter("value", csElementType)),
+        arguments = "v",
+      )
+    }
   }
 }
 

@@ -310,6 +310,26 @@ class CatMoodTracker(private val catName: String) {
     emit(null)
     emit(CatId("mylo-2"))
   }
+
+  // --- ADR-071 amendment (enum element write): a `MutableStateFlow<Mood>` whose `.Value` C# can
+  // set. The write crosses as the enum's ordinal, as the synchronous enum setter does. Starts
+  // SLEEPY (ordinal 1) and every asserted write lands on a non-zero ordinal, so a write that
+  // always sends 0 cannot pass. ---
+
+  /** MutableStateFlow<Mood> -- enum element, crosses the write seam as its ordinal. */
+  val outlook: MutableStateFlow<Mood> = MutableStateFlow(Mood.SLEEPY)
+
+  /** The held function-return twin of [outlook], sharing its storage. */
+  fun outlookDial(): MutableStateFlow<Mood> = outlook
+
+  /** Kotlin-side read-back: proves a C# write of [outlook] landed in Kotlin as the real entry. */
+  fun currentOutlook(): Mood = outlook.value
+
+  /**
+   * MutableStateFlow<CatId> -- a value-class element has no write arm, so this binds the
+   * read-only `KotlinStateFlow<CatId>` and the processor names the refused setter.
+   */
+  val chipId: MutableStateFlow<CatId> = MutableStateFlow(CatId("oreo-chip"))
 }
 
 /**

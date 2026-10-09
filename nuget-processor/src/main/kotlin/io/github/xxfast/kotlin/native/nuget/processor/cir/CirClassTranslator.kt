@@ -1936,8 +1936,9 @@ internal fun flowProperty(
   val isNullableMember: Boolean = propTypeResolved.isMarkedNullable
   // ADR-071: a genuinely DECLARED MutableStateFlow<T> (not narrowed through .asStateFlow())
   // gains a settable `.Value` -- gated on the exact declared type and a writable element
-  // (primitive/String/object; a nullable one too, bar `Boolean?`/`Char?`). A nullable member keeps
-  // ADR-067's `_has_value` probe, and its absent-member write throws on the Kotlin half.
+  // (primitive/String/object/non-null enum; a nullable one bar `Boolean?`/`Char?`/enum). A
+  // nullable member keeps ADR-067's `_has_value` probe, and its absent-member write throws on
+  // the Kotlin half.
   val isMutableStateFlowProperty: Boolean = isStateFlowType &&
       qualifiedTypeName in MUTABLE_STATE_FLOW_TYPES &&
       isMutableStateFlowElementWritable(flowElementTypeResolved)

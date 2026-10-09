@@ -670,6 +670,27 @@ The same holds for an enum dependency admitted with `admit(...)` and for a neste
 [Generic classes](generics.md) instantiated at an enum read and write it too (`Box<Mood>.Value`,
 `new Box<Mood>(Mood.Calm)`).
 
+A non-null `MutableStateFlow<E>` of an enum is settable, on a class property, a function return, a
+sealed-arm member and a class `suspend` return. The write crosses as the entry's ordinal, so an
+ordinal that no longer names an entry (a C# cast such as `(Mood)99`) throws `KotlinException` and
+the flow keeps its value:
+
+```kotlin
+class CatMoodTracker(private val catName: String) {
+  val outlook: MutableStateFlow<Mood> = MutableStateFlow(Mood.SLEEPY)
+}
+```
+
+```C#
+tracker.Outlook.Value = Mood.Grumpy;
+```
+
+A nullable element (`MutableStateFlow<Mood?>`) stays a get-only `KotlinStateFlow`.
+
+A `MutableStateFlow` of a value class also binds a get-only `KotlinStateFlow<T>`, and the build
+reports `SKIPPED_UNSUPPORTED_INPUT` for it. On a property the remark names the read-only C#
+property; expose a function that takes the value class to write it.
+
 ## Settable `.Value` on `MutableStateFlow<T>` {id="settable-value"}
 
 A member whose **declared** type is `MutableStateFlow<T>`, not narrowed to `StateFlow<T>` (the
@@ -711,8 +732,8 @@ if (diary is not null) diary.Value = "day two";
 
 A `MutableStateFlow<T>?` property is settable once it is present. If Kotlin has dropped the flow
 since you read it, the write throws `KotlinInvalidOperationException` instead of being ignored. A
-function returning `MutableStateFlow<T>?` stays read-only. `Boolean?`, `Char?` and enum elements
-stay read-only.
+function returning `MutableStateFlow<T>?` stays read-only. `Boolean?`, `Char?` and nullable enum
+elements stay read-only.
 
 Reassigning the whole `MutableStateFlow<T>` member itself (a `var` holding a different flow
 instance) is not supported; only writes through `.Value` are.
@@ -869,8 +890,6 @@ members. A `Throwable`, `Exception` or `RuntimeException` parameter does bind, a
 
 - `ReplayCache` and `SubscriptionCount` on `SharedFlow<T>`, and `Emit`/`TryEmit` on `MutableSharedFlow<T>`,
   are not exposed; publish through a Kotlin member instead.
-- `MutableStateFlow<SomeEnum>` surfaces as read-only `KotlinStateFlow<SomeEnum>`: `.Value` reads the
-  current entry but is not settable.
 - `MutableStateFlow<ByteArray>` surfaces as read-only `KotlinStateFlow<byte[]>`, not
   `KotlinMutableStateFlow<byte[]>`: `.Value` is not settable for a `ByteArray` element.
 - `CompareAndSet`, `Update`, `Emit`, `TryEmit`, `ReplayCache`, and `SubscriptionCount` on
