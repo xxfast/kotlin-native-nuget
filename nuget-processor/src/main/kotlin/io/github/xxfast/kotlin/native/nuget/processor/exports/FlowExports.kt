@@ -271,6 +271,9 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
           )
           .build()
       )
+      addStateFlowCompareAndSetPropertyExport(
+        prop, qualifiedName, prefix, propName, propCall, flowElementType, memberNullable,
+      )
     }
   }
 
@@ -384,6 +387,7 @@ internal fun FileSpec.Builder.addFlowMethodExports(
 
     addFunction(acquireBuilder.build())
     addHeldStateFlowSetValueExport("${prefix}_${cname}", method, flowElementType)
+    addHeldStateFlowCompareAndSetExport("${prefix}_${cname}", method, flowElementType)
     return
   }
 
@@ -797,5 +801,126 @@ private fun buildStateFlowHandleSetValueBody(
   appendLine("      buildError(e, ::nugetMappedType)")
   appendLine("    )")
   appendLine("  }")
+  append("}")
+}
+
+/**
+ * ADR-071 Alternative 4: [this] write slot re-labelled from `value` to [stem], so a
+ * `compareAndSet(expect, update)` export crosses each of its two parameters through the setter's
+ * own slot (has-value pair, nullable pointer and all) without restating its marshalling.
+ */
+private fun MutableStateFlowWriteSlot.relabelled(stem: String): MutableStateFlowWriteSlot {
+  val name = Regex("""(?<![.\w])value(HasValue)?\b""")
+  return MutableStateFlowWriteSlot(
+    parameters = parameters.map { (param: String, type: TypeName) ->
+      name.replace(param) { "$stem${it.groupValues[1]}" } to type
+    },
+    assignment = name.replace(assignment) { "$stem${it.groupValues[1]}" },
+  )
+}
+
+/** ADR-071 Alternative 4: the `expect` slot, the `update` slot, in export order. */
+private fun mutableStateFlowCompareAndSetSlots(
+  elementType: KSType?,
+): Pair<MutableStateFlowWriteSlot, MutableStateFlowWriteSlot> {
+  val slot: MutableStateFlowWriteSlot = mutableStateFlowWriteSlot(elementType)
+  return slot.relabelled("expect") to slot.relabelled("update")
+}
+
+/**
+ * ADR-071 Alternative 4: the property route's owner-keyed
+ * `${prefix}_compare_and_set_${propName}_value(handle, expect, update, errorOut): Boolean`, the
+ * `_set_value` sibling with two write slots. `compareAndSet` conflates by the previous value's
+ * `equals` exactly like the setter, so a throw lands in `errorOut` and returns `false`, which the
+ * C# side never reads as a missed swap (`NugetErrorNative.Check` throws first).
+ */
+private fun FileSpec.Builder.addStateFlowCompareAndSetPropertyExport(
+  prop: KSPropertyDeclaration,
+  qualifiedName: String,
+  prefix: String,
+  propName: String,
+  propCall: String,
+  elementType: KSType?,
+  memberNullable: Boolean,
+) {
+  val (expect: MutableStateFlowWriteSlot, update: MutableStateFlowWriteSlot) =
+    mutableStateFlowCompareAndSetSlots(elementType)
+  val holder: String = "handle.asStableRef<$qualifiedName>().get().$propCall"
+  val receiver: String = if (memberNullable) {
+    val name: String = propCall.removeSurrounding("`")
+    "($holder ?: throw IllegalStateException(\"$name is null\"))"
+  } else {
+    holder
+  }
+  addFunction(
+    FunSpec.builder("export_${prefix}_compare_and_set_${propName}_value")
+      .addAnnotation(
+        cNameAnnotation("${prefix}_compare_and_set_${propName}_value", ownedBy(prop)),
+      )
+      .addParameter("handle", cOpaquePointer)
+      .addMutableStateFlowWriteSlot(expect)
+      .addMutableStateFlowWriteSlot(update)
+      .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+      .returns(BOOLEAN)
+      .addCode(
+        buildStateFlowCompareAndSetBody(
+          "$receiver.compareAndSet(${expect.assignment}, ${update.assignment})",
+        ),
+        cOpaquePointerVar,
+        nugetHandles,
+      )
+      .build()
+  )
+}
+
+/**
+ * ADR-071 Alternative 4: the held route's flow-keyed `${stem}_compare_and_set(flowHandle, expect,
+ * update, errorOut): Boolean`, beside [addHeldStateFlowSetValueExport] on every route that calls
+ * it (the held function return and the awaited suspend return). [stem] already carries the
+ * overload suffix, so two overloads never share one C symbol.
+ */
+internal fun FileSpec.Builder.addHeldStateFlowCompareAndSetExport(
+  stem: String,
+  owner: KSFunctionDeclaration,
+  elementType: KSType?,
+) {
+  val nullable: Boolean = elementType?.isMarkedNullable == true
+  val elementQualified: String = (elementType?.expandAliases()
+    ?.declaration?.qualifiedName?.asString() ?: "kotlin.Any") + if (nullable) "?" else ""
+  val (expect: MutableStateFlowWriteSlot, update: MutableStateFlowWriteSlot) =
+    mutableStateFlowCompareAndSetSlots(elementType)
+  val flow: String =
+    "flowHandle.asStableRef<kotlinx.coroutines.flow.MutableStateFlow<$elementQualified>>().get()"
+  addFunction(
+    FunSpec.builder("export_${stem}_compare_and_set")
+      .addAnnotation(cNameAnnotation("${stem}_compare_and_set", ownedBy(owner)))
+      .addParameter("flowHandle", cOpaquePointer)
+      .addMutableStateFlowWriteSlot(expect)
+      .addMutableStateFlowWriteSlot(update)
+      .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+      .returns(BOOLEAN)
+      .addCode(
+        buildStateFlowCompareAndSetBody(
+          "$flow.compareAndSet(${expect.assignment}, ${update.assignment})",
+        ),
+        cOpaquePointerVar,
+        nugetHandles,
+      )
+      .build()
+  )
+}
+
+// ADR-071 Alternative 4: `return try { <cas> } catch { errorOut; false }`, the `_has_value`-style
+// Boolean shape with the setter's ADR-030 error slot.
+private fun buildStateFlowCompareAndSetBody(compareAndSet: String): String = buildString {
+  appendLine("return try {")
+  appendLine("  $compareAndSet")
+  appendLine("} catch (e: Throwable) {")
+  appendLine("  if (errorOut != null) {")
+  appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.retain(")
+  appendLine("      buildError(e, ::nugetMappedType)")
+  appendLine("    )")
+  appendLine("  }")
+  appendLine("  false")
   append("}")
 }

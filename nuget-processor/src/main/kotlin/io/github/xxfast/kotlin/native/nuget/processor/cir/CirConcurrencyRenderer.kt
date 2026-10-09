@@ -416,6 +416,13 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
         appendLine("$indent                            if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
         appendLine("$indent                            NugetErrorNative.ClearManagedFault();")
         appendLine("$indent                        },")
+        appendLine(
+          stateFlowCompareAndSetLambda(
+            method.stateFlowCompareAndSetNativeName, "flowHandle", write,
+            taken = method.parameters.localScopeNames() + setOf("flowHandle", "collectScope"),
+            indent = "$indent                        ",
+          ) + ",",
+        )
       }
       // ADR-123's `read:` slot, fourth ctor argument (trailing optional, `CirFlowRenderer`): an
       // interface element materialises each `.Value` through the ADR-136 resolve-then-wrap

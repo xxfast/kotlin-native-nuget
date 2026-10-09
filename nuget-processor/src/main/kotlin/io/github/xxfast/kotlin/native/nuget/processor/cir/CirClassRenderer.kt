@@ -439,6 +439,7 @@ internal fun StringBuilder.renderFlowPropertyNativeImports(
         .joinToString(", ") { narrowParameterMarshal(it.nativeType, it.name) }
       appendLine("        private static extern void Native_Set${prop.nativeStem}Value(NugetKotlinHandle handle, $setValueParams, out IntPtr error);")
       appendLine()
+      renderStateFlowCompareAndSetPropertyImport(libraryName, nativePrefix, prop)
     }
   }
 }
@@ -1137,3 +1138,28 @@ private fun StringBuilder.renderCallbackMethod(method: CirCallbackMethod) {
  */
 internal const val TAKE_HANDLE: String =
   "NugetKotlinHandle handle = Interlocked.Exchange(ref _handle, NugetKotlinHandle.Null);"
+
+/**
+ * ADR-071 Alternative 4: the owner-keyed `_compare_and_set` extern beside a property's
+ * `_set_value` one: the setter's slot twice (`expect`, `update`), a `bool` result and the same
+ * trailing `out IntPtr error`. Hand-rendered like its sibling, so the `[return: MarshalAs]` the
+ * 1-byte Kotlin `Boolean` needs is written out here rather than left to [renderDllImport].
+ */
+private fun StringBuilder.renderStateFlowCompareAndSetPropertyImport(
+  libraryName: String,
+  nativePrefix: String,
+  prop: CirProperty,
+) {
+  val write: CirStateFlowWrite = requireNotNull(prop.stateFlowWrite)
+  val entryPoint = "${nativePrefix}_compare_and_set_${prop.nativeName}_value"
+  val params: String =
+    (
+      write.relabelled("expect", "expect").parameters +
+        write.relabelled("update", "update").parameters
+    )
+      .joinToString(", ") { narrowParameterMarshal(it.nativeType, it.name) }
+  appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$entryPoint\")]")
+  appendLine(requireNotNull(narrowReturnMarshal("bool")))
+  appendLine("        private static extern bool Native_CompareAndSet${prop.nativeStem}Value(NugetKotlinHandle handle, $params, out IntPtr error);")
+  appendLine()
+}

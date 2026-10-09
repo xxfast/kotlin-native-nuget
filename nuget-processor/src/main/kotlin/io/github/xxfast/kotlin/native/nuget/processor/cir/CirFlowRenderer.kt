@@ -328,15 +328,20 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
       appendLine("    public class KotlinMutableStateFlow<T> : KotlinStateFlow<T>")
       appendLine("    {")
       appendLine("        private readonly Action<T> _writeValue;")
+      appendLine("        private readonly Func<T, T, bool> _compareAndSet;")
       appendLine()
+      // ADR-071 Alternative 4: `compareAndSet` is required, so a construction site that misses
+      // it fails to compile instead of shipping a `CompareAndSet` that throws at first use.
       appendLine("        internal KotlinMutableStateFlow(")
       appendLine("            NugetFlowCollectDelegate startCollect,")
       appendLine("            Func<IntPtr> readValue,")
       appendLine("            Action<T> writeValue,")
+      appendLine("            Func<T, T, bool> compareAndSet,")
       appendLine("            NugetKotlinHandle? ownedHandle = null)")
       appendLine("            : base(startCollect, readValue, ownedHandle)")
       appendLine("        {")
       appendLine("            _writeValue = writeValue;")
+      appendLine("            _compareAndSet = compareAndSet;")
       appendLine("        }")
       appendLine()
       appendLine("        public new T Value")
@@ -344,6 +349,7 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
       appendLine("            get => base.Value;")
       appendLine("            set => _writeValue(value);")
       appendLine("        }")
+      renderMutableStateFlowCompareAndSetMembers()
       appendLine("    }")
       appendLine()
     }
@@ -697,6 +703,12 @@ private fun StringBuilder.renderHeldStateFlowMethod(method: CirMethod, className
   appendLine("                    if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
   appendLine("                    NugetErrorNative.ClearManagedFault();")
   appendLine("                },")
+  appendLine(
+    stateFlowCompareAndSetLambda(
+      method.stateFlowCompareAndSetNativeName, owned, write,
+      taken = method.parameters.localScopeNames() + owned, indent = "                ",
+    ) + ",",
+  )
   appendLine("                $owned);")
   appendLine("        }")
   appendLine()
@@ -720,4 +732,96 @@ private fun StringBuilder.appendValueLambda(
   }
   appendLine("                () =>")
   appendScopedNativeCall(method, "                ", call, terminator)
+}
+
+/**
+ * ADR-071 Alternative 4: the `compareAndSet` delegate every `KotlinMutableStateFlow<T>`
+ * construction passes, over the member's `_compare_and_set` export keyed on [receiver]. Both
+ * arguments cross through the setter's own [write] slot, re-labelled per parameter. The lambda's
+ * parameter names are minted against [taken] (the enclosing method's own parameters), so a user
+ * parameter spelled `expect` is never shadowed. `NugetErrorNative.Check` throws a set error
+ * before the `bool` is read, so a throwing Kotlin `equals` never reads as a missed swap. Rendered
+ * without a trailing separator; the caller appends `,` or `)`.
+ */
+internal fun stateFlowCompareAndSetLambda(
+  nativeName: String,
+  receiver: String,
+  write: CirStateFlowWrite,
+  taken: Set<String>,
+  indent: String,
+): String = buildString {
+  val names: MutableSet<String> = taken.toMutableSet()
+  val expect: String = freshName("expect", names).also { names += it }
+  val update: String = freshName("update", names)
+  val expectSlot: CirStateFlowWrite = write.relabelled("expect", expect)
+  val updateSlot: CirStateFlowWrite = write.relabelled("update", update)
+  appendLine("$indent($expect, $update) =>")
+  appendLine("$indent{")
+  if (write.rejectsNull) {
+    appendLine("$indent    if ($expect is null) throw new ArgumentNullException(nameof($expect));")
+    appendLine("$indent    if ($update is null) throw new ArgumentNullException(nameof($update));")
+  }
+  appendLine(
+    "$indent    return NugetErrorNative.Check($nativeName($receiver, ${expectSlot.arguments}, " +
+        "${updateSlot.arguments}, out IntPtr error), error);",
+  )
+  append("$indent}")
+}
+
+/**
+ * ADR-071 Alternative 4: the flow-keyed `_compare_and_set` extern beside a held or awaited
+ * `_set_value` one: the flow handle, the setter's slot twice, `bool` plus `out IntPtr error`.
+ */
+internal fun heldStateFlowCompareAndSetImport(
+  libraryName: String,
+  stem: String,
+  name: String,
+  write: CirStateFlowWrite,
+): CirDllImport = CirDllImport(
+  libraryName = libraryName,
+  entryPoint = "${stem}_compare_and_set",
+  returnType = "bool",
+  name = name,
+  parameters = listOf(CirParameter("flowHandle", KOTLIN_HANDLE)) +
+      write.relabelled("expect", "expect").parameters +
+      write.relabelled("update", "update").parameters,
+  visibility = CirVisibility.PRIVATE,
+  hasSyncErrorOut = true,
+)
+
+/**
+ * ADR-071 Alternative 4: `CompareAndSet` over the generated delegate, and Kotlin's `update`,
+ * `updateAndGet` and `getAndUpdate` as the same C# retry loops kotlinx writes inline. No export
+ * backs the loops. `prev` is never disposed (the transform may return or capture it; ADR-187
+ * releases an undisposed wrapper on GC), and a throw from `transform` propagates unchanged.
+ */
+private fun StringBuilder.renderMutableStateFlowCompareAndSetMembers() {
+  appendLine()
+  appendLine("        /// <summary>")
+  appendLine("        /// Atomically sets <c>Value</c> to <paramref name=\"update\"/> if it currently")
+  appendLine("        /// equals <paramref name=\"expect\"/> by Kotlin <c>equals</c>. A Kotlin <c>equals</c> that")
+  appendLine("        /// throws surfaces as an exception, never as <c>false</c>.")
+  appendLine("        /// </summary>")
+  appendLine("        public bool CompareAndSet(T expect, T update) => _compareAndSet(expect, update);")
+  val loops: List<Triple<String, String, String>> = listOf(
+    Triple("void", "Update", "return;"),
+    Triple("T", "UpdateAndGet", "return next;"),
+    Triple("T", "GetAndUpdate", "return prev;"),
+  )
+  loops.forEach { (returnType: String, name: String, result: String) ->
+    appendLine()
+    appendLine("        /// <summary>")
+    appendLine("        /// Kotlin's <c>${name.replaceFirstChar { it.lowercase() }}</c>: a retry loop over")
+    appendLine("        /// <see cref=\"CompareAndSet\"/>, so <paramref name=\"transform\"/> may run more than once.")
+    appendLine("        /// </summary>")
+    appendLine("        public $returnType $name(Func<T, T> transform)")
+    appendLine("        {")
+    appendLine("            while (true)")
+    appendLine("            {")
+    appendLine("                T prev = Value;")
+    appendLine("                T next = transform(prev);")
+    appendLine("                if (CompareAndSet(prev, next)) $result")
+    appendLine("            }")
+    appendLine("        }")
+  }
 }

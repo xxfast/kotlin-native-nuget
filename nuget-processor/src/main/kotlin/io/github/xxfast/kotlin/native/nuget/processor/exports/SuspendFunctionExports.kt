@@ -210,6 +210,7 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
     if (method.awaitsSettableMutableStateFlow()) {
       val element: KSType? = returnType?.arguments?.firstOrNull()?.type?.resolve()?.expandAliases()
       addHeldStateFlowSetValueExport("${prefix}_${cname}", method, element)
+      addHeldStateFlowCompareAndSetExport("${prefix}_${cname}", method, element)
     }
   }
 }

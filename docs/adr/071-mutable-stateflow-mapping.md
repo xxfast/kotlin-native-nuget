@@ -550,8 +550,8 @@ machinery that has been in the repo since ADR-030. The item belongs in Phase 6 n
 - `.Value = x` is **conflated by `equals`**: assigning a value equal to the current one is a no-op
   and emits nothing to collectors. Verified from kotlinx source; surprising to a C# developer who
   expects a property setter to always "do something".
-- `.Value = f(.Value)` is **not atomic** (two crossings). Atomic update needs the deferred
-  `CompareAndSet`/`Update`.
+- `.Value = f(.Value)` is **not atomic** (two crossings). Atomic update needs `CompareAndSet`/`Update`
+  (shipped, see the 2026-10-09 atomic-update amendment).
 - The setter can throw `KotlinException` (ADR-024 family), because the Kotlin setter calls
   `Any.equals` on the previous value.
 - Writing an object element transfers the *Kotlin* object behind the C# wrapper's handle; the C#
@@ -572,7 +572,8 @@ machinery that has been in the repo since ADR-030. The item belongs in Phase 6 n
 
 ### Deferred (each becomes its own ROADMAP sub-item)
 
-- **`CompareAndSet(T expect, T update)`** and **`Update(Func<T,T>)`**: Alternative 4. Additive and
+- **`CompareAndSet(T expect, T update)`** and **`Update(Func<T,T>)`** (shipped, see the 2026-10-09
+  atomic-update amendment): Alternative 4. Additive and
   non-breaking. `Update` is pure C# once `CompareAndSet` exists (Kotlin's own `update` is exactly
   that retry loop).
 - **`Emit`/`TryEmit`/`ReplayCache`/`SubscriptionCount`**: the `MutableSharedFlow` half of
@@ -853,3 +854,28 @@ Verified: processor Tier 1 `Tier1MutableStateFlowEnumElementTest`;
 `EnumStateFlowElement_RepeatedValueReads_ReturnToBaseline` extended with one write (the ordinal
 mints no handle, so no new row). The sibling `StateFlow<Enum?>`-on-suspend question was checked and
 is not broken.
+## Amendment (2026-10-09): `CompareAndSet` and `Update` (Alternative 4)
+
+`KotlinMutableStateFlow<T>` gains `bool CompareAndSet(T expect, T update)` and the C#-only
+`Update(Func<T,T>)`, `UpdateAndGet(Func<T,T>)` and `GetAndUpdate(Func<T,T>)`.
+
+- `CompareAndSet` is backed by a per-member, element-typed `_compare_and_set` export beside the
+  `_set_value` export, calling Kotlin `MutableStateFlow.compareAndSet`. It exists on all three
+  settable routes: property, held function return and awaited class `suspend` return, including
+  nullable elements (same presence-plus-value shape as the setter) and nullable members (an absent
+  member throws like the setter).
+- Comparison is Kotlin `equals`. A throwing `equals` surfaces through `errorOut` as
+  `KotlinInvalidOperationException`, never as `false`, so a failure cannot read as a missed swap.
+- `Update`, `UpdateAndGet` and `GetAndUpdate` are CAS retry loops in C#, with no export, as
+  Alternative 4 predicted. They never dispose the `prev` value they read, and an exception from the
+  transform propagates unchanged without touching the flow.
+- No handle is minted on the success path, so there is no LeakTests row.
+- Not built, still open under Alternative 4: `Emit`, `TryEmit`, `ReplayCache`, `SubscriptionCount`.
+  They belong with the `SharedFlow<T>` mapping (see the SharedFlow line in ROADMAP Phase 6).
+
+Verified: `Tier1MutableStateFlowCompareAndSetTest`; `IntegrationTests/MutableStateFlowTests.cs` and
+`MutableStateFlowFunctionTests.cs`; processor suite, IntegrationTests, LeakTests and both AOT runs
+green.
+
+Inferred, not verified: the setter lambda's parameter `v` is not freshly named, so a held method
+with a user parameter named `v` may generate non-compiling C#. Recorded as a ROADMAP Phase 6 item.

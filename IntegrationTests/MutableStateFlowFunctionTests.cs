@@ -71,4 +71,16 @@ public class MutableStateFlowFunctionTests
         Assert.Equal(3, mylosLevel.Value);
         Assert.Equal(7, oreosLevel.Value); // the first flow is untouched by the second call
     }
+
+    [Fact]
+    public void FunctionReturn_CompareAndSet_IsKeyedOnTheHeldFlow_OreoTopsUpOnlyFromThree()
+    {
+        // ADR-071 Alternative 4: the flow-keyed `_compare_and_set` swaps the flow Level() handed
+        // out.
+        using var dispenser = new CatSnackDispenser();
+        using var level = dispenser.Level();
+        Assert.False(level.CompareAndSet(9, 5));
+        Assert.True(level.CompareAndSet(3, 5));
+        Assert.Equal(5, dispenser.LastLevel());
+    }
 }
