@@ -429,6 +429,22 @@ ADR-123's amendment of the same date.
 
 Still not bound: `MutableStateFlow<List<T>>` (no write seam, on purpose). An awaited nullable
 `StateFlow<List<T>>?` is covered by Tier 1 only. Evidence: verified for the non-null class route
-(`SuspendStateFlowCollectionElementTests`, LeakTests row 8d-suspend); inferred, not run, that the
-awaited branch's literal `flowHandle` / `collectScope` locals collide with a parameter of that name
-(CS0136), recorded in ROADMAP Phase 6.
+(`SuspendStateFlowCollectionElementTests`, LeakTests row 8d-suspend). The inference recorded here
+that the awaited branch's literal `flowHandle` / `collectScope` locals collide with a parameter of
+that name (CS0136) was wrong; see the 2026-10-10 amendment.
+
+## Amendment (2026-10-10): parameters named after the awaited branch's locals compile
+
+The awaited-`StateFlow` branch of `CirConcurrencyRenderer.renderAsyncMethod` spells its locals
+(`flowHandle`, `collectScope`) and its lambda parameters (`flowOnNext`, `flowOnComplete`,
+`flowOnError`, `flowUserData`, and the write lambda's `v` and `error`) literally, where the
+acquired-`Flow` branch mints them through `freshName`. A `suspend` StateFlow method with a user
+parameter of any of those names still compiles, so the literal spelling needs no change. Every one of
+those names is declared inside the completion lambda, and C# 8 and later let a lambda's locals and
+parameters shadow an enclosing parameter instead of raising CS0136. Nothing inside the lambda reads
+a user parameter, so the shadowed name is the intended binding.
+
+Verified: `Tier1AwaitedStateFlowLocalNamesTest` runs `dotnet build` over the generated C# for the
+plain, nullable-member, nullable-element, collection-element, `MutableStateFlow` (write and
+compare-and-set) and static top-level shapes, each with parameters named `flowHandle`,
+`collectScope`, `flowOnNext`, `flowOnComplete`, `flowOnError`, `flowUserData`, `v` and `error`.
