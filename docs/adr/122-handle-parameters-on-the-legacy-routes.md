@@ -455,7 +455,8 @@ member receives `null`. A sealed base keeps ADR-105's rewrite (`sealedAsHandle()
 not widened: the parameter stays required, as a non-null handle default already does (widened by
 the 2026-10-09 amendment below).
 
-The `SKIPPED_UNSUPPORTED_INPUT` wording now says the route takes a handle "nullable or not".
+The `SKIPPED_UNSUPPORTED_INPUT` wording now says the route takes a handle "nullable or not" (since
+2026-10-10: "each nullable or not", covering the collections too).
 Verified by `nuget-processor`'s `Tier1LegacyRouteNullableHandleParameterTest` and the flipped
 `Tier1LegacyRouteHandleParameterTest` ghost case (generated text),
 `IntegrationTests/LegacyRouteNullableHandleParameterTests.cs` (consumer behaviour), and the
