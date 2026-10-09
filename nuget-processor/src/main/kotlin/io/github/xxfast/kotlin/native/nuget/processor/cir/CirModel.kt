@@ -1026,9 +1026,10 @@ internal data class CirMethod(
   // The native method name (e.g. "Native_MoodReportSetValue") of the sibling `_set_value`
   // DllImport. Empty unless [isMutableStateFlow].
   val stateFlowSetValueNativeName: String = "",
-  // ADR-071: true when the settable element crosses the write seam as an object handle (v.Handle)
-  // rather than by value. Only consulted when [isMutableStateFlow].
-  val isMutableStateFlowElementObject: Boolean = false,
+  // ADR-071: the `_set_value` slots after the flow handle and the C# arguments the write lambda
+  // fills them with (by value, an object handle, or a nullable element's wire). Non-null exactly
+  // when [isMutableStateFlow].
+  val stateFlowWrite: CirStateFlowWrite? = null,
   // ADR-067: true when the StateFlow member itself is nullable (`StateFlow<T>?` return). Renders
   // the return type as `KotlinStateFlow<T>?` and gates a `_has_value` presence-probe DllImport /
   // null-check before construction. Empty (false) unless [isStateFlow].
@@ -1086,6 +1087,21 @@ internal data class CirMethod(
  */
 internal val CirMethod.resolvedExternName: String
   get() = externName ?: "Native_$name"
+
+/**
+ * ADR-071: how a settable `KotlinMutableStateFlow<T>.Value` write crosses its `_set_value` export,
+ * decided once by the translator so the extern and the write lambda cannot disagree.
+ *
+ * [parameters] are the native slots after the receiver handle: one by-value slot, one object
+ * handle, or (nullable element write) the has-value pair of a nullable scalar. [arguments] is the
+ * C# argument list that fills them from the lambda's `v`. [rejectsNull] keeps the
+ * `ArgumentNullException` guard a non-null object element needs before it reads `v._handle`.
+ */
+internal data class CirStateFlowWrite(
+  val parameters: List<CirParameter>,
+  val arguments: String,
+  val rejectsNull: Boolean = false,
+)
 
 internal data class CirProperty(
   val name: String,
@@ -1146,6 +1162,9 @@ internal data class CirProperty(
   // The native method name (e.g. "Native_SetTreatCountValue") of the sibling `_set_value`
   // DllImport. Empty unless [isMutableStateFlow].
   val stateFlowSetValueNativeName: String = "",
+  // ADR-071: the `_set_value` slots after the owner handle and the C# arguments the write lambda
+  // fills them with. Non-null exactly when [isMutableStateFlow].
+  val stateFlowWrite: CirStateFlowWrite? = null,
   // Issue #38: true when this is a sealed-subclass property of a nullable non-String primitive
   // type (`Int?`), which crosses on the ADR-002 two-call pair (`_get_<p>_has_value` +
   // `_get_<p>_value`) instead of a single scalar slot. Read only by [renderSealedClass], which

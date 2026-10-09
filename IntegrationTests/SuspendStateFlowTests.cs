@@ -136,4 +136,47 @@ public class SuspendStateFlowTests
             Assert.Equal("Mylo", firstSeen!.Name);
         }
     }
+
+    // --- ADR-071 held-route amendment: `suspend fun` returning MutableStateFlow<T> awaits to a
+    // settable Task<KotlinMutableStateFlow<T>>, written through the flow-keyed setter. ---
+
+    [Fact]
+    public async Task AwaitTreatJar_ReturnsSettableHolder_WriteVisibleThroughProperty_MyloGetsFourTreats()
+    {
+        using var tracker = new CatMoodTracker("Mylo");
+        Task<KotlinMutableStateFlow<int>> pending = tracker.AwaitTreatJarAsync();
+        using KotlinMutableStateFlow<int> jar = await pending;
+        jar.Value = 4;
+        Assert.Equal(4, jar.Value);
+        Assert.Equal(4, tracker.TreatCount.Value);
+        Assert.Equal(4, tracker.TreatsGivenSoFar()); // the write landed in Kotlin
+    }
+
+    [Fact]
+    public async Task AwaitTreatJar_WriteObservedByALiveCollector_OreosJarStreamSeesTheUpdate()
+    {
+        using var tracker = new CatMoodTracker("Oreo");
+        using KotlinMutableStateFlow<int> jar = await tracker.AwaitTreatJarAsync();
+        jar.Value = 6;
+        var seen = new List<int>();
+        var cts = new CancellationTokenSource();
+        await foreach (var n in jar.WithCancellation(cts.Token))
+        {
+            seen.Add(n);
+            cts.Cancel();
+        }
+        Assert.Equal(6, seen[0]);
+    }
+
+    [Fact]
+    public async Task AwaitFavouriteToy_ObjectElementWrite_CrossesAsAHandle_OreoSwapsHerToy()
+    {
+        using var tracker = new CatMoodTracker("Oreo");
+        using KotlinMutableStateFlow<Cat> toys = await tracker.AwaitFavouriteToyAsync();
+        using var feather = new Cat("Feather", 2);
+        toys.Value = feather;
+        using var toy = tracker.FavouriteToy.Value;
+        Assert.Equal("Feather", toy.Name);
+        Assert.Throws<ArgumentNullException>(() => toys.Value = null!);
+    }
 }

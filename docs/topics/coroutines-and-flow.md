@@ -213,6 +213,16 @@ A top-level function has no owning object to cancel its collections, so each `aw
 until its own enumerator is disposed or its token is cancelled. Dispose the holder when you are done
 with it, as with a class method's.
 
+A class `suspend fun` whose declared return is `MutableStateFlow<T>` awaits to a settable
+`KotlinMutableStateFlow<T>`, written the same way as the [property form](#settable-value):
+
+```C#
+using KotlinMutableStateFlow<int> jar = await tracker.AwaitTreatJarAsync();
+jar.Value = 4;
+```
+
+A top-level `suspend fun` returning `MutableStateFlow<T>` still awaits to a read-only holder.
+
 ### `StateFlow<T>` element type is an interface {id="suspend-stateflow-interface-element"}
 
 The element can itself be an interface. It is spelled and read through the interface, the same as
@@ -255,8 +265,8 @@ if (den is not null)
 ```
 
 Both work on class methods and top-level functions, and combine as `StateFlow<T?>?`. A
-`suspend fun` returning `MutableStateFlow<T?>` binds as a read-only holder; its `.Value` setter is
-not available.
+`suspend fun` returning `MutableStateFlow<T?>` or `MutableStateFlow<T>?` binds as a read-only holder;
+its `.Value` setter is not available.
 
 ## `suspend fun` returning `Flow<T>` {id="suspend-fun-returning-flow-t"}
 
@@ -617,7 +627,7 @@ The same holds for an enum dependency admitted with `admit(...)` and for a neste
 [Generic classes](generics.md) instantiated at an enum read and write it too (`Box<Mood>.Value`,
 `new Box<Mood>(Mood.Calm)`).
 
-## Settable `.Value` on `MutableStateFlow<T>`
+## Settable `.Value` on `MutableStateFlow<T>` {id="settable-value"}
 
 A member whose **declared** type is `MutableStateFlow<T>`, not narrowed to `StateFlow<T>` (the
 common `private val _x = MutableStateFlow(...)` / `val x: StateFlow<T> = _x.asStateFlow()` idiom
@@ -639,6 +649,28 @@ calls `equals` on the *previous* value to decide whether to conflate; if that `e
 throw propagates out of the C# write as `KotlinInvalidOperationException`, unlike the get-only
 `.Value` read, which never throws.
 
+A nullable element is settable too, and `null` is a valid write (a nullable `Int` crosses as
+presence plus value, so `null` never lands as `0`):
+
+```kotlin
+val napMinutes: MutableStateFlow<Int?> = MutableStateFlow(null)
+private var _diary: MutableStateFlow<String>? = null
+val diary: MutableStateFlow<String>? get() = _diary
+```
+
+```C#
+tracker.NapMinutes.Value = 15;
+tracker.NapMinutes.Value = null;
+
+KotlinMutableStateFlow<string>? diary = tracker.Diary;  // null until Kotlin creates it
+if (diary is not null) diary.Value = "day two";
+```
+
+A `MutableStateFlow<T>?` property is settable once it is present. If Kotlin has dropped the flow
+since you read it, the write throws `KotlinInvalidOperationException` instead of being ignored. A
+function returning `MutableStateFlow<T>?` stays read-only. `Boolean?`, `Char?` and enum elements
+stay read-only.
+
 Reassigning the whole `MutableStateFlow<T>` member itself (a `var` holding a different flow
 instance) is not supported; only writes through `.Value` are.
 
@@ -657,9 +689,9 @@ public KotlinStateFlow<string?> Nickname { get; }   // .Value and every emission
 public KotlinStateFlow<string>? MaybeMood { get; }  // null until the member exists
 ```
 
-A `null` element crossing `await foreach` is a genuine emission, not the end of the stream. Writing
-a nullable element or a nullable member is not supported. A `suspend fun` returning a nullable
-`StateFlow` binds as described [above](#suspend-fun-returning-stateflow-t).
+A `null` element crossing `await foreach` is a genuine emission, not the end of the stream. Writes
+to a nullable `MutableStateFlow` are covered in [Settable `.Value`](#settable-value). A `suspend fun`
+returning a nullable `StateFlow` binds as described [above](#suspend-fun-returning-stateflow-t).
 
 ## Parameters on `Flow`, `StateFlow`, and `suspend` members {id="parameters-on-flow-stateflow-and-suspend-members"}
 
@@ -800,8 +832,8 @@ members. A `Throwable`, `Exception` or `RuntimeException` parameter does bind, a
   `KotlinMutableStateFlow<byte[]>`: `.Value` is not settable for a `ByteArray` element.
 - `CompareAndSet`, `Update`, `Emit`, `TryEmit`, `ReplayCache`, and `SubscriptionCount` on
   `MutableStateFlow<T>` are not exposed.
-- A nullable-element or nullable-member `MutableStateFlow` write, and a `suspend fun` returning
-  `MutableStateFlow<T>`, are not supported.
+- A `suspend fun` returning `MutableStateFlow<T?>` or `MutableStateFlow<T>?`, and a top-level
+  `suspend fun` returning `MutableStateFlow<T>`, bind a read-only holder.
 - `StateFlow<T>` or `Flow<T>` as a function parameter, or as a generic type argument, is not
   supported.
 - A nullable `Flow<T>?` (the whole stream absent, as opposed to a nullable *element* `Flow<T?>`,

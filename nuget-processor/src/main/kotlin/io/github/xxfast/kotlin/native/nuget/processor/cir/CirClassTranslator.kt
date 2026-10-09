@@ -53,6 +53,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmStoredCa
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMember
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardFlowType
+import io.github.xxfast.kotlin.native.nuget.processor.exports.awaitsSettableMutableStateFlow
 import io.github.xxfast.kotlin.native.nuget.processor.exports.returnsHeldMutableStateFlow
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardLegacyPairMembers
@@ -1934,14 +1935,12 @@ internal fun flowProperty(
   val isNullableElement: Boolean = flowElementTypeResolved?.isMarkedNullable == true
   val isNullableMember: Boolean = isStateFlowType && propTypeResolved.isMarkedNullable
   // ADR-071: a genuinely DECLARED MutableStateFlow<T> (not narrowed through .asStateFlow())
-  // gains a settable `.Value` -- gated on the exact declared type, a non-nullable
-  // element/member (both deferred), and a v1-supported element (primitive/String/object).
+  // gains a settable `.Value` -- gated on the exact declared type and a writable element
+  // (primitive/String/object; a nullable one too, bar `Boolean?`/`Char?`). A nullable member keeps
+  // ADR-067's `_has_value` probe, and its absent-member write throws on the Kotlin half.
   val isMutableStateFlowProperty: Boolean = isStateFlowType &&
       qualifiedTypeName in MUTABLE_STATE_FLOW_TYPES &&
-      !isNullableElement && !isNullableMember &&
-      isMutableStateFlowElementSupported(flowElementTypeResolved)
-  val isMutableStateFlowObjectElement: Boolean =
-    isMutableStateFlowProperty && isMutableStateFlowElementObject(flowElementTypeResolved)
+      isMutableStateFlowElementWritable(flowElementTypeResolved)
   if (isMutableStateFlowProperty) tracker.needsMutableStateFlow = true
   // ADR-123: a collection element is spelled and read like the ordinary route's collection
   // result, never through `qualifiedElementCsType` (which runs a Kotlin builtin through the
@@ -1994,9 +1993,14 @@ internal fun flowProperty(
   if (isStateFlowType) tracker.needsStateFlow = true
 
   val nativeReturnType: String = "IntPtr"
+  // ADR-071: the write seam's slots and the lambda's arguments, decided once for both.
+  val stateFlowWrite: CirStateFlowWrite? = if (isMutableStateFlowProperty) {
+    mutableStateFlowWrite(flowElementTypeResolved, requireNotNull(flowElementType))
+  } else null
+  val memberSuffix: String = if (isNullableMember) "?" else ""
   val type: String = when {
-    isMutableStateFlowProperty -> "KotlinMutableStateFlow<$flowElementType>"
-    isStateFlowType -> "KotlinStateFlow<$flowElementType>${if (isNullableMember) "?" else ""}"
+    isMutableStateFlowProperty -> "KotlinMutableStateFlow<$flowElementType>$memberSuffix"
+    isStateFlowType -> "KotlinStateFlow<$flowElementType>$memberSuffix"
     else -> "KotlinFlow<$flowElementType>"
   }
 
@@ -2022,25 +2026,17 @@ internal fun flowProperty(
         }
         appendLine("                return new $ctorName<$flowElementType>((onNext, onComplete, onError, userData) =>")
         appendLine("                    $collectNativeName(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData),")
-        if (isMutableStateFlowProperty) {
+        if (stateFlowWrite != null) {
           appendLine("                    () => $valueNativeName(_handle),")
-          val writeReceiver: String = if (isMutableStateFlowObjectElement) "v._handle" else "v"
-          if (isMutableStateFlowObjectElement) {
-            appendLine("                    v =>")
-            appendLine("                    {")
+          appendLine("                    v =>")
+          appendLine("                    {")
+          if (stateFlowWrite.rejectsNull) {
             appendLine("                        if (v is null) throw new ArgumentNullException(nameof(v));")
-            appendLine("                        $setValueNativeName(_handle, $writeReceiver, out IntPtr error);")
-            appendLine("                        if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
-            appendLine("                        NugetErrorNative.ClearManagedFault();")
-            appendLine("                    });")
-          } else {
-            appendLine("                    v =>")
-            appendLine("                    {")
-            appendLine("                        $setValueNativeName(_handle, $writeReceiver, out IntPtr error);")
-            appendLine("                        if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
-            appendLine("                        NugetErrorNative.ClearManagedFault();")
-            appendLine("                    });")
           }
+          appendLine("                        $setValueNativeName(_handle, ${stateFlowWrite.arguments}, out IntPtr error);")
+          appendLine("                        if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
+          appendLine("                        NugetErrorNative.ClearManagedFault();")
+          appendLine("                    });")
         } else if (flowElementRead != null) {
           // ADR-123: `read:` is named, so it skips the ADR-068-only `ownedHandle` slot.
           appendLine("                    () => $valueNativeName(_handle),")
@@ -2067,21 +2063,10 @@ internal fun flowProperty(
       }
   }
 
-  // ADR-071: the setter's native (DllImport) parameter type -- the element's own C# wire type
-  // for a primitive/String, else IntPtr for an object handle. Only meaningful when
-  // [isMutableStateFlowProperty]; otherwise it stays [nativeReturnType] (unused, since a
-  // read-only StateFlow property has no setter).
-  val mutableStateFlowNativeSetterType: String = when {
-    !isMutableStateFlowProperty -> nativeReturnType
-    isMutableStateFlowObjectElement -> KOTLIN_HANDLE
-    else -> flowElementType ?: nativeReturnType
-  }
-
   return CirProperty(
     name = prop.csharpMemberName(),
     type = type,
     nativeReturnType = nativeReturnType,
-    nativeSetterType = mutableStateFlowNativeSetterType,
     nativeName = propName.asCSymbol(),
     getter = getter,
     setter = null,
@@ -2094,6 +2079,7 @@ internal fun flowProperty(
     isMutableStateFlow = isMutableStateFlowProperty,
     stateFlowSetValueNativeName =
       if (isMutableStateFlowProperty) "Native_Set${csPropName}Value" else "",
+    stateFlowWrite = stateFlowWrite,
   )
 }
 
@@ -2154,12 +2140,10 @@ internal fun flowMembers(
     val isNullableMember: Boolean = isStateFlowMethod && returnType?.isMarkedNullable == true
     // ADR-071: mirrors the sibling property branch above -- a genuinely DECLARED
     // MutableStateFlow<T> function return (not narrowed to StateFlow<T>) gains a settable
-    // `.Value`, gated on non-nullable element/member (both deferred) and a v1-supported element.
+    // `.Value`, gated on a non-nullable member and a writable element (a nullable one included).
     // ADR-071 (2026-09-11): that gate is now the shared predicate the Kotlin emitter reads, and it
     // selects the held route below rather than an extra export on the ADR-065 pair.
     val isHeldMutableStateFlow: Boolean = method.returnsHeldMutableStateFlow()
-    val isMutableStateFlowObjectElement: Boolean =
-      isHeldMutableStateFlow && isMutableStateFlowElementObject(flowElementTypeResolved)
     if (isHeldMutableStateFlow) tracker.needsMutableStateFlow = true
     // ADR-123: a collection element, spelled and read like the ordinary route's collection result.
     // A refused element never reaches here: `filteredMethods` drops the member upstream.
@@ -2225,18 +2209,14 @@ internal fun flowMembers(
       // The owner handle and the method's own parameters are gone from the setter: the write is
       // keyed on the flow handle the acquire returned. The trailing `out IntPtr error` stays
       // (MutableStateFlow.value conflates by Any.equals on the previous value, which can throw).
+      val heldWrite: CirStateFlowWrite =
+        mutableStateFlowWrite(flowElementTypeResolved, flowCsElementType)
       val heldSetValueImport = CirDllImport(
         libraryName = libraryName,
         entryPoint = "${prefix}_${cname}_set_value",
         returnType = "void",
         name = "${nativeStem}SetValue",
-        parameters = listOf(
-          CirParameter("flowHandle", KOTLIN_HANDLE),
-          CirParameter(
-            "value",
-            if (isMutableStateFlowObjectElement) KOTLIN_HANDLE else flowCsElementType,
-          ),
-        ),
+        parameters = listOf(CirParameter("flowHandle", KOTLIN_HANDLE)) + heldWrite.parameters,
         visibility = CirVisibility.PRIVATE,
         hasSyncErrorOut = true,
       )
@@ -2254,7 +2234,9 @@ internal fun flowMembers(
         flowElementType = flowCsElementType,
         isMutableStateFlow = true,
         stateFlowSetValueNativeName = "${nativeStem}SetValue",
-        isMutableStateFlowElementObject = isMutableStateFlowObjectElement,
+        stateFlowWrite = heldWrite,
+        // A nullable element reads through the null-aware `nuget_stateflow_value_or_null`.
+        flowElementNullable = isNullableElement,
       )
 
       return@flatMap listOf(acquireImport, heldSetValueImport, heldMethod)
@@ -2606,7 +2588,30 @@ internal fun suspendMembers(
       visibility = CirVisibility.PRIVATE,
     )
 
-    val asyncReturnType: String = element.asyncReturnType
+    // ADR-071 held-route amendment: an awaited `MutableStateFlow<T>` is a settable holder, written
+    // through the held route's flow-keyed `_set_value` (the shared predicate gates both halves).
+    val settable: Boolean = method.awaitsSettableMutableStateFlow()
+    val csElementType: String =
+      element.asyncReturnType.removePrefix("KotlinStateFlow<").removeSuffix(">")
+    val asyncReturnType: String =
+      if (settable) "KotlinMutableStateFlow<$csElementType>" else element.asyncReturnType
+    val write: CirStateFlowWrite? = if (settable) {
+      tracker.needsMutableStateFlow = true
+      val elementType: KSType? = method.returnType?.resolve()?.expandAliases()
+        ?.arguments?.firstOrNull()?.type?.resolve()?.expandAliases()
+      mutableStateFlowWrite(elementType, csElementType)
+    } else null
+    val setValueImport: CirDllImport? = write?.let {
+      CirDllImport(
+        libraryName = libraryName,
+        entryPoint = "${prefix}_${cname}_set_value",
+        returnType = "void",
+        name = "${nativeStem}SetValue",
+        parameters = listOf(CirParameter("flowHandle", KOTLIN_HANDLE)) + it.parameters,
+        visibility = CirVisibility.PRIVATE,
+        hasSyncErrorOut = true,
+      )
+    }
 
     val asyncMethod = CirMethod(
       // ADR-150: the suspend function's own KDoc, on its `Async` projection. `@return` documents
@@ -2628,6 +2633,8 @@ internal fun suspendMembers(
       flowElementNullable = element.elementNullable,
       acquiredFlowCollectNativeName =
         if (element.asyncReturnType.startsWith("KotlinFlow<")) "${nativeStem}Collect" else null,
+      stateFlowSetValueNativeName = if (write != null) "${nativeStem}SetValue" else "",
+      stateFlowWrite = write,
     )
 
     val collector: List<CirMember> = if (asyncMethod.acquiredFlowCollectNativeName != null) {
@@ -2641,7 +2648,7 @@ internal fun suspendMembers(
     } else {
       emptyList()
     }
-    listOf(nativeImport, asyncMethod) + collector
+    listOfNotNull(nativeImport, setValueImport, asyncMethod) + collector
   }
 
   return asyncMembers + suspendStateFlowMembers

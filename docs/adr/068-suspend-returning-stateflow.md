@@ -409,3 +409,11 @@ Verified: `IntegrationTests/TopLevelSuspendStateFlowTests.cs` and
 `watchLapCat`, `watchDen`), and LeakTests `SuspendStateFlowNullableElementAndMember_ReturnsToBaseline`.
 Inferred: `StateFlow<Interface?>` and `StateFlow<Enum?>` elements on this route are admitted but not
 exercised.
+
+## Amendment (2026-10-09): `MutableStateFlow<T>` is no longer narrowed on a class method
+
+The v1 scope line that spells a `suspend fun` returning `MutableStateFlow<T>` as the read-only
+`KotlinStateFlow<T>` view no longer holds for a **class** method with a non-null element: it awaits
+to a settable `Task<KotlinMutableStateFlow<T>>`. The `_async` export and the holder's read seams are
+unchanged; only a flow-keyed write is added. See ADR-071's 2026-10-09 amendment. A nullable element
+or member, and the top-level route, keep the read-only view.

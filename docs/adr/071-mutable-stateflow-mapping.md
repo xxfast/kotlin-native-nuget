@@ -578,20 +578,22 @@ machinery that has been in the repo since ADR-030. The item belongs in Phase 6 n
 - **`Emit`/`TryEmit`/`ReplayCache`/`SubscriptionCount`**: the `MutableSharedFlow` half of
   `MutableStateFlow`'s supertype list. SKIE exposes all of them; they belong with the deferred
   `SharedFlow<T>` mapping (ROADMAP.md:108), not here.
-- **Nullable element writes** (`MutableStateFlow<T?>`): a nullable *primitive* element needs the
+- **Nullable element writes** (`MutableStateFlow<T?>`; shipped, see the 2026-10-09 amendments): a
+  nullable *primitive* element needs the
   two-export `NullableDispatch` shape (verified, `ForwardPropertyPlanner.kt:124-134`); a nullable
   *reference* element needs only a nullable parameter. ADR-067 shipped the nullable **read**; the
-  write is deferred. Until then, a declared `MutableStateFlow<T?>` keeps ADR-067's read-only
+  write was deferred; the 2026-10-09 amendment below ships it. Until then it kept ADR-067's read-only
   `KotlinStateFlow<T?>` mapping (no `KotlinMutableStateFlow` is generated); it must **not** silently
   degrade to a non-nullable write.
 - **Nullable member writes** (`MutableStateFlow<T>?`): the Kotlin body would be
   `obj.x?.value = value`, a silent no-op when absent. Deferred rather than shipping a write that
-  can silently do nothing.
+  can silently do nothing. Shipped by the 2026-10-09 amendment below with a throwing body.
 - **`suspend fun` returning `MutableStateFlow<T>`** (ADR-068's variant): its receiver is a runtime
   flow handle, not the owner handle, so it needs Alternative 3's handle-keyed generic setter (or a
   per-element-type monomorphic shared export such as `nuget_mutablestateflow_set_value_int`). A
   `suspend fun` returning `MutableStateFlow<T>` keeps ADR-068's read-only `KotlinStateFlow<T>`
-  mapping in the meantime.
+  mapping in the meantime. The class route shipped with a flow-keyed setter instead (2026-10-09
+  amendment below); the generic runtime setter was not needed.
 - **Enum element types** (`MutableStateFlow<SomeEnum>`): out of scope in **both** directions. Note
   a pre-existing gap: `NugetMarshal.FromHandle<T>` has no enum branch and would fall through to its
   `Activator.CreateInstance` route (verified, `CirMarshalRenderer.kt:104-259`), so
@@ -767,3 +769,58 @@ Pinned by `Tier1MutableStateFlowFunctionTest`, `IntegrationTests/MutableStateFlo
 against the `CatSnackDispenser` fixture (a deliberately fresh-per-call body), and
 `LeakTests/LiveHandleTests.cs` row 8f, which is the first row to exercise the `ownedHandle` free
 branch: the route is the only one that mints a per-call handle the wrapper owns.
+
+## Amendment (2026-10-09): nullable element write
+
+A `MutableStateFlow<T?>` property, or non-suspend function return, now binds a
+`KotlinMutableStateFlow<T?>` whose `.Value` setter accepts `null`. The 2026-09-11 held route
+carries the function-return form, so `napLog()` and `napMinutes` share storage.
+
+Rule: the `_set_value` export gets a nullable value slot, spelled per element kind. A `String?`
+crosses as a nullable `String?` slot, an object element as a null `COpaquePointer?` handle
+(`value?.asStableRef<Q>()?.get()`), and a nullable scalar as a pair, `[MarshalAs(I1)] bool
+valueHasValue, T value`, with the Kotlin assignment `if (valueHasValue) value else null`. The pair
+is the legacy-route convention the sibling flow and `suspend` parameters already use, so a null is
+never a zero. The C# lambda drops the `ArgumentNullException` for a nullable object and passes
+`v?._handle ?? NugetKotlinHandle.Null`. `Boolean?`, `Char?` and enum elements stay read-only,
+mirroring ADR-067's read side; the declared nullable type must not degrade to a non-null write.
+
+Verified: `Tier1MutableStateFlowNullableElementWriteTest`; `IntegrationTests/MutableStateFlowTests.cs`
+(`CatMoodTracker.collarTag`, `napMinutes`, `bestFriend`, `napLog()`), including null versus 0 and
+a null object handle landing in Kotlin. No LeakTests row: the write borrows its handle and mints
+nothing. A null object handle crossing as a zero pointer is verified by the object-element test.
+
+## Amendment (2026-10-09): nullable member write
+
+A `MutableStateFlow<T>?` **property** is settable once present. The getter already returns `null`
+after the `_has_value` probe, so a `KotlinMutableStateFlow<T>` only exists once presence was
+observed; the setter body is
+`(obj.x ?: throw IllegalStateException("x is null")).value = ...`. A write that finds the member
+absent again (a getter-backed `val` that flipped between read and write) therefore surfaces as
+`KotlinInvalidOperationException` through the existing `errorOut`, never as the silent no-op that
+motivated the original deferral.
+
+A **function** returning `MutableStateFlow<T>?` is not covered: it stays on the read-only
+`_has_value` route.
+
+Verified: `Tier1MutableStateFlowNullableMemberWriteTest`; `MutableStateFlowTests.cs`
+(`CatMoodTracker.diary`, `openDiary`, `closeDiary`), including the throw after `closeDiary()`.
+
+## Amendment (2026-10-09): `suspend fun` returning `MutableStateFlow<T>`
+
+Extends the 2026-09-11 held-route amendment to a **class** `suspend fun (): MutableStateFlow<T>`. It
+awaits to a settable `Task<KotlinMutableStateFlow<T>>`. The runtime exports are unchanged: the
+`_async` export still mints the flow through `NugetHandles.retain`, reads go through
+`nuget_stateflow_collect` / `nuget_stateflow_value`, and the write goes through a per-module,
+element-typed `${prefix}_${cname}_set_value(flowHandle, value, errorOut)` emitted beside the
+`_async` export (the same body as the held route's). A generic runtime setter was therefore not
+needed, and no `NugetRuntimeAbi1` change or new contract hash follows. The awaited holder passes a
+third write lambda before its `ownedHandle`, so `Dispose()` still frees the flow.
+
+Still read-only on purpose: `suspend fun (): MutableStateFlow<T?>`,
+`suspend fun (): MutableStateFlow<T>?` (the nullable-suspend-return guard) and the top-level
+suspend route. `Boolean?`, `Char?` and enum elements stay as above.
+
+Verified: `Tier1SuspendMutableStateFlowTest`; `IntegrationTests/SuspendStateFlowTests.cs`
+(`awaitTreatJar`, `awaitFavouriteToy`); LeakTests row 8f-suspend
+`SuspendMutableStateFlow_AwaitWriteReadDispose_ReturnsToBaseline`.
