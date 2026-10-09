@@ -105,6 +105,8 @@ class StateFlowNullableTest {
     runBlocking {
       withTimeout(10_000) {
         while (holder.items.size < 1) delay(1)
+        // ADR-207: the first item spent the one credit; hand it back as the C# reader does.
+        export_nuget_flow_resume(jobHandle)
         streak.value = 7
         while (holder.items.size < 2) delay(1)
       }

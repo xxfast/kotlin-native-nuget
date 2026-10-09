@@ -355,6 +355,10 @@ stays on the user's own parameter and the generated token is renamed `cancellati
 `DisposeAsync()` drains instead of cancelling: it waits for in-flight coroutines to finish
 naturally before releasing the handle.
 
+The exception is a running `Flow` collection: `DisposeAsync()` cancels it rather than waiting, since
+a reader that stopped reading without disposing its enumerator would otherwise block the drain
+forever. Dispose your enumerators (`await foreach` does) so the Kotlin side sees a clean cancel.
+
 ```C#
 var service = new CatNapService();
 Task<string> quickNap = service.QuickNapAsync();
@@ -457,6 +461,21 @@ await foreach (var item in feeder.MealAnnouncements)
 
 `Flow<T>` becomes `KotlinFlow<T> : IAsyncEnumerable<T>`. It is cold: each `await foreach` re-runs
 the Kotlin flow from the start. `WithCancellation` stops the enumeration early.
+
+### Backpressure {id="flow-backpressure"}
+
+A slow `await foreach` body slows the Kotlin producer, as a slow `collect` would. At most one item
+sits unread on the C# side, and the flow body parks inside the next `emit`, so a side effect placed
+before that `emit` runs one item ahead of what your loop has seen. A cancel or `break` hands out at
+most that one buffered item. There is no C# prefetch setting; call `buffer(n)` on the Kotlin flow
+if you want a larger lead.
+
+```C#
+await foreach (var treat in conveyor.Belt)
+    await Task.Delay(1000); // the Kotlin producer waits here instead of racing ahead
+```
+
+The same applies to `StateFlow<T>`, `SharedFlow<T>` and a `Flow` returned from `suspend`.
 
 An element type that is an interface, or a `List<T>`/`Set<T>`/`Map<K, V>`, is spelled and read
 exactly like the same type at a property or `suspend` return, described above. An interface that appears

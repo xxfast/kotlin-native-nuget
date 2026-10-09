@@ -94,6 +94,10 @@ internal fun StringBuilder.renderJobHelper(helper: CirJobHelper) {
   appendLine()
   appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_job_dispose\")]")
   appendLine("        internal static extern void Dispose(IntPtr handle);")
+  // ADR-207: the Flow enumerator's credit return, runtime-fixed like the two above.
+  appendLine()
+  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_flow_resume\")]")
+  appendLine("        internal static extern void Resume(IntPtr handle);")
   appendLine("    }")
   appendLine()
   renderJobCell()

@@ -211,7 +211,7 @@ internal enum class ForwardDiagnosticKind(
   ERROR_C_ENTRY_POINT_COLLISION(ForwardDiagnosticSeverity.ERROR),
 
   /** ADR-163: the sanitised `nuget.libraryName` is `nuget`, which is ADR-127's reserved leading
-   *  segment for the runtime's own fixed ABI (`nuget_string_free`, `nuget_gc_collect`, ~68 names).
+   *  segment for the runtime's own fixed ABI (`nuget_string_free`, `nuget_gc_collect`, ~69 names).
    *  Every forward symbol this build would mint starts with that segment, so a user declaration
    *  could land exactly on a runtime export and bind the wrong function at link time. Fatal, and
    *  fatal early: the round stops before a single symbol is planned. */

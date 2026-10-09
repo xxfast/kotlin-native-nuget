@@ -424,3 +424,16 @@ The warning only ever appeared in the runtime. Verified: `:nuget-runtime:mingwX6
 The "67 `nuget_*` names" recorded above became 68 with `nuget_stateflow_value_or_null`; see ADR-129's
 2026-10-09 amendment. The helpers are unchanged, but `nuget_stateflow_collect`'s body now emits a
 null element as a null item instead of faulting the channel.
+
+## Amendment (2026-10-09): `collectForCSharp` is credit-gated
+
+[ADR-207](207-flow-backpressure.md) changes `collectForCSharp`: the `emit` its `body` receives is now
+`suspend`, takes one credit before `onNext`, and the C# reader returns the credit through the new
+`nuget_flow_resume` export after each item. The returned handle is a `NugetFlowCollection`, a `Job`
+by delegation (`@OptIn(InternalForInheritanceCoroutinesApi::class)`), so `nuget_job_cancel` and
+`nuget_job_dispose` still accept it. The cancel and error arms take no credit, and a producer
+cancelled while parked releases the item it minted. The export count is 69 (see ADR-129's
+2026-10-09 amendment). `nuget_scope_drain`, which this ADR left out of scope, now cancels every
+collection still running under the owner before joining. The "Two new public runtime functions, no
+new `@CName`" consequence describes the helpers as first shipped. **Verified**: `:nuget-runtime`
+tests (58) and the AOT legs pass.

@@ -258,7 +258,7 @@ class ForwardAbiLegacyImportTest {
   }
 
   /**
-   * ADR-127 (+ADR-129): the 68 runtime names are the `nuget-runtime` klib's, so a C# import of
+   * ADR-127 (+ADR-129): the 69 runtime names are the `nuget-runtime` klib's, so a C# import of
    * one is satisfied by the klib and needs no Kotlin export in the generated file. The check
    * keeps the inverse: a generated export under a runtime name would collide with the runtime's
    * at link time, so it fails the build here instead.

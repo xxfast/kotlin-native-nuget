@@ -123,7 +123,7 @@ internal object Tier1RuntimeStub {
       onErrorPtr: COpaquePointer,
       userData: COpaquePointer,
       mappedType: (Throwable) -> String?,
-      body: suspend (emit: (COpaquePointer?) -> Unit) -> Unit,
+      body: suspend (emit: suspend (COpaquePointer?) -> Unit) -> Unit,
     ): COpaquePointer = TODO()
   """.trimIndent()
 

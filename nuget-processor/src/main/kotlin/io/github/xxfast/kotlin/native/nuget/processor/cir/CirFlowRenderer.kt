@@ -239,6 +239,10 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   appendLine("                    if (_channel.Reader.TryRead(out T? item))")
   appendLine("                    {")
   appendLine("                        Current = item;")
+  // ADR-207: hand the credit back once the item is out, so the Kotlin producer may emit the next
+  // one. Through the published handle, which `DisposeAsync` zeroes only after the loop is over.
+  appendLine("                        IntPtr job = Volatile.Read(ref _jobHandle);")
+  appendLine("                        if (job != IntPtr.Zero) NugetJobNative.Resume(job);")
   appendLine("                        return true;")
   appendLine("                    }")
   appendLine("                }")
