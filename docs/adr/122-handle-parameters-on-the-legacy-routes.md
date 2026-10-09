@@ -479,9 +479,9 @@ expression is never spelled in C#: omitting the argument makes Kotlin evaluate i
   (the member receives `null`).
 - ADR-164 rule 5 and the CS0121 sibling-arity guard apply unchanged. `Dinnerbell.share` keeps `mat`
   without a C# default because the defaulted `List` after it is still required.
-- A defaulted collection parameter still stays required (the nullable collection wire does not
-  exist on these routes). A sealed base takes the same two shapes; no sealed-base fixture member
-  covers it.
+- A defaulted non-null collection parameter still stays required (a defaulted nullable one widens,
+  see the ADR-114 2026-10-09 amendment). A sealed base takes the same two shapes; no sealed-base
+  fixture member covers it.
 
 No new `LeakTests` row (verified by reading source): an unset handle crosses as a null pointer and
 a set one is the borrowed handle already measured by

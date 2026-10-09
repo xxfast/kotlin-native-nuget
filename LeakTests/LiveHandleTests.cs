@@ -2695,6 +2695,32 @@ public class LiveHandleTests
         });
     }
 
+    // Row 9r. A nullable collection PARAMETER on the legacy routes (ADR-114 amendment), null and
+    // non-null, a `List<String>?` and a `List<Cat>?`, on the suspend and the Flow route. The first
+    // leak row for ADR-114's parameter route at all. C# builds one wire container per non-null
+    // argument and its `finally` disposes it; a null argument is `IntPtr.Zero`, mints nothing, and
+    // the guarded dispose must skip it. The `Cat` handles are borrowed by the elements and disposed
+    // here, so the baseline is the board alone.
+    [Fact]
+    public async Task LegacyRoute_NullableCollectionParameter_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var board = new TreatBoard();
+            using var oreo = new Cat("Oreo", 9);
+
+            Assert.Equal("no kinds for no cats", await board.TallyForAsync(null, null));
+            Assert.Equal("2 for Oreo", await board.TallyForAsync(["biscuit", "milo"], [oreo]));
+            Assert.Equal("nothing", await board.NibbleAsync(null));
+            Assert.Equal("salmon", await board.NibbleAsync());
+
+            var seen = new List<string>();
+            await foreach (var s in board.ServingsFor(null, null)) seen.Add(s);
+            await foreach (var s in board.ServingsFor(["biscuit"], [oreo])) seen.Add(s);
+            Assert.Equal(["the whole board", "nobody", "biscuit", "Oreo"], seen);
+        });
+    }
+
     // Row 9h. A suspend call whose result is an *interface*. No interface-return suspend row
     // existed at all: Rows 9d/9e return a class and a sealed base, both of which the completion
     // constructs directly. An interface return puts a second object in play -- the ADR-040 backing

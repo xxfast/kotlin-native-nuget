@@ -536,7 +536,8 @@ w: [nuget:SKIPPED_UNSUPPORTED_INPUT] Skipping TreatBoard.pair(p: Pair<String, In
 
 Deferred:
 
-- Nullable collection parameters (`List<T>?`) on these routes. The sync route handles them with an
+- Nullable collection parameters (`List<T>?`) on these routes (bound by the 2026-10-09 amendment
+  below). The sync route handles them with an
   `IntPtr.Zero` guard (`ForwardCirPlanProjection.kt:681-686`); nullable threading on the legacy flow
   routes is ADR-067 territory and is deliberately not widened here.
 - The non-generic sibling defect: an *object*-typed parameter on these routes renders `IntPtr` in C#
@@ -651,3 +652,38 @@ call-scoped handle and `_set_value` a hand-written variant, since `out IntPtr er
 declared outside the `try` to survive the dispose). No fixture reaches either arm: both need a
 nullable or `MutableStateFlow` return **plus** a collection parameter, a combination nothing in
 `test-library` declares. Cold on purpose, not untested by oversight; see ROADMAP.md.
+
+### 2026-10-09: nullable collection parameters bind
+
+A `List<T>?`, `Set<T>?` or `Map<K, V>?` parameter on a `suspend`, `Flow` or `StateFlow` member now
+binds instead of being named `SKIPPED_UNSUPPORTED_INPUT`, replacing the "Deferred" first bullet
+above. It covers the `_collect`, `_value` and `_async` routes for class, sealed-arm, interface and
+top-level owners, with the same component admission as the non-null form.
+
+- C# declares `IReadOnlyList<T>?` (and `IReadOnlySet<T>?`, `IReadOnlyDictionary<K, V>?`). A `null`
+  argument is `IntPtr.Zero` on the existing pointer slot, which the Kotlin export now declares
+  `COpaquePointer?` and lowers eagerly as `x?.asStableRef<...>()?.get()?.map { ... }`, so the member
+  receives `null`. No second slot exists, as for a nullable handle (ADR-122).
+- C# builds the wire container as `x != null ? NugetMarshal.CreateList(x) : IntPtr.Zero`, and the
+  `finally` disposes it only when the handle is not `IntPtr.Zero`. The guard is unconditional for
+  every collection parameter. `nuget_dispose` takes a non-null handle, so omitting the guard
+  compiles and fails at run time on the `null` arm.
+- A sealed-base component (`List<Shape>?`) stays refused on the parameter side, as the non-null
+  `List<Shape>` does.
+- A defaulted nullable collection (`tags: List<String>? = null`) widens by
+  [ADR-164](164-optional-default-parameters.md) rule 2 to
+  `KotlinOptional<IReadOnlyList<T>?> tags = default`, with a leading `IsSet` slot: omitted runs the
+  Kotlin default, an explicit `null` reaches Kotlin as `null`. A non-null defaulted collection
+  stays required.
+
+Verified: `Tier1LegacyRouteCollectionParameterTest` (generated text, including the `StateFlow`
+`_value` route and a top-level owner, which have no native test),
+`IntegrationTests/LegacyRouteCollectionParameterTests.cs` (`TreatBoard.servingsFor`, `tallyFor`,
+`nibble`: a `List<String>?` and a `List<Cat>?` on `Flow` and `suspend` owners, null, non-null,
+omitted and explicit `null`), and `LeakTests` row 9r
+`LegacyRoute_NullableCollectionParameter_ReturnsToBaseline`, the first leak row for this ADR's
+parameter route (processor 1889, IntegrationTests 3289, LeakTests 216, AOT both green). Not
+covered: a nullable `Map`, a nullable `Mutable*` kind, an optional collection followed by a
+required parameter, and an optional collection on a `StateFlow` member.
+Left for a later change (ROADMAP): the `SKIPPED_UNSUPPORTED_INPUT` text says "nullable or not" only
+of a handle.

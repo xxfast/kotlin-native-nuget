@@ -92,4 +92,26 @@ class TreatBoard {
 
   /** Control: no collection parameter, so nothing here may change. */
   fun servedAll(): StateFlow<String> = _servedAll
+
+  /**
+   * ADR-114 amendment, `_collect`: nullable collections, a converted `List<String>?` and a handle
+   * `List<Cat>?`. `null` kinds serve the whole board; `null` cats feed nobody.
+   */
+  fun servingsFor(kinds: List<String>?, cats: List<Cat>?): Flow<String> =
+    ((kinds ?: listOf("the whole board")) + (cats?.map { it.name } ?: listOf("nobody"))).asFlow()
+
+  /** ADR-114 amendment, `_async`: the same two nullable collections on the suspend route. */
+  suspend fun tallyFor(kinds: List<String>?, cats: List<Cat>?): String {
+    delay(1)
+    return "${kinds?.size ?: "no kinds"} for ${cats?.joinToString { it.name } ?: "no cats"}"
+  }
+
+  /**
+   * ADR-164 rule 2: a defaulted nullable collection is optional in C#. Omitted, Kotlin's default
+   * runs (salmon); an explicit `null` reaches here as `null`.
+   */
+  suspend fun nibble(tags: List<String>? = listOf("salmon")): String {
+    delay(1)
+    return tags?.joinToString() ?: "nothing"
+  }
 }

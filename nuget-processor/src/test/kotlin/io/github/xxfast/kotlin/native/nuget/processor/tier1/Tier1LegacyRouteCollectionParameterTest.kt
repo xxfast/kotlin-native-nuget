@@ -87,10 +87,26 @@ class Tier1LegacyRouteCollectionParameterTest {
 
       // Control: no collection parameter at all, must be unaffected by any of this.
       fun servedAll(): StateFlow<String> = _served
+
+      // ADR-114 amendment: nullable collections, a converted and a handle component, per route.
+      fun servingsOf(kinds: List<String>?, treats: List<Treat>?): Flow<String> =
+        (kinds.orEmpty() + treats.orEmpty().map { it.label }).asFlow()
+      fun servedOf(kinds: List<String>?): StateFlow<String> =
+        MutableStateFlow(kinds?.joinToString() ?: "none")
+      suspend fun countOf(kinds: List<String>?, treats: List<Treat>?): Int =
+        (kinds?.size ?: -1) + (treats?.size ?: 0)
+
+      // ...and a defaulted nullable one widens to an Optional behind an IsSet slot.
+      suspend fun nibble(tags: List<String>? = listOf("salmon")): Int = tags?.size ?: -1
+      fun picks(cat: String, tags: Set<String>? = null): Flow<String> =
+        (listOf(cat) + tags.orEmpty()).asFlow()
     }
 
     // The top-level suspend route, broken differently: it compiles, and lands IntPtr in C#.
     suspend fun forgetAll(ids: Set<String>): Int = ids.size
+
+    // ADR-114 amendment: the top-level owner of a nullable collection parameter.
+    suspend fun forgetSome(ids: Set<String>?): Int = ids?.size ?: -1
   """.trimIndent()
 
   private fun run(): Tier1Result = Tier1Harness.run(
@@ -253,6 +269,100 @@ class Tier1LegacyRouteCollectionParameterTest {
       "control: a flow member with no collection parameter must be untouched; got: " +
           "${csharpLinesFor(result, "ServedAll")}",
     )
+  }
+
+  /**
+   * ADR-114 amendment: a nullable collection parameter binds on every legacy route instead of
+   * skipping as `SKIPPED_UNSUPPORTED_INPUT`. The Kotlin slot is `COpaquePointer?`, lowered with
+   * `?.` before the launch; C# declares `IReadOnlyList<T>?`, builds `IntPtr.Zero` for `null`, and
+   * guards the dispose, since `nuget_dispose` takes a non-null pointer.
+   */
+  @Test
+  fun `a nullable collection parameter binds on every legacy route`() {
+    val result = run()
+
+    assertTrue(
+      result.compiledClean,
+      "expected clean generated Kotlin; got: ${result.compileErrors}",
+    )
+    val skipped: List<String> = result.kspWarnings.filter {
+      it.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name}]") &&
+          listOf("servingsOf", "servedOf", "countOf", "forgetSome", "nibble", "picks")
+            .any(it::contains)
+    }
+    assertTrue(skipped.isEmpty(), "expected no nullable collection member skipped; got: $skipped")
+
+    listOf(
+      "library_treats__treatboard_servingsOf_collect" to listOf("kinds", "treats"),
+      "library_treats__treatboard_servedOf_collect" to listOf("kinds"),
+      "library_treats__treatboard_servedOf_value" to listOf("kinds"),
+      "library_treats__treatboard_countOf_async" to listOf("kinds", "treats"),
+      "library_treats__forgetSome_async" to listOf("ids"),
+    ).forEach { (export, params) ->
+      val signature: String = exportSignature(result, export)
+      params.forEach { param ->
+        assertTrue(signature.contains("$param: COpaquePointer?"), "$export($param): $signature")
+      }
+    }
+    val countOf: String = exportBody(result, "library_treats__treatboard_countOf_async")
+    val lowered = "val kindsArg = kinds?.asStableRef<MutableList<Any?>>()?.get()?.map"
+    assertTrue(countOf.indexOf(lowered) in 0 until countOf.indexOf("launch"), countOf)
+
+    val cs: String = result.generatedCSharp
+    listOf(
+      "public KotlinFlow<string> ServingsOf(IReadOnlyList<string>? kinds, " +
+          "IReadOnlyList<global::Interop.Treats.Treat>? treats)",
+      "public KotlinStateFlow<string> ServedOf(IReadOnlyList<string>? kinds)",
+      "public Task<int> CountOfAsync(IReadOnlyList<string>? kinds, " +
+          "IReadOnlyList<global::Interop.Treats.Treat>? treats",
+      "public static Task<int> ForgetSomeAsync(IReadOnlySet<string>? ids",
+      "IntPtr kindsHandle = kinds != null ? NugetMarshal.CreateList(kinds) : IntPtr.Zero;",
+      "if (kindsHandle != IntPtr.Zero) NugetMarshal.Dispose(kindsHandle);",
+    ).forEach { expected ->
+      assertTrue(expected in cs, "missing `$expected`; got: ${csharpSignatures(result)}")
+    }
+    assertFalse(
+      cs.lines().any { it.trim() == "NugetMarshal.Dispose(kindsHandle);" },
+      "expected every collection dispose guarded on IntPtr.Zero",
+    )
+  }
+
+  /**
+   * ADR-164 rule 2 on the legacy routes, for a collection: a defaulted nullable collection is
+   * `KotlinOptional<IReadOnlyList<T>?> = default` over a leading `IsSet` slot, so an omitted
+   * argument runs Kotlin's default and an explicit `null` reaches the member as `null`.
+   */
+  @Test
+  fun `a defaulted nullable collection parameter is optional behind an IsSet slot`() {
+    val result = run()
+
+    val nibble: String = exportBody(result, "library_treats__treatboard_nibble_async")
+    assertTrue(nibble.contains("tagsIsSet: Boolean,\n  tags: COpaquePointer?,"), nibble)
+    assertTrue(nibble.contains("val mask = (if (tagsIsSet) 1 else 0)"), nibble)
+    assertTrue(nibble.contains("0 -> obj.nibble()"), nibble)
+    assertTrue(nibble.contains("1 -> obj.nibble(tags = tagsArg)"), nibble)
+    val picks: String = exportSignature(result, "library_treats__treatboard_picks_collect")
+    assertTrue(picks.contains("tagsIsSet: Boolean,\n  tags: COpaquePointer?,"), picks)
+
+    val cs: String = result.generatedCSharp
+    listOf(
+      "public Task<int> NibbleAsync(global::Kotlin.Native.Interop.KotlinOptional<" +
+          "IReadOnlyList<string>?> tags = default, CancellationToken cancellationToken = default)",
+      "public KotlinFlow<string> Picks(string cat, global::Kotlin.Native.Interop.KotlinOptional<" +
+          "IReadOnlySet<string>?> tags = default)",
+      "IntPtr tagsHandle = tags.Value != null ? NugetMarshal.CreateList(tags.Value) : IntPtr.Zero;",
+      "tags.HasValue, tagsHandle",
+      "[MarshalAs(UnmanagedType.I1)] bool tagsIsSet, IntPtr tags",
+    ).forEach { expected -> assertTrue(expected in cs, "missing `$expected`; got:\n$cs") }
+  }
+
+  /** The `@CName`-named export from its annotation to its closing brace (roughly). */
+  private fun exportBody(result: Tier1Result, export: String): String {
+    val generated: String = result.generated
+    val start: Int = generated.indexOf("@CName(\"$export\")")
+    require(start >= 0) { "no @CName(\"$export\") in the generated Kotlin" }
+    val end: Int = generated.indexOf("@CName(", start + 1).takeIf { it > 0 } ?: generated.length
+    return generated.substring(start, end)
   }
 
   /** The declared parameter list of the `@CName`-named export, up to its return type. */
