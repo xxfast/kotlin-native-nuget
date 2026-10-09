@@ -362,3 +362,11 @@ writes exactly one `error Rake` line to the trace file, trace off writes none) a
 `Tier1ForwardErrorTraceTest` (the `caller` parameter on `BuildException` and `Check`, the call into
 `TraceError`, and that the traced builder compiles against the shared contract). Not covered: the
 Kotlin export name, which is the last frame of `KotlinStackTrace` and is not repeated in the line.
+
+## Amendment (2026-10-09): the runtime ABI is now 68 names
+
+`nuget_stateflow_value_or_null` (ADR-067's 2026-10-09 amendment) is the 68th export, an additive
+sibling of `nuget_stateflow_value` for a nullable `StateFlow` element on the suspend route. It is
+in `NUGET_RUNTIME_EXPORTS` and the "67" in `NugetRuntimeApi`'s doc comment became "68". The
+"67 names" above (and in ADR-128's PR-E notes) describe the count at the time they were written.
+`NugetRuntimeAbi1` is unchanged: an added export is ABI-compatible.

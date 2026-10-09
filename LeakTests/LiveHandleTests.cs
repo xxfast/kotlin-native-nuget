@@ -1892,6 +1892,47 @@ public class LiveHandleTests
         });
     }
 
+    // Row 6g-nullable. Row 6g-toplevel's owners on the two nullable shapes. A nullable ELEMENT
+    // (`StateFlow<Int?>`) reads `.Value` through `nuget_stateflow_value_or_null`: a null read must
+    // mint nothing, a present read mints one boxed handle `FromHandle<int?>` frees, and a null
+    // emission crosses as a null item that frees nothing. A nullable MEMBER (`StateFlow<Cat>?`)
+    // awaited while null mints nothing on either side; once the den is open it is the usual holder
+    // plus one wrapper per `.Value`.
+    //
+    // Mylo's nap streak breaks and resumes, and Oreo moves into the den, ten times over.
+    [Fact]
+    public async Task SuspendStateFlowNullableElementAndMember_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using (KotlinStateFlow<int?> streak = await CatWatch.WatchNapStreakAsync())
+            {
+                CatWatch.CountNapStreak(null);
+                Assert.Null(streak.Value);
+                CatWatch.CountNapStreak(2);
+                Assert.Equal(2, streak.Value);
+
+                CatWatch.CountNapStreak(null);
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                await foreach (int? days in streak.WithCancellation(cts.Token))
+                {
+                    Assert.Null(days);
+                    break;
+                }
+            }
+
+            CatWatch.CloseDen();
+            Assert.Null(await CatWatch.WatchDenAsync());
+            CatWatch.OpenDen("Oreo");
+            using (KotlinStateFlow<Cat>? den = await CatWatch.WatchDenAsync())
+            {
+                using Cat cat = den!.Value;
+                Assert.Equal("Oreo", cat.Name);
+            }
+            CatWatch.CloseDen();
+        });
+    }
+
     // Row 6h. The same minted receiver handle as Row 6b, but read through an extension PROPERTY
     // getter rather than an extension function. The getter body is the new surface: the setter
     // route already owns a handle scope, the getter body is flat, so without a `finally`-dispose

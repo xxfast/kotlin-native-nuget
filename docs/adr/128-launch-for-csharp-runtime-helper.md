@@ -419,3 +419,8 @@ Correction to ADR-021's 2026-08-20 addendum, which predicted that generated outp
 `DelicateCoroutinesApi` warning. Verified by a clean `:test-library:compileKotlinMingwX64
 --rerun-tasks`: the generated code emits none, because it no longer contains an `ATOMIC` launch.
 The warning only ever appeared in the runtime. Verified: `:nuget-runtime:mingwX64Test` passes (51).
+## Amendment (2026-10-09): export count
+
+The "67 `nuget_*` names" recorded above became 68 with `nuget_stateflow_value_or_null`; see ADR-129's
+2026-10-09 amendment. The helpers are unchanged, but `nuget_stateflow_collect`'s body now emits a
+null element as a null item instead of faulting the channel.

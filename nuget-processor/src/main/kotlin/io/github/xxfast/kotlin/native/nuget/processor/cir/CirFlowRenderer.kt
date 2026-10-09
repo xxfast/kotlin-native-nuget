@@ -356,6 +356,10 @@ internal fun StringBuilder.renderStateFlowHandleHelper(helper: CirStateFlowHandl
   appendLine()
   appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_stateflow_value\")]")
   appendLine("        internal static extern IntPtr Value(NugetKotlinHandle flowHandle);")
+  appendLine()
+  // The null-aware sibling: `IntPtr.Zero` for a null value, read as null by `FromHandle<T?>`.
+  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_stateflow_value_or_null\")]")
+  appendLine("        internal static extern IntPtr ValueOrNull(NugetKotlinHandle flowHandle);")
   appendLine("    }")
   appendLine()
 }

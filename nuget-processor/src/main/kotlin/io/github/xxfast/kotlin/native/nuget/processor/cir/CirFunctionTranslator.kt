@@ -815,6 +815,7 @@ internal fun translateSuspendFunction(
     isAsync = true,
     asyncReturnType = asyncReturnType,
     flowElementRead = stateFlowElement?.read,
+    flowElementNullable = stateFlowElement?.elementNullable == true,
     acquiredFlowCollectNativeName =
       if (asyncReturnType.startsWith("KotlinFlow<")) "${nativeName}_collect" else null,
     // ADR-119 / ADR-131: the top-level route's own copy of the class route's decision, exhaustive

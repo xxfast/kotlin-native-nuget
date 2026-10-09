@@ -352,6 +352,23 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
       append("                    }")
     }
     isStateFlowReturn -> buildString {
+      // A nullable member (`StateFlow<T>?`) awaits to `KotlinStateFlow<T>?`: the `_async` export
+      // sends a null flow as a zero `resultPtr`, tested here before any handle is owned, so a null
+      // Kotlin return never becomes a live holder over a zero handle.
+      val memberNullable: Boolean = method.asyncReturnType.endsWith("?")
+      val holderType: String = method.asyncReturnType.removeSuffix("?")
+      val indent: String = if (memberNullable) "    " else ""
+      // A nullable element (`StateFlow<T?>`) reads through the null-aware sibling export.
+      val valueRead: String = if (method.flowElementNullable) "ValueOrNull" else "Value"
+      if (memberNullable) {
+        appendLine("if (resultPtr == IntPtr.Zero)")
+        appendLine("                    {")
+        appendLine("                        t.SetResult(null);")
+        appendLine("                    }")
+        appendLine("                    else")
+        appendLine("                    {")
+        append("                        ")
+      }
       // ADR-187: the flow handle is owned from here, and the lambdas capture that object and the
       // scope handle object, never raw pointers (see `renderHeldStateFlowMethod`).
       appendLine("var flowHandle = new NugetKotlinHandle(resultPtr);")
@@ -360,19 +377,23 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
       // top-level suspend call itself does; the enumerator's job is still the cancellation handle.
       val collectScope: String =
         if (method.isStatic) "NugetKotlinHandle.Null" else "GetOrCreateScope()"
-      appendLine("                    NugetKotlinHandle collectScope = $collectScope;")
-      appendLine("                    t.SetResult(new ${method.asyncReturnType}(")
-      appendLine("                        (flowOnNext, flowOnComplete, flowOnError, flowUserData) =>")
-      appendLine("                            NugetStateFlowNative.Collect(flowHandle, collectScope, flowOnNext, flowOnComplete, flowOnError, flowUserData),")
-      appendLine("                        () => NugetStateFlowNative.Value(flowHandle),")
+      appendLine("$indent                    NugetKotlinHandle collectScope = $collectScope;")
+      appendLine("$indent                    t.SetResult(new $holderType(")
+      appendLine("$indent                        (flowOnNext, flowOnComplete, flowOnError, flowUserData) =>")
+      appendLine("$indent                            NugetStateFlowNative.Collect(flowHandle, collectScope, flowOnNext, flowOnComplete, flowOnError, flowUserData),")
+      appendLine("$indent                        () => NugetStateFlowNative.$valueRead(flowHandle),")
       // ADR-123's `read:` slot, fourth ctor argument (trailing optional, `CirFlowRenderer`): an
       // interface element materialises each `.Value` through the ADR-136 resolve-then-wrap
       // expression instead of the default `FromHandle<T>`, which has no factory for an interface.
       if (method.flowElementRead != null) {
-        appendLine("                        flowHandle,")
-        append("                        ${method.flowElementRead}));")
+        appendLine("$indent                        flowHandle,")
+        append("$indent                        ${method.flowElementRead}));")
       } else {
-        append("                        flowHandle));")
+        append("$indent                        flowHandle));")
+      }
+      if (memberNullable) {
+        appendLine()
+        append("                    }")
       }
     }
 

@@ -321,8 +321,8 @@ suspend fun awaitPlaymateReport(): StateFlow<Cat> {
 - **`suspend fun` returning `Flow<T>`** (ROADMAP line 118) — the exact twin using an `nuget_flow_collect` shared
   export without `_value`. Not folded in here to keep this ADR StateFlow-scoped, but the machinery is deliberately
   shared-generic so that item becomes a near-trivial follow-up.
-- **Nullable** `suspend fun (): StateFlow<T>?` / `StateFlow<T?>` — mirror ADR-065's deferred nullable items
-  combined with ADR-019's deferred nullable-suspend two-call pattern.
+- **Nullable** `suspend fun (): StateFlow<T>?` / `StateFlow<T?>` — done 2026-10-09, see the final
+  amendment.
 - **Settable `.Value`** — unchanged from ADR-065 (read-only view in v1).
 
 ### Documentation
@@ -383,9 +383,29 @@ Consequence: nothing cancels a top-level holder's in-flight collections except t
 enumerator or token. Disposing the holder frees the flow handle; it does not cancel a running
 `await foreach`, the same as a top-level `suspend fun`'s own call, which only its token cancels.
 
-A nullable element (`StateFlow<T?>`) is still refused by name here, for the reason the class route
-refuses it: `nuget_stateflow_value` has no null arm.
+A nullable element (`StateFlow<T?>`) was refused by name here until 2026-10-09; see the amendment
+at the end.
 
 Tests: `Tier1TopLevelSuspendStateFlowTest`, `IntegrationTests/TopLevelSuspendStateFlowTests.cs`
 over `test-library`'s `CatWatch.kt`, and `LeakTests/LiveHandleTests.cs`'s
 `TopLevelSuspendStateFlow_AwaitReadCollectDispose_ReturnsToBaseline`.
+
+## Amendment (2026-10-09): nullable element and nullable member
+
+The Deferred bullet and the refusal above are closed. `suspend fun (): StateFlow<T?>` awaits to
+`Task<KotlinStateFlow<T?>>` and `suspend fun (): StateFlow<T>?` awaits to
+`Task<KotlinStateFlow<T>?>`, on class and top-level routes. The outer suspend stays a `Task`.
+
+- Member: the Kotlin `_async` export already minted a null result pointer for a null flow; the C#
+  completion now tests `resultPtr == IntPtr.Zero` and completes the task with `null` before it
+  builds a holder. No scope or handle is minted for a null.
+- Element: `.Value` reads through the new runtime export `nuget_stateflow_value_or_null` (the
+  module's `NugetStateFlowNative` gains a third import) only when the element is nullable; every
+  other member keeps `nuget_stateflow_value`. `nuget_stateflow_collect` now emits a null element as a
+  null item, ADR-067's wire. Details are in ADR-067's 2026-10-09 amendment.
+
+Verified: `IntegrationTests/TopLevelSuspendStateFlowTests.cs` and
+`Tier1TopLevelSuspendStateFlowTest` over `CatWatch.kt` (`watchNapStreak`, `watchNickname`,
+`watchLapCat`, `watchDen`), and LeakTests `SuspendStateFlowNullableElementAndMember_ReturnsToBaseline`.
+Inferred: `StateFlow<Interface?>` and `StateFlow<Enum?>` elements on this route are admitted but not
+exercised.

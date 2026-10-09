@@ -1005,6 +1005,9 @@ internal data class CirMethod(
   // and kin. Null leaves the shipped construction untouched, so a non-collection element still
   // reads through the constructors' default `NugetMarshal.FromHandle<T>`.
   val flowElementRead: String? = null,
+  // ADR-068, nullable element: an awaited `StateFlow<T?>` reads each `.Value` through the
+  // runtime's null-aware `nuget_stateflow_value_or_null` instead of `nuget_stateflow_value`.
+  val flowElementNullable: Boolean = false,
   /** ADR-194: collector keyed on the acquired Flow, with no acquisition parameters. */
   val acquiredFlowCollectNativeName: String? = null,
   // The collect lambda's four parameters (`onNext, onComplete, onError, userData`), minted apart
