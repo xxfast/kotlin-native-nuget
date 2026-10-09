@@ -51,7 +51,7 @@ Complete.
 Complete.
 
 ## Phase 6: Async support
-- [ ] Three branches of [ADR-159](docs/adr/159-async-member-on-kotlin-subclass.md)'s scope-ownership logic have no fixture: `forwardDeclaresScopeMember`'s sealed-arm-ancestor arm, `reProjectsKeptBaseMember`'s dropped-base return, and `overridesDisposeAsync` with a concrete open class between an abstract owner and a further subclass. ([details](docs/backlog/adr-159-three-untested-branches.md))
+- [ ] A kept generic base under a dropped middle class (`Barge : Keel : Crate<Int>` with `Keel` unexported, both overriding the same `suspend fun`) fails generation with an internal error in `forwardBaseSpelling` (`cir/CirClassTranslator.kt`), which reads only direct supertypes; widening it to `getAllSuperTypes()` then yields `CS0506` on the override ([details](docs/backlog/kept-generic-base-under-dropped-middle.md))
 - [ ] Map `SharedFlow<T>` (hot stream with subscribers – may map to `IAsyncEnumerable<T>` with replay or `IObservable<T>`)
 - [ ] `MutableStateFlow<SomeEnum>` binds a read-only `KotlinStateFlow<SomeEnum>`: `isMutableStateFlowElementSupported` returns false for `ENUM_CLASS` (`cir/CirTypeMapping.kt`), so the settable `.Value` needs a `value: Int` set shim (`Mood.entries[value]`, `(int)v` in C#). ADR-071's enum deferral, left open by the ADR-094 2026-09-29 amendment.
 - [ ] `CompareAndSet` / `Update` / `Emit` / `TryEmit` / `ReplayCache` / `SubscriptionCount` on `MutableStateFlow<T>`: deferred, additive; mirrors SKIE's wider `SkieSwiftMutableStateFlow<T>` surface (ADR-071 Alternative 4)
