@@ -51,10 +51,15 @@ class Tier1SuspendFlowTest {
   @Test fun `generated acquired collectors compile with every routed owner`() {
     assertTrue(result.compiledClean, result.compileErrors.toString())
     val cs = result.generatedCSharp
-    listOf("AcquiredAsync", "LabelsAsync", "FirstAsync", "AbstractFlowAsync", "DreamsAsync", "PurrsAsync", "CurlsAsync", "SpecialsAsync", "TopAsync").forEach {
+    listOf(
+      "AcquiredAsync", "LabelsAsync", "FirstAsync", "AbstractFlowAsync", 
+      "DreamsAsync", "PurrsAsync", "CurlsAsync", "SpecialsAsync", "TopAsync", 
+      "SharedAsync",
+    ).forEach {
       assertTrue(it in cs, "$it absent from $cs")
     }
     assertTrue("MenuNative.Native_SpecialsAsyncCollect" in cs, cs)
+    assertTrue("shared_collect" in result.generated, result.generated)
     assertTrue("Task<KotlinFlow<int>>" in cs, cs)
     assertTrue("public class KotlinFlow<T> : IAsyncEnumerable<T>, IDisposable" in cs, cs)
     assertTrue("flowHandle.asStableRef<Flow<List<Mood>>>()" in result.generated, result.generated)
@@ -84,7 +89,10 @@ class Tier1SuspendFlowTest {
   }
 
   @Test fun `refused combinations name their refusal and emit neither half`() {
-    val refused = listOf("nullableContainer", "nullableCollection", "unsupported", "shared", "stateNullable", "stateCollection", "input", "extensionFlow")
+    val refused = listOf(
+      "nullableContainer", "nullableCollection", "unsupported", 
+      "stateNullable", "stateCollection", "input", "extensionFlow",
+    )
     refused.forEach { name ->
       assertTrue(result.kspWarnings.any { name in it }, "missing warning for $name: ${result.kspWarnings}")
       assertFalse("${name}_collect" in result.generated, result.generated)

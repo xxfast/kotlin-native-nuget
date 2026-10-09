@@ -10,6 +10,7 @@ started. `Flow<T>` becomes `IAsyncEnumerable<T>`, and `StateFlow<T>` adds a sync
 | `suspend fun` | `async Task<T>`, suffixed `Async` |
 | `suspend (A) -> R` lambda | `KotlinSuspendFunc<A, R>` with `InvokeAsync` |
 | `Flow<T>` | `KotlinFlow<T> : IAsyncEnumerable<T>` |
+| `SharedFlow<T>` / declared `MutableSharedFlow<T>` | `KotlinFlow<T>`, replays the Kotlin replay cache first and never completes |
 | `Flow<T?>` | `KotlinFlow<T?>`, a `null` emission is a genuine item |
 | `StateFlow<T>` | `KotlinStateFlow<T> : KotlinFlow<T>`, adds a synchronous `.Value` |
 | `MutableStateFlow<T>` (declared, not narrowed to `StateFlow<T>`) | `KotlinMutableStateFlow<T> : KotlinStateFlow<T>`, `.Value` is settable |
@@ -462,7 +463,45 @@ does; only a genuinely absent element is `null`. This is the element's own nulla
 (`Flow<T?>`); the whole stream being absent (`Flow<T>?`) is a different, unsupported shape, see
 Limitations.
 
-## `StateFlow<T>`
+## `SharedFlow<T>` {id="shared-flow-t"}
+
+```kotlin
+class CatBulletin(private val name: String) {
+  val headlines: MutableSharedFlow<String> = MutableSharedFlow(replay = 2)
+  val editions: SharedFlow<Int> = ...
+  fun editionReport(): SharedFlow<Int> = editions
+  suspend fun latestSightings(): SharedFlow<Cat> = ...
+  fun publish(headline: String, edition: Int) { ... }
+}
+```
+
+```C#
+using var bulletin = new CatBulletin("Oreo");
+bulletin.Publish("found the treat jar", 1);
+
+await foreach (string headline in bulletin.Headlines)
+{
+    Console.WriteLine(headline); // "Oreo: found the treat jar", replayed from the cache
+    break;
+}
+
+using KotlinFlow<Cat> sightings = await bulletin.LatestSightingsAsync(); // dispose the acquired flow
+```
+
+`SharedFlow<T>` becomes `KotlinFlow<T>`, and a `suspend` return becomes `Task<KotlinFlow<T>>` as it
+does for `Flow<T>`. It binds at a property, a method return and a `suspend` return on classes,
+interfaces, sealed arms and top-level functions. A declared `MutableSharedFlow<T>` also surfaces as
+a read-only `KotlinFlow<T>`; C# cannot emit into it, so publish through a Kotlin member such as
+`Publish` above.
+
+Each `await foreach` starts by receiving the Kotlin replay cache in order, then waits for new
+emissions. A `SharedFlow` never completes on its own, so bound the loop with `break` or a
+`CancellationToken`, as for [`StateFlow<T>`](#stateflow-t). With `replay = 0`, an item published
+before you start enumerating is lost, and the bridge gives no signal that the collector has
+subscribed. Element types follow `Flow<T>`, including a nullable element (`SharedFlow<String?>`
+binds `KotlinFlow<string?>`).
+
+## `StateFlow<T>` {id="stateflow-t"}
 
 ```kotlin
 private val _energyLevel: MutableStateFlow<Int> = MutableStateFlow(100)
@@ -680,7 +719,8 @@ members. A `Throwable`, `Exception` or `RuntimeException` parameter does bind, a
 
 ## Limitations
 
-- `SharedFlow<T>` (hot, multi-subscriber) is not supported.
+- `ReplayCache` and `SubscriptionCount` on `SharedFlow<T>`, and `Emit`/`TryEmit` on `MutableSharedFlow<T>`,
+  are not exposed; publish through a Kotlin member instead.
 - `MutableStateFlow<SomeEnum>` surfaces as read-only `KotlinStateFlow<SomeEnum>`: `.Value` reads the
   current entry but is not settable.
 - `MutableStateFlow<ByteArray>` surfaces as read-only `KotlinStateFlow<byte[]>`, not

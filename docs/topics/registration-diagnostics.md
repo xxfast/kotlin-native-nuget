@@ -466,6 +466,10 @@ The suspend-returning-Flow path is covered by `SuspendFlow_AcquireCollectDispose
 `SuspendFlow_ImmediateAcquisitionAndCompletion_ThousandsReturnToBaseline`. The acquired holder's
 GC fallback is covered by `UndisposedSuspendFlowHolder_IsReleasedByTheGc`.
 
+A hot [`SharedFlow<T>`](coroutines-and-flow.md#shared-flow-t) never completes, so its leak row is the
+abandoned shape: `SharedFlow_AbandonedAfterReplay_ReturnsToBaseline` (row 8k) takes the replayed
+item from a property and a `suspend` return, disposes each enumerator, and returns to baseline.
+
 | Row | Test | Pins |
 |---|---|---|
 | 16 | `UndisposedClassWrapper_IsReleasedByTheGc` | a class wrapper |

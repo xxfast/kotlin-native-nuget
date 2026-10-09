@@ -116,15 +116,23 @@ internal val SUSPEND_LAMBDA_TYPES = setOf(
   "kotlin.coroutines.SuspendFunction3",
 )
 
-internal val FLOW_TYPES = setOf(
-  "kotlinx.coroutines.flow.Flow",
+// ADR-205: SharedFlow<T> (and, as a read-only view, MutableSharedFlow<T>) is-a Flow whose
+// `collect` replays the Kotlin-side replay cache and never completes, so it rides the plain Flow
+// `_collect` route unchanged and is spelled `KotlinFlow<T>`. Kept as its own set (the ADR-071
+// union pattern) so a later `KotlinSharedFlow<T>` with `ReplayCache` stays a local diff;
+// FLOW_TYPES stays the union so every existing call site picks the shared types up.
+internal val PLAIN_FLOW_TYPES = setOf("kotlinx.coroutines.flow.Flow")
+internal val SHARED_FLOW_TYPES = setOf(
+  "kotlinx.coroutines.flow.SharedFlow",
+  "kotlinx.coroutines.flow.MutableSharedFlow",
 )
+internal val FLOW_TYPES = PLAIN_FLOW_TYPES + SHARED_FLOW_TYPES
 
 // ADR-065: StateFlow<T> (and, as a read-only view, MutableStateFlow<T>) is a hot,
 // always-current-value stream. It is-a Flow, so detection is on the DECLARED type's exact
 // qualifiedName and is checked BEFORE FLOW_TYPES everywhere FLOW_TYPES is consulted -- never via
 // isAssignableFrom, which would make a StateFlow match the plain-Flow branch and silently lose
-// `.Value`. SharedFlow/MutableSharedFlow remain unlisted and deferred (ROADMAP line 108).
+// `.Value`. SharedFlow/MutableSharedFlow are FLOW_TYPES members (ADR-205), not StateFlows.
 //
 // ADR-071: split into MUTABLE_STATE_FLOW_TYPES / READ_ONLY_STATE_FLOW_TYPES so a genuinely
 // DECLARED `MutableStateFlow<T>` (not narrowed through `.asStateFlow()`) can additionally gain a

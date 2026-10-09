@@ -3,7 +3,7 @@
 2026-10-03 amendment: a `suspend fun` returning `Flow<T>` keeps asynchronous acquisition as
 `Task<KotlinFlow<T>>`; the returned holder owns its acquired Flow handle. See
 [ADR-194](194-suspend-returning-flow.md). This does not change the original plain-Flow mapping or
-deferred `SharedFlow` scope.
+deferred `SharedFlow` scope. Amended 2026-10-09: ADR-205 maps `SharedFlow<T>`.
 
 ## Status
 
@@ -614,7 +614,7 @@ Flow collection uses the class's `CoroutineScope` (same as suspend methods). Thi
 - Clean completion when flow exhausts
 
 **Deferred:**
-- **`SharedFlow<T>`** — hot stream with subscribers; semantically different from cold Flow; needs separate mapping (may be `IAsyncEnumerable<T>` with replay, or `IObservable<T>`, or a custom type).
+- **`SharedFlow<T>`** — hot stream with subscribers; semantically different from cold Flow; needs separate mapping (may be `IAsyncEnumerable<T>` with replay, or `IObservable<T>`, or a custom type). **Amendment (2026-10-09):** mapped by [ADR-205](205-shared-flow-mapping.md) as `KotlinFlow<T>`.
 - **`StateFlow<T>`** — hot stream with always-current-value; may map to a C# property + change notification; needs separate analysis.
 - **`Flow<T>` as a function parameter** — passing a C#-implemented `IAsyncEnumerable<T>` into Kotlin as a `Flow<T>` (bidirectional); requires Phase 6 C#→Kotlin support.
 - **`suspend fun` returning `Flow<T>`**: ~~the outer `suspend` rarely matters (returning a Flow is
@@ -626,3 +626,11 @@ Flow collection uses the class's `CoroutineScope` (same as suspend methods). Thi
 - **Nullable `Flow<T>?`** — deferred (requires the two-call nullable pattern from ADR-002, combined with the flow export).
 - **Backpressure** — bounded `Channel<T>` with explicit resume signaling; deferred for v1 (unbounded channel is safe for most use cases).
 - **`Flow<T>` as a generic type argument** — e.g., `Box<Flow<String>>`; deferred (generics containing Flow types).
+
+## Amendment (2026-10-09): `SharedFlow<T>` is mapped
+
+[ADR-205](205-shared-flow-mapping.md) closes the `SharedFlow<T>` deferral above. A declared
+`SharedFlow<T>`, or a declared `MutableSharedFlow<T>` as a read-only view, binds as `KotlinFlow<T>`
+(`Task<KotlinFlow<T>>` at a `suspend` return) through this ADR's `_collect` export, unchanged.
+`SharedFlow.collect` replays the Kotlin replay cache and never completes, so no `IObservable<T>` and
+no C#-side replay buffer are needed. **Verified** by the 2026-10-09 integration and leak tests.

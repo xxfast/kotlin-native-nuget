@@ -353,8 +353,8 @@ produced entirely on the **Kotlin** side by `StateFlow.collect`:
   This is a genuine behavioural difference from cold Flow and is documented for consumers (the
   `await foreach` must be bounded by cancellation/`break`).
 
-`SharedFlow<T>` (configurable `replay`/`extraBufferCapacity`) is where a C#-side replay buffer would
-actually be needed; it is **out of scope** and deferred (ROADMAP line 108).
+`SharedFlow<T>` (configurable `replay`/`extraBufferCapacity`) was deferred here as the place a C#-side replay
+buffer would be needed. Superseded (2026-10-09): [ADR-205](205-shared-flow-mapping.md) needs no such buffer.
 
 ### KSP detection (question 4)
 
@@ -470,8 +470,8 @@ This is the exact hazard the task flagged.
   view.
 - **`INotifyPropertyChanged` adapter** — a deferred, opt-in convenience for XAML data-binding,
   layered on top of `KotlinStateFlow<T>` (Alternative 2); not the v1 core.
-- **`SharedFlow<T>`** (ROADMAP line 108) — configurable replay/buffer; a distinct mapping (a C#-side
-  replay buffer or `IObservable<T>`), explicitly **not** StateFlow. Kept narrowly separate.
+- **`SharedFlow<T>`** — deferred here as a distinct mapping, explicitly **not** StateFlow. Mapped by
+  [ADR-205](205-shared-flow-mapping.md) (2026-10-09) as `KotlinFlow<T>`, without a C#-side buffer.
 - **Nullable element `StateFlow<T?>`** and **nullable `StateFlow<T>?`** — `StateFlow<T?>` makes
   `.Value` a `T?` (needs the nullable cascade of ADR-002/061 at the value getter); `StateFlow<T>?`
   needs the two-call nullable pattern around the whole member. Both deferred (mirror ROADMAP line 112
@@ -500,3 +500,12 @@ unbound, and ADR-068's `suspend
 fun` returning `StateFlow<T>` still reads its element through the module-wide
 `nuget_stateflow_value` export, which has no null arm and is refused (not bound) for a nullable
 element as of the same date (see ADR-067's Consequences).
+
+## Amendment (2026-10-09): `SharedFlow<T>` needs no C#-side replay buffer
+
+[ADR-205](205-shared-flow-mapping.md) maps `SharedFlow<T>` and a declared `MutableSharedFlow<T>`
+(read-only view) as plain `KotlinFlow<T>`, not a `KotlinStateFlow<T>` sibling. The sketch above of a
+C#-side replay buffer is retired: replay is a Kotlin-side property of `SharedFlow.collect`, and the
+bridge sees replayed items as ordinary `onNext` callbacks. The exact-`qualifiedName` ordering rule
+here is unchanged: a `StateFlow` is checked before the Flow set, and `SharedFlow` is only in the
+Flow set. **Verified** by the 2026-10-09 integration tests.
