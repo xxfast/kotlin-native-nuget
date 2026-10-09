@@ -1014,6 +1014,11 @@ internal data class CirMethod(
   // task yields `KotlinFlow<T>?` and a zero `resultPtr` completes with null. A flag, never a `?`
   // on [asyncReturnType], which the completion reuses inside `new ...(`.
   val acquiredFlowNullable: Boolean = false,
+  // ADR-068, collection element: an awaited `StateFlow<List<T>>` reads through its own
+  // flow-handle-keyed `_collect` / `_value` pair instead of `NugetStateFlowNative`. Null for every
+  // other awaited `StateFlow`, which keeps the shared runtime pair.
+  val awaitedStateFlowCollectNativeName: String? = null,
+  val awaitedStateFlowValueNativeName: String? = null,
   // The collect lambda's four parameters (`onNext, onComplete, onError, userData`), minted apart
   // from this method's own parameters (`ForwardLegacyNames`): a lambda parameter spelled like a
   // user parameter would shadow it, and the native call inside the lambda would pass the callback

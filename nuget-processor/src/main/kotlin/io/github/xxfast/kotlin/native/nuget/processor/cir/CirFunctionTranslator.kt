@@ -826,6 +826,10 @@ internal fun translateSuspendFunction(
     acquiredFlowNullable = acquiredFlowNullable,
     acquiredFlowCollectNativeName =
       if (asyncReturnType.startsWith("KotlinFlow<")) "${nativeName}_collect" else null,
+    awaitedStateFlowCollectNativeName =
+      if (stateFlowElement?.collection != null) "${nativeName}_collect" else null,
+    awaitedStateFlowValueNativeName =
+      if (stateFlowElement?.collection != null) "${nativeName}_value" else null,
     // ADR-119 / ADR-131: the top-level route's own copy of the class route's decision, exhaustive
     // for the same reason -- the two routes have to answer a new return shape identically.
     asyncResultRead = when (returnShape) {
@@ -862,7 +866,15 @@ internal fun translateSuspendFunction(
   val collector: CirDllImport? = asyncMethod.acquiredFlowCollectNativeName?.let { name ->
     acquiredFlowCollectImport(libraryName, cname, name)
   }
-  return listOf(nativeImport, asyncMethod) + listOfNotNull(collector)
+  // ADR-068, collection element: the per-member pair the awaited holder reads through.
+  val awaitedPair: List<CirDllImport> = if (stateFlowElement?.collection != null) {
+    awaitedStateFlowCollectionImports(
+      libraryName, cname, "${nativeName}_collect", "${nativeName}_value",
+    )
+  } else {
+    emptyList()
+  }
+  return listOf(nativeImport, asyncMethod) + listOfNotNull(collector) + awaitedPair
 }
 
 internal fun translateGenericFunction(

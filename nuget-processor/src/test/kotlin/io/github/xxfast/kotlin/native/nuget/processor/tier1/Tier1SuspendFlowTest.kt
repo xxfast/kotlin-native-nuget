@@ -38,6 +38,7 @@ class Tier1SuspendFlowTest {
         suspend fun shared(): SharedFlow<Int> = MutableSharedFlow()
         suspend fun stateNullable(): StateFlow<String?> = MutableStateFlow(null)
         suspend fun stateCollection(): StateFlow<List<Int>> = MutableStateFlow(emptyList())
+        suspend fun mutableStateCollection(): MutableStateFlow<List<Int>> = MutableStateFlow(emptyList())
         suspend fun input(flow: Flow<Int>): Int = 17
       }
       class Generic<T> { suspend fun own(): Flow<Int> = flowOf(17) }
@@ -80,6 +81,8 @@ class Tier1SuspendFlowTest {
     assertTrue("NugetMarshal.ReadSet" in cs, cs)
     assertTrue("KotlinFlow<byte[]?>" in cs, cs)
     assertTrue("KotlinFlow<IReadOnlyList<IReadOnlyList<int>>>" in cs, cs)
+    // ADR-068, collection element: an awaited read-only StateFlow of a collection binds now.
+    assertTrue("Task<KotlinStateFlow<IReadOnlyList<int>>> StateCollectionAsync(" in cs, cs)
   }
 
   @Test fun `collection captures original scope and avoids acquisition name collisions`() {
@@ -94,9 +97,9 @@ class Tier1SuspendFlowTest {
   }
 
   @Test fun `refused combinations name their refusal and emit neither half`() {
-    val refused = listOf(
+    val refused: List<String> = listOf(
       "nullableCollection", "unsupported",
-      "stateCollection", "input", "extensionFlow",
+      "mutableStateCollection", "input", "extensionFlow",
     )
     refused.forEach { name ->
       assertTrue(result.kspWarnings.any { name in it }, "missing warning for $name: ${result.kspWarnings}")

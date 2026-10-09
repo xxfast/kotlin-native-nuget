@@ -649,7 +649,8 @@ in the public API with a fully green build. Owner-approved to keep in scope.
 Both halves share the parameter/call-args plumbing added here (Kotlin's `paramPrelude`, no hoist
 needed since both are synchronous; C#'s `renderStateFlowMethod` gives `_has_value` its own
 call-scoped handle and `_set_value` a hand-written variant, since `out IntPtr error` must be
-declared outside the `try` to survive the dispose). No fixture reaches either arm: both need a
+declared outside the `try` to survive the dispose). No fixture reached either arm when this was
+written (see the 2026-10-09 amendment): both need a
 nullable or `MutableStateFlow` return **plus** a collection parameter, a combination nothing in
 `test-library` declares. Cold on purpose, not untested by oversight; see ROADMAP.md.
 
@@ -687,3 +688,16 @@ covered: a nullable `Map`, a nullable `Mutable*` kind, an optional collection fo
 required parameter, and an optional collection on a `StateFlow` member.
 Left for a later change (ROADMAP): the `SKIPPED_UNSUPPORTED_INPUT` text says "nullable or not" only
 of a handle.
+`test-library` declared. Cold on purpose, not untested by oversight.
+
+## Amendment (2026-10-09): both arms now have fixtures; `_set_value` wording corrected
+
+The "deliberately left uncovered" section above no longer holds. `TreatBoard.maybeRations`
+(`StateFlow<Int>?` with a `List<Int>` parameter) reaches the `_has_value` arm, and
+`TreatBoard.menu` (`MutableStateFlow<String>` with a `List<String>` parameter) reaches the held
+acquire. `IntegrationTests/LegacyRouteCollectionParameterTests.cs` and LeakTests row 8f-collection
+pass with no generator change.
+
+The "`_set_value` hand-written variant" wording was already stale: since ADR-071's 2026-09-11 held
+route, the setter is keyed on the flow handle the acquire returned, so it takes no collection
+parameter and has no arm of its own to cover. Evidence: verified (fixtures and tests pass).
