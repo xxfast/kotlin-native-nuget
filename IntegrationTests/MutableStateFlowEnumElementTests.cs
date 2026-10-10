@@ -14,8 +14,9 @@ namespace IntegrationTests;
 /// <c>Happy</c> (0), which is only ever written after a non-zero one, so a write that always
 /// sends 0 or never lands cannot pass (ADR-097's rule).
 ///
-/// A value-class element has no write arm: <c>ChipId</c> stays a read-only
-/// <c>KotlinStateFlow&lt;CatId&gt;</c>.
+/// A value-class element is settable too (its own cells live in
+/// <c>MutableStateFlowValueClassElementTests</c>): <c>ChipId</c> is a
+/// <c>KotlinMutableStateFlow&lt;CatId&gt;</c>.
 ///
 /// Mylo naps (Sleepy); Oreo sulks (Grumpy).
 /// </summary>
@@ -63,13 +64,13 @@ public class MutableStateFlowEnumElementTests
     }
 
     [Fact]
-    public void ValueClassElement_BindsReadOnly()
+    public void ValueClassElement_BindsSettable()
     {
         using var tracker = new CatMoodTracker("Oreo");
 
         Type chipIdType = typeof(CatMoodTracker).GetProperty(nameof(CatMoodTracker.ChipId))!
             .PropertyType;
-        Assert.Equal(typeof(KotlinStateFlow<CatId>), chipIdType);
+        Assert.Equal(typeof(KotlinMutableStateFlow<CatId>), chipIdType);
         Assert.Equal(new CatId("oreo-chip"), tracker.ChipId.Value);
     }
 }

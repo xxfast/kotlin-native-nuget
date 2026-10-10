@@ -417,6 +417,7 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
         if (write.rejectsNull) {
           appendLine("$indent                            if (v is null) throw new ArgumentNullException(nameof(v));")
         }
+        write.guard?.let { guard -> appendLine("$indent                            $guard") }
         appendLine("$indent                            ${method.stateFlowSetValueNativeName}(flowHandle, ${write.arguments}, out IntPtr error);")
         appendLine("$indent                            if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
         appendLine("$indent                            NugetErrorNative.ClearManagedFault();")

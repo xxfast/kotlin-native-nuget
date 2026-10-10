@@ -2482,6 +2482,10 @@ public class LiveHandleTests
 
     // Row 8d-valueclass. Regression pin beside the enum rows: a VALUE CLASS element (ADR-171) on
     // the same two routes, released by `CatId.NugetUnbox`. Expected green already.
+    // ADR-071 amendment (value-class element write): extended with writes of a
+    // `MutableStateFlow<CatId>` on the property, its compare-and-set and the held twin (whose
+    // flow handle the reader owns), each read back. A String underlying mints nothing on the write,
+    // so the only handles are the property reads' boxes and the held reader's flow.
     [Fact]
     public async Task ValueClassFlowElement_ValueReadsAndEmissions_ReturnToBaseline()
     {
@@ -2493,6 +2497,16 @@ public class LiveHandleTests
                 var ids = new List<CatId?>();
                 await foreach (CatId? id in tracker.Tags()) ids.Add(id);
                 Assert.Equal(3, ids.Count);
+
+                for (int i = 0; i < 5; i++)
+                {
+                    tracker.ChipId.Value = new CatId($"oreo-{i}");
+                    Assert.Equal(new CatId($"oreo-{i}"), tracker.ChipId.Value);
+                }
+                Assert.True(tracker.ChipId.CompareAndSet(new CatId("oreo-4"), new CatId("mylo-1")));
+                using var reader = tracker.ChipReader();
+                reader.Value = new CatId("mylo-2");
+                Assert.Equal("mylo-2", tracker.CurrentChipId());
             },
             iterations: 200);
     }

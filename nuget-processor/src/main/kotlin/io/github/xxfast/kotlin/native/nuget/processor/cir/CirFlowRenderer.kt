@@ -699,6 +699,7 @@ private fun StringBuilder.renderHeldStateFlowMethod(method: CirMethod, className
   if (write.rejectsNull) {
     appendLine("                    if (v is null) throw new ArgumentNullException(nameof(v));")
   }
+  write.guard?.let { guard -> appendLine("                    $guard") }
   appendLine("                    ${method.stateFlowSetValueNativeName}($owned, ${write.arguments}, out IntPtr error);")
   appendLine("                    if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
   appendLine("                    NugetErrorNative.ClearManagedFault();")
@@ -761,6 +762,8 @@ internal fun stateFlowCompareAndSetLambda(
     appendLine("$indent    if ($expect is null) throw new ArgumentNullException(nameof($expect));")
     appendLine("$indent    if ($update is null) throw new ArgumentNullException(nameof($update));")
   }
+  listOfNotNull(expectSlot.guard, updateSlot.guard)
+    .forEach { guard -> appendLine("$indent    $guard") }
   appendLine(
     "$indent    return NugetErrorNative.Check($nativeName($receiver, ${expectSlot.arguments}, " +
         "${updateSlot.arguments}, out IntPtr error), error);",
