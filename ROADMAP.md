@@ -29,7 +29,7 @@ Reverse-direction backlog items deferred by the 2026-10-07 triage (experimental 
 
 ### Deferred to 1.x
 
-Additive, so none of it forces a major; each stays in its phase below: `Flow` as a parameter, the wider `MutableStateFlow` surface, reverse exception fidelity, events, `ValueTask`, operators, indexers, arrays, generic interfaces, the crossing benchmark, the size gate, the leak-ladder rungs beyond what the disposal contract needs, `LibraryImport`, record classes.
+Additive, so none of it forces a major; each stays in its phase below: `Flow` as a parameter, reverse exception fidelity, events, `ValueTask`, operators, indexers, arrays, generic interfaces, the crossing benchmark, the size gate, the leak-ladder rungs beyond what the disposal contract needs, `LibraryImport`, record classes.
 
 ## Phase 1: Basic bridging
 

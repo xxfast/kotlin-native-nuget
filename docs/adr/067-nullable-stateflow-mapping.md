@@ -482,3 +482,12 @@ The per-member `_has_value` probe is not StateFlow-specific. [ADR-026](026-flow-
 2026-10-09 amendment reuses it for a plain `Flow<T>?` property or method, which binds as
 `KotlinFlow<T>?`. The method purity caveat above applies there unchanged. The "Flow
 nullable-member item" in Deferred is closed by that amendment.
+
+## Amendment (2026-10-10): the `MutableStateFlow` write of `Boolean?` and `Char?` shipped
+
+The "Deferred: `Boolean?` / `Char?` value elements" item above covers the nullable read. A
+`MutableStateFlow<Boolean?>` and `MutableStateFlow<Char?>` now have a settable `.Value` (and
+`CompareAndSet` and the `Update` family) on the property and held-return routes, at the pinned
+widths (`I1` for `bool`, `U2` for `char`); see
+[ADR-071's 2026-10-10 amendment](071-mutable-stateflow-mapping.md). This note claims the write
+only. A nullable enum element's write shipped in the same amendment.

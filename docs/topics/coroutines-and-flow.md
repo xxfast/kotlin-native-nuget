@@ -647,8 +647,9 @@ The elements you can write are those a `MutableStateFlow<T>` can set, described 
 [Settable `.Value`](#settable-value). That includes a value class, which emits by value:
 `TryEmit(new CatId("oreo-1"))` crosses as the underlying and Kotlin wraps it again, with the
 same underlyings and the same `ArgumentException` for `default(CatId)` as a
-[`MutableStateFlow` of a value class](#enum-elements). A `MutableSharedFlow` of any other element
-(a `List`, `Set` or `Map`, a `ByteArray`, an interface, or a nullable `Boolean`, `Char` or enum)
+[`MutableStateFlow` of a value class](#enum-elements). That includes a nullable `Boolean`, `Char`
+or enum (`KotlinMutableSharedFlow<Mood?>`), where `null` is an emit of its own. A
+`MutableSharedFlow` of any other element (a `List`, `Set` or `Map`, a `ByteArray` or an interface)
 binds a read-only `KotlinSharedFlow<T>` and the build reports `SKIPPED_UNSUPPORTED_INPUT`. On a
 property the remark names the read-only C# property; expose a function that takes the element to
 emit it. A value class over anything the list above does not admit is not bound at all: the member
@@ -760,7 +761,9 @@ class CatMoodTracker(private val catName: String) {
 tracker.Outlook.Value = Mood.Grumpy;
 ```
 
-A nullable element (`MutableStateFlow<Mood?>`) stays a get-only `KotlinStateFlow`.
+A nullable element (`MutableStateFlow<Mood?>`) is settable too on a property and a function
+return, and `null` clears it. `null` is a write of its own, never entry 0; an out-of-range ordinal
+throws as above.
 
 A `MutableStateFlow` of a value class is settable on the same routes, and `CompareAndSet` and the
 `Update` family work on it. The write crosses as the underlying value and Kotlin wraps it again, so
@@ -840,8 +843,18 @@ if (diary is not null) diary.Value = "day two";
 
 A `MutableStateFlow<T>?` property is settable once it is present. If Kotlin has dropped the flow
 since you read it, the write throws `KotlinInvalidOperationException` instead of being ignored. A
-function returning `MutableStateFlow<T>?` stays read-only. `Boolean?`, `Char?` and nullable enum
-elements stay read-only.
+function returning `MutableStateFlow<T>?` stays read-only.
+
+`Boolean?`, `Char?` and a nullable enum are settable like any other nullable element, so `null`,
+`false` and `true` are three different writes and a non-ASCII `char` survives:
+
+```C#
+tracker.Purring.Value = false;   // MutableStateFlow<Boolean?>
+tracker.Purring.Value = null;
+tracker.Initial.Value = '한';     // MutableStateFlow<Char?>
+```
+
+A nullable element is read-only on a `suspend fun` return, whatever the element.
 
 An element that is a [generic class](generics.md) instantiation (`Box<String>`) or a generic
 sealed type (`Outcome<Int>`) is settable like any other class element, nullable (`Box<String>?`)
@@ -1096,12 +1109,17 @@ members. A `Throwable`, `Exception` or `RuntimeException` parameter does bind, a
 
 ## Limitations
 
-- `MutableStateFlow<ByteArray>` surfaces as read-only `KotlinStateFlow<byte[]>`, not
-  `KotlinMutableStateFlow<byte[]>`: `.Value` is not settable for a `ByteArray` element.
+- A `MutableStateFlow` of a `List`, `Set`, `Map`, `ByteArray` or interface surfaces as the
+  read-only `KotlinStateFlow<T>`, not `KotlinMutableStateFlow<T>`: `.Value` is not settable, and a
+  C# implementation of an interface cannot be written into a Kotlin flow. The build reports
+  `SKIPPED_UNSUPPORTED_INPUT` naming the member and the element. Expose a function that takes the
+  new value to write it.
 - `Emit`, `TryEmit`, `ReplayCache`, and `SubscriptionCount` on
   `MutableStateFlow<T>` are not exposed (`CompareAndSet` and `Update` are; see [Atomic updates](#atomic-updates)).
-- A `suspend fun` returning `MutableStateFlow<T?>` or `MutableStateFlow<T>?`, and a top-level
-  `suspend fun` returning `MutableStateFlow<T>`, bind a read-only holder.
+- A `suspend fun` returning `MutableStateFlow<T?>` or `MutableStateFlow<T>?`, a top-level
+  `suspend fun` returning `MutableStateFlow<T>`, and a non-`suspend` function returning
+  `MutableStateFlow<T>?`, bind a read-only holder. The build names each with
+  `SKIPPED_UNSUPPORTED_INPUT`.
 - `StateFlow<T>` or `Flow<T>` as a function parameter is not supported. As a generic type argument
   it binds [read-only](#flow-type-argument).
 - A top-level non-`suspend` `fun f(): Flow<T>?` and an `object` or companion `Flow<T>?` member are

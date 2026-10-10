@@ -784,8 +784,9 @@ crosses as a nullable `String?` slot, an object element as a null `COpaquePointe
 valueHasValue, T value`, with the Kotlin assignment `if (valueHasValue) value else null`. The pair
 is the legacy-route convention the sibling flow and `suspend` parameters already use, so a null is
 never a zero. The C# lambda drops the `ArgumentNullException` for a nullable object and passes
-`v?._handle ?? NugetKotlinHandle.Null`. `Boolean?`, `Char?` and nullable enum elements stay read-only,
-mirroring ADR-067's read side; the declared nullable type must not degrade to a non-null write.
+`v?._handle ?? NugetKotlinHandle.Null`. `Boolean?`, `Char?` and nullable enum elements stayed
+read-only when this shipped, mirroring ADR-067's read side (the 2026-10-10 amendment at the end of
+this file ships them); the declared nullable type must not degrade to a non-null write.
 
 Verified: `Tier1MutableStateFlowNullableElementWriteTest`; `IntegrationTests/MutableStateFlowTests.cs`
 (`CatMoodTracker.collarTag`, `napMinutes`, `bestFriend`, `napLog()`), including null versus 0 and
@@ -821,7 +822,8 @@ third write lambda before its `ownedHandle`, so `Dispose()` still frees the flow
 
 Still read-only on purpose: `suspend fun (): MutableStateFlow<T?>`,
 `suspend fun (): MutableStateFlow<T>?` (the nullable-suspend-return guard) and the top-level
-suspend route. `Boolean?`, `Char?` and nullable enum elements stay as above.
+suspend route. (`Boolean?`, `Char?` and nullable enum elements were held back on the other routes
+when this shipped; see the 2026-10-10 amendment at the end of this file.)
 
 Verified: `Tier1SuspendMutableStateFlowTest`; `IntegrationTests/SuspendStateFlowTests.cs`
 (`awaitTreatJar`, `awaitFavouriteToy`); LeakTests row 8f-suspend
@@ -840,8 +842,9 @@ The write crosses by value as the entry's ordinal, as the synchronous enum sette
 now a sealed three-way (`Scalar`, `Enum`, `Handle`) with two non-writing arms, `RefusedValueClass`
 and `ReadOnly`, replacing the old object/non-object boolean, which would have sent an enum down the
 handle arm (`v._handle` on a C# enum). An out-of-range ordinal throws `KotlinException` from the
-existing `errorOut` slot and the write does not land. A nullable enum element stays read-only
-(the nullable-element gate sits upstream), as do `ByteArray` and the other cases listed above.
+existing `errorOut` slot and the write does not land. A nullable enum element stayed read-only
+here (the 2026-10-10 amendment at the end of this file ships it), as did `ByteArray` and the other
+cases listed above.
 
 A `MutableStateFlow<ValueClass>` used to pass the gate as an ordinary class and take the handle arm
 (`v._handle` on a C# record struct). It was refused by name for a while; the 2026-10-10 value-class
@@ -1019,3 +1022,76 @@ binds.
 - **Rationale and evidence.** See the 2026-10-10 amendment to ADR-077. Verified by
   `Tier1FlowElementValueClassWithoutStructTest` with a real `dotnet build`. The box-less case is
   read from the generated reader (it would have thrown `NotSupportedException`), not executed.
+
+## Amendment (2026-10-10): nullable `Boolean`, `Char` and enum elements are settable; the read-only cases are named
+
+Closes what the wider `MutableStateFlow` surface had left: the three nullable elements the
+2026-10-09 amendments held back, and the silence around the cases that stay read-only on purpose.
+
+### Nullable `Boolean?`, `Char?` and enum elements
+
+`MutableStateFlow<Mood?>`, `MutableStateFlow<Boolean?>` and `MutableStateFlow<Char?>` bind a
+settable `KotlinMutableStateFlow<T?>` on the property and held-return routes, with `.Value`
+(`null` and back), `CompareAndSet` and the `Update` family. The same elements emit through
+`MutableSharedFlow` (`KotlinMutableSharedFlow<Mood?>`, `<bool?>`, `<char?>`: `EmitAsync` and
+`TryEmit` on property, held and awaited routes), because ADR-209's surface keys on the same element
+classifier (`isMutableStateFlowElementWritable`).
+
+- **Wire.** `Boolean?` and `Char?` take the nullable scalar's has-value pair from the first
+  2026-10-09 amendment: `[MarshalAs(I1)] bool valueHasValue, [MarshalAs(I1)] bool value` and
+  `[MarshalAs(I1)] bool valueHasValue, [MarshalAs(U2)] char value`, assigned
+  `if (valueHasValue) value else null`. The widths are pinned on the write slots and the boxed read
+  (ADR-069 for `bool`, ADR-098 for `char`), which is what ADR-067's deferral waited on. A nullable
+  enum is the same pair over the ordinal slot: C# sends `v.HasValue, (int)v.GetValueOrDefault()` and
+  Kotlin assigns `if (valueHasValue) Mood.entries[value] else null`. A null is never ordinal 0.
+- **Out-of-range ordinal.** A nullable enum write of an ordinal that names no entry (`(Mood)99`)
+  throws `KotlinException` on the setter and on the `CompareAndSet` update slot, and does not land,
+  as for a non-null enum.
+- **Awaited route.** Unchanged: every nullable element stays read-only on a class
+  `suspend fun (): MutableStateFlow<T?>`, now named (below).
+- **Gate.** `isMutableStateFlowElementWritable` admits every writable kind's nullable form. Its
+  per-kind `when` stays as the one place a kind could be held back again, and the SharedFlow
+  refusal arm for a nullable writable element is kept cold for the same reason.
+
+### Declined, named
+
+A declared `MutableStateFlow` or `MutableSharedFlow` binds the read-only holder, with
+`SKIPPED_UNSUPPORTED_INPUT` saying why, for:
+
+- a `List`, `Set` or `Map` element, or a `ByteArray`: they cross as a handle to a wire container the
+  write seam has no arm to build;
+- an interface element: it is read through its ADR-040 backing wrapper, and no forward arm carries a
+  C# implementation of an interface into a Kotlin flow.
+
+These were silently read-only before. The property form reads "its setter is not generated because
+a List element of a MutableStateFlow has no write arm (the write seam does not build its wire
+container), so its `.Value` is not settable from C#"; an interface reads "(a C# implementation
+cannot be written into a Kotlin flow on the forward route)". A method return says "its returned
+holder's setter" instead. Both flows build the sentence in one function,
+`MutableStateFlowReadOnlyElement.noWriteArm(holder)`, so they cannot drift.
+
+Four read-only routes are named the same way ("its returned holder's setter is not generated
+because ..."): a nullable `MutableStateFlow` method return (the held route has no null arm), an
+awaited `MutableStateFlow` of a nullable element, an awaited nullable `MutableStateFlow`, and a
+top-level `suspend` function's `MutableStateFlow` (the awaited write is keyed on a class member).
+
+A refusal fires only for a member that survives read-only. One the Flow or suspend route refuses
+whole (a nullable collection element, an awaited `MutableStateFlow` of a collection, a refused
+parameter) carries that refusal's own diagnostic. An interface-owned read-only `MutableStateFlow`
+is named on the interface, which matters when its implementer is not exported (it was silent).
+
+### Evidence
+
+Verified natively (`IntegrationTests/MutableStateFlowEnumElementTests.cs`, `MutableStateFlowTests.cs`,
+`SharedFlowTests.cs`; AOT included): `CatMoodTracker.hunch` and `hunchDial()` (null versus `Happy`
+at ordinal 0, the out-of-range write, `CompareAndSet` and the `Update` family), `purring` (null,
+`false` and `true` are three distinct writes) and `initial` (a non-ASCII `char` survives the write
+and the read), and four facts on `CatBulletin.hunches`, `purrs` and `initials`. LeakTests row
+8d-enum `EnumStateFlowElement_RepeatedValueReads_ReturnToBaseline` gained the nullable enum writes;
+the scalar writes mint nothing, so no new row. Tier 1 cells with `dotnet build` cover the
+signatures (`Tier1MutableStateFlowEnumElementTest`, `Tier1MutableStateFlowNullableElementWriteTest`,
+`Tier1SharedFlowSurfaceTest`).
+
+The collection, `ByteArray`, interface and route refusals are verified by Tier 1 only
+(`Tier1MutableStateFlowReadOnlyElementTest`): no `test-library` fixture has those shapes.
+Inferred, not run: a refused value class element on an interface is named, but no cell pins it.

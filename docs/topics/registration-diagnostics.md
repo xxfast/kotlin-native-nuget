@@ -385,7 +385,9 @@ returns to baseline with nothing for you to dispose. `LeakTests/LiveHandleTests.
 `EnumFlowElement_Emissions_ReturnToBaseline` and
 `ValueClassFlowElement_ValueReadsAndEmissions_ReturnToBaseline` cover the enum `.Value` loop, the enum
 emission loop and the value-class element on the same two routes. The enum `.Value` loop also
-writes a settable `MutableStateFlow<E>` once; the write crosses as an ordinal and mints nothing.
+writes a settable `MutableStateFlow<E>` once and a `MutableStateFlow<E?>` through a property, a
+`CompareAndSet` to `null` and a held reader; a write crosses as an ordinal (behind a has-value
+flag when nullable) and mints nothing.
 The value-class loop also writes a settable `MutableStateFlow<V>` through the property, a
 `CompareAndSet` and a held reader. A `String` underlying mints nothing on the write, so the only
 handles are the read boxes and the held reader's flow, which you dispose.
