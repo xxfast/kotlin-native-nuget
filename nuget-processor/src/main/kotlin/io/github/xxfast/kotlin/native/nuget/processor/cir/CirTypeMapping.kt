@@ -14,6 +14,7 @@ import com.google.devtools.ksp.symbol.Variance
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.CollectionKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardKotlinArgumentSpelling
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyGenericSealedElement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
@@ -290,8 +291,13 @@ internal sealed interface MutableStateFlowElement {
   /** An enum (ADR-071 amendment): crosses as its ordinal, as the synchronous enum setter does. */
   data class Enum(val qualifiedName: String) : Writable
 
-  /** An ordinary exported class or object: crosses as its handle (`v._handle`). */
-  data class Handle(val qualifiedName: String) : Writable
+  /**
+   * An exported class or object: crosses as its handle (`v._handle`). [kotlinType] is the type
+   * the Kotlin half reads that handle at, spelled by [forwardKotlinArgumentSpelling]: the
+   * qualified name, applied for a generic instantiation (`pkg.Box<kotlin.String>`, ADR-208),
+   * since a generic class has no bare spelling (`asStableRef<pkg.Box>()` does not compile).
+   */
+  data class Handle(val kotlinType: String) : Writable
 
   /**
    * ADR-071 amendment (value-class element write): a value class whose underlying the synchronous
@@ -346,22 +352,20 @@ internal fun classifyMutableStateFlowElement(elementType: KSType?): MutableState
   val classDeclaration: KSClassDeclaration =
     declaration as? KSClassDeclaration ?: return MutableStateFlowElement.ReadOnly
   val qualifiedName: String = classDeclaration.qualifiedName?.asString() ?: simpleName
+  val expanded: KSType = elementType.expandAliases()
   return when {
     classDeclaration.classKind == ClassKind.ENUM_CLASS ->
       MutableStateFlowElement.Enum(qualifiedName)
 
-    // Before the CLASS arm: a value class is a `CLASS` too.
+    // Before the CLASS arm: a value class is a `CLASS` too. A generic value class is refused by
+    // name there and is never read as a handle.
     classDeclaration.isValueClass() -> valueClassElement(classDeclaration, qualifiedName)
 
-    // ADR-208: a generic class instantiation (`Box<String>`) has no write arm. The Kotlin half
-    // of the seam reads the element at its bare qualified name, which a generic class does not
-    // have (`asStableRef<pkg.Box>()` does not compile), so it keeps the read-only mapping.
-    // After the value-class arm: a generic value class is refused by name there, not silently.
-    elementType.expandAliases().arguments.isNotEmpty() -> MutableStateFlowElement.ReadOnly
-
+    // ADR-208: a closed generic instantiation (`Box<String>`, a generic sealed `Outcome<Int>`)
+    // is an object handle like any other class, read at its applied spelling.
     classDeclaration.classKind == ClassKind.CLASS ||
         classDeclaration.classKind == ClassKind.OBJECT ->
-      MutableStateFlowElement.Handle(qualifiedName)
+      MutableStateFlowElement.Handle(expanded.makeNotNullable().forwardKotlinArgumentSpelling())
 
     else -> MutableStateFlowElement.ReadOnly
   }

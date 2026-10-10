@@ -505,6 +505,53 @@ public class LiveHandleTests
     }
 
     [Fact]
+    public async Task MutableStateFlowGenericElement_Writes_ReturnToBaseline()
+    {
+        // ADR-071 over ADR-208: a box written into a `MutableStateFlow<Box<T>>` (`.Value` set and
+        // both `CompareAndSet` slots, on the property, held and awaited routes, a nullable element
+        // set to a box and back to null, and a generic sealed arm) is BORROWED: `v._handle`
+        // crosses, Kotlin keeps its own reference to the object and releases nothing, and the
+        // caller's Dispose is the only release. Every `.Value` read back is a wrapper of its own.
+        await AssertNoLeakAsync(async () =>
+        {
+            using var display = new BoxDisplay();
+            using var second = new Box<string>("second");
+            using var third = new Box<string>("third");
+            display.Front.Value = second;
+            Assert.True(display.Front.CompareAndSet(second, third));
+            using (Box<string> front = display.Front.Value)
+            {
+                Assert.Equal("third", front.Value);
+            }
+
+            display.Spare.Value = second;
+            Assert.Equal("second", display.SpareLabel());
+            display.Spare.Value = null;
+            Assert.Null(display.Spare.Value);
+
+            using var seven = new Box<int>(7);
+            using var eight = new Box<int>(8);
+            using (KotlinMutableStateFlow<Box<int>> window = display.Window())
+            {
+                window.Value = seven;
+                Assert.True(window.CompareAndSet(seven, eight));
+            }
+            using (KotlinMutableStateFlow<Box<int>> window = await display.UnveiledAsync())
+            {
+                window.Value = seven;
+                Assert.Equal(7, display.WindowCount());
+            }
+
+            using var refused = new Outcomes.Outcome.Err<int>("no dinner");
+            display.Verdict.Value = refused;
+            using (Outcomes.Outcome<int> verdict = display.Verdict.Value)
+            {
+                Assert.Equal("no dinner", ((Outcomes.Outcome.Err<int>)verdict).Message);
+            }
+        });
+    }
+
+    [Fact]
     public void GenericSealed_CSharpBuiltArmsPassedBack_ReturnToBaseline()
     {
         // ADR-199: an arm the consumer constructs mints its handle in the C# constructor and lends
