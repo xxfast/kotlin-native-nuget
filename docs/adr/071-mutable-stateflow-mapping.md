@@ -970,3 +970,33 @@ reaches a `MutableSharedFlow<String>`'s `EmitAsync` and `TryEmit` (seen in the g
 `Native_TryEmitHeadlines` lambda; no test pins it). Inferred, not
 observed: the pre-fix behaviour of a null `string` element, taken from the same wire as the
 measured `default(CatId)` crash (a null pointer in a non-null Kotlin `String` slot).
+
+## Amendment (2026-10-10): a generic class instantiation element is settable
+
+A `MutableStateFlow` whose element is a closed generic class instantiation (`MutableStateFlow<Box<String>>`)
+or a generic sealed type (`MutableStateFlow<Outcome<Int>>`) is `KotlinMutableStateFlow<Box<string>>`
+with a settable `.Value`, `CompareAndSet` and the `Update` family, on the property, held function
+return and awaited `suspend` routes. `Box<T>?` takes the object-handle arm's nullable pointer, so it
+is settable to a box and back to `null`. This supersedes the read-only mapping ADR-208 gave a generic
+instantiation element, which existed only because the write seam could not spell the element.
+
+- **Rule.** The write seam spelled the element by its bare qualified name at three Kotlin sites: the
+  write slot's handle arm (`asStableRef<pkg.Box>()`), and the held `_set_value` and
+  `_compare_and_set` exports. A generic class has no bare spelling, so that did not compile. All three
+  now use `forwardKotlinArgumentSpelling()`, the instantiated spelling of ADR-199 and ADR-208
+  (`pkg.Box<kotlin.String>`). A non-generic element renders exactly as before.
+- **Borrowed.** The written wrapper is borrowed: its handle crosses, Kotlin keeps its own reference
+  and releases nothing, and the caller's `Dispose` is the only release.
+- **Equality.** `CompareAndSet` compares with Kotlin `equals`, so a C#-built `Ok(1)` of a data arm
+  matches the `Ok(1)` Kotlin holds, and a plain class matches by identity.
+- **Still refused.** A generic *value* class element (`MutableStateFlow<VCrate<Int>>`) is no handle
+  and declares no record struct. The member is refused whole upstream with
+  `SKIPPED_UNSUPPORTED_PROPERTY`; no read-only property survives, so no setter remark applies. Pinned.
+- **Consequence, pre-existing for every object-handle element.** The `Update` family's retry loop
+  reads `.Value` into a wrapper it never disposes, which the GC releases. The leak row covers set and
+  `CompareAndSet`, not `Update`.
+
+Verified: `Tier1MutableStateFlowGenericElementTest` (signatures, the applied spelling in the Kotlin
+half, the refused value class, and a `dotnet build` of a consumer that sets, compares and updates);
+`IntegrationTests/MutableStateFlowGenericElementTests.cs` run natively against `BoxDisplay`;
+LeakTests row `MutableStateFlowGenericElement_Writes_ReturnToBaseline`.
