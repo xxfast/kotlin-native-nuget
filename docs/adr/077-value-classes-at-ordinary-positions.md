@@ -310,3 +310,39 @@ the same nullable-pointer shape as `ChartId?`, retagged `UNBOX_VALUE_CLASS`.
 property and callable positions too, via the shared `sealedAsHandle()` rewrite minted by
 [ADR-105](105-sealed-property-position.md); the C# reconstruction routes through the sealed base's
 own `FromHandle` discriminator rather than the ordinary constructor call this ADR's table assumes.
+
+## Amendment (2026-10-10): `default(V)` of a reference-underlying value class is refused in C#
+
+A C# `record struct` always has a `default`. For a value class over a `String` or an exported
+class its underlying is then null, a value Kotlin could never construct and that no non-null
+Kotlin slot can take. Before this amendment `new ChipLedger(default(CatId))` took the process down
+with an access violation (`0xC0000005` in `ChipLedger.Native_Create`, measured).
+
+Rule: every forward crossing of such a value class into a non-null Kotlin slot throws
+`ArgumentException("default(Tag) carries no Id; construct a Tag instead", nameof(tag))` in C#,
+before the call. A primitive or enum underlying has a real `default`, and a nullable `V?` slot
+still accepts `null`; a `default` inside `V?` is refused like any other.
+
+One helper owns the spelling, `valueClassUnderlyingOrThrow` (`ValueClassDefaultGuard.kt`), and it
+is an expression inside the unwrap, `(tag.Id ?? throw new ArgumentException(...))`, so it serves
+argument lists, `Select` lambdas and expression-bodied members alike. Guarded sites: property
+setter, method and constructor parameters, a value class inside a `List` parameter, extension
+receivers, the struct's own members (`default(CatId).Length`), the ADR-171 box, collection
+components on the `suspend` and `Flow` routes, and the `MutableStateFlow` value-class write arm
+(see [ADR-071](071-mutable-stateflow-mapping.md)). Not guarded because the shape is refused
+upstream: a bare value-class parameter on a `suspend` or `Flow` member, a callback returning a
+value class, an interface with a value-class member, and a generic `Box<Tag>` return.
+
+Because the guard is an expression it runs while the arguments are evaluated, after earlier
+arguments have built their handles. Those are released on the throw: the list handle on the
+call's own `finally`, a half-filled list in `CreateList`'s catch.
+
+Verified: `IntegrationTests/ValueClassDefaultGuardTests.cs`; `Tier1ValueClassDefaultGuardTest`;
+`LeakTests/LiveHandleTests.cs` row 8d-valueclass-default,
+`DefaultValueClass_RefusedAfterAHandleWasBuilt_ReturnsToBaseline`; the pre-fix crash above was
+observed directly. Not covered by any fixture: the nullable primitive-underlying collection
+component arm (`ForwardCirCollectionComponents.kt`).
+
+Known and unchanged: an ordinary non-null `String` parameter or setter still accepts `null!` with
+no C# guard (the crash was measured for a constructor parameter). That is not a value-class case
+and this amendment does not change it.

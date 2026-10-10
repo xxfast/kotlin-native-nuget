@@ -336,6 +336,12 @@ A collection parameter on a held `MutableStateFlow` method or a nullable `StateF
 wraps its acquire, and the `_has_value` probe, in a call-scoped collection handle. Row 8f-collection
 covers both: `CollectionParameterOnHeldAcquireAndHasValueProbe_ReturnsToBaseline`.
 
+A [`default(V)` of a `String`- or class-backed value class](value-classes.md) throws
+`ArgumentException` while the call's arguments are evaluated, after earlier arguments have built
+their handles. `LeakTests/LiveHandleTests.cs` row 8d-valueclass-default,
+`DefaultValueClass_RefusedAfterAHandleWasBuilt_ReturnsToBaseline`, refuses one after a list
+argument was built, and one inside a half-filled `List<CatId>`; both return to baseline.
+
 For a [cancellation-token-taking async call](instance-members.md#async-cancellation), this count
 only proves the pending-continuation and `Task` handles came back to baseline: the bridge-owned
 `CancellationTokenSource` is a plain .NET `GCHandle`, not one of the Kotlin `StableRef`s

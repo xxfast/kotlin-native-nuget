@@ -955,3 +955,16 @@ with a user parameter named `v` may generate non-compiling C#. Recorded as a ROA
 `MutableSharedFlow<T>` is writable for exactly the elements whose `MutableStateFlow<T>` `.Value`
 is settable, and a value-class outcome here lands on both. The four members are still not exposed
 on a `MutableStateFlow<T>`.
+
+## Amendment (2026-10-10): the write arm's `default(V)` guard, and a null `string` element
+
+The `MutableStateFlow` value-class write arm refuses `default(V)` through the shared expression
+helper `valueClassUnderlyingOrThrow`, defined by
+[ADR-077's 2026-10-10 amendment](077-value-classes-at-ordinary-positions.md), in place of a
+statement-form guard. It throws the same `ArgumentException` naming the struct, on the setter and
+both `CompareAndSet` slots (`(v.Id ?? throw new ArgumentException(...))`).
+
+A non-null `string` element now throws `ArgumentNullException` on the setter and on both
+`CompareAndSet` slots, the exception a null object element already threw there. Inferred, not
+observed: the pre-fix behaviour of a null `string` element, taken from the same wire as the
+measured `default(CatId)` crash (a null pointer in a non-null Kotlin `String` slot).
