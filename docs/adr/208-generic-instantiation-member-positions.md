@@ -117,7 +117,7 @@ class).
 | a generic interface reference (`Shelf<String>`) | it keeps its `"generic declaration"` skip; spelling a generic interface is a separate feature |
 | an inner class capturing a generic owner | ADR-196 spells it `Tin.Latch<T>`; out of scope |
 | an unexported outer (`Pair<Int, Int>`) | nothing declares it in C#; the unexported-class refusal names `kotlin.Pair` |
-| `MutableStateFlow<Box<T>>` | binds read-only as `KotlinStateFlow<Box<T>>` in this change |
+| `MutableStateFlow<Box<T>>` | settable `KotlinMutableStateFlow<Box<T>>` since the 2026-10-10 amendment to [ADR-071](071-mutable-stateflow-mapping.md); only a generic value class element stays refused |
 | a C# class implementing a Kotlin interface whose member returns `Box<Int>` | `SKIPPED_UNIMPLEMENTABLE_INTERFACE`; verified on `Manifest` |
 
 ## Consequences

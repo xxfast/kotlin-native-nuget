@@ -27,6 +27,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.MutableStateFlowElemen
 import io.github.xxfast.kotlin.native.nuget.processor.cir.writableMutableStateFlowElement
 import io.github.xxfast.kotlin.native.nuget.processor.cir.isMutableStateFlowElementWritable
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardKotlinArgumentSpelling
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardArmMemberProjectedByBase
@@ -723,9 +724,9 @@ internal fun mutableStateFlowWriteSlot(elementType: KSType?): MutableStateFlowWr
   return when (element) {
     is MutableStateFlowElement.Handle -> {
       val unwrap: String = if (nullable) {
-        "value?.asStableRef<${element.qualifiedName}>()?.get()"
+        "value?.asStableRef<${element.kotlinType}>()?.get()"
       } else {
-        "value.asStableRef<${element.qualifiedName}>().get()"
+        "value.asStableRef<${element.kotlinType}>().get()"
       }
       MutableStateFlowWriteSlot(listOf("value" to cOpaquePointer.copy(nullable = nullable)), unwrap)
     }
@@ -773,12 +774,12 @@ private fun valueClassWriteSlot(
     is MutableStateFlowElement.Handle -> if (nullable) {
       MutableStateFlowWriteSlot(
         listOf("value" to cOpaquePointer.copy(nullable = true)),
-        "value?.asStableRef<${underlying.qualifiedName}>()?.get()?.let { ${wrap("it")} }",
+        "value?.asStableRef<${underlying.kotlinType}>()?.get()?.let { ${wrap("it")} }",
       )
     } else {
       MutableStateFlowWriteSlot(
         listOf("value" to cOpaquePointer),
-        wrap("value.asStableRef<${underlying.qualifiedName}>().get()"),
+        wrap("value.asStableRef<${underlying.kotlinType}>().get()"),
       )
     }
 
@@ -816,6 +817,15 @@ internal fun FunSpec.Builder.addMutableStateFlowWriteSlot(
 }
 
 /**
+ * The element of a held `MutableStateFlow<T>` as the flow-keyed write exports read the flow at
+ * (`MutableStateFlow<kotlin.Int?>`, `MutableStateFlow<pkg.Box<kotlin.String>>`): the one
+ * spelling the write slot's handle arm uses ([MutableStateFlowElement.Handle.kotlinType]), with
+ * the element's own nullability.
+ */
+private fun heldStateFlowElementSpelling(elementType: KSType?): String =
+  elementType?.expandAliases()?.forwardKotlinArgumentSpelling() ?: "kotlin.Any"
+
+/**
  * ADR-071 (2026-09-11): the held route's flow-handle-keyed `${stem}_set_value(flowHandle, value,
  * errorOut)` export. Shared by the held function-return route and the suspend route that awaits
  * a `MutableStateFlow<T>`, both of which hand C# the flow's own handle.
@@ -825,9 +835,7 @@ internal fun FileSpec.Builder.addHeldStateFlowSetValueExport(
   owner: KSFunctionDeclaration,
   elementType: KSType?,
 ) {
-  val nullable: Boolean = elementType?.isMarkedNullable == true
-  val elementQualified: String = (elementType?.expandAliases()
-    ?.declaration?.qualifiedName?.asString() ?: "kotlin.Any") + if (nullable) "?" else ""
+  val elementQualified: String = heldStateFlowElementSpelling(elementType)
   val slot: MutableStateFlowWriteSlot = mutableStateFlowWriteSlot(elementType)
   addFunction(
     FunSpec.builder("export_${stem}_set_value")
@@ -1001,9 +1009,7 @@ internal fun FileSpec.Builder.addHeldStateFlowCompareAndSetExport(
   owner: KSFunctionDeclaration,
   elementType: KSType?,
 ) {
-  val nullable: Boolean = elementType?.isMarkedNullable == true
-  val elementQualified: String = (elementType?.expandAliases()
-    ?.declaration?.qualifiedName?.asString() ?: "kotlin.Any") + if (nullable) "?" else ""
+  val elementQualified: String = heldStateFlowElementSpelling(elementType)
   val (expect: MutableStateFlowWriteSlot, update: MutableStateFlowWriteSlot) =
     mutableStateFlowCompareAndSetSlots(elementType)
   val flow: String =

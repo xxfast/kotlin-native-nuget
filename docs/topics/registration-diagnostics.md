@@ -320,6 +320,12 @@ value's handle and mints nothing; each `.Value` read mints one element handle th
 covers an `Int` and a class element. A nullable `MutableStateFlow` element or member write adds no
 handle, so it has no row of its own.
 
+A `MutableStateFlow` whose element is a generic class instantiation (`Box<string>`) or a generic
+sealed type borrows the written box too, on set and `CompareAndSet`, so only your `Dispose` releases
+it. `MutableStateFlowGenericElement_Writes_ReturnToBaseline` writes through the property, held,
+awaited and nullable routes and a sealed arm, and returns to baseline. The `Update` family has no
+row: its retry loop reads each `.Value` into a wrapper it never disposes, which the GC releases.
+
 An absent [nullable `Flow<T>?` member](coroutines-and-flow.md#flow-nullable-member) mints nothing:
 the presence check on a property or method, and a `suspend` completion with no flow, leave no
 handle behind, and a present one is the ordinary holder you dispose.

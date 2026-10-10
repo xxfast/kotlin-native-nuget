@@ -839,6 +839,29 @@ since you read it, the write throws `KotlinInvalidOperationException` instead of
 function returning `MutableStateFlow<T>?` stays read-only. `Boolean?`, `Char?` and nullable enum
 elements stay read-only.
 
+An element that is a [generic class](generics.md) instantiation (`Box<String>`) or a generic
+sealed type (`Outcome<Int>`) is settable like any other class element, nullable (`Box<String>?`)
+included. The box you write is borrowed, so it stays yours to dispose:
+
+```kotlin
+class BoxDisplay {
+  val front: MutableStateFlow<Box<String>> = MutableStateFlow(Box("first"))
+  val verdict: MutableStateFlow<Outcome<Int>> = MutableStateFlow(Outcome.Ok(1))
+}
+```
+
+```C#
+using var display = new BoxDisplay();
+using var second = new Box<string>("second");
+display.Front.Value = second;
+
+using var refused = new Outcome.Err<int>("no dinner");
+display.Verdict.Value = refused;
+```
+
+A `MutableStateFlow` of a generic *value* class (`MutableStateFlow<VCrate<Int>>`) is not bound at
+all: the member is skipped with `SKIPPED_UNSUPPORTED_PROPERTY`.
+
 Reassigning the whole `MutableStateFlow<T>` member itself (a `var` holding a different flow
 instance) is not supported; only writes through `.Value` are.
 
@@ -862,13 +885,14 @@ from a plain C# CAS:
 
 - An object element is compared with Kotlin `equals`, which is identity for a plain class. A
   wrapper read back from `.Value` is the same Kotlin instance, so it matches; a second `Cat` with
-  the same fields does not.
+  the same fields does not. A data arm of a sealed type is equal by value, so a C#-built
+  `new Outcome.Ok<int>(1)` matches the `Ok(1)` Kotlin holds.
 - A throwing Kotlin `equals` surfaces as `KotlinInvalidOperationException`, never as `false`.
 - An absent `MutableStateFlow<T>?` throws on `CompareAndSet`, as the setter does.
 - The transform may run more than once under contention, so keep it free of side effects. An
   exception it throws propagates unchanged and leaves the value alone.
-- `Update` never disposes the value passed to the transform. Dispose any object wrapper you
-  create or read yourself.
+- `Update` never disposes the value passed to the transform, and an object element's retry loop
+  leaves the wrapper it reads to the GC. Dispose any object wrapper you create or read yourself.
 
 ## Nullable `StateFlow<T?>` and `StateFlow<T>?`
 

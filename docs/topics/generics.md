@@ -442,7 +442,10 @@ A refused argument is reported as `SKIPPED_UNSUPPORTED_TYPE` naming the member, 
 `Box<List<Int>>` return: "its generic class `<package>.Box` has no C# spelling here: the erased
 wire cannot read its type argument `List<Int>`".
 
-A `MutableStateFlow<Box<Int>>` binds as a read-only `KotlinStateFlow<Box<int>>`. A C# class cannot
+A `MutableStateFlow<Box<Int>>` binds as a `KotlinMutableStateFlow<Box<int>>` with a settable
+`.Value`, `CompareAndSet` and `Update` (see
+[Settable `.Value`](coroutines-and-flow.md#settable-value)); the written box is borrowed, so you
+still dispose it. A C# class cannot
 implement a Kotlin interface that has a member returning `Box<Int>`; the implementation is skipped
 with `SKIPPED_UNIMPLEMENTABLE_INTERFACE`.
 
