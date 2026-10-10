@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import kotlin.test.Test
 import kotlin.test.assertFalse
@@ -324,7 +325,9 @@ class Tier1LegacyRouteCollectionParameterTest {
       "public Task<int> CountOfAsync(IReadOnlyList<string>? kinds, " +
           "IReadOnlyList<global::Interop.Treats.Treat>? treats",
       "public static Task<int> ForgetSomeAsync(IReadOnlySet<string>? ids",
-      "IntPtr kindsHandle = kinds != null ? NugetMarshal.CreateList(kinds) : IntPtr.Zero;",
+      "IntPtr kindsHandle = kinds != null ? NugetMarshal.CreateList(" +
+        "global::System.Linq.Enumerable.Select(kinds, x => " +
+        "${nonNullStringOrThrow("x", "kinds")})) : IntPtr.Zero;",
       "if (kindsHandle != IntPtr.Zero) NugetMarshal.Dispose(kindsHandle);",
     ).forEach { expected ->
       assertTrue(expected in cs, "missing `$expected`; got: ${csharpSignatures(result)}")
@@ -358,7 +361,9 @@ class Tier1LegacyRouteCollectionParameterTest {
           "IReadOnlyList<string>?> tags = default, CancellationToken cancellationToken = default)",
       "public KotlinFlow<string> Picks(string cat, global::Kotlin.Native.Interop.KotlinOptional<" +
           "IReadOnlySet<string>?> tags = default)",
-      "IntPtr tagsHandle = tags.Value != null ? NugetMarshal.CreateList(tags.Value) : IntPtr.Zero;",
+      "IntPtr tagsHandle = tags.Value != null ? NugetMarshal.CreateList(" +
+        "global::System.Linq.Enumerable.Select(tags.Value, x => " +
+        "${nonNullStringOrThrow("x", "tags")})) : IntPtr.Zero;",
       "tags.HasValue, tagsHandle",
       "[MarshalAs(UnmanagedType.I1)] bool tagsIsSet, IntPtr tags",
     ).forEach { expected -> assertTrue(expected in cs, "missing `$expected`; got:\n$cs") }

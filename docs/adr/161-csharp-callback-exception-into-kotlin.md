@@ -335,3 +335,13 @@ Verified: `Tier1CancelledCallbackOriginalTest` and the six `CancelledCallback_*`
 `CallbackFaultTests.cs`. Inferred, not tested: suspend and `Flow` exports share `BuildException`, so
 a cancelled callback there hits the same detection, but only the rebuild path can fire because the
 stash lives on another thread.
+
+## Amendment (2026-10-10): a null returned for a non-null `String` takes this path
+
+A C# callback or C#-implemented interface member that returns `null` where Kotlin expects a
+non-null `String` is refused inside `NugetMarshal.WrapString` with an `ArgumentNullException`
+(parameter `value`), and so faults through the path above instead of crashing the process on an
+uncaught `kotlin.NullPointerException`. The C# caller of the Kotlin function receives the
+`ArgumentNullException` for a lambda (verified); for an interface member the test asserts only an
+exception whose message contains `value`. See the 2026-10-10 amendment to
+[ADR-003](003-memory-management-across-bridge.md).

@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -115,7 +116,8 @@ class Tier1ByteArrayComponentTest {
           "generatedCSharp=${result.generatedCSharp}",
     )
     assertTrue(
-      "new KeyValuePair<string, IntPtr>(x.Key, NugetMarshal.CreateBytes(x.Value))" in
+      ("new KeyValuePair<string, IntPtr>(${nonNullStringOrThrow("x.Key", "bursts")}, " +
+        "NugetMarshal.CreateBytes(x.Value))") in
           result.generatedCSharp,
       "expected the value slot to project to an IntPtr handle; " +
           "generatedCSharp=${result.generatedCSharp}",

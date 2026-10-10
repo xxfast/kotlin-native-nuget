@@ -26,3 +26,22 @@ internal fun valueClassUnderlyingOrThrow(
   return "($struct.$property ?? throw new ArgumentException(\"default($structName) carries no " +
       "$property; construct a $structName instead\"$named))"
 }
+
+/**
+ * The C# read of a `string` headed for a non-null Kotlin `String` slot, refusing null:
+ * `(text ?? throw new ArgumentNullException(nameof(text)))`. The string twin of
+ * [valueClassUnderlyingOrThrow], and an expression for the same reason: one spelling serves an
+ * argument list, a `Select` lambda, an expression-bodied member and a write lambda.
+ *
+ * C# can always pass `null!` where a `string` is declared. The marshaller turns it into a null
+ * pointer, and Kotlin then holds a null in a `String` it believes is non-null: measured, that is
+ * an access violation as soon as the export touches it (`0xC0000005` out of a companion, object or
+ * top-level import), a silent null stored in the object when it does not, a
+ * `kotlin.NullPointerException` out of a collection read, and an uncaught one that takes the
+ * process down when it is a callback's result. One null check per string argument, no allocation.
+ *
+ * [value] is the expression read, [parameter] the name the caller wrote, which is what
+ * `ArgumentNullException.ParamName` is for (a collection's own name for one of its elements).
+ */
+internal fun nonNullStringOrThrow(value: String, parameter: String = value): String =
+  "($value ?? throw new ArgumentNullException(nameof($parameter)))"

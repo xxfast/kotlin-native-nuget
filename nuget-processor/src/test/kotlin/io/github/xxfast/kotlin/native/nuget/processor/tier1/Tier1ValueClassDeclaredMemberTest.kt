@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import io.github.xxfast.kotlin.native.nuget.processor.valueClassUnderlyingOrThrow
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import kotlin.test.Test
@@ -100,7 +101,7 @@ class Tier1ValueClassDeclaredMemberTest {
     assertContains(cs, "public string Describe(string prefix)")
     assertContains(cs, "Native_Describe_2(" +
       valueClassUnderlyingOrThrow("this", "Value", "ChartId") +
-      ", prefix)")
+      ", ${nonNullStringOrThrow("prefix")})")
   }
 
   /**

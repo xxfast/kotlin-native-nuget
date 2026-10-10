@@ -1,9 +1,17 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+
+/**
+ * A `List` or `Set` of non-null strings as the generated C# hands it to its factory: each element
+ * read through the null guard (`nonNullStringOrThrow`), reported against the collection [name].
+ */
+private fun guardedStrings(name: String): String =
+  "global::System.Linq.Enumerable.Select($name, x => ${nonNullStringOrThrow("x", name)})"
 
 /**
  * ROADMAP:130 / ROADMAP:340 — a temporary native collection handle is disposed on **every** exit
@@ -41,8 +49,8 @@ class Tier1CollectionHandleCleanupTest {
       |            IntPtr labelsHandle = IntPtr.Zero;
       |            try
       |            {
-      |                entriesHandle = NugetMarshal.CreateList(entries);
-      |                labelsHandle = NugetMarshal.CreateSet(labels);
+      |                entriesHandle = NugetMarshal.CreateList(${guardedStrings("entries")});
+      |                labelsHandle = NugetMarshal.CreateSet(${guardedStrings("labels")});
       |                int nativeResult = Native_CrossCheck(_handle, entriesHandle, labelsHandle, out IntPtr error);
       |                if (error != IntPtr.Zero)
       |                {
@@ -80,13 +88,14 @@ class Tier1CollectionHandleCleanupTest {
     )
 
     val cs: String = result.generatedCSharp
+    val notes: String = guardedStrings("notes")
     assertContains(
       cs,
       """
       |            IntPtr notesHandle = IntPtr.Zero;
       |            try
       |            {
-      |                notesHandle = notes != null ? NugetMarshal.CreateList(notes) : IntPtr.Zero;
+      |                notesHandle = notes != null ? NugetMarshal.CreateList($notes) : IntPtr.Zero;
       |                IntPtr handle = Native_Create(notesHandle, out IntPtr error);
       |                if (error != IntPtr.Zero)
       |                {
@@ -129,7 +138,7 @@ class Tier1CollectionHandleCleanupTest {
       |                IntPtr valueHandle = IntPtr.Zero;
       |                try
       |                {
-      |                    valueHandle = NugetMarshal.CreateList(value);
+      |                    valueHandle = NugetMarshal.CreateList(${guardedStrings("value")});
       |                    Native_Set_tags(_handle, valueHandle, out IntPtr error);
       |                    if (error != IntPtr.Zero)
       |                    {

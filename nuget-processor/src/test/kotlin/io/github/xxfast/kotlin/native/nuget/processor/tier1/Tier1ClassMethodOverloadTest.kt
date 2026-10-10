@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import kotlin.test.Test
 import kotlin.test.assertContains
@@ -69,8 +70,14 @@ class Tier1ClassMethodOverloadTest {
     // (the sync-error renderer rebuilds the body independently of the plan's projection).
     assertContains(cs, "private static extern IntPtr Native_Describe_2(")
     assertContains(cs, "private static extern IntPtr Native_Describe_3(")
-    assertContains(cs, "Native_Describe_2(_handle, prefix, out IntPtr error)")
-    assertContains(cs, "Native_Describe_3(_handle, prefix, excited, out IntPtr error)")
+    assertContains(
+      cs,
+      "Native_Describe_2(_handle, ${nonNullStringOrThrow("prefix")}, out IntPtr error)",
+    )
+    assertContains(
+      cs,
+      "Native_Describe_3(_handle, ${nonNullStringOrThrow("prefix")}, excited, out IntPtr error)",
+    )
   }
 
   /**

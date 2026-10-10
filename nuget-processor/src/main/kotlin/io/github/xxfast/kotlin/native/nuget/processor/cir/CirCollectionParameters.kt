@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSValueParameter
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
@@ -304,9 +305,16 @@ private fun legacyRouteParameter(
 
     // A scalar keeps the shipped spelling. A refused parameter never reaches here: both halves
     // filter its member out first, and `warnRefusedLegacyRouteMembers` names it once.
+    // A `Plain` string is non-null (a nullable or defaulted one is `NullableScalar`), so its read
+    // refuses the `null!` C# can always pass, as every other non-null string crossing does.
     ForwardLegacyParameterShape.Plain, is ForwardLegacyParameterShape.Refused -> {
       val resolved: KSType = param.type.resolve().expandAliases()
-      CirParameter(name, mapParamType(resolved.declaration.simpleName.asString()))
+      val type: String = mapParamType(resolved.declaration.simpleName.asString())
+      CirParameter(
+        name,
+        type,
+        nativeArgumentExpression = if (type == "string") nonNullStringOrThrow(name) else null,
+      )
     }
   }
 }

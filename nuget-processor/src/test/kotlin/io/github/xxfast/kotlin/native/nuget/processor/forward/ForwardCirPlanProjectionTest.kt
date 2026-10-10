@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import io.github.xxfast.kotlin.native.nuget.processor.valueClassUnderlyingOrThrow
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirConstructor
@@ -198,7 +199,10 @@ class ForwardCirPlanProjectionTest {
     assertEquals(true, rendered.contains("IntPtr @paramsHandle = IntPtr.Zero;"), rendered)
     assertEquals(
       true,
-      rendered.contains("@paramsHandle = NugetMarshal.CreateList(@params);"),
+      rendered.contains(
+        "@paramsHandle = NugetMarshal.CreateList(global::System.Linq.Enumerable.Select(" +
+          "@params, x => ${nonNullStringOrThrow("x", "@params")}));",
+      ),
       rendered,
     )
     assertEquals(
@@ -259,7 +263,9 @@ class ForwardCirPlanProjectionTest {
     )
     assertEquals(
       true,
-      rendered.contains("Native_Create(@abstract, @ref._handle, out IntPtr error)"),
+      rendered.contains(
+        "Native_Create(${nonNullStringOrThrow("@abstract")}, @ref._handle, out IntPtr error)",
+      ),
       rendered,
     )
     assertEquals(false, rendered.contains("(abstract,"), rendered)
@@ -296,7 +302,9 @@ class ForwardCirPlanProjectionTest {
     assertEquals(true, rendered.contains("Describe(string error_)"), rendered)
     assertEquals(
       true,
-      rendered.contains("Native_Describe(_handle, error_, out IntPtr error)"),
+      rendered.contains(
+        "Native_Describe(_handle, ${nonNullStringOrThrow("error_")}, out IntPtr error)",
+      ),
       rendered,
     )
     assertEquals(false, rendered.contains("string error,"), rendered)
@@ -379,7 +387,10 @@ class ForwardCirPlanProjectionTest {
     assertEquals(true, rendered.contains("IntPtr error_Handle = IntPtr.Zero;"), rendered)
     assertEquals(
       true,
-      rendered.contains("error_Handle = NugetMarshal.CreateList(error_);"),
+      rendered.contains(
+        "error_Handle = NugetMarshal.CreateList(global::System.Linq.Enumerable.Select(" +
+          "error_, x => ${nonNullStringOrThrow("x", "error_")}));",
+      ),
       rendered,
     )
     assertEquals(

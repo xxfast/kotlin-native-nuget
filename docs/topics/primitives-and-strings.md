@@ -52,6 +52,33 @@ when it returns a value. Keep those getters free of side effects and ensure thei
 stable between evaluations. A top-level function with the same return evaluates once, like an
 ordinary instance method.
 
+## Passing null for a non-null String {id="null-for-a-non-null-string"}
+
+C# lets `null!` through where a `string` is declared. For a Kotlin `String` (not `String?`) the
+generated code refuses it before anything crosses, with an `ArgumentNullException` whose
+`ParamName` is the parameter you wrote:
+
+```C#
+using var desk = new StampDesk("Mylo");
+desk.Stamp(null!); // throws ArgumentNullException, ParamName == "text"
+```
+
+This covers constructor, method, setter (`ParamName` is `value`), `suspend`, top-level, companion,
+`object`, extension receiver and sealed arm parameters alike. A `null` inside a `List`, `Set` or
+`Map` of strings is reported against the collection you passed, so `ParamName` is `texts` for
+`desk.StampAll(new List<string> { "a", null! })`; it replaces the `KotlinNullReferenceException`
+an earlier build threw there. On a member returning a `Flow`, the exception is thrown when the
+flow is collected, because that is where Kotlin reads the argument.
+
+Two shapes accept `null` on purpose: a `string?` parameter (including `string? x = null`), and a
+generic `T` position (`new Box<string>(null!)` holds the null, since `T` is unbounded). A
+[value class](value-classes.md) over a `String` has its own guard and throws `ArgumentException`
+for `default`.
+
+A lambda or C#-implemented interface member that returns `null` where Kotlin
+expects a non-null `String` is refused the same way. See
+[Exceptions from a callback](lambdas-and-callbacks.md#exceptions-from-a-callback).
+
 ## Char
 
 `Char` maps to C# `char`, including non-ASCII characters. It works in properties, parameters,

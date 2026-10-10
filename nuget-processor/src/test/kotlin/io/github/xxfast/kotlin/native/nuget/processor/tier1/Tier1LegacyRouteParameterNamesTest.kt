@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -140,7 +141,11 @@ class Tier1LegacyRouteParameterNamesTest {
       "public Task<string> LoadAsync(string @params, " +
           "CancellationToken cancellationToken = default)",
     )
-    assertContains(generated, "Native_LoadAsync(_handle, GetOrCreateScope(), @params, NugetThunks")
+    assertContains(
+      generated,
+      "Native_LoadAsync(_handle, GetOrCreateScope(), ${nonNullStringOrThrow("@params")}, " +
+        "NugetThunks",
+    )
   }
 
   @Test
@@ -152,7 +157,8 @@ class Tier1LegacyRouteParameterNamesTest {
     assertContains(generated, "public KotlinFlow<int> Watch(string @params)")
     assertContains(
       generated,
-      "return Native_WatchCollect(_handle, GetOrCreateScope(), @params, onNext, onComplete, " +
+      "return Native_WatchCollect(_handle, GetOrCreateScope(), " +
+        "${nonNullStringOrThrow("@params")}, onNext, onComplete, " +
           "onError, userData);",
     )
   }
@@ -244,7 +250,11 @@ class Tier1LegacyRouteParameterNamesTest {
       "public Task<KotlinStateFlow<int>> PollAsync(string @params, " +
           "CancellationToken cancellationToken = default)",
     )
-    assertContains(generated, "Native_PollAsync(_handle, GetOrCreateScope(), @params, NugetThunks")
+    assertContains(
+      generated,
+      "Native_PollAsync(_handle, GetOrCreateScope(), ${nonNullStringOrThrow("@params")}, " +
+        "NugetThunks",
+    )
   }
 
   /**

@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
@@ -564,11 +565,10 @@ internal fun mutableStateFlowWrite(elementType: KSType?, csElementType: String):
     } else {
       CirStateFlowWrite(
         parameters = listOf(CirParameter("value", csElementType)),
-        arguments = "v",
         // `flow.Value = null!` on a non-null `string` element would hand the export a null string
-        // pointer for a non-null Kotlin `String`, which is an access violation there (measured on
-        // the same wire, see [valueClassUnderlyingOrThrow]); rejected like a null object element.
-        rejectsNull = !nullable && simpleName == "String",
+        // pointer for a non-null Kotlin `String`; its read is the one guard every non-null string
+        // crossing shares ([nonNullStringOrThrow]), not a statement of its own.
+        arguments = if (!nullable && simpleName == "String") nonNullStringOrThrow("v") else "v",
       )
     }
 

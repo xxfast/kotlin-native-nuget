@@ -1126,8 +1126,9 @@ internal val CirMethod.resolvedExternName: String
  * [parameters] are the native slots after the receiver handle: one by-value slot, one object
  * handle, or (nullable element write) the has-value pair of a nullable scalar. [arguments] is the
  * C# argument list that fills them from the lambda's `v`. [rejectsNull] keeps the
- * `ArgumentNullException` guard a non-null object element needs before it reads `v._handle`, and a
- * non-null `String` element before its null pointer reaches a non-null Kotlin slot.
+ * `ArgumentNullException` guard a non-null object element needs before it reads `v._handle`. A
+ * non-null `String` element needs no statement: its argument is the guarded read itself
+ * (`nonNullStringOrThrow`).
  */
 internal data class CirStateFlowWrite(
   val parameters: List<CirParameter>,

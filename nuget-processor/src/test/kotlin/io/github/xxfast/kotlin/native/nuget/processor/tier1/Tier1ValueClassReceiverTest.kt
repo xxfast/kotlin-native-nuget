@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import io.github.xxfast.kotlin.native.nuget.processor.valueClassUnderlyingOrThrow
 import kotlin.test.Test
 import kotlin.test.assertContains
@@ -62,13 +63,17 @@ class Tier1ValueClassReceiverTest {
     assertContains(cs, "private static extern IntPtr Native_TemperamentGetNote(int receiver, out IntPtr error);")
     assertContains(cs, "private static extern IntPtr Native_ChartrefGetAnnotation(NugetKotlinHandle receiver, out IntPtr error);")
     assertContains(cs, "Native_TemperamentGetNote((int)receiver.Mood, out IntPtr error)")
-    assertContains(cs, "Native_TemperamentSetNote((int)receiver.Mood, value, out IntPtr error)")
+    assertContains(
+      cs,
+      "Native_TemperamentSetNote((int)receiver.Mood, ${nonNullStringOrThrow("value")}, " +
+        "out IntPtr error)",
+    )
     assertContains(cs, "Native_ChartrefGetAnnotation(" +
       valueClassUnderlyingOrThrow("receiver", "Patient", "ChartRef", "receiver") +
       "._handle, out IntPtr error)")
     assertContains(cs, "Native_ChartrefSetAnnotation(" +
       valueClassUnderlyingOrThrow("receiver", "Patient", "ChartRef", "receiver") +
-      "._handle, value, out IntPtr error)")
+      "._handle, ${nonNullStringOrThrow("value")}, out IntPtr error)")
   }
 
   @Test
