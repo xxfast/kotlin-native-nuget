@@ -27,6 +27,7 @@ a catchable `KotlinException` at the call.
 |---|---|
 | `class<T>` | `class<T>` |
 | `sealed class<T>` | a generic `abstract class`, arms on a non-generic holder (`Outcome.Ok<T>`) |
+| `Box<String>` as a property, parameter or return | `Box<string>`, caller-owned when returned |
 | `<T : Bound>` | `where T : Bound` |
 | `out T` / `in T` on an interface | `out T` / `in T` |
 | `fun <T> f(value: T): T` (top-level) | a generic method |
@@ -364,26 +365,53 @@ Assert.Equal("barge loaded 7", await barge.LoadAsync());
 `Crate<T>` itself has no `LoadAsync`, since a generic class binds no `suspend` member, so the
 override on `Barge` is the only one C# sees.
 
-## Returning an instantiated generic class
+## A generic class at a member position {id="returning-an-instantiated-generic-class"}
 
-A top-level function returning a generic class instantiated with a primitive, `String`, or an
-exported class, object, or enum binds normally, qualified the same way any other cross-namespace
-return is:
+A closed instantiation of an exported generic class (`Box<String>`, `Box<Cat>`, `Box<Box<Int>>`,
+`Box<String>?`) binds anywhere a class does: a property (a `var` too), a method return or
+parameter, a constructor parameter, a companion, an `object`, the top level, an extension receiver,
+a `List` element, a `suspend` result or parameter, and a `Flow` or `StateFlow` element.
 
 ```kotlin
-class Crate<T>(val item: T)
+class BoxShelf {
+  val label: Box<String> = Box("Oreo")
+  var favourite: Box<Cat> = Box(Cat("Mylo"))
 
-fun crateOfInt(): Crate<Int> = Crate(1)
-fun crateOfSnapshot(): Crate<Snapshot> = Crate(Snapshot("Oreo"))
+  fun peek(box: Box<String>): String = box.value
+  fun maybe(present: Boolean): Box<String>? = if (present) Box("here") else null
+  fun nested(): Box<Box<Int>> = Box(Box(7))
+}
+
+val topBox: Box<String> = Box("top shelf")
+val Box<Int>.doubled: Int get() = value * 2
 ```
 
 ```C#
-Crate<int> crate = Crates.CrateOfInt();
-Crate<Snapshot> snapshotCrate = Crates.CrateOfSnapshot(); // qualified: Crate<global::...Snapshot>
+using var shelf = new BoxShelf();
+using Box<string> label = shelf.Label;              // a new wrapper on every read
+Assert.Equal("Oreo", shelf.Peek(label));            // passed in: borrowed, still yours to dispose
+
+using var oreo = new Cat("Oreo");
+using var boxed = new Box<Cat>(oreo);
+shelf.Favourite = boxed;                            // the setter borrows too
+Assert.Null(shelf.Maybe(false));
+
+using Box<Box<int>> outer = shelf.Nested();
+using Box<int> inner = outer.Value;                 // Value is another wrapper to dispose
+
+using Box<string> top = BoxShelves.TopBox;
+using var four = new Box<int>(4);
+Assert.Equal(8, four.Doubled);                      // an extension on Box<int>
 ```
 
-Such a function can take enum, primitive and `String` parameters. An enum crosses as its ordinal, a
-nullable enum or primitive keeps its `null`, and overloads bind side by side:
+A `Box<T>` Kotlin hands back is yours to dispose, and every read is a new wrapper over the same
+Kotlin object. A `Box<T>` you pass in is borrowed: the call neither keeps nor disposes your wrapper.
+The type argument can be a primitive, `String`, an exported class, enum, interface or value class,
+a nullable of those (`Box<String?>`), or another closed instantiation.
+
+A top-level function that returns an instantiated generic class works the same way, and can take
+enum, primitive, `String` and exported class parameters. A nullable one keeps its `null`, and
+overloads bind side by side:
 
 ```kotlin
 fun treatsFor(mood: Mood): Box<Int> = Box(mood.ordinal + 1)
@@ -397,33 +425,27 @@ using Box<int> treats = CatMoodTrackerKt.TreatsFor(Mood.Grumpy);
 using Box<int> plan = CatMoodTrackerKt.SnackPlan(null, 0); // Mood? and int?
 ```
 
-A parameter of an exported class type is not carried on this route: the function is skipped, named.
-
 A generic `abstract class` returns the same way. The value is an internal subclass that forwards to the
 Kotlin object, as described in [An abstract class as a return type](interfaces-abstract-sealed.md#an-abstract-class-as-a-return-type).
 
-If the type argument is something this route can't spell — a collection, another generic class,
-`Flow`, a lambda, `Any`, or `ByteArray` — or the outer type is itself not an exported generic class
-(`Pair<Int, Int>`), the function is skipped instead of generating C# that fails to compile:
+These are skipped, named, instead of generating C# that fails to compile:
 
-```kotlin
-fun crateOfList(): Crate<List<Int>> = Crate(listOf(1)) // skipped, named
-fun pairOf(): Pair<Int, Int> = 1 to 2                  // skipped: Pair isn't declared in C#
-```
+- A type argument the bridge cannot read back: a collection (`Box<List<Int>>`), `Any`,
+  `ByteArray`, a lambda, an `object`, `Unit`, or a `Flow` or `StateFlow` (not supported yet).
+- A projection (`Box<*>`, `Box<out Cat>`), since C# has none for a generic class.
+- A generic interface (`Shelf<String>`) and an inner class of a generic owner
+  (`Tin<Int>.Latch`).
+- An outer type that is not an exported class (`Pair<Int, Int>`).
 
-```
-[nuget:SKIPPED_UNSUPPORTED_RETURN] Skipping crateOfList(): its type argument
-   `kotlin.collections.List` has no C# spelling on a generic return: an argument must be a
-   primitive, String, or an exported class, object, enum or interface, and a type carrying its own
-   type arguments (a collection, a generic class, Flow, a lambda) has none
-```
+A refused argument is reported as `SKIPPED_UNSUPPORTED_TYPE` naming the member, for example for a
+`Box<List<Int>>` return: "its generic class `<package>.Box` has no C# spelling here: the erased
+wire cannot read its type argument `List<Int>`".
 
-A **nullable** generic-class return (`fun f(): Crate<Int>?`) is refused the same way, named, even
-when the non-null form (`Crate<Int>`) would bind fine; return the non-null form, or wrap it in your
-own non-generic class if `null` needs to be expressible.
+A `MutableStateFlow<Box<Int>>` binds as a read-only `KotlinStateFlow<Box<int>>`. A C# class cannot
+implement a Kotlin interface that has a member returning `Box<Int>`; the implementation is skipped
+with `SKIPPED_UNIMPLEMENTABLE_INTERFACE`.
 
-A generic **sealed** hierarchy is the exception: `Outcome<Int>` binds at a parameter, property, member
-return and `List` element too. See
+A generic **sealed** hierarchy binds at the same positions; see
 [A generic sealed hierarchy](interfaces-abstract-sealed.md#generic-sealed-hierarchy).
 
 ## Generic functions
@@ -601,6 +623,7 @@ the generic owner is still exported.
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/147-generic-class-methods.md">ADR-147: Generic class methods</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/208-generic-instantiation-member-positions.md">ADR-208: Generic instantiations at member positions</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/171-value-classes-at-erased-generic-positions.md">ADR-171: Value classes at erased generic positions</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/173-erased-generic-routes-carry-csharp-interface-identity.md">ADR-173: Erased generic routes carry C# interface identity</a>
     </category>
