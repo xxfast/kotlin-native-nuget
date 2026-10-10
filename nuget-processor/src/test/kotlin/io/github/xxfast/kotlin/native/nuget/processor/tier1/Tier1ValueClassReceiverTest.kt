@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.valueClassUnderlyingOrThrow
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertTrue
@@ -62,8 +63,12 @@ class Tier1ValueClassReceiverTest {
     assertContains(cs, "private static extern IntPtr Native_ChartrefGetAnnotation(NugetKotlinHandle receiver, out IntPtr error);")
     assertContains(cs, "Native_TemperamentGetNote((int)receiver.Mood, out IntPtr error)")
     assertContains(cs, "Native_TemperamentSetNote((int)receiver.Mood, value, out IntPtr error)")
-    assertContains(cs, "Native_ChartrefGetAnnotation(receiver.Patient._handle, out IntPtr error)")
-    assertContains(cs, "Native_ChartrefSetAnnotation(receiver.Patient._handle, value, out IntPtr error)")
+    assertContains(cs, "Native_ChartrefGetAnnotation(" +
+      valueClassUnderlyingOrThrow("receiver", "Patient", "ChartRef", "receiver") +
+      "._handle, out IntPtr error)")
+    assertContains(cs, "Native_ChartrefSetAnnotation(" +
+      valueClassUnderlyingOrThrow("receiver", "Patient", "ChartRef", "receiver") +
+      "._handle, value, out IntPtr error)")
   }
 
   @Test
@@ -107,7 +112,9 @@ class Tier1ValueClassReceiverTest {
 
     val cs: String = result.generatedCSharp
     assertContains(cs, "private static extern IntPtr Native_Abbreviate([MarshalAs(UnmanagedType.LPUTF8Str)] string receiver, int length, out IntPtr error);")
-    assertContains(cs, "Native_Abbreviate(receiver.Value, length, out IntPtr error)")
+    assertContains(cs, "Native_Abbreviate(" +
+      valueClassUnderlyingOrThrow("receiver", "Value", "ChartId", "receiver") +
+      ", length, out IntPtr error)")
     assertContains(cs, "private static extern int Native_Escalate(int receiver, out IntPtr error);")
     assertContains(
       cs,

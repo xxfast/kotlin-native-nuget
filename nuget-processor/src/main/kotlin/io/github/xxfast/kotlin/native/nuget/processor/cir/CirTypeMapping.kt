@@ -28,6 +28,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isValueClass
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.isUnderPackage
+import io.github.xxfast.kotlin.native.nuget.processor.valueClassUnderlyingOrThrow
 
 /**
  * Expands a `typealias` reference to the type it names (ADR-018).
@@ -309,10 +310,6 @@ internal sealed interface MutableStateFlowElement {
   ) : Writable {
     /** The C# record struct's underlying property, capitalized as `CirValueClass` declares it. */
     val csProperty: String get() = underlyingProperty.replaceFirstChar { it.uppercase() }
-
-    /** A reference underlying, whose `default(V)` carries a null no Kotlin slot can take. */
-    val isReferenceUnderlying: Boolean
-      get() = underlying is Handle || underlyingSimpleName == "String"
   }
 
   /**
@@ -502,6 +499,10 @@ internal fun mutableStateFlowWrite(elementType: KSType?, csElementType: String):
       CirStateFlowWrite(
         parameters = listOf(CirParameter("value", csElementType)),
         arguments = "v",
+        // `flow.Value = null!` on a non-null `string` element would hand the export a null string
+        // pointer for a non-null Kotlin `String`, which is an access violation there (measured on
+        // the same wire, see [valueClassUnderlyingOrThrow]); rejected like a null object element.
+        rejectsNull = !nullable && simpleName == "String",
       )
     }
 
@@ -514,22 +515,22 @@ internal fun mutableStateFlowWrite(elementType: KSType?, csElementType: String):
  * setter's unwrap (`ForwardCirPropertyProjection`, ADR-077) over the lambda's `v`. The extern
  * slot is the underlying's own wire; a nullable element rides that underlying's nullable spelling
  * (an in-band null for a String or handle, the has-value pair for a primitive or enum ordinal).
- * A struct is never null, so nothing rejects null; a reference underlying instead [guard]s
- * `default(V)`, whose null underlying would otherwise reach a non-null Kotlin slot (or, nullable,
- * silently clear the flow).
+ * A struct is never null, so nothing rejects null; a reference underlying is instead unwrapped
+ * through [valueClassUnderlyingOrThrow], the one guard every value-class crossing shares, so
+ * `default(V)` never reaches a non-null Kotlin slot (or, nullable, silently clears the flow).
  */
 private fun valueClassStateFlowWrite(
   element: MutableStateFlowElement.ValueClass,
   nullable: Boolean,
 ): CirStateFlowWrite {
   val prop: String = element.csProperty
-  val guard: String? = if (element.isReferenceUnderlying) {
-    val absent: String = if (nullable) "v.HasValue && v.Value.$prop is null" else "v.$prop is null"
-    "if ($absent) throw new ArgumentException(\"default(${element.simpleName}) carries no " +
-        "$prop; construct a ${element.simpleName} instead\", nameof(v));"
-  } else {
-    null
-  }
+  // The reference underlying of the PRESENT struct: `v` itself, or `v.Value` behind `v.HasValue`.
+  val present: String = valueClassUnderlyingOrThrow(
+    struct = if (nullable) "v.Value" else "v",
+    property = prop,
+    structName = element.simpleName,
+    parameter = "v",
+  )
   val hasValuePair: (String, String) -> CirStateFlowWrite = { wire: String, unwrapped: String ->
     CirStateFlowWrite(
       parameters = listOf(CirParameter("valueHasValue", "bool"), CirParameter("value", wire)),
@@ -539,8 +540,11 @@ private fun valueClassStateFlowWrite(
   return when (element.underlying) {
     is MutableStateFlowElement.Handle -> CirStateFlowWrite(
       parameters = listOf(CirParameter("value", KOTLIN_HANDLE)),
-      arguments = if (nullable) "v?.$prop._handle ?? NugetKotlinHandle.Null" else "v.$prop._handle",
-      guard = guard,
+      arguments = if (nullable) {
+        "v.HasValue ? $present._handle : NugetKotlinHandle.Null"
+      } else {
+        "$present._handle"
+      },
     )
 
     is MutableStateFlowElement.Enum -> if (nullable) {
@@ -554,8 +558,7 @@ private fun valueClassStateFlowWrite(
       when {
         wire == "string" -> CirStateFlowWrite(
           parameters = listOf(CirParameter("value", if (nullable) "string?" else "string")),
-          arguments = if (nullable) "v?.$prop" else "v.$prop",
-          guard = guard,
+          arguments = if (nullable) "v.HasValue ? $present : null" else present,
         )
 
         nullable -> hasValuePair(wire, "v.GetValueOrDefault().$prop")

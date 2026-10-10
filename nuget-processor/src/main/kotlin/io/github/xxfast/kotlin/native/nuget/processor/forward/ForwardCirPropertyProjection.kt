@@ -905,16 +905,29 @@ internal object ForwardCirPropertyProjection {
       is BridgeType.ValueClass -> {
         val prop: String = value.underlyingPropertyName.replaceFirstChar { it.uppercase() }
         val nullable: Boolean = this is BridgeType.Nullable && !nonNull
-        val unwrapped: String = if (nullable) "$name?.$prop" else "$name.$prop"
+        // A String or handle underlying refuses `default(V)` in the unwrap itself. The nullable
+        // spelling keeps null as the null pointer and refuses only a PRESENT default, which `?.`
+        // would read as "no value". [name] may be a member access (`value.Value`); its root is the
+        // accessor's own parameter.
+        val parameter: String = name.substringBefore('.')
+        val guarded: Boolean = value.hasNullDefault()
+        val unwrapped: String = when {
+          guarded && nullable -> value.underlyingCs("$name.Value", parameter)
+          guarded -> value.underlyingCs(name, parameter)
+          nullable -> "$name?.$prop"
+          else -> "$name.$prop"
+        }
         when (value.underlying) {
           is BridgeType.Enum -> "(int)$unwrapped"
           is BridgeType.ObjectHandle ->
-            if (nullable) "$unwrapped._handle ?? NugetKotlinHandle.Null" else "$unwrapped._handle"
+            if (nullable) "$name.HasValue ? $unwrapped._handle : NugetKotlinHandle.Null"
+            else "$unwrapped._handle"
+
+          BridgeType.String -> if (nullable) "$name.HasValue ? $unwrapped : null" else unwrapped
 
           BridgeType.Unit,
           is BridgeType.Primitive,
           BridgeType.Char,
-          BridgeType.String,
           BridgeType.Instant,
           BridgeType.Duration,
           is BridgeType.Throwable,

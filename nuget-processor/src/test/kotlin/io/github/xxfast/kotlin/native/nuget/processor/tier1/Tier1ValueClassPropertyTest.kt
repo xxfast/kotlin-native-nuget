@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.valueClassUnderlyingOrThrow
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertTrue
@@ -41,7 +42,9 @@ class Tier1ValueClassPropertyTest {
       cs,
       "return new global::Interop.ChartId(Marshal.PtrToStringUTF8(nativeResult)!);",
     )
-    assertContains(cs, "Native_Set_currentChart(_handle, value.Value, out IntPtr error)")
+    assertContains(cs, "Native_Set_currentChart(_handle, " +
+      valueClassUnderlyingOrThrow("value", "Value", "ChartId", "value") +
+      ", out IntPtr error)")
   }
 
   @Test
@@ -72,7 +75,9 @@ class Tier1ValueClassPropertyTest {
       "return nativeResult == IntPtr.Zero ? null : " +
           "new global::Interop.ChartId(Marshal.PtrToStringUTF8(nativeResult)!);",
     )
-    assertContains(cs, "Native_Set_backupChart(_handle, value?.Value, out IntPtr error)")
+    assertContains(cs, "Native_Set_backupChart(_handle, value.HasValue ? " +
+      valueClassUnderlyingOrThrow("value.Value", "Value", "ChartId", "value") +
+      " : null, out IntPtr error)")
     assertContains(cs, "string? value, out IntPtr error);")
   }
 }

@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.valueClassUnderlyingOrThrow
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import kotlin.test.Test
 import kotlin.test.assertContains
@@ -97,7 +98,9 @@ class Tier1ValueClassDeclaredMemberTest {
     assertContains(cs, "EntryPoint = \"library_tier1_valueclassoverload__chartid_describe_2\"")
     assertContains(cs, "public string Describe()")
     assertContains(cs, "public string Describe(string prefix)")
-    assertContains(cs, "Native_Describe_2(Value, prefix)")
+    assertContains(cs, "Native_Describe_2(" +
+      valueClassUnderlyingOrThrow("this", "Value", "ChartId") +
+      ", prefix)")
   }
 
   /**

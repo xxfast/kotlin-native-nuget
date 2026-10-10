@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.valueClassUnderlyingOrThrow
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertTrue
@@ -97,9 +98,13 @@ class Tier1ValueClassNullableResultTest {
 
   @Test
   fun `a nullable reference result rides the null pointer with no error slot`() {
-    assertContains(cs, "public string? Label() => Marshal.PtrToStringUTF8(Native_Label(Name));")
+    assertContains(cs, "public string? Label() => Marshal.PtrToStringUTF8(Native_Label(" +
+      valueClassUnderlyingOrThrow("this", "Name", "Tag") +
+      "));")
     assertContains(
-      cs, "public string? Nickname => Marshal.PtrToStringUTF8(Native_GetNickname(Name));",
+      cs, "public string? Nickname => Marshal.PtrToStringUTF8(Native_GetNickname(" +
+        valueClassUnderlyingOrThrow("this", "Name", "Tag") +
+        "));",
     )
     assertContains(
       result.generated,
@@ -111,11 +116,15 @@ class Tier1ValueClassNullableResultTest {
   fun `a nullable has-value result reads the bool and the valueOut out slot`() {
     assertContains(
       cs,
-      "public int? Count() => Native_Count(Name, out int valueOut) ? valueOut : (int?)null;",
+      "public int? Count() => Native_Count(" +
+        valueClassUnderlyingOrThrow("this", "Name", "Tag") +
+        ", out int valueOut) ? valueOut : (int?)null;",
     )
     assertContains(
       cs,
-      "public int? Age => Native_GetAge(Name, out " +
+      "public int? Age => Native_GetAge(" +
+        valueClassUnderlyingOrThrow("this", "Name", "Tag") +
+        ", out " +
           "int valueOut) ? valueOut : (int?)null;",
     )
     assertContains(cs, "out int valueOut);")
@@ -138,7 +147,9 @@ class Tier1ValueClassNullableResultTest {
   fun `a nullable handle result is guarded against the null handle`() {
     val pompom: String = cs.substringAfter("public global::Interop.Vcnullable.Pompom? Pompom()")
       .substringBefore("\n        }")
-    assertContains(pompom, "IntPtr nativeResult = Native_Pompom(Name);")
+    assertContains(pompom, "IntPtr nativeResult = Native_Pompom(" +
+      valueClassUnderlyingOrThrow("this", "Name", "Tag") +
+      ");")
     assertContains(
       pompom,
       "return nativeResult == IntPtr.Zero ? null : " +
@@ -160,20 +171,28 @@ class Tier1ValueClassNullableResultTest {
     assertContains(
       cs,
       "public global::Interop.Vcnullable.Pompom OwnPompom() => " +
-          "new global::Interop.Vcnullable.Pompom(Native_OwnPompom(Name), out _);",
+          "new global::Interop.Vcnullable.Pompom(Native_OwnPompom(" +
+            valueClassUnderlyingOrThrow("this", "Name", "Tag") +
+            "), out _);",
     )
     assertContains(cs, "public IReadOnlyList<string> AllNames() => NugetMarshal.ReadList<string>(")
-    assertContains(cs, "public byte[] AllBytes() => NugetMarshal.ReadBytes(Native_AllBytes(Name));")
+    assertContains(cs, "public byte[] AllBytes() => NugetMarshal.ReadBytes(Native_AllBytes(" +
+      valueClassUnderlyingOrThrow("this", "Name", "Tag") +
+      "));")
     assertContains(
       cs,
       "public global::System.TimeSpan LongNap() " +
-          "=> new global::System.TimeSpan(Native_LongNap(Name));",
+          "=> new global::System.TimeSpan(Native_LongNap(" +
+            valueClassUnderlyingOrThrow("this", "Name", "Tag") +
+            "));",
     )
     assertContains(cs, "public global::System.Guid OwnChip() => global::System.Guid.Parse(")
     assertContains(
       cs,
       "public global::Interop.Vcnullable.Dose OwnDose() " +
-          "=> new global::Interop.Vcnullable.Dose(Native_OwnDose(Name));",
+          "=> new global::Interop.Vcnullable.Dose(Native_OwnDose(" +
+            valueClassUnderlyingOrThrow("this", "Name", "Tag") +
+            "));",
     )
     assertContains(cs, "public global::Interop.Vcnullable.IPet OwnPet()")
   }

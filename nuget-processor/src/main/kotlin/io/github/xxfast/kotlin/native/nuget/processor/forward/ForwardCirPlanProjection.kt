@@ -950,8 +950,8 @@ internal object ForwardCirPlanProjection {
       // property (`value` -> `Value`, CirClassTranslator); the unwrapped value is lowered to its
       // wire form per underlying (sub-item 4), and Kotlin re-wraps it on the other side.
       is BridgeType.ValueClass -> {
-        val prop: String = type.underlyingPropertyName.replaceFirstChar { it.uppercase() }
-        val unwrapped = "${parameter.csharpName}.$prop"
+        // A String or handle underlying refuses `default(V)` in the unwrap itself.
+        val unwrapped: String = type.underlyingCs(parameter.csharpName, parameter.csharpName)
         listOf(
           when (type.underlying) {
             is BridgeType.Enum -> "(int)$unwrapped"
@@ -1039,15 +1039,20 @@ internal object ForwardCirPlanProjection {
               "${parameter.csharpName}.HasValue",
               if (inner.underlying is BridgeType.Enum) "(int)$unwrapped" else unwrapped,
             )
-          } else {
-            val unwrapped = "${parameter.csharpName}?.$prop"
+          } else if (inner.hasNullDefault()) {
+            // A null stays the null pointer; a PRESENT `default(V)` is refused, since `?.` would
+            // read its null underlying as "no value" and hand Kotlin a null it was never given.
+            val name: String = parameter.csharpName
+            val present: String = inner.underlyingCs("$name.Value", name)
             listOf(
               if (inner.underlying is BridgeType.ObjectHandle) {
-                "$unwrapped._handle ?? NugetKotlinHandle.Null"
+                "$name.HasValue ? $present._handle : NugetKotlinHandle.Null"
               } else {
-                unwrapped
+                "$name.HasValue ? $present : null"
               }
             )
+          } else {
+            listOf("${parameter.csharpName}?.$prop")
           }
         }
 
