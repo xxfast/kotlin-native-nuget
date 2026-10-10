@@ -44,6 +44,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.MUTABLE_STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.MutableStateFlowElement
 import io.github.xxfast.kotlin.native.nuget.processor.cir.classifyMutableStateFlowElement
+import io.github.xxfast.kotlin.native.nuget.processor.cir.MUTABLE_SHARED_FLOW_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.SharedFlowSurface
+import io.github.xxfast.kotlin.native.nuget.processor.cir.sharedFlowSurface
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.isMutableStateFlowElementWritable
 import io.github.xxfast.kotlin.native.nuget.processor.cir.translate
@@ -808,6 +811,8 @@ internal fun warnRefusedLegacyRouteMembers(
   suspendFunctions: List<KSFunctionDeclaration>,
   classifier: ForwardBridgeTypeClassifier,
   logger: KSPLogger,
+  // ADR-209: the reachable interfaces, whose flow members bind on `I<Name>` (ADR-174).
+  interfaces: List<KSClassDeclaration> = emptyList(),
   // ROADMAP Phase 4 line 23: an out-of-scope dependency type on a legacy route is named with the
   // plan route's own `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` wording, so it needs the same two inputs.
   excludeEntries: List<String> = emptyList(),
@@ -1129,7 +1134,88 @@ internal fun warnRefusedLegacyRouteMembers(
     add(diagnostic)
   }
 
+  // ADR-209: a declared `MutableSharedFlow<T>` whose element has no ADR-071 write arm binds the
+  // read-only `KotlinSharedFlow<T>`. The member survives, so the absent writes are named, in the
+  // MutableStateFlow setter refusal's family and wording, never silent. A member whose element the
+  // collect refuses is dropped whole and already named by the flow walk.
+  fun MutableList<ForwardDiagnostic>.nameRefusedSharedFlowWrite(
+    member: KSDeclaration,
+    declaration: String,
+    owner: ForwardDiagnosticOwner?,
+  ) {
+    val property: KSPropertyDeclaration? = member as? KSPropertyDeclaration
+    val function: KSFunctionDeclaration? = member as? KSFunctionDeclaration
+    val type: KSType = (property?.type ?: function?.returnType)?.resolve()?.expandAliases()
+      ?: return
+    if (type.declaration.qualifiedName?.asString() !in MUTABLE_SHARED_FLOW_TYPES) return
+    if (sharedFlowSurface(type) != SharedFlowSurface.READ_ONLY) return
+    if (classifier.legacyRefusedFlowElement(type) != null) return
+    val element: KSType? = type.arguments.firstOrNull()?.type?.resolve()?.expandAliases()
+    val spelled: String = element?.declaration?.qualifiedName?.asString()
+      ?: element?.declaration?.simpleName?.asString()
+      ?: "Any"
+    val classified: MutableStateFlowElement = classifyMutableStateFlowElement(element)
+    val why: String = when (classified) {
+      is MutableStateFlowElement.RefusedValueClass ->
+        "a MutableSharedFlow element of value class ${classified.qualifiedName} has no write arm"
+
+      is MutableStateFlowElement.Writable ->
+        "a MutableSharedFlow element of nullable $spelled has no write arm"
+
+      MutableStateFlowElement.ReadOnly ->
+        "a MutableSharedFlow element of $spelled has no write arm"
+    }
+    val publicName: String = member.csharpMemberName()
+    val reason: String =
+      "its EmitAsync, TryEmit and SubscriptionCount are not generated because $why"
+    val remedy: String =
+      "a read-only KotlinSharedFlow; expose a function taking $spelled to emit it"
+    val hint: String = if (property != null) {
+      "the C# property $publicName is $remedy"
+    } else {
+      "$publicName returns $remedy"
+    }
+    add(
+      ForwardDiagnostic(
+        kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
+        symbol = member,
+        declaration = declaration,
+        reason = reason,
+        hint = hint,
+        owner = if (property != null) {
+          owner?.let { container -> ForwardDiagnosticOwner.Property(container, publicName) }
+        } else {
+          null
+        },
+        member = property?.simpleName?.asString(),
+      ),
+    )
+  }
+
+  fun MutableList<ForwardDiagnostic>.nameRefusedWrites(
+    member: KSDeclaration,
+    declaration: String,
+    owner: ForwardDiagnosticOwner?,
+  ) {
+    nameRefusedValueClassWrite(member, declaration, owner)
+    nameRefusedSharedFlowWrite(member, declaration, owner)
+  }
+
   val diagnostics: List<ForwardDiagnostic> = buildList {
+    // ADR-209: a reachable interface's flow members bind on `I<Name>` (ADR-174), so a refused
+    // shared-flow write there is named too.
+    interfaces.forEach { iface ->
+      val owner: String = iface.simpleName.asString()
+      val ownerDeclaration: ForwardDiagnosticOwner = iface.forwardDiagnosticOwner()
+      val members: List<KSDeclaration> = iface.forwardInterfaceFlowProperties(classifier) +
+          iface.forwardInterfaceFlowMethods(classifier) +
+          iface.forwardInterfaceSuspendMethods(classifier)
+      members.forEach { member ->
+        nameRefusedSharedFlowWrite(
+          member, "$owner.${member.simpleName.asString()}", ownerDeclaration,
+        )
+      }
+    }
     classes.forEach { cls ->
       val owner: String = cls.simpleName.asString()
       val ownerDeclaration: ForwardDiagnosticOwner = cls.forwardDiagnosticOwner()
@@ -1176,7 +1262,7 @@ internal fun warnRefusedLegacyRouteMembers(
       cls.getAllProperties()
         .filter { property -> property.getVisibility() == Visibility.PUBLIC }
         .forEach { property ->
-          nameRefusedValueClassWrite(
+          nameRefusedWrites(
             property, "$owner.${property.simpleName.asString()}", ownerDeclaration,
           )
         }
@@ -1184,7 +1270,7 @@ internal fun warnRefusedLegacyRouteMembers(
         .filter { method -> method.getVisibility() == Visibility.PUBLIC }
         .filter { method -> method.isForwardLegacyAsyncRoute() }
         .forEach { method ->
-          nameRefusedValueClassWrite(
+          nameRefusedWrites(
             method, "$owner.${method.simpleName.asString()}", ownerDeclaration,
           )
         }
@@ -1271,14 +1357,14 @@ internal fun warnRefusedLegacyRouteMembers(
         subclass.getAllProperties()
           .filter { property -> property.getVisibility() == Visibility.PUBLIC }
           .forEach { property ->
-            nameRefusedValueClassWrite(
+            nameRefusedWrites(
               property, "$owner.${property.simpleName.asString()}", ownerDeclaration,
             )
           }
         armMembers
           .filter { method -> method.isForwardLegacyAsyncRoute() }
           .forEach { method ->
-            nameRefusedValueClassWrite(
+            nameRefusedWrites(
               method, "$owner.${method.simpleName.asString()}", ownerDeclaration,
             )
           }
@@ -1286,6 +1372,7 @@ internal fun warnRefusedLegacyRouteMembers(
     }
     suspendFunctions.forEach { func ->
       nameRefused(func, func.simpleName.asString(), func.forwardFileClassOwner())
+      nameRefusedSharedFlowWrite(func, func.simpleName.asString(), func.forwardFileClassOwner())
     }
   }
   ForwardDiagnosticSink.emit(diagnostics, logger)
@@ -2570,7 +2657,7 @@ internal class NugetProcessor(
     warnDroppedForwardExtensionReceivers(callableCatalog, logger)
     warnEnumCompanionProperties(enums, logger)
     warnRefusedLegacyRouteMembers(
-      classes, sealedClasses, suspendFunctions, forwardClassifier, logger,
+      classes, sealedClasses, suspendFunctions, forwardClassifier, logger, reachableInterfaces,
       context.excludePackages, context.strictDependencyTypes,
     )
     // ADR-064 amendment (2026-09-13): the structural generic functions, which never reach the

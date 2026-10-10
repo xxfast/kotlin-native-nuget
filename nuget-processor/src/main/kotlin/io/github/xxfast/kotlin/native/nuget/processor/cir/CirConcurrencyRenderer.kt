@@ -264,6 +264,10 @@ internal data class CirAsyncLocals(
   val cancellationToken: String = "cancellationToken",
   val collectScope: String = "collectScope",
 ) {
+  /** Every local this wrapper declares, for a nested lambda to mint its own names apart from. */
+  fun names(): Set<String> =
+    setOf(tcs, callback, callbackHandle, job, jobHandle, reg, cancellationToken, collectScope)
+
   companion object {
     fun of(parameters: List<CirParameter>): CirAsyncLocals {
       val taken: MutableSet<String> = parameters.localScopeNames()
@@ -337,8 +341,7 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
   // single-IntPtr constructor.
   // ADR-071 held-route amendment: an awaited `MutableStateFlow<T>` is the same holder plus a write
   // lambda over the flow-keyed `_set_value` ([CirMethod.stateFlowWrite]).
-  val isStateFlowReturn: Boolean = method.asyncReturnType.startsWith("KotlinStateFlow<") ||
-    method.asyncReturnType.startsWith("KotlinMutableStateFlow<")
+  val isStateFlowReturn: Boolean = method.isAwaitedStateFlow
   // A nullable element (`StateFlow<T?>`) reads through the null-aware sibling export; a collection
   // element (ADR-068) reads through its own flow-handle-keyed pair, which projects each element.
   val stateFlowCollect: String =
@@ -371,6 +374,15 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
       appendLine("                                    throw new ObjectDisposedException(\"${method.asyncReturnType}\");")
       appendLine("                                return ${method.acquiredFlowCollectNativeName}($ownedFlow, ${locals.collectScope}, $next, $complete, $error, $data);")
       appendLine("                            },")
+      // ADR-209: an awaited shared flow's seams, keyed on the same owned flow handle and launched
+      // on the same captured scope its collect uses.
+      method.sharedFlow?.let { shared ->
+        val taken: Set<String> = flowNames + locals.names() +
+          setOf("t", "resultPtr", "errorPtr", "isCancelled", "userData")
+        sharedFlowArguments(
+          shared, ownedFlow, locals.collectScope, "                            ", taken,
+        ).forEach { argument -> appendLine("$argument,") }
+      }
       // Named, not positional: a collection element's read carries a trailing `release:` too
       // (row 16l), which sits after the owned-handle slot.
       appendLine("                            ${acquiredRead ?: "null"}, ownedHandle: $ownedFlow));")

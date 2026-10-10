@@ -114,6 +114,7 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(
 
   addFunction(builder.build())
   addAcquiredFlowCollectExport(func, cname, returnType, classifier)
+  addFlowKeyedSharedFlowExports(cname, func, returnType, classifier)
   addAwaitedStateFlowCollectionExports(func, cname, returnType, classifier)
 }
 
@@ -207,6 +208,7 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
 
     addFunction(builder.build())
     addAcquiredFlowCollectExport(method, "${prefix}_${cname}", returnType, classifier)
+    addFlowKeyedSharedFlowExports("${prefix}_${cname}", method, returnType, classifier)
     addAwaitedStateFlowCollectionExports(method, "${prefix}_${cname}", returnType, classifier)
     // ADR-071 held-route amendment: an awaited `MutableStateFlow<T>` is written through the held
     // route's flow-keyed setter; the `_async` export above already hands the flow back by handle.
@@ -386,7 +388,7 @@ internal fun FunSpec.Builder.addLegacyScalarParameter(
   return addParameter(name, (if (enum) INT else type).copy(nullable = nullable))
 }
 
-private fun FileSpec.Builder.addAcquiredFlowCollectExport(
+internal fun FileSpec.Builder.addAcquiredFlowCollectExport(
   method: KSFunctionDeclaration,
   prefix: String,
   returnType: KSType?,

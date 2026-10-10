@@ -2420,7 +2420,7 @@ public class LiveHandleTests
             Assert.Equal("Oreo: found the treat jar", headlines.Current);
             await headlines.DisposeAsync();
 
-            using KotlinFlow<Cat> sightings = await bulletin.LatestSightingsAsync();
+            using KotlinSharedFlow<Cat> sightings = await bulletin.LatestSightingsAsync();
             IAsyncEnumerator<Cat> cats = sightings.GetAsyncEnumerator();
             Assert.True(await cats.MoveNextAsync());
             using (Cat oreo = cats.Current)
@@ -2430,6 +2430,152 @@ public class LiveHandleTests
             await cats.DisposeAsync();
         });
     }
+
+    // Row 8m. ADR-209: `ReplayCache`. One export call mints a list handle and `ReadList` mints one
+    // box per item, consuming each with the flow's own element read and disposing the list. The
+    // object element's wrappers are the caller's: one read disposes them, the other drops them
+    // for the GC (ADR-187). The `suspend` return's acquired flow handle is disposed by `using`.
+    [Fact]
+    public async Task SharedFlow_ReplayCache_ObjectElement_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await using var bulletin = new CatBulletin("Oreo");
+            bulletin.Publish("on the fence", 4);
+            foreach (Cat sighting in bulletin.Sightings.ReplayCache) sighting.Dispose();
+            DropReplayCache(bulletin);
+            Assert.Equal(new[] { 4 }, bulletin.Editions.ReplayCache);
+            Assert.Equal(new[] { "Oreo: on the fence" }, bulletin.Headlines.ReplayCache);
+            using KotlinSharedFlow<Cat> latest = await bulletin.LatestSightingsAsync();
+            foreach (Cat sighting in latest.ReplayCache) sighting.Dispose();
+        });
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void DropReplayCache(CatBulletin bulletin) =>
+        Assert.Single(bulletin.Sightings.ReplayCache);
+
+    // Row 8n. ADR-209: `SubscriptionCount` mints an owned `StateFlow<Int>` handle per read. A
+    // disposed one releases it; an abandoned one is released by the GC (ADR-187). Each `.Value`
+    // read is one box `FromHandle<int>` consumes.
+    [Fact]
+    public void MutableSharedFlow_SubscriptionCount_DisposedAndAbandoned_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var bulletin = new CatBulletin("Oreo");
+            using (KotlinStateFlow<int> subscribers = bulletin.Headlines.SubscriptionCount)
+            {
+                Assert.Equal(0, subscribers.Value);
+            }
+            DropSubscriptionCount(bulletin);
+        });
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void DropSubscriptionCount(CatBulletin bulletin) =>
+        Assert.Equal(0, bulletin.Headlines.SubscriptionCount.Value);
+
+    // Row 8o. ADR-209: `EmitAsync`, completed and cancelled. A completed emit mints the emit job
+    // handle (released by the completion) and borrows the object argument's handle; the
+    // pre-cancelled one crosses nothing at all.
+    [Fact]
+    public async Task MutableSharedFlow_EmitAsync_CompletedAndCancelled_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await using var bulletin = new CatBulletin("Oreo");
+            using (var mylo = new Cat("Mylo"))
+            {
+                await bulletin.Visitors.EmitAsync(mylo);
+            }
+            await bulletin.Moods.EmitAsync(Mood.Grumpy);
+            Assert.Equal("Mylo", bulletin.LatestVisitor());
+            using var cancelled = new CancellationTokenSource();
+            cancelled.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => bulletin.Headlines.EmitAsync("never sent", cancelled.Token));
+        });
+    }
+
+    // Row 8p. ADR-209's cancel cell: an emit PARKED behind a stalled collector (no replay, no
+    // buffer, and an enumerator that never asks for a second item, so ADR-207's credit gate holds
+    // the collector), then cancelled by its owner's `Dispose()`, which cancels the scope the emit
+    // was launched on. The emit job, the collection and the scope all return to the baseline.
+    [Fact]
+    public async Task MutableSharedFlow_ParkedEmitAsync_CancelledByOwnerDispose_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            var bulletin = new CatBulletin("Oreo");
+            KotlinMutableSharedFlow<int> pulses = bulletin.Pulses;
+            using (KotlinStateFlow<int> subscribers = pulses.SubscriptionCount)
+            {
+                IAsyncEnumerator<int> stalled = pulses.GetAsyncEnumerator();
+                await WaitUntilAsync(() => subscribers.Value == 1);
+                await pulses.EmitAsync(1).WaitAsync(TimeSpan.FromSeconds(10));
+                await pulses.EmitAsync(2).WaitAsync(TimeSpan.FromSeconds(10));
+                Task parked = pulses.EmitAsync(3);
+                Assert.False(pulses.TryEmit(4));
+
+                bulletin.Dispose();
+
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                    () => parked.WaitAsync(TimeSpan.FromSeconds(10)));
+                await stalled.DisposeAsync();
+            }
+            await bulletin.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+        });
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!condition())
+        {
+            Assert.True(DateTime.UtcNow < deadline, "timed out waiting for the condition");
+            await Task.Delay(10);
+        }
+    }
+
+    // Row 8q. ADR-209: `TryEmit`, synchronous. The object argument's handle is borrowed (the
+    // Kotlin export dereferences it before `tryEmit`) and the enum crosses as its ordinal.
+    [Fact]
+    public void MutableSharedFlow_TryEmit_ObjectAndEnumElements_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var bulletin = new CatBulletin("Oreo");
+            using (var mylo = new Cat("Mylo"))
+            {
+                Assert.True(bulletin.Visitors.TryEmit(mylo));
+            }
+            Assert.True(bulletin.Moods.TryEmit(Mood.Sleepy));
+            Assert.Equal(Mood.Sleepy, bulletin.LatestMood());
+        });
+    }
+
+    // Row 8r. ADR-209: a held `MutableSharedFlow<T>` method return (the ADR-071 held-row mirror).
+    // The acquire mints the flow's own handle, which the wrapper owns: disposed here, and dropped
+    // for the GC in the second read.
+    [Fact]
+    public void MutableSharedFlow_HeldMethodReturn_DisposedAndAbandoned_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var bulletin = new CatBulletin("Oreo");
+            using (KotlinMutableSharedFlow<string> desk = bulletin.HeadlineDesk())
+            {
+                Assert.True(desk.TryEmit("held"));
+                Assert.Equal(new[] { "held" }, desk.ReplayCache);
+            }
+            DropHeldDesk(bulletin);
+        });
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void DropHeldDesk(CatBulletin bulletin) =>
+        Assert.True(bulletin.HeadlineDesk().TryEmit("dropped"));
 
     // Row 8b. Issue #131: a top-level factory taking a *borrowed* nullable handle. The Kotlin
     // thunk reads it with `logger?.asStableRef<Logger>()?.get()`, which must not take ownership:

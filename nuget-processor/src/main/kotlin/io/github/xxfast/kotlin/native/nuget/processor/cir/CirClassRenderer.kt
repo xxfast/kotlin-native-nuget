@@ -442,6 +442,7 @@ internal fun StringBuilder.renderFlowPropertyNativeImports(
       renderStateFlowCompareAndSetPropertyImport(libraryName, nativePrefix, prop)
     }
   }
+  renderSharedFlowPropertyNativeImports(libraryName, nativePrefix, prop)
 }
 
 private fun StringBuilder.renderLegacyPropertyNativeImports(cls: CirClass, prop: CirProperty) {
