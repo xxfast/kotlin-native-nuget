@@ -13,7 +13,7 @@ per read), [ADR-062](062-forward-callable-plan.md) (the callable plan),
 [ADR-197](197-method-type-parameters-on-the-callable-plan.md) (a generic function's own `T`).
 
 Scope: a closed instantiation of an exported generic class. `Flow` and `StateFlow` arguments are
-refused here; the next change binds them.
+bound by the amendment at the end of this ADR.
 
 ## Context
 
@@ -112,7 +112,7 @@ class).
 | `Box<(Int) -> Int>` | a lambda has no handle the erased wire can read (ADR-160) |
 | `Box<Any>` | `Any` has no C# spelling the erased `T` can round-trip (ADR-147) |
 | `Box<*>`, `Box<out Cat>` | C# has no use-site projection of a generic class |
-| `Box<Flow<..>>`, `Box<StateFlow<..>>` | refused here; the next change binds them |
+| `Box<Flow<..>>`, `Box<StateFlow<..>>` | bound, see the amendment below |
 | `Box<List<Int>>?` at a return | the planner's existing NULLABLE skip |
 | a generic interface reference (`Shelf<String>`) | it keeps its `"generic declaration"` skip; spelling a generic interface is a separate feature |
 | an inner class capturing a generic owner | ADR-196 spells it `Tin.Latch<T>`; out of scope |
@@ -141,3 +141,79 @@ generated C# with `dotnet build` in three cells (every bound position, the suspe
 positions, and the declined shapes). `LeakTests` rows `GenericInstance_ReturnedBoxes_ReturnToBaseline`,
 `GenericInstance_PassedBoxes_ReturnToBaseline` and `GenericInstance_SuspendAndFlow_ReturnToBaseline`
 return to baseline.
+## Amendment (2026-10-10): Flow and StateFlow as the type argument
+
+Part E of this ADR. Where this section and the Part E text above disagree (export naming, the
+scope, `MutableStateFlow`), this section is what shipped. It amends
+[ADR-194](194-suspend-returning-flow.md) (Alternative 3's reason; ADR-194 carries its own dated
+amendment) and builds on [ADR-068](068-suspend-returning-stateflow.md), [ADR-071](071-mutable-stateflow-mapping.md),
+[ADR-117](117-forward-abi-collision-names-owning-declarations.md), [ADR-205](205-shared-flow-mapping.md) and
+[ADR-207](207-flow-backpressure.md).
+
+### Rule
+
+`box.Value` on a `Box<Flow<E>>` or `Box<StateFlow<E>>` is a `KotlinFlow<E>` / `KotlinStateFlow<E>`
+the caller collects (`await foreach`) and disposes. It binds at every position a closed generic
+instantiation binds, plus the top-level function return (`crateOfFlow(): Crate<Flow<Int>>` flips
+from a named skip to a binding). Also bound: nested `Box<Box<Flow<E>>>`, `Box<Flow<E>?>` and
+`Box<Flow<E>>?`. `Box<SharedFlow<E>>` binds as the plain `KotlinFlow<E>` ([ADR-205](205-shared-flow-mapping.md)).
+
+**Materialiser.** One generated export per closed instantiation, keyed on the flow's own handle and
+built by the same builder the acquired `Flow` route uses (`handleKeyedFlowCollectExport`), so each
+element is projected by the same `itemBoxExpr`. It is named by the mangled Kotlin element
+spelling, not by a counter, so it is stable across unrelated edits and readable in a native
+stack: `<lib>_flowarg_flow_kotlin_Int_collect`, `<lib>_flowarg_stateflow_<pkg>_Mood_collect` plus
+`_value`, `..._String_nullable_collect`. The C# half is one `[DllImport]` set inside `NugetMarshal`
+and one `Factories` line per instantiation. Every symbol is module-local and regenerates with its
+C# half: **no `nuget_*` runtime export changes**, and the runtime `nuget_stateflow_*` exports are
+not used, so one rule covers every element.
+
+**Scope (supersedes the null-scope rule of Part E above).** The holder creates its **own**
+`NugetScopeHandle`, and `Dispose` cancels it before releasing the flow handle (`KotlinFlow<T>` /
+`KotlinStateFlow<T>` gained a trailing internal `ownedScope` constructor argument). Consequences:
+
+- Disposing the holder cancels its running collections. Their enumerators then complete.
+- The scope is no child of any class's scope, so disposing the producing owner neither cancels these
+  collections nor waits for them: `nuget_scope_drain` cannot hang on them (the ADR-207 class).
+- An abandoned, undisposed holder leaks its scope and job until finalization; callers dispose it.
+- Each `.Value` read mints a fresh holder (a fresh flow handle and a fresh scope) over the same
+  Kotlin flow; N reads need N disposes. The scope is created with the holder, not by the first
+  collect.
+
+Why not the null scope Part E first proposed: a collection on an unowned root could be ended only by its
+enumerator, and `Dispose` on the holder would not stop it (the integration cell parks the flow in
+`awaitCancellation` to prove the holder now does).
+
+### Declined, named skips (no ROADMAP lines)
+
+| Shape | Outcome |
+|---|---|
+| `Box<MutableStateFlow<T>>` | binds read-only as `KotlinStateFlow<T>`; `SKIPPED_UNSUPPORTED_INPUT` named once per instantiation. A settable `.Value` needs a compareAndSet delegate and member-owned write exports, and a boxed flow has no member |
+| `Box<Flow<Flow<Int>>>`, a lambda element, a `Unit` element, `Flow<*>`, the open `Box<Flow<T>>` | `SKIPPED_UNSUPPORTED_TYPE`, naming the argument |
+| a flow argument of a generic **sealed** type (`Outcome<Flow<Int>>`) | stays refused |
+| passing a holder **into** Kotlin (`new Box<KotlinFlow<int>>(flow)`) | throws `NotSupportedException`; the flow-parameter line of Phase 7 covers that direction |
+
+### Fix to the previous item (member-position instantiations)
+
+An interface reached **only** as the type argument of a member-position instantiation
+(`fun seen(): Box<Sighting>`) got no backing wrapper and no `Factories` key, so `.Value` had
+nothing to materialise through at runtime. Fixed in the reachability walk:
+`genericInstancePositionTypes` visits function parameters and member-function signatures, and
+`erasedInterfaceArguments` recurses through a generic-class carrier (and through a flow element).
+Pinned by `Tier1GenericInstanceMemberPositionTest`.
+
+### Evidence
+
+**Verified.** `Tier1FlowTypeArgumentTest` (8 cells, three of them `dotnet build` of the generated
+C# for every element kind) and `IntegrationTests/FlowTypeArgumentTests.cs`, run natively: `Int`,
+enum, nullable `String` and `StateFlow` enum/`Int` elements, two enumerations of one holder, the
+top-level return, nesting, a nullable argument, a `SharedFlow`, a read-only `MutableStateFlow`,
+holder disposal ending a parked collection, and owner disposal mid-collection not hanging. Three
+`LeakTests` rows return to baseline: `BoxedFlow_CollectAndDispose_ReturnsToBaseline`,
+`BoxedFlow_OwnerOrHolderDisposedMidCollection_ReturnsToBaseline`,
+`BoxedFlow_EachValueReadMintsAFreshHolder_ReturnsToBaseline`. `ByteArray` and `Throwable` elements
+are verified by Tier 1 and `dotnet build` only, not run natively.
+
+**Inferred.** `Flow<E>` and `Flow<E?>` over a reference `E` are one runtime `Type`, so their two
+`Factories` lines collide: the nullable line is rendered last and its export covers both, which is
+safe only because no cell declares both in one module.

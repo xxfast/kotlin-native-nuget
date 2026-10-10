@@ -165,6 +165,7 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | `StateFlow<E>` / `Flow<E>` of an enum or value class element (nullable included) | → | `KotlinStateFlow<E>` / `KotlinFlow<E>` | `.Value` and `await foreach` return the C# enum or record struct. A `MutableStateFlow` of a non-null enum, or of a value class over a `String`, primitive, enum or object, is settable. | [Coroutines and Flow](coroutines-and-flow.md) |
 | `suspend fun` returning `StateFlow<T>` | → | `Task<KotlinStateFlow<T>>` | Stays a `Task`. Class and top-level; nullable element or holder binds as `T?`. A `List`/`Set`/`Map` element binds read-only; `MutableStateFlow` of one is not bound. | [Coroutines and Flow](coroutines-and-flow.md) |
 | `suspend fun` returning `Flow<T>` | → | `Task<KotlinFlow<T>>` | Await acquisition once; dispose the acquired holder separately from its owner. | [Coroutines and Flow](coroutines-and-flow.md) |
+| `Flow<E>` / `StateFlow<E>` as the type argument of a generic class (`Box<Flow<E>>`) | → | `Box<KotlinFlow<E>>` / `Box<KotlinStateFlow<E>>` | `box.Value` mints a new holder per read that owns its collection scope; dispose it. Read-only: a `MutableStateFlow` argument is not settable. | [Coroutines and Flow](coroutines-and-flow.md) |
 | `List`/`Set`/`Map` parameter (nullable too) on a `Flow`/`StateFlow`-returning or `suspend` member | → | the collection type, never `IntPtr` | `null` crosses as Kotlin `null`. Converted eagerly, before the coroutine starts, so the handle is call-scoped; `.Value` re-marshals per read. Any other generic parameter skips, named. | [Coroutines and Flow](coroutines-and-flow.md) |
 | `List`/`Set`/`Map` return on a `suspend` member | → | `Task<IReadOnlyList<T>>` / `Task<IReadOnlySet<T>>` / `Task<IReadOnlyDictionary<K, V>>` | Spelled and read as the property route spells the same type; `?` and a sealed-base element bind. A closed `Box<T>` binds; every other generic `suspend` return skips, named. | [Coroutines and Flow](coroutines-and-flow.md) |
 | A class, `object`, sealed base, or sealed subclass parameter on a `Flow`/`StateFlow`-returning or `suspend` member | → | the mapped C# type, spelled exactly as the return position on the same member, passed as `x._handle` | Nullable binds as `T?`, `null` crossing as no handle. A value class or interface parameter skips, named. | [Coroutines and Flow](coroutines-and-flow.md) |
@@ -176,7 +177,7 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | `IAsyncEnumerable<T>` method return, instance or static | ← | `Flow<T>` | Pull-based and cold: the C# method runs at `collect`, not at the call that returned the `Flow`. A mid-stream throw arrives as `NugetManagedException`. | [Instance members](instance-members.md) |
 
 <note>
-<p><code>Flow</code> parameters and <code>Flow</code> as a generic argument are not yet supported. See <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a> Phase 6.</p>
+<p><code>Flow</code> parameters are not yet supported. See <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a> Phase 7.</p>
 </note>
 
 ## Documentation comments
