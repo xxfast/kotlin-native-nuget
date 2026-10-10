@@ -287,16 +287,18 @@ internal fun classifyMutableStateFlowElement(elementType: KSType?): MutableState
   val classDeclaration: KSClassDeclaration =
     declaration as? KSClassDeclaration ?: return MutableStateFlowElement.ReadOnly
   val qualifiedName: String = classDeclaration.qualifiedName?.asString() ?: simpleName
-  // ADR-208: a generic instantiation (`Box<String>`) has no write arm. The Kotlin half of the
-  // seam reads the element at its bare qualified name, which a generic class does not have
-  // (`asStableRef<pkg.Box>()` does not compile), so it keeps the read-only mapping.
-  if (elementType.expandAliases().arguments.isNotEmpty()) return MutableStateFlowElement.ReadOnly
   return when {
     classDeclaration.classKind == ClassKind.ENUM_CLASS ->
       MutableStateFlowElement.Enum(qualifiedName)
 
     // Before the CLASS arm: a value class is a `CLASS` too.
     classDeclaration.isValueClass() -> valueClassElement(classDeclaration, qualifiedName)
+
+    // ADR-208: a generic class instantiation (`Box<String>`) has no write arm. The Kotlin half
+    // of the seam reads the element at its bare qualified name, which a generic class does not
+    // have (`asStableRef<pkg.Box>()` does not compile), so it keeps the read-only mapping.
+    // After the value-class arm: a generic value class is refused by name there, not silently.
+    elementType.expandAliases().arguments.isNotEmpty() -> MutableStateFlowElement.ReadOnly
 
     classDeclaration.classKind == ClassKind.CLASS ||
         classDeclaration.classKind == ClassKind.OBJECT ->

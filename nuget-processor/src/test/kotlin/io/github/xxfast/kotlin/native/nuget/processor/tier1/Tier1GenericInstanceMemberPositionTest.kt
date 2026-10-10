@@ -396,4 +396,163 @@ class Tier1GenericInstanceMemberPositionTest {
       allowUnsafe = true,
     )
   }
+
+  private val crates: Tier1Result by lazy {
+    Tier1Harness.run(
+      mapOf("Crates.kt" to """
+      package tier1.crates
+
+      import kotlin.jvm.JvmInline
+      import kotlinx.coroutines.flow.Flow
+      import kotlinx.coroutines.flow.MutableStateFlow
+      import kotlinx.coroutines.flow.StateFlow
+      import kotlinx.coroutines.flow.flowOf
+
+      class Box<T>(val value: T)
+
+      @JvmInline
+      value class Crate<T>(val item: T)
+
+      class Depot {
+        val held: Crate<Int> = Crate(1)
+        var spare: Crate<String> = Crate("toy")
+        fun fetch(): Crate<Int> = Crate(2)
+        fun stow(crate: Crate<Int>): Int = crate.item
+        fun maybeFetch(): Crate<Int>? = null
+        fun maybeStow(crate: Crate<Int>?): Int = 0
+        fun boxed(): Box<Crate<Int>> = Box(Crate(3))
+        fun listed(): List<Crate<Int>> = listOf(Crate(4))
+        suspend fun later(): Crate<Int> = Crate(5)
+        suspend fun laterWith(crate: Crate<Int>): Int = crate.item
+        val stream: Flow<Crate<Int>> = flowOf(Crate(6))
+        val state: StateFlow<Crate<Int>> = MutableStateFlow(Crate(7))
+        val mutable: MutableStateFlow<Crate<Int>> = MutableStateFlow(Crate(8))
+        fun streamOf(): Flow<Crate<Int>> = flowOf(Crate(9))
+        fun dial(): MutableStateFlow<Crate<Int>> = MutableStateFlow(Crate(10))
+      }
+
+      val topCrate: Crate<Int> = Crate(11)
+
+      fun topFetch(): Crate<Int> = Crate(12)
+
+      fun topStow(crate: Crate<Int>): Int = crate.item
+
+      val Crate<Int>.label: String get() = "n=" + item
+      """.trimIndent()),
+      processorOptions = mapOf("nuget.rootPackage" to "tier1"),
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+  }
+
+
+  /** Every member of the [crates] fixture, with the named skip its position gives it. */
+  private val crateMembers: Map<String, ForwardDiagnosticKind> = mapOf(
+    "held" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
+    "spare" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
+    "fetch" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
+    "stow" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
+    "maybeFetch" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
+    "maybeStow" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
+    "boxed" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
+    "listed" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
+    "later" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
+    "laterWith" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
+    "stream" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
+    "state" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
+    "mutable" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
+    "streamOf" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
+    "dial" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
+    "topCrate" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
+    "topFetch" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
+    "topStow" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
+    "label" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
+  )
+
+  /**
+   * A generic VALUE class (`@JvmInline value class Crate<T>`) is not a handle-carrying object, so
+   * an instantiation of it is not an ADR-208 handle at any position: it has no `_handle`, no
+   * `asStableRef` read and no `Factories` line. Every member typed with one stays a named skip,
+   * absent on both halves, and what is left of `Interop.cs` compiles.
+   */
+  @Test
+  fun `a generic value class instantiation is never a handle and stays a named skip`() {
+    assertTrue(crates.kspErrors.isEmpty(), "expected no KSP errors; got: ${crates.kspErrors}")
+    assertTrue(crates.compiledClean, "expected a clean compile; got: ${crates.compileErrors}")
+    val cs: String = crates.generatedCSharp.withoutDocComments()
+    val mentions: List<String> = cs.lines().filter { Regex("""\bCrate\b""").containsMatchIn(it) }
+    assertTrue(mentions.isEmpty(), "expected no C# code naming Crate; got: $mentions")
+    assertFalse(
+      "tier1.crates.Crate" in crates.generated,
+      "expected no Kotlin export reading or minting a Crate",
+    )
+    assertFalse(
+      Regex("""@CName\("[^"]*depot_(?!create"|dispose")""").containsMatchIn(crates.generated),
+      "expected no Depot member export; generated=${crates.generated}",
+    )
+    val declarations: List<String> = cs.lines().filter { it.trimStart().startsWith("public") }
+    crateMembers.forEach { (member, kind) ->
+      val csName: String = member.replaceFirstChar { it.uppercase() }
+      val declared: List<String> =
+        declarations.filter { Regex("""\b$csName(Async)?\b""").containsMatchIn(it) }
+      assertTrue(declared.isEmpty(), "expected no $csName declaration; got: $declared")
+      assertTrue(
+        crates.kspWarnings.any {
+          it.contains("[nuget:${kind.name}]") && it.contains(".$member: ")
+        },
+        "expected a ${kind.name} naming $member; kspWarnings=${crates.kspWarnings}",
+      )
+    }
+    // The ADR-208 refusal sentence belongs to a generic CLASS. Only `Box<Crate<Int>>` gets it, for
+    // its argument; the value class itself never reaches that seam.
+    assertFalse(
+      crates.kspWarnings.any { it.contains("generic class `tier1.crates.Crate`") },
+      "a generic value class is not a generic class reference; kspWarnings=${crates.kspWarnings}",
+    )
+    assertContains(
+      crates.kspWarnings.single { it.contains(".boxed: ") },
+      "its generic class `tier1.crates.Box` has no C# spelling here: the erased wire cannot " +
+        "read its type argument `Crate<Int>`",
+    )
+    Tier1CSharpCompile.assertCompiles(
+      crates,
+      """
+      using Interop.Crates;
+
+      namespace Consumer
+      {
+          public static class Probe
+          {
+              public static void Run()
+              {
+                  using var depot = new Depot();
+              }
+          }
+      }
+      """.trimIndent(),
+      allowUnsafe = true,
+    )
+  }
+
+  /**
+   * ADR-208's read-only gate on a generic `MutableStateFlow` element is for a generic CLASS, whose
+   * refusal is silent because the member still binds. A generic value class element keeps
+   * ADR-071's named write refusal, on a property and on a returned holder.
+   */
+  @Test
+  fun `a MutableStateFlow of a generic value class keeps its named write refusal`() {
+    listOf("mutable", "dial").forEach { member ->
+      assertTrue(
+        crates.kspWarnings.any {
+          it.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name}]") &&
+            it.contains(".$member: ") && it.contains("value class tier1.crates.Crate") &&
+            it.contains("has no write arm")
+        },
+        "expected $member refused naming its value class; kspWarnings=${crates.kspWarnings}",
+      )
+    }
+    assertFalse(
+      Regex("""depot_set_\w+_value""").containsMatchIn(crates.generated),
+      "expected no Kotlin setter for a generic value class element",
+    )
+  }
 }
