@@ -169,6 +169,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyEnumRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import io.github.xxfast.kotlin.native.nuget.processor.valueClassUnderlyingOrThrow
 
 /** Which half of issue #42 a dropped supertype is: both re-home their public members onto the
@@ -4147,13 +4148,22 @@ internal fun translateCompanionFunction(
   val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
 
   val params: List<CirParameter> = func.parameters.map { param ->
-    val kotlinType: String = param.type.resolve().expandAliases().declaration.simpleName.asString()
-    CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
+    val resolved: KSType = param.type.resolve().expandAliases()
+    val kotlinType: String = resolved.declaration.simpleName.asString()
+    val name: String = param.name?.asString() ?: "_"
+    val type: String = mapParamType(kotlinType)
+    // C# can pass `null!` where a `string` is declared; a non-null one is read through the guard.
+    val guarded: Boolean = type == "string" && !resolved.isMarkedNullable
+    CirParameter(
+      name,
+      type,
+      nativeArgumentExpression = if (guarded) nonNullStringOrThrow(name) else null,
+    )
   }
 
   val entryPoint: String = "${classPrefix}_companion_${cname}"
   val nativeName: String = "Native_Companion_$csMethodName"
-  val paramNames: String = params.joinToString(", ") { it.name }
+  val paramNames: String = params.joinToString(", ") { it.nativeArgument }
   val nativeCallArgs: String = if (paramNames.isEmpty()) {
     "out IntPtr error"
   } else {

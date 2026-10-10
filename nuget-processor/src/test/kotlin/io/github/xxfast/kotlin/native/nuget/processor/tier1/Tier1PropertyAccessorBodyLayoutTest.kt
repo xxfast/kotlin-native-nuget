@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertTrue
@@ -110,6 +111,9 @@ class Tier1PropertyAccessorBodyLayoutTest {
   @Test
   fun `a custom constructor body renders like a method body`() {
     val result = Tier1Harness.run(source)
+    // The list's elements are read through the null guard, reported against the parameter.
+    val notes: String = "global::System.Linq.Enumerable.Select(notes, x => " +
+      "${nonNullStringOrThrow("x", "notes")})"
 
     assertContains(
       result.generatedCSharp,
@@ -118,7 +122,7 @@ class Tier1PropertyAccessorBodyLayoutTest {
       |            IntPtr notesHandle = IntPtr.Zero;
       |            try
       |            {
-      |                notesHandle = notes != null ? NugetMarshal.CreateList(notes) : IntPtr.Zero;
+      |                notesHandle = notes != null ? NugetMarshal.CreateList($notes) : IntPtr.Zero;
       |                IntPtr handle = Native_Create(notesHandle, out IntPtr error);
       """.trimMargin(),
     )

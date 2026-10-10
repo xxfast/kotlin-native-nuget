@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -141,7 +142,10 @@ class Tier1NullableGenericPropertyTest {
     assertContains(cs, "public string Label")
     assertContains(cs, "public int Count")
     assertContains(cs, "public string Note")
-    assertContains(cs, "Native_Set_note(_handle, value, out IntPtr error);")
+    assertContains(
+      cs,
+      "Native_Set_note(_handle, ${nonNullStringOrThrow("value")}, out IntPtr error);",
+    )
     assertContains(cs, "public global::Interop.Cat Keeper")
     assertContains(cs, "return new global::Interop.Cat(nativeResult, out _);")
 

@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -140,7 +141,8 @@ class Tier1ReservedParameterNamesTest {
     )
     assertContains(
       result.generatedCSharp,
-      "IntPtr nativeResult = Native_Describe(_handle, handle_, value_, nativeResult_, " +
+      "IntPtr nativeResult = Native_Describe(_handle, handle_, " +
+          "${nonNullStringOrThrow("value_")}, nativeResult_, " +
           "out IntPtr error);",
     )
     assertContains(
@@ -167,7 +169,11 @@ class Tier1ReservedParameterNamesTest {
       result.generatedCSharp,
       "public static string Tag(this string receiver, string receiver_)",
     )
-    assertContains(result.generatedCSharp, "Native_Tag(receiver, receiver_, out IntPtr error);")
+    assertContains(
+      result.generatedCSharp,
+      "Native_Tag(${nonNullStringOrThrow("receiver")}, ${nonNullStringOrThrow("receiver_")}, " +
+        "out IntPtr error);",
+    )
     assertContains(result.generated, "  `receiver`: String,\n  receiver_: String,\n  errorOut:")
     assertContains(result.generated, "receiver.nuget_ext_tier1__reserved__tag(receiver_)")
   }
@@ -259,7 +265,7 @@ class Tier1ReservedParameterNamesTest {
     assertContains(result.generatedCSharp, "public Meter(string value_)")
     assertContains(
       result.generatedCSharp,
-      "IntPtr handle = Native_Create(value_, out IntPtr error);",
+      "IntPtr handle = Native_Create(${nonNullStringOrThrow("value_")}, out IntPtr error);",
     )
     assertContains(
       result.generated,

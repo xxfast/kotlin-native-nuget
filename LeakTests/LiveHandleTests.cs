@@ -2966,6 +2966,23 @@ public class LiveHandleTests
         });
     }
 
+    // Row 8d-nullstring. The string twin of the row above: a `null!` string is refused in C# while
+    // the call's arguments are evaluated, AFTER the `names` list handle was built on `StampNamed`
+    // and with the list half filled on `StampAll` (the null is its second element). Both are
+    // released on the way out, by the call's own `finally` and by `CreateList`'s catch.
+    [Fact]
+    public void NullString_RefusedAfterAHandleWasBuilt_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var desk = new TestLibrary.Stamps.StampDesk("Mylo");
+            var names = new List<string> { "Oreo", "Mylo" };
+            Assert.Throws<ArgumentNullException>(() => desk.StampNamed(names, null!));
+            var texts = new List<string> { "Oreo", null! };
+            Assert.Throws<ArgumentNullException>(() => desk.StampAll(texts));
+        });
+    }
+
     // Row 8e. Issue #129 / ADR-124: the same flow route as Row 7, with a *sealed arm* as the owner.
     // The arm mints nothing new (the per-item box, the job handle and the subscription all come
     // from the same builders), but it owns its scope through the arm's own `_scopeHandle` and

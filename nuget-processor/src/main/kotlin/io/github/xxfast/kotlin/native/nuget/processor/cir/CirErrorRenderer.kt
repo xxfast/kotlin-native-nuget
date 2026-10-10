@@ -271,9 +271,12 @@ internal fun StringBuilder.renderSyncErrorCheckMethod(method: CirMethod, classNa
   val nativeFuncName: String =
     if (method.isStatic) method.nativeName else method.resolvedExternName
 
-  // When a parameter's native type differs from its public type (e.g. enum -> int), cast it.
+  // When a parameter's native type differs from its public type (e.g. enum -> int), cast it. A
+  // parameter that carries its own native argument (a non-null `string`, read through its null
+  // guard) passes that instead.
   val nativeArgList: String = method.parameters.joinToString(", ") { param ->
-    if (param.nativeType != param.type) "(${param.nativeType})${param.name}" else param.name
+    param.nativeArgumentExpression
+      ?: if (param.nativeType != param.type) "(${param.nativeType})${param.name}" else param.name
   }
 
   val nativeCallArgs: String = when {

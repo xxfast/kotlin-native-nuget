@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -145,7 +146,8 @@ class Tier1ValueClassDefaultGuardTest {
     )
     assertContains(
       csharp,
-      "new KeyValuePair<string, string>(x.Key, ${tag("x.Value", parameter = null)})",
+      "new KeyValuePair<string, string>(${nonNullStringOrThrow("x.Key", "byName")}, " +
+        "${tag("x.Value", parameter = null)})",
     )
     // The suspend and the Flow-returning member build the same list; all three sites are guarded.
     assertEquals(
@@ -211,15 +213,16 @@ class Tier1ValueClassDefaultGuardTest {
   @Test
   fun `a non-null String MutableStateFlow element rejects null before it crosses`() {
     assertClean()
-    val setter: String = csharp
-      .substringBefore("Native_SetTextValue(_handle, v, out IntPtr error);")
-      .substringAfterLast("v =>")
-    assertContains(setter, "if (v is null) throw new ArgumentNullException(nameof(v));")
-    val swap: String = csharp
-      .substringBefore("Native_CompareAndSetTextValue(_handle, expect, update,")
-      .substringAfterLast("(expect, update) =>")
-    assertContains(swap, "if (expect is null) throw new ArgumentNullException(nameof(expect));")
-    assertContains(swap, "if (update is null) throw new ArgumentNullException(nameof(update));")
+    // The read is the one guard every non-null string crossing shares, not a statement.
+    assertContains(
+      csharp,
+      "Native_SetTextValue(_handle, ${nonNullStringOrThrow("v")}, out IntPtr error);",
+    )
+    assertContains(
+      csharp,
+      "Native_CompareAndSetTextValue(_handle, ${nonNullStringOrThrow("expect")}, " +
+        "${nonNullStringOrThrow("update")}, out IntPtr error), error);",
+    )
   }
 
   @Test

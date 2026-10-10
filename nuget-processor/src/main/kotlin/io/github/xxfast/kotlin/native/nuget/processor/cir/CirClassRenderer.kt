@@ -490,7 +490,8 @@ internal fun StringBuilder.renderConstructor(
 ) {
   renderDoc(ctor.doc, "        ")
   val paramStr: String = ctor.parameters.joinToString(", ") { it.declaration }
-  val paramNames: String = ctor.parameters.joinToString(", ") { it.name }
+  // The native argument, not the bare name: a non-null `string` is read through its null guard.
+  val paramNames: String = ctor.parameters.joinToString(", ") { it.nativeArgument }
   val nativeCallArgs: String = if (paramNames.isEmpty()) "out IntPtr error" else "$paramNames, out IntPtr error"
 
   if (hasSuperClass) {
