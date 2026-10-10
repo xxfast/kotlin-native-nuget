@@ -2,9 +2,11 @@ package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.CollectionKind
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPlanSkipReason
 import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticTypeName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isBridgeableComponent
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isWrappableComponent
+import io.github.xxfast.kotlin.native.nuget.processor.forward.skipReason
 
 /**
  * One Kotlin collection component spelling, the [BridgeType] the classifier gives it, and the
@@ -116,4 +118,55 @@ internal object Tier1UnwrappableWitness {
         "this witness (and the planner arm they guard) are now dead code to delete, or whether " +
         "a deliberate permanent refusal should be added to the candidate list.",
     )
+
+  /** Ordered: the first entry still deferred as an unrouted generic reference wins. */
+  private val unroutedGenerics: List<Tier1GenericCandidate> = listOf(
+    // ADR-040 keeps a generic interface on the "generic declaration" route; ADR-208 declined it.
+    Tier1GenericCandidate(
+      kotlin = "Shelf<Int>",
+      declarations = "interface Shelf<T> { fun top(): T }",
+      type = { packageName ->
+        BridgeType.SpecializedProtocol("generic declaration $packageName.Shelf")
+      },
+    ),
+    // ADR-196: an inner class captures its generic owner's `T`; ADR-208 declined it too.
+    Tier1GenericCandidate(
+      kotlin = "Tin<Int>.Latch",
+      declarations = "class Tin<T>(val lid: T) { inner class Latch(val turns: Int) }",
+      type = { packageName ->
+        BridgeType.SpecializedProtocol("generic declaration $packageName.Tin.Latch")
+      },
+    ),
+  )
+
+  /**
+   * A generic type reference no route carries at a member position: the member skips as
+   * `UNROUTED_POSITION` (reason `GENERIC`), with the input or return kind of its position. Since
+   * ADR-208 an exported generic CLASS (`Box<Int>`) is no such thing; it binds everywhere.
+   */
+  val unroutedGeneric: Tier1GenericCandidate
+    get() = unroutedGenerics.firstOrNull { candidate ->
+      candidate.type("tier1").skipReason() == ForwardPlanSkipReason.GENERIC
+    } ?: error(
+      "Tier1UnwrappableWitness: no candidate is left for an unrouted generic reference " +
+        "(UNROUTED_POSITION cells); every one of " +
+        "${unroutedGenerics.map { candidate -> candidate.kotlin }} binds now. Decide whether " +
+        "the cells using this witness are dead, or add a deliberate permanent refusal to the " +
+        "candidate list.",
+    )
+}
+
+/**
+ * One generic spelling a fixture drops in at a position, the [declarations] it needs beside it
+ * and the [BridgeType] the classifier gives it in a package. Hand-kept like
+ * [Tier1UnwrappableCandidate.readable], and never trusted silently: every cell that takes one
+ * asserts the skip it expects, so a candidate that starts binding fails its cells.
+ */
+internal class Tier1GenericCandidate(
+  val kotlin: String,
+  val declarations: String,
+  val type: (packageName: String) -> BridgeType,
+) {
+  /** The declared type's simple name (`Shelf`), as generated names and diagnostics spell it. */
+  val simpleName: String get() = kotlin.substringBefore('<')
 }

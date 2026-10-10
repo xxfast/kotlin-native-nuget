@@ -61,7 +61,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmLambdaMe
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowProperties
-import io.github.xxfast.kotlin.native.nuget.processor.exports.addFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyGenericFunctionRoute
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isReifiedWithUnspellableBound
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addGenericFunctionExports
@@ -3039,8 +3038,7 @@ internal class NugetProcessor(
         // (package, name), so the n-th namesake's plan is keyed `..._$n`.
         val planned: ForwardCallablePlan? = callableCatalog.planFor(func)
         // ADR-064: the import goes behind the gate, never ahead of it. A skipped function used to
-        // leave a line importing a symbol the generated file never mentions. The legacy route
-        // imports its own, after its own early returns.
+        // leave a line importing a symbol the generated file never mentions.
         if (planned != null) {
           // ADR-163: no simple-name import. The plan emitter spells a top-level call fully
           // qualified, because two same-named functions in two packages now both export and an
@@ -3055,9 +3053,9 @@ internal class NugetProcessor(
             builder.addImport("", func.simpleName.asString())
           }
           builder.addForwardKotlinPlanExport(planned)
-        } else {
-          builder.addFunctionExports(func, context.symbols, callableCatalog)
         }
+        // ADR-208: no else. The generic-return legacy adapter is gone; an unplanned top-level
+        // function exports nothing and its skip is already named.
       }
     }
 

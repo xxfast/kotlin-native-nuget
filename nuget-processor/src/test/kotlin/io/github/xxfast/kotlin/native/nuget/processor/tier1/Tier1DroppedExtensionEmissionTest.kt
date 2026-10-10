@@ -23,31 +23,37 @@ import kotlin.test.assertTrue
 class Tier1DroppedExtensionEmissionTest {
 
   /**
-   * Fix A, negative half: `Box<Int>.label`'s receiver is an unsupported extension-property
-   * receiver (the same shape `Tier1NamedSkipDiagnosticsTest` uses for the receiver diagnostic), so
-   * `BoxExtensions` would have zero members and must not be emitted at all.
+   * Fix A, negative half: the receiver ([Tier1UnwrappableWitness.unroutedGeneric], the same shape
+   * `Tier1NamedSkipDiagnosticsTest` uses for the receiver diagnostic) is an unsupported
+   * extension-property receiver, so its `...Extensions` class would have zero members and must
+   * not be emitted at all. `Box<Int>` was that receiver until ADR-208 bound it.
    */
   @Test
   fun `receiver group with only dropped members emits no empty extensions class`() {
+    val generic: Tier1GenericCandidate = Tier1UnwrappableWitness.unroutedGeneric
     val result = Tier1Harness.run(
       """
       package tier1.emptyext
 
-      class Box<T>(val value: T)
+      ${generic.declarations}
 
       class Patient(val name: String)
 
-      val Box<Int>.label: String get() = "x"
+      val ${generic.kotlin}.label: String get() = "x"
       """.trimIndent()
     )
 
     assertTrue(
       result.compiledClean,
-      "expected no broken source for Box<Int>.label; got: ${result.compileErrors}",
+      "expected no broken source for ${generic.kotlin}.label; got: ${result.compileErrors}",
+    )
+    assertTrue(
+      result.kspWarnings.any { it.contains("${generic.simpleName}.label") },
+      "expected the receiver to stay refused; kspWarnings=${result.kspWarnings}",
     )
     assertFalse(
-      result.generatedCSharp.contains("BoxExtensions"),
-      "expected no empty BoxExtensions class in the generated C#; " +
+      result.generatedCSharp.contains("${generic.simpleName}Extensions"),
+      "expected no empty ${generic.simpleName}Extensions class in the generated C#; " +
           "generatedCSharp=${result.generatedCSharp}",
     )
   }
@@ -104,21 +110,26 @@ class Tier1DroppedExtensionEmissionTest {
    */
   @Test
   fun `dropped extension property leaves no dead import in the generated Kotlin`() {
+    val generic: Tier1GenericCandidate = Tier1UnwrappableWitness.unroutedGeneric
     val result = Tier1Harness.run(
       """
       package tier1.deadimport
 
-      class Box<T>(val value: T)
+      ${generic.declarations}
 
       class Patient(val name: String)
 
-      val Box<Int>.label: String get() = "x"
+      val ${generic.kotlin}.label: String get() = "x"
       """.trimIndent()
     )
 
     assertTrue(
       result.compiledClean,
-      "expected no broken source for Box<Int>.label; got: ${result.compileErrors}",
+      "expected no broken source for ${generic.kotlin}.label; got: ${result.compileErrors}",
+    )
+    assertTrue(
+      result.kspWarnings.any { it.contains("${generic.simpleName}.label") },
+      "expected the receiver to stay refused; kspWarnings=${result.kspWarnings}",
     )
     assertFalse(
       result.generated.contains("import tier1.deadimport.label"),

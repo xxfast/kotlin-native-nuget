@@ -73,12 +73,13 @@ internal class ForwardBridgeTypeClassifier(
   internal val exportMarkers: Set<String> get() = context.exportMarkers
 
   /**
-   * ADR-199: every closed generic sealed instantiation classified at a position, by C# spelling
+   * ADR-199: every closed generic sealed instantiation (ADR-208: and every closed instantiation of
+   * an exported generic class) classified at a position, by C# spelling
    * (`TestLibrary.Outcome.Outcome<int>`, no `global::`), each with the expression body that reads
    * it from a `NugetKotlinHandle handle`. One static `NugetMarshal.Factories` entry each, so an
    * erased read (`List<Outcome<Int>>`) finds its key.
    */
-  internal val closedSealedInstantiations: MutableMap<String, String> = sortedMapOf()
+  internal val closedInstantiations: MutableMap<String, String> = sortedMapOf()
 
   /**
    * The C# namespace [declaration] is rendered into, by the same mapping [interfaceType] qualifies
@@ -362,7 +363,7 @@ internal class ForwardBridgeTypeClassifier(
       val genericArm: Boolean =
         classDeclaration.forwardArmSealedParent()?.isGenericSealedType() == true
       if (discriminated && (classDeclaration.isGenericSealedType() || genericArm)) {
-        return genericSealedReference(type, classDeclaration, qualifiedName)
+        return genericReference(type, classDeclaration, qualifiedName)
       }
       // ADR-204: an ineligible sealed interface whose arms are all declared handle classes keeps
       // its `I<Name>` spelling and reconstructs through the interface's own `FromHandle`.
@@ -415,11 +416,23 @@ internal class ForwardBridgeTypeClassifier(
     if (armParent != null && qualifiedName in context.exportedObjectHandles &&
       classDeclaration.classKind != ClassKind.ENUM_CLASS
     ) {
-      return genericSealedReference(type, classDeclaration, qualifiedName)
+      return genericReference(type, classDeclaration, qualifiedName)
+    }
+    // ADR-208: a closed (or open) instantiation of an exported generic class (`Box<String>`) is
+    // the same applied-spelling handle ADR-199 gives a generic sealed reference, at every position.
+    // An `inner` class keeps the ADR-196 branch below: its C# spelling carries the owner's `T`.
+    val isPlainGenericClass: Boolean = classDeclaration.typeParameters.isNotEmpty() &&
+        classDeclaration.classKind == ClassKind.CLASS &&
+        Modifier.INNER !in classDeclaration.modifiers
+    if (isPlainGenericClass && qualifiedName in context.exportedObjectHandles) {
+      return genericReference(type, classDeclaration, qualifiedName)
     }
     // ADR-196: an inner class that captures a generic owner's `T` is the generic `Tin.Latch<T>` in
     // C#, so a reference to it is a generic reference too, though it declares no parameter itself.
-    if (classDeclaration.forwardTypeParametersInScope().isNotEmpty()) {
+    // ADR-208: a plain generic class the module does not export (`kotlin.Pair`, a dependency's
+    // `Box<T>`) is not deferred here any more. No route is left to defer it to, so it falls
+    // through to the unexported-class refusals below, which name it and its remedy.
+    if (classDeclaration.forwardTypeParametersInScope().isNotEmpty() && !isPlainGenericClass) {
       return BridgeType.SpecializedProtocol("generic declaration $qualifiedName")
     }
     val isClassOrObject: Boolean =
@@ -650,25 +663,30 @@ internal class ForwardBridgeTypeClassifier(
    * ADR-199: a reference to a generic sealed type or one of its arms, spelled with the use site's
    * arguments (`global::Ns.Outcome<int>`, `global::Ns.Outcome.Err<global::...KotlinNothing>`) and
    * read back in Kotlin at its applied type (`pkg.Outcome<kotlin.Int>`), or a named refusal.
+   * ADR-208: and a reference to any exported generic class (`global::Ns.Box<string>`), whose
+   * refusal is an unsupported type rather than a sealed position.
    */
-  private fun genericSealedReference(
+  private fun genericReference(
     type: KSType,
     declaration: KSClassDeclaration,
     qualifiedName: String,
   ): BridgeType {
     val isSealed: Boolean = declaration.isGenericSealedType()
-    fun refused(why: String): BridgeType =
+    // The C# arm's parameters, each with the Kotlin type it is instantiated at and the Kotlin
+    // parameter whose bound it must satisfy.
+    val parent: KSClassDeclaration? =
+      declaration.forwardArmSealedParent()?.takeIf { it.isGenericSealedType() }
+    fun refused(why: String): BridgeType = if (isSealed || parent != null) {
       BridgeType.SpecializedProtocol("$SEALED_HELPER_PREFIX$qualifiedName", sealedRefusal = why)
+    } else {
+      BridgeType.Unsupported(qualifiedName, why, isGenericRefusal = true)
+    }
 
     val arguments: List<KSTypeArgument> = type.arguments
     if (arguments.any { it.variance != Variance.INVARIANT || it.type == null }) {
       return refused("`${type}` is a use-site projection, and C# has no " +
           "projection of a generic class")
     }
-    // The C# arm's parameters, each with the Kotlin type it is instantiated at and the Kotlin
-    // parameter whose bound it must satisfy.
-    val parent: KSClassDeclaration? =
-      declaration.forwardArmSealedParent()?.takeIf { it.isGenericSealedType() }
     val shape: ForwardSealedArmShape? = parent?.let { declaration.forwardSealedArmShape(it) }
     val own: Map<String, KSType> = declaration.typeParameters
       .zip(arguments)
@@ -708,7 +726,7 @@ internal class ForwardBridgeTypeClassifier(
         return@map KOTLIN_NOTHING_CSHARP
       }
       val classified: BridgeType = classify(argument).sealedAsHandle()
-      if (!classified.isErasedSealedArgument()) {
+      if (!classified.isErasedTypeArgument()) {
         return refused("the erased wire cannot read its type argument " +
             "`${argument}`")
       }
@@ -729,9 +747,10 @@ internal class ForwardBridgeTypeClassifier(
     }
     if (closed) {
       val key: String = csharpType.removePrefix("global::")
-      closedSealedInstantiations[key] = when {
-        isSealed -> "$csharpType.FromHandle(handle)"
-        else -> "new ${constructType ?: csharpType}(handle, out _)"
+      closedInstantiations[key] = if (isSealed) {
+        "$csharpType.FromHandle(handle)"
+      } else {
+        "new ${constructType ?: csharpType}(handle, out _)"
       }
     }
     val handle = BridgeType.ObjectHandle(

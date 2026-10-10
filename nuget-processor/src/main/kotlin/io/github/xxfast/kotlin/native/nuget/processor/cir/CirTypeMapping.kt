@@ -294,6 +294,12 @@ internal fun classifyMutableStateFlowElement(elementType: KSType?): MutableState
     // Before the CLASS arm: a value class is a `CLASS` too.
     classDeclaration.isValueClass() -> valueClassElement(classDeclaration, qualifiedName)
 
+    // ADR-208: a generic class instantiation (`Box<String>`) has no write arm. The Kotlin half
+    // of the seam reads the element at its bare qualified name, which a generic class does not
+    // have (`asStableRef<pkg.Box>()` does not compile), so it keeps the read-only mapping.
+    // After the value-class arm: a generic value class is refused by name there, not silently.
+    elementType.expandAliases().arguments.isNotEmpty() -> MutableStateFlowElement.ReadOnly
+
     classDeclaration.classKind == ClassKind.CLASS ||
         classDeclaration.classKind == ClassKind.OBJECT ->
       MutableStateFlowElement.Handle(qualifiedName)
@@ -1026,40 +1032,4 @@ internal fun lambdaTypeArgumentDiagnostic(
   hint = "expose a lambda over bridgeable types instead: replace `$typeArgument` with a " +
       "primitive, a String, or a top-level exported class in the export scope (a Flow or a " +
       "generic type argument needs its own bridgeable wrapper type)",
-)
-
-/**
- * Issue #111's rule on the top-level generic-return route: the [lambdaTypeArgumentDiagnostic]
- * sibling for `fun f(): Crate<List<Int>>` (an argument C# cannot name) and
- * `fun f(): Pair<Int, Int>` (an outer generic type nothing in `Interop.cs` declares). Its own
- * wording, because this route is not a lambda.
- */
-internal fun genericReturnTypeArgumentDiagnostic(
-  symbol: KSNode?,
-  declaration: String,
-  unspellable: String,
-  isOuterType: Boolean,
-  owner: ForwardDiagnosticOwner?,
-  member: String?,
-): ForwardDiagnostic = ForwardDiagnostic(
-  kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
-  symbol = symbol,
-  declaration = declaration,
-  owner = owner,
-  member = member,
-  reason = if (isOuterType) {
-    "its generic return type `$unspellable` is not declared in C#: a generic return must be a " +
-        "generic class exported from this module"
-  } else {
-    "its type argument `$unspellable` has no C# spelling on a generic return: an argument must " +
-        "be a primitive, String, or an exported class, object, enum or interface, and a type " +
-        "carrying its own type arguments (a collection, a generic class, Flow, a lambda) has none"
-  },
-  hint = if (isOuterType) {
-    "return an exported generic class of your own instead of `$unspellable`, or a non-generic " +
-        "exported class wrapping it"
-  } else {
-    "replace `$unspellable` with a primitive, a String, or an exported class in the export " +
-        "scope, or return a non-generic exported class that wraps the value"
-  },
 )

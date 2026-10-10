@@ -6,9 +6,9 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * The top-level generic-return route (`translateFunction`'s `isGenericReturnType` arm) spelled a
- * type argument C# cannot name by its bare Kotlin simple name, and an outer type nothing declares
- * by a namespace that does not exist:
+ * A top-level function returning an exported generic class (`fun f(): Crate<Int>`). Until ADR-208
+ * it was on a hand-built legacy route that spelled a type argument C# cannot name by its bare
+ * Kotlin simple name, and an outer type nothing declares by a namespace that does not exist:
  *
  * ```kotlin
  * fun crateOfList(): Crate<List<Int>> = Crate(listOf(1))
@@ -19,18 +19,21 @@ import kotlin.test.assertTrue
  * public static global::Interop.Kotlin.Pair<int, int> PairOf()     // CS0234 'Kotlin'
  * ```
  *
- * Issue #111 already gated every lambda-type-argument site; this route was the one left
- * qualify-only. Binding is not an option (a generic carrier reads its `T` through
- * `NugetMarshal.FromHandle<T>`, which has no materialiser for a collection, a constructed generic
- * or a Flow), so each of these is skipped, named, with a `SKIPPED_UNSUPPORTED_RETURN` that says
- * which argument (or which outer type) has no C# spelling.
+ * ADR-208 put the return on the plan route and deleted the legacy one. A closed instantiation
+ * binds, nullable outer and nested instantiation included; an argument the erased wire cannot
+ * read (a generic carrier reads its `T` through `NugetMarshal.FromHandle<T>`, which has no
+ * materialiser for a collection, a lambda or a Flow) refuses the use site, named, as
+ * `SKIPPED_UNSUPPORTED_TYPE`; an outer type the module does not export is refused as the
+ * unsupported type it is.
  *
- * The Kotlin half keeps its `@CName` export, exactly like the lambda-return skip: a C#-only skip
- * leaves an export no import names, which `ForwardAbiContract` tolerates by design.
+ * A skip is absent on BOTH halves now: the legacy route used to leave an orphan `@CName` export.
  *
  * The crate holds Oreo's favourite toy, which nobody may take out.
  */
 class Tier1GenericReturnTypeArgumentTest {
+
+  /** A generic reference no route carries, for the NULLABLE-return wording cell. */
+  private val unrouted: Tier1GenericCandidate = Tier1UnwrappableWitness.unroutedGeneric
 
   private val fixture: Map<String, String> = mapOf(
     "Lens.kt" to """
@@ -81,6 +84,10 @@ class Tier1GenericReturnTypeArgumentTest {
 
       fun maybeCrateOfInt(): Crate<Int>? = null
 
+      ${unrouted.declarations}
+
+      fun maybeUnrouted(): ${unrouted.kotlin}? = null
+
       enum class Mood { CALM, GRUMPY }
 
       fun crateOfMaybeInt(): Crate<Int?> = Crate(null)
@@ -103,56 +110,69 @@ class Tier1GenericReturnTypeArgumentTest {
     libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
   )
 
-  /** Every spiked shape, each with the argument (or outer type) its diagnostic must name. */
-  private val skipped: Map<String, String> = linkedMapOf(
-    "crateOfList" to "kotlin.collections.List",
-    "crateOfNullableList" to "kotlin.collections.List",
-    "crateOfMap" to "kotlin.collections.Map",
-    "crateOfFlow" to "kotlinx.coroutines.flow.Flow",
-    "crateOfLambda" to "kotlin.Function1",
-    "crateOfAny" to "kotlin.Any",
-    "crateOfBytes" to "kotlin.ByteArray",
-    "crateOfCrate" to "tier1.catcam.Crate",
-    "duoOfIntList" to "kotlin.collections.List",
-    "pairOf" to "kotlin.Pair",
-    "crateOfListWithParam" to "kotlin.collections.List",
+  /**
+   * Every refused use site of an exported outer, each with the type argument its diagnostic must
+   * name, as the author wrote it. `crateOfFlow` is here until ADR-208 part E binds a Flow argument.
+   */
+  private val refusedArguments: Map<String, String> = linkedMapOf(
+    "crateOfList" to "List<Int>",
+    "crateOfNullableList" to "List<Int>?",
+    "crateOfMap" to "Map<String, Int>",
+    "crateOfFlow" to "Flow<Int>",
+    "crateOfLambda" to "Function1<Int, Int>",
+    "crateOfAny" to "Any",
+    "crateOfBytes" to "ByteArray",
+    "duoOfIntList" to "List<Int>",
+    "crateOfListWithParam" to "List<Int>",
   )
 
   /**
-   * A nullable outer type never reaches the generic-return arm: it took `translateFunction`'s
-   * nullable branch, which imported `_has_value`/`_value` entry points the Kotlin half never
-   * exports, and the ABI contract failed the whole build as an internal generator error, for a
-   * nameable `Crate<Int>?` as much as for `Crate<List<Int>>?`. The route refuses it now, and the
-   * planner's NULLABLE return skip is the named diagnostic.
+   * A nullable outer over a bindable argument binds. Over a refused one it is the planner's
+   * NULLABLE return skip, as it was before ADR-208, and absent from both halves.
    */
   @Test
-  fun `a nullable generic return skips the function, named, instead of failing the build`() {
+  fun `a nullable generic return binds, and skips named when its argument is refused`() {
     val result = run()
 
     assertTrue(result.kspErrors.isEmpty(), "expected no KSP errors; got: ${result.kspErrors}")
-    listOf("maybeCrateOfList", "maybeCrateOfInt").forEach { function ->
-      val csName: String = function.replaceFirstChar { it.uppercase() }
-      assertFalse(
-        result.generatedCSharp.contains("${csName}_"),
-        "expected no $csName import on the C# half; got: " +
-            "${result.generatedCSharp.lines().filter { it.contains(csName) }}",
-      )
-      assertTrue(
-        skipDiagnostic(result, function).contains("NULLABLE"),
-        "expected the NULLABLE return skip for $function; got: ${skipDiagnostic(result, function)}",
-      )
-    }
+    assertTrue(
+      result.generatedCSharp.contains(
+        "public static global::Interop.Catcam.Crate<int>? MaybeCrateOfInt()",
+      ),
+      "expected Crate<Int>? to bind as a nullable wrapper; got: " +
+          "${result.generatedCSharp.lines().filter { it.contains("MaybeCrateOfInt") }}",
+    )
+    assertTrue(
+      result.kspWarnings.none { it.contains("[nuget:SKIPPED_") && it.contains("maybeCrateOfInt:") },
+      "expected no skip for maybeCrateOfInt; kspWarnings=${result.kspWarnings}",
+    )
+    assertFalse(
+      result.generatedCSharp.contains("MaybeCrateOfList"),
+      "expected no MaybeCrateOfList on the C# half; got: " +
+          "${result.generatedCSharp.lines().filter { it.contains("MaybeCrateOfList") }}",
+    )
+    assertTrue(
+      skipDiagnostic(result, "maybeCrateOfList", ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN)
+        .contains("NULLABLE"),
+      "expected the NULLABLE return skip for maybeCrateOfList",
+    )
   }
 
+  /**
+   * The NULLABLE return skip names the type it refused, in the sentence and the hint. A nullable
+   * generic class over a bindable argument binds since ADR-208, so the probes are one over a
+   * refused argument and a generic reference no route carries.
+   */
   @Test
   fun `a nullable return skip names the refused type, in the sentence and the hint`() {
     val result = run()
 
     mapOf(
-      "maybeCrateOfInt" to "`Crate<Int>?`",
+      "maybeUnrouted" to "`${unrouted.kotlin}?`",
       "maybeCrateOfList" to "`Crate<List<Int>>?`",
     ).forEach { (function, spelled) ->
-      val diagnostic: String = skipDiagnostic(result, function)
+      val diagnostic: String =
+        skipDiagnostic(result, function, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN)
       assertTrue(
         diagnostic.contains("its nullable return type $spelled has no supported wire (NULLABLE)"),
         "expected the reason sentence to name $spelled; got: $diagnostic",
@@ -169,33 +189,52 @@ class Tier1GenericReturnTypeArgumentTest {
   }
 
   @Test
-  fun `an unnameable generic-return type argument skips the function, named`() {
+  fun `an unreadable generic-return type argument skips the function, named`() {
     val result = run()
 
-    skipped.forEach { (function, typeArgument) ->
+    refusedArguments.forEach { (function, typeArgument) ->
       val csName: String = function.replaceFirstChar { it.uppercase() }
       val lines: List<String> = result.generatedCSharp.lines().filter { it.contains(" $csName(") }
       assertTrue(
         lines.isEmpty(),
         "expected $csName absent from Interop.cs, it has no C# spelling; got: $lines",
       )
-      assertSkipDiagnostic(result, function, typeArgument)
+      assertRefusedArgument(result, function, typeArgument)
     }
   }
 
+  /** `Pair` is not declared in C#: refused as the unmapped stdlib type it is, named. */
   @Test
-  fun `the generic-return skip has its own wording, not the lambda one`() {
+  fun `a generic return whose outer type is not exported skips the function, named`() {
     val result = run()
 
-    val diagnostic: String = skipDiagnostic(result, "crateOfList")
+    val lines: List<String> = result.generatedCSharp.lines().filter { it.contains(" PairOf(") }
+    assertTrue(lines.isEmpty(), "expected PairOf absent from Interop.cs; got: $lines")
+    val diagnostic: String =
+      skipDiagnostic(result, "pairOf", ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE)
+    assertTrue(
+      diagnostic.contains("kotlin.Pair"),
+      "expected the pairOf diagnostic to name kotlin.Pair; got: $diagnostic",
+    )
+  }
+
+  @Test
+  fun `the refused-argument skip has its own wording, not the lambda one`() {
+    val result = run()
+
+    val diagnostic: String =
+      skipDiagnostic(result, "crateOfList", ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE)
     assertFalse(
       diagnostic.contains("lambda type argument"),
-      "expected the generic-return skip to describe a generic return, not a lambda; got: " +
-          diagnostic,
+      "expected the skip to describe a generic class, not a lambda; got: $diagnostic",
+    )
+    assertFalse(
+      diagnostic.contains("sealed type"),
+      "expected the skip not to call a plain class a sealed type; got: $diagnostic",
     )
     assertTrue(
-      diagnostic.contains("generic return"),
-      "expected the generic-return skip to name its route; got: $diagnostic",
+      diagnostic.contains("its generic class `tier1.catcam.Crate` has no C# spelling here"),
+      "expected the skip to name the generic class; got: $diagnostic",
     )
   }
 
@@ -218,12 +257,21 @@ class Tier1GenericReturnTypeArgumentTest {
       "expected Crate<Snapshot> to keep binding, qualified; got: " +
           "${result.generatedCSharp.lines().filter { it.contains("CrateOfSnapshot") }}",
     )
+    // ADR-208: a nested instantiation binds too; its inner wrapper has its own factory.
+    assertTrue(
+      result.generatedCSharp.contains(
+        "public static global::Interop.Catcam.Crate<global::Interop.Catcam.Crate<int>> " +
+            "CrateOfCrate()",
+      ),
+      "expected Crate<Crate<Int>> to bind; got: " +
+          "${result.generatedCSharp.lines().filter { it.contains("CrateOfCrate") }}",
+    )
     assertTrue(
       result.generatedCSharp.contains("public static Crate<T> CrateOf<T>(T item)"),
       "expected a type-parameter return to keep binding; got: " +
           "${result.generatedCSharp.lines().filter { it.contains("CrateOf<") }}",
     )
-    listOf("crateOfInt", "crateOfSnapshot", "crateOf").forEach { function ->
+    listOf("crateOfInt", "crateOfSnapshot", "crateOfCrate", "crateOf").forEach { function ->
       assertTrue(
         result.kspWarnings.none { it.contains("[nuget:SKIPPED_") && it.contains("$function: ") },
         "expected no skip for $function; kspWarnings=${result.kspWarnings}",
@@ -232,8 +280,8 @@ class Tier1GenericReturnTypeArgumentTest {
   }
 
   /**
-   * `csTypeArgument` reads the argument's own nullability, so a nullable type argument keeps its
-   * `?` on this route: `Crate<Int?>` is `Crate<int?>`, never `Crate<int>` where null reads `0`.
+   * A nullable type argument keeps its `?`: `Crate<Int?>` is `Crate<int?>`, never `Crate<int>`
+   * where null reads `0`.
    */
   @Test
   fun `a nullable generic-return type argument keeps its question mark`() {
@@ -268,11 +316,11 @@ class Tier1GenericReturnTypeArgumentTest {
   }
 
   /**
-   * `Crate<T?>` at a type parameter never reaches `csTypeArgument`. With a parameter of its own
-   * type parameter it binds on the generic-function route, which spells the return by ADR-147's
-   * bare-`T` rule as `Crate<T>`: the `?` written on `T?` is not carried into C#, the instantiation
-   * says whether the item holds null (`CrateOfMaybe<int?>` does, `CrateOfMaybe<int>` reads `0`).
-   * Without one it is the generic route's existing named skip. Both are pinned as they stand.
+   * `Crate<T?>` at a function's own type parameter is the generic-function route's (ADR-197). With
+   * a parameter of its own type parameter it binds, spelling the return by ADR-147's bare-`T` rule
+   * as `Crate<T>`: the `?` written on `T?` is not carried into C#, the instantiation says whether
+   * the item holds null (`CrateOfMaybe<int?>` does, `CrateOfMaybe<int>` reads `0`). Without one it
+   * is that route's existing named skip. Both are pinned as they stand.
    */
   @Test
   fun `a nullable type-parameter argument keeps the generic-function route's spelling`() {
@@ -299,9 +347,9 @@ class Tier1GenericReturnTypeArgumentTest {
     )
   }
 
-  /** The Kotlin half keeps its orphan export (like the lambda-return skip) and still compiles. */
+  /** A skip is absent on both halves: no orphan export is left for a refused function. */
   @Test
-  fun `the generated Kotlin still compiles`() {
+  fun `the generated Kotlin still compiles and a skipped function exports nothing`() {
     val result = run()
 
     assertTrue(
@@ -309,26 +357,35 @@ class Tier1GenericReturnTypeArgumentTest {
       "expected clean generated Kotlin; got: ${result.compileErrors}",
     )
     assertTrue(result.kspErrors.isEmpty(), "expected no KSP errors; got: ${result.kspErrors}")
+    listOf("crateOfList", "pairOf").forEach { function ->
+      assertFalse(
+        result.generated.contains("\"library_catcam__$function\""),
+        "expected no orphan export for the skipped $function in CNameExports.kt",
+      )
+    }
     assertTrue(
-      result.generated.contains("\"library_catcam__crateOfList\""),
-      "expected the C#-only skip to leave the Kotlin export in place, as the lambda-return skip " +
-          "does; got no library_catcam__crateOfList in CNameExports.kt",
+      result.generated.contains("\"library_catcam__crateOfInt\""),
+      "expected the bound crateOfInt to keep its export",
     )
   }
 
-  private fun skipDiagnostic(result: Tier1Result, function: String): String = requireNotNull(
+  private fun skipDiagnostic(
+    result: Tier1Result,
+    function: String,
+    kind: ForwardDiagnosticKind,
+  ): String = requireNotNull(
     result.kspWarnings.firstOrNull {
-      it.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN.name}]") &&
-          it.contains("$function: ")
+      it.contains("[nuget:${kind.name}]") && it.contains("$function: ")
     },
   ) {
-    "expected a SKIPPED_UNSUPPORTED_RETURN naming $function; kspWarnings=${result.kspWarnings}"
+    "expected a ${kind.name} naming $function; kspWarnings=${result.kspWarnings}"
   }
 
-  private fun assertSkipDiagnostic(result: Tier1Result, function: String, typeArgument: String) {
-    val diagnostic: String = skipDiagnostic(result, function)
+  private fun assertRefusedArgument(result: Tier1Result, function: String, typeArgument: String) {
+    val diagnostic: String =
+      skipDiagnostic(result, function, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE)
     assertTrue(
-      diagnostic.contains("`$typeArgument`"),
+      diagnostic.contains("cannot read its type argument `$typeArgument`"),
       "expected the $function diagnostic to name $typeArgument; got: $diagnostic",
     )
   }

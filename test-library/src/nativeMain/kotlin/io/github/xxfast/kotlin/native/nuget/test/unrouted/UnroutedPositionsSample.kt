@@ -28,10 +28,10 @@ class Depot {
   /** row 10: CALLBACK_PROTOCOL, lambda return on a class method. Predicted NONE. */
   fun callbackReturnOnClass(): (Int) -> Unit = {}
 
-  /** row 21: GENERIC, generic-declaration return on a class method. Predicted NONE. */
+  /** row 21: GENERIC, generic-declaration return on a class method. BINDS since ADR-208. */
   fun genericReturnOnClass(): Box<Int> = Box(1)
 
-  /** row 21: GENERIC, generic-declaration parameter on a class method. Predicted NONE. */
+  /** row 21: GENERIC, generic-declaration parameter on a class method. BINDS since ADR-208. */
   fun genericParamOnClass(box: Box<Int>): Int = box.value
 
   /** row 17 / extra observation: own `<T>` on an ordinary class; binds since ADR-197. */
@@ -46,7 +46,7 @@ class Depot {
   /** row 14: CALLBACK_PROTOCOL as a collection element. Predicted NONE. */
   fun callbackElementOnClass(): List<(Int) -> Unit> = emptyList()
 
-  /** row 23: GENERIC as a collection element. Predicted NONE. */
+  /** row 23: GENERIC as a collection element. BINDS since ADR-208. */
   fun genericElementOnClass(): List<Box<Int>> = emptyList()
 }
 
@@ -134,7 +134,7 @@ fun callbackParamOnTopLevel(cb: (Int) -> Unit): Int {
   return 1
 }
 
-/** row 20: GENERIC, generic-declaration parameter on a top-level function. Predicted NONE. */
+/** row 20: GENERIC, generic-declaration parameter on a top-level function. BINDS (ADR-208). */
 fun genericParamOnTopLevel(box: Box<Int>): Int = box.value
 
 /** row 15: structural GENERIC with a `T`-typed parameter, top level. Predicted RE. */
@@ -158,7 +158,7 @@ fun Depot.callbackParamOnExtension(cb: (Int) -> Unit): Int {
   return 1
 }
 
-/** row 22: GENERIC return on an extension. Predicted NONE. */
+/** row 22: GENERIC return on an extension. BINDS since ADR-208, on `DepotExtensions`. */
 fun Depot.genericReturnOnExtension(): Box<Int> = Box(1)
 
 /** row 18: structural GENERIC on an extension. Predicted NONE. */

@@ -368,3 +368,19 @@ K4        neg.kt:3:20: error: initializer type mismatch: expected 'Cell<Int>', a
 ```
 
 The spikes above ran before implementation. The built output was then checked end to end: `:nuget-processor:test` (1774 passed) and `scripts/verify.sh` (IntegrationTests 3183, LeakTests 189, 8 AOT shapes, ContractTests 4), with the generated C# and Kotlin read from the verified run. Generated-output claims in the sections above marked **Verified** rest on that run.
+
+## Amendment (2026-10-10): the reference path now carries plain generic classes (ADR-208)
+
+The classifier seam this ADR added for a generic sealed reference serves every exported,
+non-`inner` generic class as of [ADR-208](208-generic-instantiation-member-positions.md): a closed
+`Box<String>` returns the same `ObjectHandle` with the applied C# and Kotlin spellings and one
+`Factories` line per closed instantiation, and only the outer `isSealed` test still chooses between
+`FromHandle` (discriminator) and `new Box<string>(handle, out _)`. The helpers were renamed to say
+so: `genericSealedReference` is `genericReference`, `closedSealedInstantiations` is
+`closedInstantiations`, and `isErasedSealedArgument` is `isErasedTypeArgument`. The argument rule is
+unchanged, so `Box<List<Int>>` and `Box<Any>` are refused as `Outcome<List<Int>>` is. A refusal on a
+plain class is `SKIPPED_UNSUPPORTED_TYPE` ("its generic class `X` has no C# spelling here: ..."),
+not the sealed position's wording.
+
+Evidence, verified: `Tier1GenericInstanceMemberPositionTest` and
+`IntegrationTests/GenericInstanceMemberTests.cs`; the ADR-199 sealed cells are unchanged.

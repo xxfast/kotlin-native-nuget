@@ -909,11 +909,15 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
 
       // ADR-197: a member's own type parameter binds too now, on the owners and at the positions
       // the boxed wire reaches, so the sentence names those rather than "top-level only".
+      // ADR-208: a closed instantiation of an exported generic class binds everywhere now, so
+      // what reaches here is a generic interface, an inner class of a generic owner, or a
+      // function's own type parameter out of place.
       ForwardPlanSkipReason.GENERIC.name ->
-        "a generic type binds at a top-level function return, and a function's own type " +
+        "an exported generic class binds at every position, and a function's own type " +
             "parameter at a top-level function with a parameter of it and on a class, object, " +
-            "companion or sealed-class member as a bare `T` or `T?` parameter or return, but not " +
-            "at this position"
+            "companion or sealed-class member as a bare `T` or `T?` parameter or return; a " +
+            "generic interface or an inner class of a generic owner does not bind, nor does a " +
+            "type parameter at this position"
 
       else -> "no bridge route carries it at this position"
     }
@@ -1008,10 +1012,10 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
     // ADR-112 left one shape here: a sealed type with no generated discriminator, which is what
     // the hint below says too.
     ForwardPlanSkipReason.SEALED_POSITION ->
-      if (detail?.contains(GENERIC_SEALED_REFUSAL_SEPARATOR) == true) {
+      if (detail?.contains(GENERIC_REFUSAL_SEPARATOR) == true) {
         // ADR-199: the generic sealed type is declared; this use site has no C# spelling.
         val (sealedName: String, why: String) =
-          detail.split(GENERIC_SEALED_REFUSAL_SEPARATOR, limit = 2)
+          detail.split(GENERIC_REFUSAL_SEPARATOR, limit = 2)
         "its generic sealed type `$sealedName` has no C# spelling here: $why"
       } else {
         "its sealed type ${detail?.let { "`$it` " } ?: ""}has no generated C# discriminator"
@@ -1032,8 +1036,16 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
     // sentence now ([ownsSentence] claims the property route as soon as a detail is there); a type
     // whose refusal is about the position rather than the type carries no detail and keeps the
     // generic sentence.
-    ForwardPlanSkipReason.UNSUPPORTED ->
-      if (detail != null) "its type `$detail` is not supported" else generic
+    ForwardPlanSkipReason.UNSUPPORTED -> when {
+      detail == null -> generic
+      // ADR-208: the generic class is declared; this use site has no C# spelling.
+      GENERIC_REFUSAL_SEPARATOR in detail -> {
+        val (className: String, why: String) = detail.split(GENERIC_REFUSAL_SEPARATOR, limit = 2)
+        "its generic class `$className` has no C# spelling here: $why"
+      }
+
+      else -> "its type `$detail` is not supported"
+    }
 
     // Kotlin's own resolution: a member always beats an extension of the same name.
     ForwardPlanSkipReason.SHADOWED_BY_MEMBER ->
@@ -1233,8 +1245,17 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
   // #55/#56's sentence, moved here with it: `include("kotlin")` was the old hint, and following
   // it replaced the export scope with one nothing in the module lives under. A stdlib type wants
   // a first-class mapping (ADR-076 `Instant`, ADR-103 `Duration`, ADR-151 `ByteArray`).
-  ForwardPlanSkipReason.UNSUPPORTED ->
-    if (detail != null && detail.isStdlibPackage()) stdlibTypeHint(detail) else genericSkipHint
+  ForwardPlanSkipReason.UNSUPPORTED -> when {
+    detail == null -> genericSkipHint
+    // ADR-208: each refusal is a C# language gap or an erased-wire gap, so the remedy is the type.
+    GENERIC_REFUSAL_SEPARATOR in detail ->
+      "type the member with a closed instantiation C# can spell: a concrete argument the erased " +
+          "wire reads (a primitive, string, exported class, interface, enum or value class, or " +
+          "another closed generic class), and no `*` or `out`/`in` projection"
+
+    detail.isStdlibPackage() -> stdlibTypeHint(detail)
+    else -> genericSkipHint
+  }
 
   // Following ADR-109's `exclude("<pkg>")` remedy lands every callable reaching the excluded type
   // here. `include(...)` is not the fix: `PackageScope.covers` tests `exclude` first, so an
@@ -1434,7 +1455,7 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
   // export scope), which C# has no way to reconstruct. `SKIPPED_INELIGIBLE_SEALED_INTERFACE` says
   // why an ineligible one has none.
   ForwardPlanSkipReason.SEALED_POSITION -> if (
-    detail?.contains(GENERIC_SEALED_REFUSAL_SEPARATOR) == true
+    detail?.contains(GENERIC_REFUSAL_SEPARATOR) == true
   ) {
     // ADR-199: each refusal is a C# language gap, not a deferral, so the remedy is the Kotlin type.
     "type the member with a closed instantiation C# can spell: a concrete argument the erased " +
