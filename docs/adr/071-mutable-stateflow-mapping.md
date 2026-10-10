@@ -877,5 +877,23 @@ Verified: `Tier1MutableStateFlowCompareAndSetTest`; `IntegrationTests/MutableSta
 `MutableStateFlowFunctionTests.cs`; processor suite, IntegrationTests, LeakTests and both AOT runs
 green.
 
-Inferred, not verified: the setter lambda's parameter `v` is not freshly named, so a held method
-with a user parameter named `v` may generate non-compiling C#. Recorded as a ROADMAP Phase 6 item.
+The inference recorded here that the setter lambda's parameter `v` is not freshly named, so a held
+method with a user parameter named `v` may generate non-compiling C#, was wrong; see the 2026-10-10
+amendment.
+
+## Amendment (2026-10-10): parameters named after the held setter's lambda names compile
+
+The held branch of `CirFlowRenderer.renderHeldStateFlowMethod` spells the setter lambda's parameter
+`v`, its `out IntPtr error` and the callback parameters literally. A held (non-suspend)
+`MutableStateFlow` method with a user parameter of any of those names still compiles, so the
+spelling needs no change. Those names are declared inside lambdas, and C# 8 and later let a lambda's
+parameters shadow an enclosing parameter instead of raising CS0136. Nothing inside those lambdas
+reads a user parameter, so the shadowed name is the intended binding. The method-level locals
+(`flow_`, `owned_`, `expect_`, `update_`) were already freshly named, a user parameter named `error`
+already reaches C# as `error_` (issue #66), and `prev`, `next` and `transform` live on the runtime
+`KotlinMutableStateFlow<T>` class, not in the generated method.
+
+Verified: `Tier1HeldMutableStateFlowLocalNamesTest` runs `dotnet build` over the generated C# for
+held `MutableStateFlow` methods with `Int`, `String`, enum, object-handle, `String?` and `Int?`
+elements, each with parameters named `v`, `error`, `expect`, `update`, `onNext`, `onComplete`,
+`onError`, `userData`, `prev`, `next`, `transform`, `flow`, `owned` and `collectScope`.
