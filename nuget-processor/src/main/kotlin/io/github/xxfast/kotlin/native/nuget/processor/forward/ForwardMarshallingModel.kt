@@ -354,6 +354,13 @@ internal sealed interface BridgeType {
     val isUndeclaredInterface: kotlin.Boolean = false,
     val isUndeclaredClass: kotlin.Boolean = false,
     val isUndeclaredValueClass: kotlin.Boolean = false,
+    /**
+     * With [isUndeclaredValueClass]: the underlying that left this value class with no C# record
+     * struct at all (`kotlin.Char`, `kotlin.time.Instant`, another value class, a collection), as
+     * the author would read it. `null` for the nested value class whose owner walk deferred it:
+     * that one has a perfectly good underlying and a different remedy.
+     */
+    val valueClassUnderlying: kotlin.String? = null,
     /** ADR-133: a Kotlin `object` at a member type position. Declared in C# as a static class,
      *  which cannot be a parameter or return type (CS0722), wherever the object itself lives. */
     val isObjectPosition: kotlin.Boolean = false,

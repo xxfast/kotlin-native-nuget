@@ -35,8 +35,8 @@ spelling of any of those (`string?`, `int?`, `char?`, and so on): a lambda's typ
 `?` when the Kotlin declaration is nullable at that position, and `null` reaches the Kotlin lambda,
 or comes back from it, exactly as written. A value class payload or result crosses boxed, not by
 its underlying, so its own `init` still validates; a value class with no crossing at this position
-(a nullable underlying, a generic value class, or an ineligible sealed interface) is refused by
-name instead.
+(a nullable underlying or an ineligible sealed interface) is refused by name instead, and so is
+one with no C# record struct (see [Value classes](value-classes.md)).
 
 An exported **interface** type argument (`KotlinFunc<IPet, IPet>`) is spelled with the interface
 itself, never the ADR-040 backing wrapper, and passing your own C# implementation to `Invoke`

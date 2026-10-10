@@ -31,6 +31,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedCallb
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedInterfaceBridgePair
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.valueClassWithoutStruct
+import io.github.xxfast.kotlin.native.nuget.processor.forward.hasErasedCrossing
+import io.github.xxfast.kotlin.native.nuget.processor.forward.sealedAsHandle
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedReturn
@@ -152,7 +155,9 @@ internal fun KSFunctionDeclaration.hasPlannedCallbackParameter(
  *  - a lambda RESULT outside `Unit`, the primitives and `String`: the per-call route reads every
  *    other result back as a `String` box on both halves, so `() -> Cat` did not compile.
  */
-internal fun KSFunctionDeclaration.refusedLegacyLambdaShape(): LegacyRefusedInterfaceBridgePair? =
+internal fun KSFunctionDeclaration.refusedLegacyLambdaShape(
+  classifier: ForwardBridgeTypeClassifier,
+): LegacyRefusedInterfaceBridgePair? =
   parameters.firstNotNullOfOrNull { param ->
     val expanded: KSType = param.type.resolve().expandAliases()
     val expandedName: String? = expanded.declaration.qualifiedName?.asString()
@@ -188,6 +193,41 @@ internal fun KSFunctionDeclaration.refusedLegacyLambdaShape(): LegacyRefusedInte
         hint = "a collection, `Any`, a `Pair`, an array or another Kotlin builtin has no " +
             "crossing on a callback: pass the values one per call, or wrap them in an exported " +
             "class and pass that",
+      )
+    }
+    // A value-class payload is spelled as its record struct and read back through `Factories`.
+    // One no struct is declared for was spelled anyway (`Action<Initial>`, CS0246); the classifier
+    // refuses it at every position, and this route asks it rather than the expanded name.
+    val undeclared: BridgeType.Unsupported? = arguments.dropLast(1)
+      .firstNotNullOfOrNull { argument -> classifier.classify(argument).valueClassWithoutStruct() }
+    if (undeclared != null) {
+      return@firstNotNullOfOrNull LegacyRefusedInterfaceBridgePair(
+        kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
+        reason = "$CALLBACK_CARRIES$spelled, whose payload value class `${undeclared.rendered}` " +
+            "has no C# record struct, because it wraps `${undeclared.valueClassUnderlying}`, " +
+            "which no value-class wire carries",
+        hint = "change the underlying of value class `${undeclared.rendered}` to a String, a " +
+            "primitive other than Char, an enum, or an exported class or sealed type, or pass " +
+            "the underlying value to the callback instead",
+      )
+    }
+    // ...and one that HAS a record struct but no ADR-171 box/unbox pair (a nullable underlying such
+    // as `String?`) has no `Factories` entry, so `FromHandle<V>` would throw inside the callback
+    // at the first invocation. The rule and the sealed rewrite are the planner's own.
+    val unboxed: KSType? = arguments.dropLast(1).firstOrNull { argument ->
+      val valueClass: BridgeType.ValueClass? =
+        classifier.classify(argument).sealedAsHandle() as? BridgeType.ValueClass
+      valueClass != null && argument.arguments.isEmpty() && !valueClass.hasErasedCrossing()
+    }
+    if (unboxed != null) {
+      return@firstNotNullOfOrNull LegacyRefusedInterfaceBridgePair(
+        kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
+        reason = "$CALLBACK_CARRIES$spelled, whose payload value class " +
+            "`${unboxed.kotlinSpelling()}` has no boxed form to cross a callback in " +
+            "(a value class is a callback payload only over a String, a primitive other than " +
+            "Char, an enum or an exported class)",
+        hint = "change the value class's underlying to one of those, or pass the underlying " +
+            "value to the callback instead",
       )
     }
     val result: KSType = arguments.lastOrNull()?.expandAliases() ?: return@firstNotNullOfOrNull null
@@ -320,7 +360,7 @@ internal fun KSClassDeclaration.forwardClassLegacyMembers(
     // halves both vanish is never found, so `removeRinger` cannot survive as a cancel for a
     // subscription nobody can make) nor the ordinary `methods` list.
     // `warnRefusedLegacyRouteMembers` names it.
-    .filterNot { method -> method.refusedLegacyLambdaShape() != null }
+    .filterNot { method -> method.refusedLegacyLambdaShape(classifier) != null }
 
   val (lambdaParamMethods, methods) = allNonFlowMethods.partition { method ->
     method.hasLegacyLambdaParameter()

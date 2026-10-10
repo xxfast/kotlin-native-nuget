@@ -648,11 +648,12 @@ The elements you can write are those a `MutableStateFlow<T>` can set, described 
 `TryEmit(new CatId("oreo-1"))` crosses as the underlying and Kotlin wraps it again, with the
 same underlyings and the same `ArgumentException` for `default(CatId)` as a
 [`MutableStateFlow` of a value class](#enum-elements). A `MutableSharedFlow` of any other element
-(a `List`, `Set` or `Map`, a `ByteArray`, an interface, a value class over any other underlying,
-or a nullable `Boolean`, `Char` or enum) binds
-a read-only `KotlinSharedFlow<T>` and the build reports `SKIPPED_UNSUPPORTED_INPUT`. On a property
-the remark names the read-only C# property; expose a function that takes the element to emit it.
-`resetReplayCache()` is not exposed.
+(a `List`, `Set` or `Map`, a `ByteArray`, an interface, or a nullable `Boolean`, `Char` or enum)
+binds a read-only `KotlinSharedFlow<T>` and the build reports `SKIPPED_UNSUPPORTED_INPUT`. On a
+property the remark names the read-only C# property; expose a function that takes the element to
+emit it. A value class over anything the list above does not admit is not bound at all: the member
+is skipped by name (see [value class elements](#enum-elements)). `resetReplayCache()` is not
+exposed.
 
 ## `StateFlow<T>` {id="stateflow-t"}
 
@@ -789,11 +790,14 @@ tracker.SpareChipId.Value = null;
   `ArgumentException` in C# before anything crosses. This applies to a value class over a `String`
   or an object.
 - The underlying must be a non-null `String`, a primitive other than `Char`, an enum, or an
-  exported class or object. A value class over anything else (a `Char`, a nullable, another value
-  class, a `kotlin.*` class such as `Instant` or `Uuid`) and a generic value class bind a get-only
-  `KotlinStateFlow<T>`, and the build reports `SKIPPED_UNSUPPORTED_INPUT` naming the underlying.
-  On a property the remark names the read-only C# property; expose a function that takes the value
-  class to write it.
+  exported class or object. A value class over anything else is not a flow element at all, on a
+  `Flow`, `StateFlow` or `SharedFlow` alike, and the member is skipped by name rather than bound
+  read-only. A `Char`, another value class, a `kotlin.*` class such as `Instant` or `Uuid`, a
+  `Throwable`, a `List` or a generic value class has no C# record struct
+  (`SKIPPED_UNSUPPORTED_TYPE`). A nullable underlying (`value class Nick(val name: String?)`) has a
+  record struct but cannot be read back as a bare flow element, an awaited result or a lambda
+  payload, so it is skipped too; it still works inside a `List`. Expose the underlying value, or
+  change the underlying, to bind it.
 
 ## Settable `.Value` on `MutableStateFlow<T>` {id="settable-value"}
 

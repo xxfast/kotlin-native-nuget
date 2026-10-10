@@ -904,6 +904,28 @@ internal class ForwardBridgeTypeClassifier(
         qualifiedName,
         "value class underlying parameter must be named",
       )
+    // A top-level value class the processor declares no record struct for: its underlying is one
+    // no value-class wire carries (`Char`, `Instant`, another value class, a collection), so
+    // `NugetProcessor` named it once and kept it out of `exportedValueClasses`, the set the
+    // renderer declares from. Classifying it as a `ValueClass` anyway let every position that asks
+    // "can the component cross" spell a struct nothing declares: a `List<Initial>` component, a
+    // `Flow`/`StateFlow` element, an erased generic argument (CS0234 in the consumer's build). It
+    // is the same answer the nested gate above gives, on the same set, so "is it spelled" and "is
+    // it declared" cannot disagree at any position. `kotlin.Result` is in no export set and keeps
+    // classifying as a `ValueClass` for ADR-108's rewrite, as above.
+    val hasNoRecordStruct: Boolean = declaration.parentDeclaration == null &&
+        qualifiedName != RESULT_QUALIFIED_NAME && qualifiedName !in context.exportedValueClasses
+    if (hasNoRecordStruct) {
+      val underlying: KSType = underlyingParam.type.resolve()
+      val underlyingName: String = underlying.declaration.qualifiedName?.asString()
+        ?: underlying.declaration.simpleName.asString()
+      return BridgeType.Unsupported(
+        qualifiedName,
+        "a value class with no C# record struct declared for it",
+        isUndeclaredValueClass = true,
+        valueClassUnderlying = underlyingName + if (underlying.isMarkedNullable) "?" else "",
+      )
+    }
     // ADR-108: carry the classified type arguments so the planner can see `Result<T>`'s payload.
     // A star projection (`type == null`) contributes nothing, which is what keeps `Result<*>` on
     // its named skip.

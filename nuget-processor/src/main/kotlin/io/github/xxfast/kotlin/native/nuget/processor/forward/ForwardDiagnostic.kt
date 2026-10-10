@@ -995,9 +995,18 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
       "its type `${detail ?: "the class"}` is nested and no C# nested type is declared for it " +
           "($name)"
 
+    // Two ways to have no record struct. A top-level one has an underlying no value-class wire
+    // carries, and its detail names both ([VALUE_CLASS_WRAPS]); a nested one was deferred by its
+    // owner walk.
     ForwardPlanSkipReason.UNDECLARED_VALUE_CLASS ->
-      "its value class type `${detail ?: "the value class"}` is nested and no C# nested record " +
-          "struct is declared for it ($name)"
+      if (detail != null && VALUE_CLASS_WRAPS in detail) {
+        "its value class type `${detail.substringBefore(VALUE_CLASS_WRAPS)}` has no C# record " +
+            "struct, because it wraps `${detail.substringAfter(VALUE_CLASS_WRAPS)}`, which no " +
+            "value-class wire carries ($name)"
+      } else {
+        "its value class type `${detail ?: "the value class"}` is nested and no C# nested " +
+            "record struct is declared for it ($name)"
+      }
 
     // ADR-133: the object-at-a-member-position drop. Owns its sentence so the author reads the C#
     // rule (a static type has no parameter or return position) rather than the generic combination.
@@ -1520,7 +1529,14 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
   // nested kind that is not a handle at all, so "no C# nested type is generated for it" would read
   // as though a class were missing. Same ADR-134 shape rule as the hint above it, and the same two
   // remedies, because the same owner walk declares both.
-  ForwardPlanSkipReason.UNDECLARED_VALUE_CLASS -> {
+  ForwardPlanSkipReason.UNDECLARED_VALUE_CLASS -> if (
+    detail != null && VALUE_CLASS_WRAPS in detail
+  ) {
+    "change the underlying of value class `${detail.substringBefore(VALUE_CLASS_WRAPS)}` to a " +
+        "String, a primitive other than Char, an enum, or an exported class or sealed type (the " +
+        "SKIPPED_UNSUPPORTED_TYPE warning on the value class itself says the same), or expose " +
+        "the underlying value instead"
+  } else {
     val valueClassName: String = detail ?: "the value class"
     "value class `$valueClassName` is nested inside another declaration and no C# `readonly " +
         "record struct` is generated for it, so every member typed with it is skipped rather " +

@@ -1717,7 +1717,7 @@ internal class ForwardCallablePlanner(
               // A refused lambda shape is named by `warnRefusedLegacyRouteMembers` with the type
               // that failed; naming it here too would report one member twice, and the C# remark
               // would keep this generic wording instead.
-              method.refusedLegacyLambdaShape() != null
+              method.refusedLegacyLambdaShape(classifier) != null
 
         else -> false
       }
@@ -1749,7 +1749,7 @@ internal class ForwardCallablePlanner(
       findStoredCallbackPairs(
         methods
           .filter { method -> method.hasLegacyLambdaParameter() }
-          .filter { method -> method.refusedLegacyLambdaShape() == null },
+          .filter { method -> method.refusedLegacyLambdaShape(classifier) == null },
       )
     val bridgePairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
       findInterfaceBridgePairs(methods.filterNot { method -> method.hasLegacyLambdaParameter() })
@@ -1769,7 +1769,7 @@ internal class ForwardCallablePlanner(
     // unexported supertype's member, or an override of one, is named here.
     fun KSFunctionDeclaration.isNamedElsewhere(): Boolean =
       (parentDeclaration != cls && isDeclaredOnExportedType()) ||
-          refusedLegacyLambdaShape() != null ||
+          refusedLegacyLambdaShape(classifier) != null ||
           this in namedPairMembers ||
           overridesExportedInterfaceMember(classifier.exportedObjectHandles) ||
           (isForwardLegacyAsyncRoute() &&
@@ -5600,8 +5600,21 @@ internal fun BridgeType.undeclaredTypeDetail(): String? {
           unsupported.isUndeclaredClass || unsupported.isUndeclaredValueClass ||
           unsupported.isObjectPosition
     }
-    ?.rendered
+    ?.let { unsupported ->
+      // A value class with no record struct carries its underlying too, so the sentence can say
+      // why; one detail slot, as [actualTypeAliasTargetDetail] does for its pair.
+      unsupported.valueClassUnderlying
+        ?.let { underlying -> "${unsupported.rendered}$VALUE_CLASS_WRAPS$underlying" }
+        ?: unsupported.rendered
+    }
 }
+
+/**
+ * Separates a value class from the underlying that left it with no C# record struct, inside the
+ * one detail slot [ForwardPlanSkipReason.UNDECLARED_VALUE_CLASS] has (`pkg.Initial wraps
+ * kotlin.Char`). A qualified name cannot contain a space, so the split is unambiguous.
+ */
+internal const val VALUE_CLASS_WRAPS: String = " wraps "
 
 /** True for the ADR-009 sealed-hierarchy protocol, whichever position it turned up at. The
  *  classifier mints exactly one protocol name for it, so the prefix is the whole test. */

@@ -14,9 +14,10 @@ import kotlin.test.assertTrue
  * awaited `suspend fun` holder, which all share the one write classifier.
  *
  * A nullable enum element stays the read-only `KotlinStateFlow<Mood?>`, and a value-class element
- * over an underlying no write arm carries (here `String?`) is refused BY NAME (it used to pass the
- * gate as an ordinary class and take the object-handle arm, spelling `v._handle` on a C# record
- * struct). The writable value-class shapes live in `Tier1MutableStateFlowValueClassElementTest`.
+ * with no boxed form (here over `String?`) is skipped BY NAME (it used to pass the gate as an
+ * ordinary class and take the object-handle arm, spelling `v._handle` on a C# record struct, and
+ * later bound a read-only holder nothing could read). The writable value-class shapes live in
+ * `Tier1MutableStateFlowValueClassElementTest`.
  * The end-to-end half lives in `CatMoodTracker` / `MutableStateFlowEnumElementTests.cs`.
  */
 class Tier1MutableStateFlowEnumElementTest {
@@ -156,7 +157,7 @@ class Tier1MutableStateFlowEnumElementTest {
   }
 
   @Test
-  fun `a value class element over a nullable underlying is refused by name and binds read-only`() {
+  fun `a value class element over a nullable underlying is skipped by name`() {
     val result = Tier1Harness.run(source, libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore))
 
     assertTrue(result.compiledClean, "got: ${result.compileErrors} ${result.kspErrors}")
@@ -164,11 +165,11 @@ class Tier1MutableStateFlowEnumElementTest {
     val kotlin: String = result.generated
     val csharp: String = result.generatedCSharp
 
-    assertContains(csharp, Regex("""public KotlinStateFlow<[\w.:]*Tag> Tag\b"""))
-    assertContains(csharp, Regex("""public KotlinStateFlow<[\w.:]*Tag> TagDial\(\)"""))
+    // `Tag` wraps a `String?`: a record struct with no box/unbox pair, so nothing could read a
+    // bare element back and the flow route drops the member instead of binding it read-only.
     assertFalse(
-      Regex("""KotlinMutableStateFlow<[\w.:]*Tag>""").containsMatchIn(csharp),
-      "expected no settable holder of a value class element; generatedCSharp=$csharp",
+      Regex("""Flow<[\w.:]*Tag\??>""").containsMatchIn(csharp),
+      "expected no holder of a value class element with no boxed form; generatedCSharp=$csharp",
     )
     assertFalse(
       "tracker_set_tag_value" in kotlin || "tracker_tagDial_set_value" in kotlin,
@@ -176,18 +177,17 @@ class Tier1MutableStateFlowEnumElementTest {
     )
     assertTrue(
       result.kspWarnings.any {
-        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) &&
-            it.contains("Tracker.tag:") && it.contains("value class")
+        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name) &&
+            it.contains("Tracker.tag:") && it.contains("a value class is a Flow or StateFlow")
       },
-      "expected a SKIPPED_UNSUPPORTED_INPUT naming Tracker.tag; kspWarnings=${result.kspWarnings}",
+      "expected a named skip of Tracker.tag; kspWarnings=${result.kspWarnings}",
     )
     assertTrue(
       result.kspWarnings.any {
-        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) &&
-            it.contains("Tracker.tagDial")
+        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN.name) &&
+            it.contains("Tracker.tagDial") && it.contains("a value class is a Flow or StateFlow")
       },
-      "expected a SKIPPED_UNSUPPORTED_INPUT naming Tracker.tagDial; " +
-          "kspWarnings=${result.kspWarnings}",
+      "expected a named skip of Tracker.tagDial; kspWarnings=${result.kspWarnings}",
     )
   }
 }
