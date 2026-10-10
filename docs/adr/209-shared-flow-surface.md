@@ -195,7 +195,8 @@ guard: a `String` or object underlying throws `ArgumentException` in C# before t
 owner-keyed `EmitAsync` the owner's lazy scope may be created first; it is disposed with the owner).
 
 A declared `MutableSharedFlow<T>` whose element has no write arm (collections, `ByteArray`,
-interfaces, the nullable cases above, and a value class over any other underlying) binds as
+interfaces, the nullable cases above, and a value class over any other underlying; one with no
+record struct or no boxed form is skipped instead, see the 2026-10-10 amendment) binds as
 `KotlinSharedFlow<T>` and keeps `ReplayCache`. The dropped members are named with
 `SKIPPED_UNSUPPORTED_INPUT`: "its EmitAsync, TryEmit and SubscriptionCount are not generated
 because a MutableSharedFlow element of X has no write arm", with a hint that the C# property is a
@@ -255,3 +256,14 @@ refusals.
   its `SubscriptionCount` placement and "source-compatible" claims are corrected here. ADR-071's
   parked `Emit`/`TryEmit`/`ReplayCache`/`SubscriptionCount` list now points here.
 - No runtime ABI change.
+
+## Amendment (2026-10-10): struct-less and box-less elements are member-level skips
+
+A `SharedFlow` or `MutableSharedFlow` over a value class with no C# record struct (a `Char`,
+`Instant`, `Uuid`, `Throwable`, nested value class, `List` or generic value class underlying) is a
+named `SKIPPED_UNSUPPORTED_TYPE` skip of the member, not a read-only `KotlinSharedFlow`. So is one
+that has a record struct but no box/unbox pair (`Nick(val name: String?)`). This replaces the
+"value class over any other underlying binds read-only, named with its underlying" sentence above
+for those two kinds; the rule is in the 2026-10-10 amendments to ADR-071 and ADR-077. Verified by
+`Tier1ValueClassWithoutStructSharedFlowAndGenericTest` (property, held and awaited returns, with a
+`dotnet build`).

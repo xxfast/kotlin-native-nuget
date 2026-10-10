@@ -346,3 +346,49 @@ component arm (`ForwardCirCollectionComponents.kt`).
 Known and unchanged: an ordinary non-null `String` parameter or setter still accepts `null!` with
 no C# guard (the crash was measured for a constructor parameter). That is not a value-class case
 and this amendment does not change it.
+
+## Amendment (2026-10-10): a value class with no C# record struct is refused at every position
+
+**Defect.** A top-level value class the processor declares no record struct for (underlying
+`Char`, `Instant`/`Uuid` or another `kotlin.*` class, `Throwable`, a nested value class, a `List`,
+or a generic value class) was still classified as a value class. Any position that asked "can the
+component cross" then spelled a type nothing declares: `KotlinStateFlow<global::Interop.Initial>`,
+`List<Interop.Initial>`, `Action<Initial>`. The consumer build failed with CS0234 or CS0246.
+**Verified** by compiled probes: 20 errors on the flow routes and 10 on ordinary collections.
+
+**Rule 1: one predicate.** `ForwardBridgeTypeClassifier` refuses a top-level value class that is not
+in the declared-record-struct set (`exportedValueClasses`, the set the renderer declares structs
+from), so "is it spelled" and "is it declared" cannot disagree. `kotlin.Result` stays a value class
+for ADR-108's rewrite. Every position then skips the member by name:
+`SKIPPED_UNSUPPORTED_TYPE`, "its value class type `X` has no C# record struct, because it wraps
+`kotlin.Char`, which no value-class wire carries". The kind changed from
+`SKIPPED_UNSUPPORTED_INPUT`/`_RETURN`/`_PROPERTY` on the routes that used to report the others.
+
+**Rule 2: a record struct without a box.** A value class that has a record struct but no ADR-171
+box/unbox pair (`Nick(val name: String?)`, a nullable underlying) has no `Factories` entry. As a
+bare `Flow`/`StateFlow`/`SharedFlow` element, an awaited result or a lambda payload it is a named
+skip too. Inside a `List` it still binds, because components are projected without a box.
+
+**Positions pinned, with the C# compiled (verified).** Bare and inside `List`/`Set`/`Map`, nested
+and nullable components, property, method return and parameter, `suspend` return and parameter,
+constructor, lambda payload and result, sealed arm, top level, extension receiver, `Flow`,
+`StateFlow`, `MutableStateFlow`, `SharedFlow` and `MutableSharedFlow` elements (property, held and
+awaited returns), `Box<Initial>` at member positions, inside a `List` and as a `MutableStateFlow`
+element, `Box<Flow<Initial>>` and `Box<StateFlow<Nick>>`. Interface members build clean, but their
+diagnostic is not asserted.
+
+**Consequences.**
+
+- No generated output changes for any existing fixture: the regenerated bindings are
+  byte-identical. No LeakTests row, because a refusal mints nothing.
+- ADR-071's write refusal ("its setter is not generated ... read-only `KotlinStateFlow`") fires only
+  for a member that survives; it used to name a property that was dropped.
+- Still worded the old way: a struct-less value class nested inside another class keeps its "is
+  nested" wording.
+- The Rule 2 reader would have thrown `NotSupportedException`. **Inferred** from the generated code,
+  not executed.
+
+Evidence: `Tier1FlowElementValueClassWithoutStructTest`, `Tier1ValueClassWithoutStructPositionsTest`
+and `Tier1ValueClassWithoutStructSharedFlowAndGenericTest`, each with a real `dotnet build`; the
+native pipeline is green on the stack. See also the 2026-10-10 notes appended to ADR-071, ADR-208
+and ADR-209.

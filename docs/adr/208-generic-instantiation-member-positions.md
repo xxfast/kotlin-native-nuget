@@ -217,3 +217,13 @@ are verified by Tier 1 and `dotnet build` only, not run natively.
 **Inferred.** `Flow<E>` and `Flow<E?>` over a reference `E` are one runtime `Type`, so their two
 `Factories` lines collide: the nullable line is rendered last and its export covers both, which is
 safe only because no cell declares both in one module.
+
+## Amendment (2026-10-10): a generic value class and `Box<struct-less>` are named skips
+
+A generic value class, and a `Box<V>` whose `V` is a value class with no C# record struct or no
+box/unbox pair, are `SKIPPED_UNSUPPORTED_TYPE` skips at member positions: property, return,
+parameter, inside a `List`, as a `MutableStateFlow` element, and as `Flow` or `StateFlow` type
+arguments (`Box<Flow<Initial>>`, `Box<StateFlow<Nick>>`). This narrows the earlier "only a generic
+value class element stays refused" cell, which was a read-only holder, to a skip. The rule is in the
+2026-10-10 amendment to ADR-077. Verified by `Tier1ValueClassWithoutStructSharedFlowAndGenericTest`
+with a real `dotnet build`.
