@@ -767,37 +767,82 @@ private fun forwardBaseSpelling(
 ): String {
   val baseName: String = base.nestedCsName()
   if (base.typeParameters.isEmpty()) return baseName
-
-  val arguments: List<KSTypeArgument> = cls.superTypes
-    .map { it.resolve() }
-    .firstOrNull { it.declaration.qualifiedName?.asString() == base.qualifiedName?.asString() }
-    ?.arguments
-    .orEmpty()
-  check(arguments.size == base.typeParameters.size) {
-    "Cannot render the base class of $name: its base $baseName declares " +
-        "${base.typeParameters.size} type parameter(s) but the declaration supplies " +
-        "${arguments.size} argument(s)."
-  }
-
-  val spelled: List<String> = arguments.map { argument ->
-    val type: KSType = checkNotNull(argument.type?.resolve()) {
-      "Cannot render the base class of $name: the base $baseName is used with a star projection, " +
-          "which has no C# spelling. Close the base over a concrete type."
-    }
-    val bridge: BridgeType = classifier.classify(type)
-    // `forwardPublicCsharpType` refuses an unspellable head with `error(...)`, which is the right
-    // outcome here but names only the BridgeType. Catch it to say which class and which argument,
-    // since a build failure with no declaration in it is unactionable.
-    try {
-      bridge.forwardPublicCsharpType()
-    } catch (e: IllegalStateException) {
-      error(
-        "Cannot render the base class of $name: the type argument '$type' of $baseName has no " +
-            "public C# spelling ($bridge). Close the base over a bridgeable type. (${e.message})",
-      )
-    }
-  }
+  val spelled: List<String> = cls.closedBaseArgumentSpellings(name, base, classifier)
   return "$baseName<${spelled.joinToString(", ")}>"
+}
+
+/**
+ * ADR-101 amendment (2026-10-10): the C# spelling of each type argument [this] closes the generic
+ * [base] over, in [base]'s parameter order, read through every class between them.
+ *
+ * The kept base need not be a direct supertype: with `Barge : Keel<Int>` and a dropped
+ * `Keel<U> : Crate<U>`, `Crate` is two hops up and its argument is `Keel`'s `U`. The walk takes one
+ * hop at a time (the first class supertype, as `declaredSuperClass()` does), spells that hop's
+ * arguments with the classifier both halves use, and closes them over the previous hop's
+ * parameters with [closedOver], so `Crate<U>` becomes `Crate<int>`. `getAllSuperTypes()` is not a
+ * substitute: it hands back the hop's own `Crate<U>` unsubstituted (CS0246).
+ *
+ * Fails the build, naming [name], when an argument on the way has no public C# spelling (a nested
+ * generic, a lambda, a `Flow`) or is a star projection. That shape does not compile today either,
+ * and a silent skip would have to drop the base class itself.
+ */
+private fun KSClassDeclaration.closedBaseArgumentSpellings(
+  name: String,
+  base: KSClassDeclaration,
+  classifier: ForwardBridgeTypeClassifier,
+): List<String> {
+  val baseName: String = base.nestedCsName()
+  val target: String? = base.qualifiedName?.asString()
+  var closing: Map<String, String> = emptyMap()
+  var current: KSClassDeclaration = this
+  while (true) {
+    val superType: KSType = current.superTypes
+      .map { it.resolve() }
+      .firstOrNull { (it.declaration as? KSClassDeclaration)?.classKind == ClassKind.CLASS }
+      ?: error(
+        "Cannot render the base class of $name: $baseName is not among the base classes of " +
+            "${qualifiedName?.asString()}.",
+      )
+    val hop: KSClassDeclaration = superType.declaration as KSClassDeclaration
+    val spelled: List<String> = superType.arguments.map { argument ->
+      spellBaseArgument(argument, name, baseName, classifier).closedOver(closing)
+    }
+    if (hop.qualifiedName?.asString() == target) {
+      check(spelled.size == base.typeParameters.size) {
+        "Cannot render the base class of $name: its base $baseName declares " +
+            "${base.typeParameters.size} type parameter(s) but the declaration supplies " +
+            "${spelled.size} argument(s)."
+      }
+      return spelled
+    }
+    closing = hop.typeParameters.map { it.name.asString() }.zip(spelled).toMap()
+    current = hop
+  }
+}
+
+/** One base-list type argument as public C#, or a build failure naming the class and the base. */
+private fun spellBaseArgument(
+  argument: KSTypeArgument,
+  name: String,
+  baseName: String,
+  classifier: ForwardBridgeTypeClassifier,
+): String {
+  val type: KSType = checkNotNull(argument.type?.resolve()) {
+    "Cannot render the base class of $name: the base $baseName is used with a star projection, " +
+        "which has no C# spelling. Close the base over a concrete type."
+  }
+  val bridge: BridgeType = classifier.classify(type)
+  // `forwardPublicCsharpType` refuses an unspellable head with `error(...)`, which is the right
+  // outcome here but names only the BridgeType. Catch it to say which class and which argument,
+  // since a build failure with no declaration in it is unactionable.
+  return try {
+    bridge.forwardPublicCsharpType()
+  } catch (e: IllegalStateException) {
+    error(
+      "Cannot render the base class of $name: the type argument '$type' of $baseName has no " +
+          "public C# spelling ($bridge). Close the base over a bridgeable type. (${e.message})",
+    )
+  }
 }
 
 /**
@@ -1824,33 +1869,35 @@ private fun KSClassDeclaration.backingInheritedOverrides(
  * base's type parameter (`T` to `string` for `Alcove : Trove<String>`). Empty for a non-generic
  * base. A base member's export carries `T` boxed whatever the argument, so an override restated
  * at the closed type still reads it through `NugetMarshal.FromHandle<string>`.
+ *
+ * Read through [closedBaseArgumentSpellings], the base list's own walk, so a generic dropped middle
+ * (`Sled : Hopper<String>`, `Hopper<U> : Bin<U>`) restates `Pick()` as `string`, never `U`.
  */
 private fun KSClassDeclaration.closedArgumentsOf(
   base: KSClassDeclaration,
   classifier: ForwardBridgeTypeClassifier,
 ): Map<String, String> {
   if (base.typeParameters.isEmpty()) return emptyMap()
-  val supertype: KSType = checkNotNull(
-    getAllSuperTypes().firstOrNull { type ->
-      type.declaration.qualifiedName?.asString() == base.qualifiedName?.asString()
-    },
-  ) { "${qualifiedName?.asString()} does not derive from ${base.qualifiedName?.asString()}" }
-  return base.typeParameters.zip(supertype.arguments).associate { (parameter, argument) ->
-    val type: KSType = checkNotNull(argument.type?.resolve()) {
-      "${qualifiedName?.asString()} closes ${base.qualifiedName?.asString()} over a star " +
-          "projection, which has no C# spelling"
-    }
-    parameter.name.asString() to classifier.classify(type).forwardPublicCsharpType()
-  }
+  val spelled: List<String> =
+    closedBaseArgumentSpellings(simpleName.asString(), base, classifier)
+  return base.typeParameters.map { it.name.asString() }.zip(spelled).toMap()
 }
 
 /** A type parameter's name as a C# type, never a member access (`.T`) or a longer identifier. */
-private fun typeParameterName(name: String): Regex = Regex("""(?<![\w.])${Regex.escape(name)}\b""")
+private fun typeParameterNames(names: Collection<String>): Regex =
+  Regex("""(?<![\w.])(?:${names.joinToString("|") { Regex.escape(it) }})\b""")
 
-private fun String.closedOver(arguments: Map<String, String>): String =
-  arguments.entries.fold(this) { text, (name, spelling) ->
-    typeParameterName(name).replace(text) { spelling }
+/**
+ * [this] with every type parameter named in [arguments] replaced by its spelling, in one pass: a
+ * spelling that itself names another parameter (`Keel<A, B>` closed as `<B, int>` under a generic
+ * subclass) is never substituted a second time.
+ */
+private fun String.closedOver(arguments: Map<String, String>): String {
+  if (arguments.isEmpty()) return this
+  return typeParameterNames(arguments.keys).replace(this) { match ->
+    arguments.getValue(match.value)
   }
+}
 
 /** A generic base's abstract member restated at the closed type arguments of a class below it. */
 private fun CirMethod.closedOver(arguments: Map<String, String>): CirMethod {

@@ -899,3 +899,72 @@ Fixture: `test-library/.../test/windowsill/ScratchingPostSample.kt` (`Scratching
 the ordinary open class, `Lounger.Hammock`/`SunHammock` for the open sealed arm). See
 [interfaces-abstract-sealed.md](../topics/interfaces-abstract-sealed.md#defaulted-interface-members-on-implementing-classes)
 for the shipped shape.
+
+## 2026-10-10 amendment: a kept generic base under a dropped middle class
+
+`Barge : Keel : Crate<Int>`, with `Keel` outside the export root and `Crate<T>` exported, failed
+generation with an internal error from the base spelling, which read only the class's direct
+supertypes. It now generates `public class Barge : Crate<int>`: the C# consumer inherits `Item`,
+`Describe` and `Pick` from `Crate<int>`, and `Barge` declares only what `Barge` or the dropped `Keel`
+declares (`Weigh()`, and a `suspend` override as `LoadAsync()`). A generic middle,
+`Keel<U> : Crate<U>`, closes the same way.
+
+### The rules
+
+- **Base arguments are found by walking, not by looking.** `closedBaseArgumentSpellings`
+  (`CirClassTranslator.kt`) follows the first class supertype one hop at a time from the exported
+  class to the kept base, spells each hop's arguments with the shared classifier, and substitutes
+  the previous hop's type-parameter names in a single pass (`closedOver`). `getAllSuperTypes()` is
+  not a substitute: it returns the middle's own `Crate<U>` unsubstituted, which renders
+  `Barge : Crate<U>` (CS0246). The star-projection and unspellable-argument failures keep their
+  messages. The abstract-class backing (`closedArgumentsOf`) reads the same walk, so an abstract
+  `Backing__` restates `Pick()` at `int`, not at the middle's `U`.
+- **A member KSP attributes to the dropped middle only because it closes `T` stays on the generic
+  base.** Under a kept generic base, KSP parents a base member that mentions `T` to the first class
+  that closes `T`: `Crate<T>.item` and a non-open `describe(tag: T)` come back parented to `Keel`.
+  `isFromDroppedBase` (`ForwardClassMembership.kt`) used to test the parent alone, so both were
+  re-homed onto `Barge` as `public override int Item` (CS0506, `Crate<T>.Item` is not virtual) and a
+  second `Describe(int)` (CS0108). It now also requires the member to be *declared* by the dropped
+  class (`isDeclaredBy`), the dropped-middle twin of the substitution filter the 2026-09-11 and
+  2026-09-13 amendments apply to a direct subclass. A real override the dropped class declares still
+  re-homes.
+- **The scope-ownership rule is unchanged.** `reProjectsKeptBaseMember` already kept a `suspend` or
+  `Flow` override whose overridee is on a generic kept base (a generic class projects neither,
+  [ADR-147](147-generic-class-methods.md)), so `Barge` is the only carrier and renders
+  `public Task<string> LoadAsync()` with no `override`. Only its KDoc and the previously missing
+  test cell were added.
+
+### Two older bugs fixed in the same change
+
+Both are independent of generics and surfaced while pinning the above.
+
+1. **`override` with nothing to override (CS0115).** An exported class overriding a member that only
+   its *dropped* base declares (`Dinghy : Skiff(dropped) : Vessel` overriding `Skiff.tack()`, which
+   `Vessel` lacks) rendered `public override string Tack()`, because the overridee lookup stopped at
+   the dropped class. `keptBaseOverridee` now accepts an overridee on a dropped base only when the
+   kept base also carries a member of that name or signature, and `overridesBaseClassMember` keys on
+   it. `baseClassOverridee` still answers with the dropped overridee, since the scope-ownership and
+   lambda-property re-projection rules key on exactly that.
+2. **A lost setter.** An exported `override var` of a `val` that only an unexported base declares
+   rendered get-only, with a remark blaming the kept base. `readOnlyOverrideeOwner` reads
+   `keptBaseOverridee` too, so that property gets its C# setter. When the kept base declares the
+   `val`, the override stays get-only as before (a C# setter there is CS0546).
+
+### Evidence
+
+- Verified: `Tier1GenericBaseUnderDroppedMiddleTest` (membership, closed base list through a
+  generic and an abstract middle, overrides at the closed type; generated C# compiled),
+  `Tier1ScopeOwnerChainBranchesTest` (the generic-kept-base cell, suspend and `Flow`),
+  `Tier1DroppedMiddleOwnMemberOverrideTest` (both older bugs, C# compiled with warnings as errors),
+  and `IntegrationTests/GenericBaseUnderDroppedMiddleTests.cs` (`Barge` extends `Crate<int>`,
+  inherits without restating, and the `suspend` override runs from C#; the `Flow` cell is Tier 1
+  only).
+- Correction to the backlog text this replaces: the CS0506 seen after widening the spelling to
+  `getAllSuperTypes()` was on `Barge.Item`, the base's own `val item: T` copied onto `Barge`, not on
+  the `suspend` override.
+- Inferred: the `Mast` cell (kept base `val`, dropped hop widens it to `var`, exported class
+  overrides as `var`) pins that the override stays get-only. Its pre-fix behavior was not isolated,
+  so it is a regression pin, not a demonstrated fix.
+- No new handle-minting route, so no `LiveHandleTests` row, and no runtime ABI change: the only
+  export difference is that `library_barge_get_item` and a duplicate `Describe` are no longer
+  minted.

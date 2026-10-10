@@ -1262,16 +1262,18 @@ internal class ForwardPropertyPlanner(
    * `virtual`, not `override` (`isOpenForOverride`), and a `virtual` declaration is
    * free to carry a setter the interface never asked for.
    *
-   * The class-chain lookup itself is [baseClassOverridee] (`ForwardClassMembership.kt`), shared
+   * The class-chain lookup itself is [keptBaseOverridee] (`ForwardClassMembership.kt`), shared
    * with the `override` / `virtual` pair since the ADR-101 amendment of 2026-09-11: the two used
    * to answer differently for the same member, and a setter rule keyed on a different overridee
-   * from the modifier it renders is how CS0546 gets back in.
+   * from the modifier it renders is how CS0546 gets back in. Since the 2026-10-10 amendment that
+   * lookup reads through a dropped base to the kept one, so a `val` only the dropped base declares
+   * refuses nothing, and a `val` the kept base declares still does whatever a dropped hop widened.
    */
   private fun KSPropertyDeclaration.readOnlyOverrideeOwner(
     superClass: KSClassDeclaration?,
   ): KSClassDeclaration? {
     val overridee: KSPropertyDeclaration =
-      baseClassOverridee(superClass) as? KSPropertyDeclaration ?: return null
+      keptBaseOverridee(superClass) as? KSPropertyDeclaration ?: return null
     return if (overridee.isMutable && overridee.hasPublicSetter()) null else superClass
   }
 

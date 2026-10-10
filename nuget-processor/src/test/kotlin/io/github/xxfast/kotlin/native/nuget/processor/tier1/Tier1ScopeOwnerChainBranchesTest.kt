@@ -296,8 +296,8 @@ class Tier1ScopeOwnerChainBranchesTest {
    * - `Raft : Plank(dropped)`, no kept base: `baseClassOverridee(null)` is null, so the function
    *   answers before the dropped-base walk; the guard's `superClass == null` half is unreachable.
    * Each projects its override on itself, on the suspend route and the Flow route, and owns the
-   * scope. The guard's generic-kept-base half has no cell: `Barge : Keel(dropped) : Crate<Int>`
-   * does not generate today (base spelling reads only direct supertypes).
+   * scope. The guard's generic-kept-base half is the next cell,
+   * `Barge : Keel(dropped) : Crate<Int>`.
    */
   @Test
   fun `an override whose only overridee is on a dropped base is projected on the exported class`() {
@@ -394,6 +394,110 @@ class Tier1ScopeOwnerChainBranchesTest {
           await foreach (int ripple in raft.Ripples()) { }
           await foreach (int ripple in canoe.Ripples()) { }
           return await raft.DriftAsync() + await canoe.DriftAsync();
+        }
+      }
+      """.trimIndent(),
+      allowUnsafe = true,
+    )
+  }
+
+  /**
+   * `reProjectsKeptBaseMember`'s generic-kept-base half: `Barge : Keel(dropped) : Crate<Int>`, with
+   * the generic `Crate<T>` declaring an `open suspend fun` and an `open` Flow method that both
+   * `Keel` and `Barge` override. A generic class projects neither (ADR-147 refusal), so the nearest
+   * overridee being on the dropped `Keel` leaves Barge as the only carrier: it projects both on
+   * itself, plain (no `override`), and owns the scope. The base list closes `Crate` through the
+   * dropped hop, and the generic base's `item: T` (which KSP parents to `Keel`, the class that
+   * closes `T`) is not re-homed onto Barge.
+   */
+  @Test
+  fun `an override under a dropped middle of a generic base is projected on the exported class`() {
+    val result: Tier1Result = Tier1Harness.run(
+      mapOf(
+        "Hidden.kt" to """
+          package tier1.bargehidden
+
+          import kotlinx.coroutines.flow.Flow
+          import kotlinx.coroutines.flow.flowOf
+          import tier1.barge.Crate
+
+          open class Keel : Crate<Int>(1) {
+            override suspend fun load(): String = "keel loaded"
+            override fun ripples(): Flow<Int> = flowOf(1)
+          }
+        """.trimIndent(),
+        "Boats.kt" to """
+          package tier1.barge
+
+          import kotlinx.coroutines.flow.Flow
+          import kotlinx.coroutines.flow.flowOf
+          import tier1.bargehidden.Keel
+
+          open class Crate<T>(val item: T) {
+            open suspend fun load(): String = "crate loaded"
+            open fun ripples(): Flow<Int> = flowOf(0)
+          }
+
+          class Barge : Keel() {
+            override suspend fun load(): String = "barge loaded"
+            override fun ripples(): Flow<Int> = flowOf(2)
+          }
+        """.trimIndent(),
+      ),
+      processorOptions = mapOf("nuget.rootPackage" to "tier1.barge"),
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    assertTrue(result.kspErrors.isEmpty(), "kspErrors=${result.kspErrors}")
+    assertTrue(result.compiledClean, "compileErrors=${result.compileErrors}")
+    val cs: String = result.generatedCSharp
+    assertFalse(Regex("class Keel\\b").containsMatchIn(cs), "outside the root")
+    assertContains(cs, "public class Barge : Crate<int>, IAsyncDisposable\n")
+    assertEquals(
+      0,
+      Regex("public [a-z ]*(Task<string> LoadAsync|KotlinFlow<int> Ripples)[(]")
+        .findAll(classBlock(cs, "Crate<T>")).count(),
+      "expected the generic Crate to project neither member (ADR-147)",
+    )
+    val block: String = classBlock(cs, "Barge")
+    assertEquals(
+      listOf("public Task<string> LoadAsync("),
+      Regex("public [a-z ]*Task<string> LoadAsync[(]").findAll(block).map { it.value }.toList(),
+      "expected Barge to project its kept override of load, not as a C# override; got: $block",
+    )
+    assertEquals(
+      listOf("public KotlinFlow<int> Ripples("),
+      Regex("public [a-z ]*KotlinFlow<int> Ripples[(]").findAll(block).map { it.value }.toList(),
+      "expected Barge to project its kept override of ripples; got: $block",
+    )
+    assertTrue(
+      block.contains("internal NugetScopeHandle? _scopeHandle;"),
+      "expected Barge to own the scope; got: $block",
+    )
+    assertFalse(
+      Regex("public [a-z ]*\\w+ Item\\b").containsMatchIn(block),
+      "expected Barge to inherit Item from Crate<int>, not restate it (CS0506); got: $block",
+    )
+    val kotlin: String = result.generated
+    assertContains(kotlin, "@CName(\"library_barge_load_async\")")
+    assertContains(kotlin, "@CName(\"library_barge_ripples_collect\")")
+    assertContains(kotlin, "@CName(\"library_crate_get_item\")")
+    assertFalse(
+      kotlin.contains("@CName(\"library_barge_get_item\")"),
+      "expected no export for the phantom item on Barge",
+    )
+
+    Tier1CSharpCompile.assertCompiles(
+      result,
+      """
+      using System.Threading.Tasks;
+      using Interop;
+      class Consumer {
+        static async Task<string> Load() {
+          await using Barge barge = new Barge();
+          Crate<int> crate = barge;
+          await foreach (int ripple in barge.Ripples()) { }
+          return await barge.LoadAsync() + crate.Item;
         }
       }
       """.trimIndent(),
