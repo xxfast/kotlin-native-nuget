@@ -844,8 +844,9 @@ internal object ForwardCirPlanProjection {
   /** ADR-164: the call arguments of [parameter], led by the `IsSet` slot when it is optional. */
   private fun ForwardCallablePlan.inputArguments(parameter: ForwardPublicParameter): List<String> =
     when (parameter.default?.encoding) {
-      ForwardDefaultEncoding.OPTIONAL ->
-        listOf("${parameter.csharpName}.HasValue") + callArgument(parameter.optionalValue())
+      // The value crosses from its unwrapped local, but a guard on it names what the caller wrote.
+      ForwardDefaultEncoding.OPTIONAL -> listOf("${parameter.csharpName}.HasValue") +
+          callArgument(parameter.optionalValue(), named = parameter.csharpName)
       // Unset, the callback's own slots still carry the static thunk and a zero ctx.
       ForwardDefaultEncoding.PRESENCE ->
         listOf("${parameter.csharpName} is not null") + callArgument(parameter)
@@ -910,8 +911,15 @@ internal object ForwardCirPlanProjection {
    * `x.GetValueOrDefault()`) matching the planner's adjacent native fan-out. A collection
    * parameter's argument is the local handle variable built by [collectionPrelude], not the
    * parameter itself.
+   *
+   * [named] is the public parameter a thrown `ArgumentException` reports through `nameof`. It is
+   * [parameter] itself except for an `Optional<T>`, whose value is read from its
+   * [ForwardPublicParameter.optionalLocal] while the caller only ever wrote the parameter.
    */
-  private fun ForwardCallablePlan.callArgument(parameter: ForwardPublicParameter): List<String> =
+  private fun ForwardCallablePlan.callArgument(
+    parameter: ForwardPublicParameter,
+    named: String = parameter.csharpName,
+  ): List<String> =
     when (val type = parameter.type) {
       is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> listOf(parameter.csharpName)
       // ADR-106: the default "D" format is the lowercase hex-dash text `Uuid.parse` reads. Never
@@ -951,7 +959,7 @@ internal object ForwardCirPlanProjection {
       // wire form per underlying (sub-item 4), and Kotlin re-wraps it on the other side.
       is BridgeType.ValueClass -> {
         // A String or handle underlying refuses `default(V)` in the unwrap itself.
-        val unwrapped: String = type.underlyingCs(parameter.csharpName, parameter.csharpName)
+        val unwrapped: String = type.underlyingCs(parameter.csharpName, named)
         listOf(
           when (type.underlying) {
             is BridgeType.Enum -> "(int)$unwrapped"
@@ -1043,7 +1051,7 @@ internal object ForwardCirPlanProjection {
             // A null stays the null pointer; a PRESENT `default(V)` is refused, since `?.` would
             // read its null underlying as "no value" and hand Kotlin a null it was never given.
             val name: String = parameter.csharpName
-            val present: String = inner.underlyingCs("$name.Value", name)
+            val present: String = inner.underlyingCs("$name.Value", named)
             listOf(
               if (inner.underlying is BridgeType.ObjectHandle) {
                 "$name.HasValue ? $present._handle : NugetKotlinHandle.Null"

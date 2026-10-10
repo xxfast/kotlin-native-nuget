@@ -68,6 +68,8 @@ class Tier1ValueClassDefaultGuardTest {
       suspend fun retagLater(tags: List<Tag>): Int = tags.size
       fun watch(tags: List<Tag>): Flow<Int> = emptyFlow()
     }
+
+    data class Passport(val tag: Tag, val spare: Tag?, val spareCollar: Collar?)
     """.trimIndent()
 
   private val result: Tier1Result by lazy {
@@ -162,6 +164,31 @@ class Tier1ValueClassDefaultGuardTest {
     assertContains(csharp, "Native_Label(${collar("this", parameter = null)}._handle)")
     assertContains(csharp, "Native_Padded(${tag("receiver")}, width, out IntPtr error);")
     assertContains(csharp, "Native_NugetBox(${tag("unboxed")}, out IntPtr error);")
+  }
+
+  /**
+   * ADR-164: an optional `copy` parameter is read once into a `spareValue` local, and that local
+   * is what the wrapper unwraps. The exception still names the PUBLIC parameter, the one the
+   * caller wrote.
+   */
+  @Test
+  fun `an optional copy parameter refuses a present default and names the public parameter`() {
+    assertClean()
+    val copy: String =
+      csharp.substringAfter("public Passport Copy(").substringBefore("\n        }")
+    assertContains(
+      copy,
+      "spare.HasValue, spareValue.HasValue ? ${tag("spareValue.Value", "spare")} : null, ",
+    )
+    assertContains(
+      copy,
+      "spareCollar.HasValue, spareCollarValue.HasValue ? " +
+        "${collar("spareCollarValue.Value", "spareCollar")}._handle : NugetKotlinHandle.Null, ",
+    )
+    assertFalse(
+      Regex("""nameof\(\w+Value\)""").containsMatchIn(csharp),
+      "a guard names a public parameter, never the unwrapped local; got:\n$copy",
+    )
   }
 
   @Test

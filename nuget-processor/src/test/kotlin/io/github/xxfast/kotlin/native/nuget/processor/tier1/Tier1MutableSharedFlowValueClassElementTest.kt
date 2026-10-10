@@ -15,9 +15,11 @@ import kotlin.test.assertTrue
  * the value class's `init` re-runs on every emit. One write slot serves the property, the held
  * method return, the awaited `suspend` holder, the interface carrier and a top-level `suspend`.
  *
- * A reference underlying guards `default(V)` in C# on BOTH writes, before anything crosses: its
- * underlying is null, which the non-null Kotlin slot cannot take (and which, nullable, would emit
- * a null nobody passed). A value class whose underlying the setter refuses stays the read-only
+ * A reference underlying refuses `default(V)` in C# on BOTH writes, before the extern is entered:
+ * its underlying is null, which the non-null Kotlin slot cannot take (and which, nullable, would
+ * emit a null nobody passed). The refusal is the unwrap itself, the one expression every
+ * value-class crossing shares (`(v.Id ?? throw new ArgumentException(...))`), not a statement of
+ * its own. A value class whose underlying the setter refuses stays the read-only
  * `KotlinSharedFlow<V>` and is named with that underlying.
  */
 class Tier1MutableSharedFlowValueClassElementTest {
@@ -84,12 +86,18 @@ class Tier1MutableSharedFlowValueClassElementTest {
     Tier1Harness.run(source, libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore))
   }
 
-  private val tagGuard: String = "if (v.Id is null) throw new ArgumentException(" +
-    "\"default(Tag) carries no Id; construct a Tag instead\", nameof(v));"
+  /** The guarded unwrap of [struct]'s [property], naming the write lambda's own `v`. */
+  private fun guarded(struct: String, property: String, type: String): String =
+    "($struct.$property ?? throw new ArgumentException(" +
+      "\"default($type) carries no $property; construct a $type instead\", nameof(v)))"
+
+  private val tagId: String = guarded("v", "Id", "Tag")
+  private val collarCat: String = guarded("v", "Cat", "Collar")
 
   /**
-   * The disposed-owner guard an owner-keyed delegate opens with, AHEAD of the argument guards: a
-   * wrapper that outlives its `Bulletin` answers `ObjectDisposedException` whatever was passed.
+   * The disposed-owner guard an owner-keyed delegate opens with, AHEAD of the call whose
+   * arguments refuse a `default(V)`: a wrapper that outlives its `Bulletin` answers
+   * `ObjectDisposedException` whatever was passed.
    */
   private val ownerGuard: String =
     "if (_handle.IsInvalid) throw new ObjectDisposedException(nameof(Bulletin));"
@@ -120,9 +128,9 @@ class Tier1MutableSharedFlowValueClassElementTest {
           """string value, IntPtr callback, IntPtr userData\);""",
       ),
     )
-    assertContains(csharp, "Native_TryEmitTags(_handle, v.Id, out IntPtr error), error);")
+    assertContains(csharp, "Native_TryEmitTags(_handle, $tagId, out IntPtr error), error);")
     assertContains(
-      csharp, "Native_EmitTags(_handle, GetOrCreateScope(), v.Id, callback, userData);",
+      csharp, "Native_EmitTags(_handle, GetOrCreateScope(), $tagId, callback, userData);",
     )
     assertContains(kotlin, "obj.tags.tryEmit(tier1.sharedvc.Tag(value))")
     // The re-wrap runs before the launch, so an `init` that throws faults the Task instead of
@@ -157,7 +165,7 @@ class Tier1MutableSharedFlowValueClassElementTest {
       "obj.rings.tryEmit(tier1.sharedvc.MoodRing(tier1.sharedvc.Mood.entries[value]))",
     )
     assertContains(
-      csharp, "Native_TryEmitCollars(_handle, v.Cat._handle, out IntPtr error), error);",
+      csharp, "Native_TryEmitCollars(_handle, $collarCat._handle, out IntPtr error), error);",
     )
     assertContains(
       kotlin,
@@ -172,7 +180,12 @@ class Tier1MutableSharedFlowValueClassElementTest {
     val kotlin: String = result.generated
     val csharp: String = result.generatedCSharp
     assertContains(csharp, Regex("""public KotlinMutableSharedFlow<[\w.:]*Tag\?> SpareTags\b"""))
-    assertContains(csharp, "Native_TryEmitSpareTags(_handle, v?.Id, out IntPtr error), error);")
+    // Null stays null; only a PRESENT default is refused, which `v?.Id` would have read as null.
+    assertContains(
+      csharp,
+      "Native_TryEmitSpareTags(_handle, v.HasValue ? ${guarded("v.Value", "Id", "Tag")} : null, " +
+        "out IntPtr error), error);",
+    )
     assertContains(kotlin, "obj.spareTags.tryEmit(value?.let { tier1.sharedvc.Tag(it) })")
     assertContains(
       csharp,
@@ -195,7 +208,8 @@ class Tier1MutableSharedFlowValueClassElementTest {
     )
     assertContains(
       csharp,
-      "Native_TryEmitSpareCollars(_handle, v?.Cat._handle ?? NugetKotlinHandle.Null, " +
+      "Native_TryEmitSpareCollars(_handle, v.HasValue ? " +
+        "${guarded("v.Value", "Cat", "Collar")}._handle : NugetKotlinHandle.Null, " +
         "out IntPtr error), error);",
     )
     assertContains(
@@ -211,42 +225,50 @@ class Tier1MutableSharedFlowValueClassElementTest {
   fun `default of a reference-underlying record struct is refused in C# before either emit`() {
     assertClean()
     val csharp: String = result.generatedCSharp
-    // Both delegates carry the guard ahead of the native call, in the same statement block.
+    // Both delegates refuse in the call's own argument list: after the owner guard's statement,
+    // before the extern is entered. The whole lambda is pinned, so nothing else sits in between.
     assertContains(
       csharp,
-      "v => { $ownerGuard $tagGuard return NugetErrorNative.Check(" +
-        "Native_TryEmitTags(_handle, v.Id, out IntPtr error), error); }",
+      "v => { $ownerGuard return NugetErrorNative.Check(" +
+        "Native_TryEmitTags(_handle, $tagId, out IntPtr error), error); }",
     )
     assertContains(
       csharp,
-      "(v, callback, userData) => { $ownerGuard $tagGuard return Native_EmitTags(" +
-        "_handle, GetOrCreateScope(), v.Id, callback, userData); }",
-    )
-    val collarGuard: String = "if (v.Cat is null) throw new ArgumentException(" +
-      "\"default(Collar) carries no Cat; construct a Collar instead\", nameof(v));"
-    assertContains(
-      csharp,
-      "v => { $ownerGuard $collarGuard return NugetErrorNative.Check(Native_TryEmitCollars(",
+      "(v, callback, userData) => { $ownerGuard return Native_EmitTags(" +
+        "_handle, GetOrCreateScope(), $tagId, callback, userData); }",
     )
     assertContains(
       csharp,
-      "(v, callback, userData) => { $ownerGuard $collarGuard return Native_EmitCollars(",
+      "v => { $ownerGuard return NugetErrorNative.Check(Native_TryEmitCollars(" +
+        "_handle, $collarCat._handle, out IntPtr error), error); }",
+    )
+    assertContains(
+      csharp,
+      "(v, callback, userData) => { $ownerGuard return Native_EmitCollars(" +
+        "_handle, GetOrCreateScope(), $collarCat._handle, callback, userData); }",
     )
     // The nullable spelling: `v?.Id` on a non-null default would ship a null and emit a null
-    // nobody passed, so the guard tests the present value.
-    val spareGuard: String = "if (v.HasValue && v.Value.Id is null) throw new ArgumentException(" +
-      "\"default(Tag) carries no Id; construct a Tag instead\", nameof(v));"
+    // nobody passed, so the unwrap refuses the present value.
+    val spareId: String = "v.HasValue ? ${guarded("v.Value", "Id", "Tag")} : null"
     assertContains(
       csharp,
-      "v => { $ownerGuard $spareGuard return NugetErrorNative.Check(Native_TryEmitSpareTags(",
+      "v => { $ownerGuard return NugetErrorNative.Check(Native_TryEmitSpareTags(" +
+        "_handle, $spareId, out IntPtr error), error); }",
     )
     assertContains(
       csharp,
-      "(v, callback, userData) => { $ownerGuard $spareGuard return Native_EmitSpareTags(",
+      "(v, callback, userData) => { $ownerGuard return Native_EmitSpareTags(" +
+        "_handle, GetOrCreateScope(), $spareId, callback, userData); }",
+    )
+    // One spelling: the statement form this guard used to take is gone from every write.
+    assertFalse(
+      Regex("""is null\) throw new ArgumentException\(""").containsMatchIn(csharp),
+      "expected the default(V) refusal only as the unwrap expression",
     )
     // A primitive or enum underlying's default is a legitimate value, so it is not guarded.
-    assertFalse("v.Count is null" in csharp, "a primitive underlying must not be guarded")
-    assertFalse("v.Mood is null" in csharp, "an enum underlying must not be guarded")
+    listOf("Naps", "MoodRing", "Flag").forEach { type ->
+      assertFalse("default($type)" in csharp, "$type has a real default and must not be guarded")
+    }
     assertContains(
       csharp,
       "v => { $ownerGuard return NugetErrorNative.Check(Native_TryEmitNaps(_handle, v.Count, " +
@@ -269,29 +291,37 @@ class Tier1MutableSharedFlowValueClassElementTest {
       Regex("""public static Task<KotlinMutableSharedFlow<[\w.:]*Tag>> TagWireAsync\("""),
     )
     // Held (class and interface backing wrapper), awaited and top-level: every write lambda in
-    // the file that crosses `v.Id` is guarded, so no route reaches Kotlin with a null string.
+    // the file that crosses a non-null `Tag` is guarded, so no route reaches Kotlin with a null
+    // string. A bare `v.Id` would be an unguarded write, and there is none.
     val writes: List<String> = csharp.lines().filter { line ->
-      line.contains("v.Id,") && line.contains("=> {")
+      Regex("""\bv\.Id\b""").containsMatchIn(line) && line.contains("=> {")
     }
     val routes: List<String> = listOf(
-      "Native_TagDeskTryEmit(owned, v.Id,", "Native_TagDeskEmit(owned,",
-      "Native_AwaitTagsAsyncTryEmit(flowHandle, v.Id,", "Native_AwaitTagsAsyncEmit(flowHandle,",
-      "TagWireAsync_native_TryEmit(flowHandle, v.Id,", "TagWireAsync_native_Emit(flowHandle,",
-      "Native_TryEmitTags(_handle, v.Id,", "Native_EmitTags(_handle, GetOrCreateScope(), v.Id,",
+      "Native_TagDeskTryEmit(owned, $tagId,", "Native_TagDeskEmit(owned,",
+      "Native_AwaitTagsAsyncTryEmit(flowHandle, $tagId,", "Native_AwaitTagsAsyncEmit(flowHandle,",
+      "TagWireAsync_native_TryEmit(flowHandle, $tagId,", "TagWireAsync_native_Emit(flowHandle,",
+      "Native_TryEmitTags(_handle, $tagId,",
+      "Native_EmitTags(_handle, GetOrCreateScope(), $tagId,",
     )
     routes.forEach { route ->
       assertTrue(writes.any { it.contains(route) }, "expected a write through $route; got $writes")
     }
-    // The `default(Tag)` guard is the last statement before the call on every route. A flow
-    // keyed on its own handle opens with it; an owner-keyed delegate opens with the
-    // disposed-owner guard instead, which therefore wins on a disposed owner.
+    // The `default(Tag)` refusal is the unwrap in the call's argument list on every route, so the
+    // call is the only statement of a flow keyed on its own handle. An owner-keyed delegate opens
+    // with the disposed-owner guard, a statement ahead of that call, which therefore wins on a
+    // disposed owner.
     val disposedOwner = Regex(
       """^if \(_handle\.IsInvalid\) throw new ObjectDisposedException\(nameof\([\w.:]+\)\); """,
     )
     writes.forEach { line ->
       val body: String = line.substringAfter("=> { ")
       assertEquals("(_handle," in line, disposedOwner.containsMatchIn(body), line)
-      assertTrue(disposedOwner.replace(body, "").startsWith("$tagGuard return "), line)
+      val call: String = disposedOwner.replace(body, "")
+      assertTrue(call.startsWith("return "), line)
+      assertContains(call.substringAfter("("), "$tagId, ")
+      // Every `v.Id` on the line is the guarded one, and it is the line's only refusal.
+      assertEquals(1, Regex("""\bv\.Id\b""").findAll(line).count(), line)
+      assertEquals(1, Regex("""throw new Argument""").findAll(line).count(), line)
     }
     // Two writes each on three owners (Bulletin, LoudWire and the Wire backing wrapper) of the
     // property and the held desk, plus the awaited and the top-level holder.

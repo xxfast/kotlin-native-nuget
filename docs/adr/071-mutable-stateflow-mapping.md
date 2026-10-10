@@ -965,6 +965,8 @@ statement-form guard. It throws the same `ArgumentException` naming the struct, 
 both `CompareAndSet` slots (`(v.Id ?? throw new ArgumentException(...))`).
 
 A non-null `string` element now throws `ArgumentNullException` on the setter and on both
-`CompareAndSet` slots, the exception a null object element already threw there. Inferred, not
+`CompareAndSet` slots, the exception a null object element already threw there. The same guard
+reaches a `MutableSharedFlow<String>`'s `EmitAsync` and `TryEmit` (seen in the generated
+`Native_TryEmitHeadlines` lambda; no test pins it). Inferred, not
 observed: the pre-fix behaviour of a null `string` element, taken from the same wire as the
 measured `default(CatId)` crash (a null pointer in a non-null Kotlin `String` slot).
