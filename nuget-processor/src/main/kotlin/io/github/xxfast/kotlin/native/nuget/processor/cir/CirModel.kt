@@ -690,6 +690,12 @@ internal data class CirMarshalHelper(
    * `NugetMarshal` and `Materialize<T>` reads it after a `Factories` miss.
    */
   val includesFactorySlot: Boolean = false,
+  /**
+   * ADR-208 part E: the handle-keyed externs every closed flow type argument collects (and, for a
+   * state flow, reads its value) through. Rendered here, in `NugetMarshal`, beside the
+   * `Factories` lines that call them.
+   */
+  val flowArgumentImports: List<CirDllImport> = emptyList(),
 ) : CirDeclaration
 
 /**
