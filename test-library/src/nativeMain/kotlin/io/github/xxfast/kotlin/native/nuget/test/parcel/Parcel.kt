@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.test.parcel
 
+import io.github.xxfast.kotlin.native.nuget.hidden.Keel
+
 /**
  * Item 15 / ADR-101: an exported *generic* base class must render its type arguments in the
  * derived class's base list, `public class NamedParcel : Parcel<string>`, and must expose a
@@ -47,6 +49,27 @@ open class Crate<T>(val item: T) {
    * Mylo cannot read the label either, but he does like to sit on it.
    */
   fun label(prefix: String, count: Int): String = "$prefix-$count:$item"
+
+  /**
+   * ADR-147 refuses a `suspend` member on a generic class, so `Crate<T>` carries no `LoadAsync`
+   * (`SKIPPED_UNSUPPORTED_COMBINATION`); [Barge]'s override is the only C# carrier.
+   *
+   * Oreo loads the crate. Oreo also unloads the crate, onto the floor.
+   */
+  open suspend fun load(): String = "crate loaded $item"
+}
+
+/**
+ * ADR-101 amendment (2026-10-10): a kept generic base under a dropped middle,
+ * `Barge : Keel(dropped) : Crate<Int>`. C# sees `public class Barge : Crate<int>`, inherits `Item`
+ * and `Describe(int)` from it, and carries only what `Barge` and `Keel` declare.
+ *
+ * The barge carries one crate of treats, which is one more than Mylo thinks it should.
+ */
+class Barge : Keel() {
+  override fun weigh(): String = "barge:$item"
+
+  override suspend fun load(): String = "barge loaded $item"
 }
 
 /**

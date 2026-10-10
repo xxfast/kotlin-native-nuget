@@ -228,6 +228,11 @@ internal fun KSClassDeclaration.forwardArmMemberProjectedByBase(
  * class, so this class is the only carrier there is and the member must project here. The same
  * holds for a generic base, which projects none of these members. The Flow route applies the same
  * rule, an `abstract` overridee included: the base declares it concrete over its own export.
+ *
+ * The kept-base guard's generic half (the second generic-base return below) is pinned by
+ * `Tier1ScopeOwnerChainBranchesTest`'s `Barge : Keel(dropped) : Crate<Int>` cell (ADR-101
+ * amendment, 2026-10-10). If ADR-147's refusal of these routes on a generic owner is ever lifted,
+ * both generic-base returns must flip with it.
  */
 internal fun KSFunctionDeclaration.reProjectsKeptBaseMember(
   cls: KSClassDeclaration,
