@@ -844,9 +844,10 @@ existing `errorOut` slot and the write does not land. A nullable enum element st
 (the nullable-element gate sits upstream), as do `ByteArray` and the other cases listed above.
 
 A `MutableStateFlow<ValueClass>` used to pass the gate as an ordinary class and take the handle arm
-(`v._handle` on a C# record struct). It now binds the read-only `KotlinStateFlow<T>` with a named
-`SKIPPED_UNSUPPORTED_INPUT`: a property carries the remark on the C# property, a method has no
-owner for it, so its remark is unowned.
+(`v._handle` on a C# record struct). It was refused by name for a while; the 2026-10-10 value-class
+amendment below now maps it. A value class over an underlying no write arm carries still binds the
+read-only `KotlinStateFlow<T>` with a named `SKIPPED_UNSUPPORTED_INPUT`: a property carries the
+remark on the C# property, a method has no owner for it, so its remark is unowned.
 
 Verified: processor Tier 1 `Tier1MutableStateFlowEnumElementTest`;
 `IntegrationTests/MutableStateFlowEnumElementTests.cs` (`CatMoodTracker.outlook`, `outlookDial`,
@@ -897,3 +898,47 @@ Verified: `Tier1HeldMutableStateFlowLocalNamesTest` runs `dotnet build` over the
 held `MutableStateFlow` methods with `Int`, `String`, enum, object-handle, `String?` and `Int?`
 elements, each with parameters named `v`, `error`, `expect`, `update`, `onNext`, `onComplete`,
 `onError`, `userData`, `prev`, `next`, `transform`, `flow`, `owned` and `collectScope`.
+
+## Amendment (2026-10-10): value class elements are settable
+
+Closes the mapping left open by the enum amendment's named refusal. A `MutableStateFlow<V>` of an
+exported value class binds a settable `KotlinMutableStateFlow<V>` (V is a C# `record struct`) on the
+property, held-return and awaited `suspend` routes, with `CompareAndSet` and the `Update` family.
+The classifier gains a fourth writable arm, `ValueClass`, beside `Scalar`, `Enum` and `Handle`.
+
+- **Wire.** The underlying crosses and Kotlin re-wraps it, the format of the ordinary value-class
+  setter (ADR-077): C# sends `v.Id`, `v.Naps`, `(int)v.Mood` or `v.Cat._handle`, and the export
+  assigns `CatId(value)`, `MoodRing(Mood.entries[value])` and so on. The value class's `init`
+  re-runs on every write. No `nuget_*` runtime ABI changes; the per-member `_set_value` and
+  `_compare_and_set` exports regenerate with their imports.
+- **Nullable `V?`.** Settable on the property and held routes. A `String` or handle underlying
+  carries the null in its own slot; a primitive or enum underlying uses the has-value pair. The
+  awaited route's nullable element stays read-only for every element kind, as before.
+- **Admitted underlyings:** a non-null `String`, a primitive other than `Char`, an enum, an exported
+  class or `object`. **Declined, named:** `Char`, a nullable underlying, a nested or generic value
+  class, and `kotlin.*` classes (`Instant`, `Uuid`, `Throwable`), which the ordinary classifier maps
+  to something other than an object handle. These bind the read-only `KotlinStateFlow<V>` and
+  the `SKIPPED_UNSUPPORTED_INPUT` reason now names the underlying. Any value class element that is
+  not writable is named, whichever arm says so, so a later gate change cannot make one silently
+  read-only.
+- **Equality.** `CompareAndSet` and the `Update` family compare with Kotlin `equals` on the
+  underlying, as the 2026-10-09 amendment says for every element. C# record-struct equality takes
+  no part.
+- **`default(V)`.** For a value class over a `String` or an exported class, `default(V)` has a null
+  underlying that no Kotlin slot can take. The C# setter and both `CompareAndSet` slots throw
+  `ArgumentException("default(CatId) carries no Id; construct a CatId instead")` before crossing; a
+  nullable element does not read `default(V)` as "clear the flow". A primitive or enum underlying
+  has a valid `default` and writes it.
+
+Verified: processor Tier 1 `Tier1MutableStateFlowValueClassElementTest` and the flipped cell in
+`Tier1MutableStateFlowEnumElementTest`; `IntegrationTests/MutableStateFlowValueClassElementTests.cs`
+(`CatMoodTracker.chipId` over a `String`, `naps` over an `Int`, `spareChipId`, `spareNaps`,
+`chipReader`, `awaitChipReader`, `currentChipId`): a write lands as a real `CatId`, a freshly built
+`CatId` matches the stored one in `CompareAndSet` and a stale one fails, `default(CatId)` throws;
+`MutableStateFlowEnumElementTests.ValueClassElement_BindsSettable`; LeakTests row 8d-valueclass
+`ValueClassFlowElement_ValueReadsAndEmissions_ReturnToBaseline` extended with property writes, a
+`CompareAndSet` and a held-reader write (the `String` underlying mints nothing on the write, so no
+new row).
+
+Inferred, not run: reading back a `Flag?` over a `Boolean` underlying is compile-checked only. The
+object and enum underlyings are covered by Tier 1 cells, not by an IntegrationTests fixture.
