@@ -348,6 +348,12 @@ their handles. `LeakTests/LiveHandleTests.cs` row 8d-valueclass-default,
 `DefaultValueClass_RefusedAfterAHandleWasBuilt_ReturnsToBaseline`, refuses one after a list
 argument was built, and one inside a half-filled `List<CatId>`; both return to baseline.
 
+A `null` for a non-null [`string`](primitives-and-strings.md#null-for-a-non-null-string) throws
+`ArgumentNullException` the same way: while the arguments are evaluated, after earlier arguments
+have built their handles. `LeakTests/LiveHandleTests.cs` row 8d-nullstring,
+`NullString_RefusedAfterAHandleWasBuilt_ReturnsToBaseline`, refuses one after a `List<string>`
+argument was built, and one inside a half-filled `List<string>`; both return to baseline.
+
 For a [cancellation-token-taking async call](instance-members.md#async-cancellation), this count
 only proves the pending-continuation and `Task` handles came back to baseline: the bridge-owned
 `CancellationTokenSource` is a plain .NET `GCHandle`, not one of the Kotlin `StableRef`s
