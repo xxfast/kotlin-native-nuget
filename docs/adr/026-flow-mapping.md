@@ -686,3 +686,10 @@ with no diagnostic (an unsafe call on the nullable receiver). Processor, integra
 method, suspend class and top-level), leak (`NullableFlowMember_AbsentAndPresent_ReturnToBaseline`)
 and AOT suites pass. **Not covered by a fixture (Tier 1 only):** interface carrier, sealed arm,
 `SharedFlow<T>?` and `MutableSharedFlow<T>?`.
+
+## Amendment (2026-10-10): a flow wrapper after its owner is disposed
+
+A `KotlinFlow<T>` taken from a property or a re-invoked method reads its owner's handle on every
+use, so it now throws `ObjectDisposedException` naming the owner once the owner is disposed, instead
+of crashing the process. Held and awaited flows keep working on their own handle. The rule and its
+evidence are in the [ADR-021](021-structured-concurrency.md) amendment of the same date.
