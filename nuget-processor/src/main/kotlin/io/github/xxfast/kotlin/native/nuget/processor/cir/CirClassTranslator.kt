@@ -1936,9 +1936,9 @@ internal fun flowProperty(
   val isNullableMember: Boolean = propTypeResolved.isMarkedNullable
   // ADR-071: a genuinely DECLARED MutableStateFlow<T> (not narrowed through .asStateFlow())
   // gains a settable `.Value` -- gated on the exact declared type and a writable element
-  // (primitive/String/object/non-null enum; a nullable one bar `Boolean?`/`Char?`/enum). A
-  // nullable member keeps ADR-067's `_has_value` probe, and its absent-member write throws on
-  // the Kotlin half.
+  // (primitive/String/object/non-null enum, or a value class over one of those; a nullable one
+  // bar `Boolean?`/`Char?`/enum). A nullable member keeps ADR-067's `_has_value` probe, and its
+  // absent-member write throws on the Kotlin half.
   val isMutableStateFlowProperty: Boolean = isStateFlowType &&
       qualifiedTypeName in MUTABLE_STATE_FLOW_TYPES &&
       isMutableStateFlowElementWritable(flowElementTypeResolved)
@@ -2035,6 +2035,7 @@ internal fun flowProperty(
           if (stateFlowWrite.rejectsNull) {
             appendLine("                        if (v is null) throw new ArgumentNullException(nameof(v));")
           }
+          stateFlowWrite.guard?.let { guard -> appendLine("                        $guard") }
           appendLine("                        $setValueNativeName(_handle, ${stateFlowWrite.arguments}, out IntPtr error);")
           appendLine("                        if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
           appendLine("                        NugetErrorNative.ClearManagedFault();")

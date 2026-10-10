@@ -357,11 +357,34 @@ class CatMoodTracker(private val catName: String) {
   /** Kotlin-side read-back: proves a C# write of [outlook] landed in Kotlin as the real entry. */
   fun currentOutlook(): Mood = outlook.value
 
-  /**
-   * MutableStateFlow<CatId> -- a value-class element has no write arm, so this binds the
-   * read-only `KotlinStateFlow<CatId>` and the processor names the refused setter.
-   */
+  // --- ADR-071 amendment (value-class element write): a `MutableStateFlow<V>` of an exported
+  // value class binds a settable `KotlinMutableStateFlow<V>`. The write crosses as the underlying,
+  // as the synchronous value-class setter does, and Kotlin re-wraps it, so `CatId`'s `init` runs
+  // again. Every asserted write lands on a value different from the starting one. ---
+
+  /** MutableStateFlow<CatId> -- value class over a String: crosses as the string, re-wrapped. */
   val chipId: MutableStateFlow<CatId> = MutableStateFlow(CatId("oreo-chip"))
+
+  /** MutableStateFlow<NapCount> -- value class over an Int: no conversion beyond the re-wrap. */
+  val naps: MutableStateFlow<NapCount> = MutableStateFlow(NapCount(3))
+
+  /** MutableStateFlow<CatId?> -- nullable value-class element: the string slot carries the null. */
+  val spareChipId: MutableStateFlow<CatId?> = MutableStateFlow(null)
+
+  /** MutableStateFlow<NapCount?> -- nullable over a primitive: crosses as the has-value pair. */
+  val spareNaps: MutableStateFlow<NapCount?> = MutableStateFlow(null)
+
+  /** The held function-return twin of [chipId], sharing its storage. */
+  fun chipReader(): MutableStateFlow<CatId> = chipId
+
+  /** The awaited twin of [chipId]: a `suspend` return holding the same flow. */
+  suspend fun awaitChipReader(): MutableStateFlow<CatId> = chipId
+
+  /** Kotlin-side read-back: proves a C# write of [chipId] landed as a real `CatId`. */
+  fun currentChipId(): String = chipId.value.id
+
+  /** Kotlin-side read-back of [spareNaps]: -1 when Kotlin holds null. */
+  fun currentSpareNaps(): Int = spareNaps.value?.naps ?: -1
 }
 
 /**

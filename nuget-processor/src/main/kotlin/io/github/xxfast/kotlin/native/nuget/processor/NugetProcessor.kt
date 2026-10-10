@@ -45,6 +45,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.MUTABLE_STATE_FLOW_TYP
 import io.github.xxfast.kotlin.native.nuget.processor.cir.MutableStateFlowElement
 import io.github.xxfast.kotlin.native.nuget.processor.cir.classifyMutableStateFlowElement
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
+import io.github.xxfast.kotlin.native.nuget.processor.cir.isMutableStateFlowElementWritable
 import io.github.xxfast.kotlin.native.nuget.processor.cir.translate
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addClassExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addCompanionExports
@@ -1058,10 +1059,12 @@ internal fun warnRefusedLegacyRouteMembers(
       }
   }
 
-  // ADR-071 amendment (enum element write): a `MutableStateFlow<ValueClass>` member binds the
-  // read-only `KotlinStateFlow<T>`, because no write arm carries a value class's unwrapped
-  // underlying. Before the write classifier went exhaustive it passed the gate as an ordinary class
-  // and took the handle arm (`v._handle` on a C# record struct); it is named now, never silent.
+  // ADR-071 amendment (value-class element write): a `MutableStateFlow<ValueClass>` member is
+  // settable when the value class's underlying is one the synchronous value-class setter carries.
+  // Any other value class binds the read-only `KotlinStateFlow<T>`, because no write arm carries
+  // its underlying. Before the write classifier went exhaustive a value class passed the gate as an
+  // ordinary class and took the handle arm (`v._handle` on a C# record struct); a refused one is
+  // named now, with its underlying, never silent.
   // The property SURVIVES read-only, so its remark goes on the C# property (ADR-075's partial
   // skip); a method has no such owner, and a type-level remark would call a callable member absent.
   fun MutableList<ForwardDiagnostic>.nameRefusedValueClassWrite(
@@ -1075,16 +1078,32 @@ internal fun warnRefusedLegacyRouteMembers(
       ?: return
     if (type.declaration.qualifiedName?.asString() !in MUTABLE_STATE_FLOW_TYPES) return
     val element: KSType? = type.arguments.firstOrNull()?.type?.resolve()?.expandAliases()
+    // Any value-class element that is not writable is named, whichever arm says so, so a gate
+    // that narrows later cannot reintroduce a silent read-only value class.
     val refused: MutableStateFlowElement.RefusedValueClass =
-      classifyMutableStateFlowElement(element) as? MutableStateFlowElement.RefusedValueClass
-        ?: return
+      when (val classified: MutableStateFlowElement = classifyMutableStateFlowElement(element)) {
+        is MutableStateFlowElement.RefusedValueClass -> classified
+        is MutableStateFlowElement.ValueClass ->
+          if (isMutableStateFlowElementWritable(element)) return
+          else MutableStateFlowElement.RefusedValueClass(
+            classified.qualifiedName, "${classified.underlyingSimpleName} as a nullable element",
+          )
+
+        MutableStateFlowElement.Scalar,
+        is MutableStateFlowElement.Enum,
+        is MutableStateFlowElement.Handle,
+        MutableStateFlowElement.ReadOnly,
+          -> return
+      }
     // A held or awaited method holder is settable only with a non-null member (and, awaited, a
     // non-null element); outside that it was never a write candidate, so there is nothing to name.
     if (function != null && type.isMarkedNullable) return
     val awaited: Boolean = function?.modifiers?.contains(Modifier.SUSPEND) == true
     if (awaited && element?.isMarkedNullable == true) return
     val reason: String = "a MutableStateFlow element of value class ${refused.qualifiedName} " +
-        "has no write arm, so its `.Value` is not settable from C#"
+        "over ${refused.underlying} has no write arm (a value class writes as a non-null " +
+        "String, a primitive other than Char, an enum, or an exported class or object), so its " +
+        "`.Value` is not settable from C#"
     val publicName: String = member.csharpMemberName()
     val diagnostic: ForwardDiagnostic = if (property != null) {
       ForwardDiagnostic(
