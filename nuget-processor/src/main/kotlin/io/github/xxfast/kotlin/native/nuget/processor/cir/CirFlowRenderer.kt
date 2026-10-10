@@ -558,12 +558,15 @@ internal fun StringBuilder.renderFlowMethod(method: CirMethod, className: String
   // ADR-123: a collection element adds its own materialiser after the delegate; every other
   // element passes nothing and keeps the shipped single-argument construction.
   val read: String? = method.flowElementRead
-  val replay: String? = method.sharedFlow
-    ?.let { shared -> reinvokedReplayArgument(method, shared.replayCache, "                ") }
+  // The delegates read the owner's `_handle` on each use, long after the check above.
+  val ownerGuard: String = disposedOwnerGuard(className)
+  val replay: String? = method.sharedFlow?.let { shared ->
+    reinvokedReplayArgument(method, shared.replayCache, "                ", ownerGuard)
+  }
   val trailing: List<String> = listOfNotNull(replay, read?.let { "                $it" })
   appendScopedNativeCall(
     method, "                ", "$nativeName(${method.body})",
-    if (trailing.isEmpty()) ");" else ",",
+    if (trailing.isEmpty()) ");" else ",", ownerGuard,
   )
   if (trailing.isNotEmpty()) appendLine(trailing.joinToString(",\n") + ");")
   appendLine("        }")
@@ -630,14 +633,19 @@ private fun StringBuilder.appendScopedNativeCall(
   indent: String,
   call: String,
   terminator: String,
+  // [disposedOwnerGuard]: every caller is a delegate over the owner's lazily read `_handle`, and
+  // the guard goes ahead of the wire handles too, so a disposed owner mints nothing.
+  ownerGuard: String,
 ) {
   val scoped: List<String>? = method.parameters.collectionScopedCall(indent, call)
   if (scoped == null) {
-    appendLine("$indent$call$terminator")
+    appendLine(guardedLambdaBody(ownerGuard, call, indent) + terminator)
     return
   }
   scoped.forEachIndexed { index, line ->
     appendLine(if (index == scoped.lastIndex) "$line$terminator" else line)
+    // After the block's opening brace.
+    if (index == 0) appendLine("$indent    $ownerGuard")
   }
 }
 
@@ -673,11 +681,17 @@ internal fun StringBuilder.renderStateFlowMethod(method: CirMethod, className: S
   appendLine("                throw new ObjectDisposedException(nameof($className));")
   appendHasValueProbe(method)
   appendLine("            return new KotlinStateFlow<${method.flowElementType}>((${method.flowCallbackNames.joinToString(", ")}) =>")
-  appendScopedNativeCall(method, "                ", "$nativeName(${method.body})", ",")
+  // The delegates read the owner's `_handle` on each use, long after the check above.
+  val ownerGuard: String = disposedOwnerGuard(className)
+  appendScopedNativeCall(
+    method, "                ", "$nativeName(${method.body})", ",", ownerGuard,
+  )
   // ADR-123: `read:` is named, so it skips the optional `ownedHandle` slot only the ADR-068
   // awaited-suspend variant fills. A non-collection element passes nothing at all.
   val read: String? = method.flowElementRead
-  appendValueLambda(method, valueNativeName, valueCallArgs, if (read == null) ");" else ",")
+  appendValueLambda(
+    method, valueNativeName, valueCallArgs, if (read == null) ");" else ",", ownerGuard,
+  )
   if (read != null) appendLine("                $read);")
   appendLine("        }")
   appendLine()
@@ -789,14 +803,15 @@ private fun StringBuilder.appendValueLambda(
   valueNativeName: String,
   valueCallArgs: String,
   terminator: String,
+  ownerGuard: String,
 ) {
   val call: String = "$valueNativeName($valueCallArgs)"
   if (!method.parameters.hasCollectionHandles()) {
-    appendLine("                () => $call$terminator")
+    appendLine("                () => { $ownerGuard return $call; }$terminator")
     return
   }
   appendLine("                () =>")
-  appendScopedNativeCall(method, "                ", call, terminator)
+  appendScopedNativeCall(method, "                ", call, terminator, ownerGuard)
 }
 
 /**
@@ -814,6 +829,9 @@ internal fun stateFlowCompareAndSetLambda(
   write: CirStateFlowWrite,
   taken: Set<String>,
   indent: String,
+  // [disposedOwnerGuard] when [receiver] is the owner's lazily read `_handle` (the property
+  // route); null for a held or awaited flow, keyed on its own handle.
+  ownerGuard: String? = null,
 ): String = buildString {
   val names: MutableSet<String> = taken.toMutableSet()
   val expect: String = freshName("expect", names).also { names += it }
@@ -822,6 +840,8 @@ internal fun stateFlowCompareAndSetLambda(
   val updateSlot: CirStateFlowWrite = write.relabelled("update", update)
   appendLine("$indent($expect, $update) =>")
   appendLine("$indent{")
+  // Receiver state first: on a disposed owner the swap is refused whatever was passed.
+  if (ownerGuard != null) appendLine("$indent    $ownerGuard")
   if (write.rejectsNull) {
     appendLine("$indent    if ($expect is null) throw new ArgumentNullException(nameof($expect));")
     appendLine("$indent    if ($update is null) throw new ArgumentNullException(nameof($update));")

@@ -1141,6 +1141,24 @@ internal const val TAKE_HANDLE: String =
   "NugetKotlinHandle handle = Interlocked.Exchange(ref _handle, NugetKotlinHandle.Null);"
 
 /**
+ * The guard a generated instance member opens with, as one statement, for a delegate that reads
+ * its [owner]'s `_handle` LAZILY (a flow wrapper's collect, `.Value`, `ReplayCache`, ...). The
+ * member that built the wrapper checked the owner once; a wrapper that outlives its owner would
+ * otherwise pass [TAKE_HANDLE]'s zero sentinel to Kotlin, which dereferences it and ends the
+ * process. It goes first in the delegate, before any P/Invoke and before anything is minted (the
+ * lazy scope, a collection argument's wire handle).
+ */
+internal fun disposedOwnerGuard(owner: String): String =
+  "if (_handle.IsInvalid) throw new ObjectDisposedException(nameof($owner));"
+
+/**
+ * [call] as a block-bodied lambda body at [indent], behind [guard]: the shape every owner-keyed
+ * flow delegate takes. Without a closing separator; the caller appends `,` or `);`.
+ */
+internal fun guardedLambdaBody(guard: String, call: String, indent: String): String =
+  "$indent{\n$indent    $guard\n$indent    return $call;\n$indent}"
+
+/**
  * ADR-071 Alternative 4: the owner-keyed `_compare_and_set` extern beside a property's
  * `_set_value` one: the setter's slot twice (`expect`, `update`), a `bool` result and the same
  * trailing `out IntPtr error`. Hand-rendered like its sibling, so the `[return: MarshalAs]` the
