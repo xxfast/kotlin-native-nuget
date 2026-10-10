@@ -205,6 +205,60 @@ public class SharedFlowTests
     }
 
     [Fact]
+    public async Task MutableSharedFlowProperty_ValueClassElement_EmitsCrossAsTheUnderlying_OreoIsTagged()
+    {
+        // ADR-209 over the ADR-071 value-class arm: C# sends `v.Id`, Kotlin re-wraps it as CatId.
+        using var bulletin = new CatBulletin("Oreo");
+        KotlinMutableSharedFlow<CatId> tags = bulletin.Tags;
+        Assert.Empty(tags.ReplayCache);
+        Assert.Null(bulletin.LatestTag());
+
+        Assert.True(tags.TryEmit(new CatId("oreo-1")));
+        // The write reached Kotlin's own flow: Kotlin reads the id back before C# does.
+        Assert.Equal("oreo-1", bulletin.LatestTag());
+        await tags.EmitAsync(new CatId("oreo-2"));
+
+        // replay = 2: both emissions, oldest first, each read back as its record struct.
+        Assert.Equal(new[] { new CatId("oreo-1"), new CatId("oreo-2") }, tags.ReplayCache);
+        Assert.Equal("oreo-2", bulletin.LatestTag());
+    }
+
+    [Fact]
+    public async Task MutableSharedFlowProperty_ValueClassElement_CollectsWhatCSharpEmitted_MyloIsTagged()
+    {
+        using var bulletin = new CatBulletin("Mylo");
+        Assert.True(bulletin.Tags.TryEmit(new CatId("mylo-7")));
+
+        using var cts = new CancellationTokenSource(Patience);
+        CatId? replayed = null;
+        await foreach (CatId tag in bulletin.Tags.WithCancellation(cts.Token))
+        {
+            replayed = tag;
+            break;
+        }
+
+        Assert.Equal(new CatId("mylo-7"), replayed);
+    }
+
+    [Fact]
+    public async Task MutableSharedFlowProperty_DefaultOfAStringValueClass_ThrowsBeforeItCrosses()
+    {
+        // default(CatId) carries a null Id, which the non-null Kotlin String slot cannot take.
+        using var bulletin = new CatBulletin("Oreo");
+        Assert.True(bulletin.Tags.TryEmit(new CatId("oreo-1")));
+
+        ArgumentException thrown =
+            Assert.Throws<ArgumentException>(() => bulletin.Tags.TryEmit(default(CatId)));
+        Assert.Contains("default(CatId)", thrown.Message);
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => bulletin.Tags.EmitAsync(default(CatId)));
+
+        // Neither refused write reached the flow.
+        Assert.Equal(new[] { new CatId("oreo-1") }, bulletin.Tags.ReplayCache);
+        Assert.Equal("oreo-1", bulletin.LatestTag());
+    }
+
+    [Fact]
     public void SharedFlowProperty_ReplayCache_ReadsTheCacheWithoutSubscribing_MylosEditions()
     {
         using var bulletin = new CatBulletin("Mylo");

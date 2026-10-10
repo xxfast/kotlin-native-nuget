@@ -34,6 +34,13 @@ class CatBulletin(private val name: String) {
   val visitors: MutableSharedFlow<Cat> = MutableSharedFlow(replay = 1)
 
   /**
+   * ADR-209 over the ADR-071 value-class arm: a value class element, written from C# as its
+   * underlying `String` and re-wrapped here, so [CatId]'s `init` runs on every emit. Replays
+   * two.
+   */
+  val tags: MutableSharedFlow<CatId> = MutableSharedFlow(replay = 2)
+
+  /**
    * ADR-209: no replay and no buffer, so an emit parks for as long as a subscriber is busy with
    * the previous item. The deterministic shape of a parked `EmitAsync`.
    */
@@ -59,6 +66,9 @@ class CatBulletin(private val name: String) {
 
   /** The name of the last cat [visitors] replays, read on the Kotlin side. */
   fun latestVisitor(): String? = visitors.replayCache.lastOrNull()?.name
+
+  /** The id of the last tag [tags] replays, read on the Kotlin side. */
+  fun latestTag(): String? = tags.replayCache.lastOrNull()?.id
 
   fun publish(headline: String, edition: Int) {
     headlines.tryEmit("$name: $headline")

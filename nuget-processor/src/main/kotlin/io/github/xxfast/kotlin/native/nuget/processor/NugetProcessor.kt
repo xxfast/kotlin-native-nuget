@@ -1156,8 +1156,11 @@ internal fun warnRefusedLegacyRouteMembers(
       ?: "Any"
     val classified: MutableStateFlowElement = classifyMutableStateFlowElement(element)
     val why: String = when (classified) {
+      // The ADR-071 value-class arm's refusal, in its wording: the underlying is what decides.
       is MutableStateFlowElement.RefusedValueClass ->
-        "a MutableSharedFlow element of value class ${classified.qualifiedName} has no write arm"
+        "a MutableSharedFlow element of value class ${classified.qualifiedName} over " +
+            "${classified.underlying} has no write arm (a value class emits as a non-null " +
+            "String, a primitive other than Char, an enum, or an exported class or object)"
 
       is MutableStateFlowElement.Writable ->
         "a MutableSharedFlow element of nullable $spelled has no write arm"

@@ -185,14 +185,20 @@ translators now carry a structural `acquiredFlow` flag, so respelling the awaite
 scalar and `String` by value, enum by ordinal, object by handle, and nullable `String?`, `Int?` and
 nullable object elements. `Boolean?`, `Char?` and a nullable enum have no write arm.
 
+A value class element emits by value, through the ADR-071 value-class arm (its 2026-10-10
+amendment): over a non-null `String`, a primitive other than `Char`, an enum, or an exported class
+or object, C# sends the underlying (`v.Id`) and Kotlin re-wraps it, so its `init` runs on every
+emit; a nullable `V?` element emits too. `EmitAsync` and `TryEmit` carry that arm's `default(V)`
+guard: a `String` or object underlying throws `ArgumentException` in C# before anything crosses.
+
 A declared `MutableSharedFlow<T>` whose element has no write arm (collections, `ByteArray`,
-interfaces, the nullable cases above, and value classes while the `MutableStateFlow` value-class
-item is open) binds as `KotlinSharedFlow<T>` and keeps `ReplayCache`. The dropped members are named
-with `SKIPPED_UNSUPPORTED_INPUT`: "its EmitAsync, TryEmit and SubscriptionCount are not generated
+interfaces, the nullable cases above, and a value class over any other underlying) binds as
+`KotlinSharedFlow<T>` and keeps `ReplayCache`. The dropped members are named with
+`SKIPPED_UNSUPPORTED_INPUT`: "its EmitAsync, TryEmit and SubscriptionCount are not generated
 because a MutableSharedFlow element of X has no write arm", with a hint that the C# property is a
-read-only `KotlinSharedFlow` and to expose a function taking X to emit it. The warning covers class,
-sealed-arm, interface and top-level `suspend` owners. Value classes consume the same classifier, so
-the outcome of that item lands here without a second decision.
+read-only `KotlinSharedFlow` and to expose a function taking X to emit it. A refused value class is
+named with its underlying ("of value class X over U has no write arm"). The warning covers class,
+sealed-arm, interface and top-level `suspend` owners.
 
 ### Declined
 

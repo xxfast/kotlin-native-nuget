@@ -44,6 +44,7 @@ class Tier1SharedFlowSurfaceTest {
         val sightings: SharedFlow<Cat> = MutableSharedFlow(replay = 1)
         val lists: MutableSharedFlow<List<Int>> = MutableSharedFlow(replay = 1)
         val tags: MutableSharedFlow<Tag> = MutableSharedFlow(replay = 1)
+        val chunks: MutableSharedFlow<ByteArray> = MutableSharedFlow(replay = 1)
         val absent: MutableSharedFlow<Int>? = null
         fun desk(): MutableSharedFlow<String> = headlines
         fun moodDesk(): MutableSharedFlow<Mood> = moods
@@ -195,15 +196,15 @@ class Tier1SharedFlowSurfaceTest {
   fun `an element with no write arm binds read-only and the missing writes are named`() {
     val cs: String = result.generatedCSharp
     assertContains(cs, Regex("""public KotlinSharedFlow<[^\n]*> Lists\b"""))
-    assertContains(cs, Regex("""public KotlinSharedFlow<[\w.:]*Tag> Tags\b"""))
-    val mutable = Regex("""public KotlinMutableSharedFlow<[^\n]*> (Lists|Tags)\b""")
+    assertContains(cs, "public KotlinSharedFlow<byte[]> Chunks")
+    val mutable = Regex("""public KotlinMutableSharedFlow<[^\n]*> (Lists|Chunks)\b""")
     assertFalse(mutable.containsMatchIn(cs), "a refused element must not bind the mutable holder")
     val kt: String = result.generated
-    assertFalse("try_emit_lists" in kt || "try_emit_tags" in kt, "no write export expected")
+    assertFalse("try_emit_lists" in kt || "try_emit_chunks" in kt, "no write export expected")
     assertContains(kt, "@CName(\"library_tier1_sharedsurface__bulletin_get_lists_replay_cache\")")
     // Every owner ADR-205 binds names it: class, interface (ADR-174) and top-level suspend.
     listOf(
-      "Bulletin.lists", "Bulletin.tags", "Bulletin.flags", "Bulletin.maybeMoods", "Feed.batches",
+      "Bulletin.lists", "Bulletin.chunks", "Bulletin.flags", "Bulletin.maybeMoods", "Feed.batches",
       "bulletinBatches",
     ).forEach { member ->
       assertTrue(
@@ -277,7 +278,9 @@ class Tier1SharedFlowSurfaceTest {
                   IReadOnlyList<Cat> sightings = bulletin.Sightings.ReplayCache;
                   KotlinSharedFlow<IReadOnlyList<int>> lists = bulletin.Lists;
                   IReadOnlyList<IReadOnlyList<int>> listCache = lists.ReplayCache;
-                  IReadOnlyList<Tag> tags = bulletin.Tags.ReplayCache;
+                  IReadOnlyList<byte[]> chunks = bulletin.Chunks.ReplayCache;
+                  bulletin.Tags.TryEmit(new Tag("oreo-1"));
+                  await bulletin.Tags.EmitAsync(bulletin.Tags.ReplayCache[0], token);
                   bulletin.Absent?.TryEmit(1);
                   using KotlinMutableSharedFlow<string> desk = bulletin.Desk();
                   desk.TryEmit("held");

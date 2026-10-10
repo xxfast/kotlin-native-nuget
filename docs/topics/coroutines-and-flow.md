@@ -638,8 +638,12 @@ using KotlinMutableSharedFlow<string> awaited = await bulletin.AwaitHeadlineDesk
 ```
 
 The elements you can write are those a `MutableStateFlow<T>` can set, described in
-[Settable `.Value`](#settable-value). A `MutableSharedFlow` of any other element (a `List`, `Set` or
-`Map`, a `ByteArray`, an interface, a value class, or a nullable `Boolean`, `Char` or enum) binds
+[Settable `.Value`](#settable-value). That includes a value class, which emits by value:
+`TryEmit(new CatId("oreo-1"))` crosses as the underlying and Kotlin wraps it again, with the
+same underlyings and the same `ArgumentException` for `default(CatId)` as a
+[`MutableStateFlow` of a value class](#enum-elements). A `MutableSharedFlow` of any other element
+(a `List`, `Set` or `Map`, a `ByteArray`, an interface, a value class over any other underlying,
+or a nullable `Boolean`, `Char` or enum) binds
 a read-only `KotlinSharedFlow<T>` and the build reports `SKIPPED_UNSUPPORTED_INPUT`. On a property
 the remark names the read-only C# property; expose a function that takes the element to emit it.
 `resetReplayCache()` is not exposed.

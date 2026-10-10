@@ -148,8 +148,12 @@ internal fun sharedFlowArguments(
   val callback: String = mint("callback")
   val userData: String = mint("userData")
   val write: CirStateFlowWrite = mutable.write.relabelled("value", v)
-  val guard: String =
-    if (write.rejectsNull) "if ($v is null) throw new ArgumentNullException(nameof($v)); " else ""
+  // The ADR-071 guards, in the setter's order: a null object first, then the value-class
+  // `default(V)` check, whose `v` [relabelled] already moved onto this lambda's parameter.
+  val guard: String = listOfNotNull(
+    "if ($v is null) throw new ArgumentNullException(nameof($v));".takeIf { write.rejectsNull },
+    write.guard,
+  ).joinToString("") { statement -> "$statement " }
   return listOf(
     replay,
     "$indent() => $scope",

@@ -542,6 +542,8 @@ The [`SharedFlow` surface](coroutines-and-flow.md#shared-flow-emit) (`ReplayCach
   argument and an enum ordinal.
 - Row 8r, `MutableSharedFlow_HeldMethodReturn_DisposedAndAbandoned_ReturnsToBaseline`: a held
   `MutableSharedFlow<T>` method return, disposed and dropped for the GC.
+- Row 8s, `MutableSharedFlow_ValueClassElement_EmitsAndReplayCache_ReturnsToBaseline`: a value-class
+  element emitted by its underlying and read back through `ReplayCache`.
 
 | Row | Test | Pins |
 |---|---|---|

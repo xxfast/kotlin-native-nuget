@@ -2555,6 +2555,26 @@ public class LiveHandleTests
         });
     }
 
+    // Row 8s. ADR-209 over the ADR-071 value-class arm: a `MutableSharedFlow<CatId>` written by
+    // `TryEmit` and `EmitAsync`. The String underlying mints nothing on either write (Kotlin
+    // re-wraps it), so the handles are the emit job and, on the `ReplayCache` read, the list plus
+    // one box per element, which `CatId.NugetUnbox` releases. The refused `default(CatId)`
+    // crosses nothing.
+    [Fact]
+    public async Task MutableSharedFlow_ValueClassElement_EmitsAndReplayCache_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await using var bulletin = new CatBulletin("Oreo");
+            Assert.True(bulletin.Tags.TryEmit(new CatId("oreo-1")));
+            await bulletin.Tags.EmitAsync(new CatId("oreo-2"));
+            Assert.Equal(
+                new[] { new CatId("oreo-1"), new CatId("oreo-2") }, bulletin.Tags.ReplayCache);
+            Assert.Equal("oreo-2", bulletin.LatestTag());
+            Assert.Throws<ArgumentException>(() => bulletin.Tags.TryEmit(default(CatId)));
+        });
+    }
+
     // Row 8r. ADR-209: a held `MutableSharedFlow<T>` method return (the ADR-071 held-row mirror).
     // The acquire mints the flow's own handle, which the wrapper owns: disposed here, and dropped
     // for the GC in the second read.
