@@ -3,6 +3,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.tier1
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import kotlin.test.Test
 import kotlin.test.assertContains
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -59,6 +60,10 @@ class Tier1SharedFlowSurfaceTest {
         val maybeFaults: SharedFlow<Throwable?> = MutableSharedFlow(replay = 1)
         val flags: MutableSharedFlow<Boolean?> = MutableSharedFlow(replay = 1)
         val maybeMoods: MutableSharedFlow<Mood?> = MutableSharedFlow(replay = 1)
+        val initials: MutableSharedFlow<Char?> = MutableSharedFlow(replay = 1)
+        fun maybeMoodDesk(): MutableSharedFlow<Mood?> = maybeMoods
+        suspend fun awaitMaybeMoods(): MutableSharedFlow<Mood?> = maybeMoods
+        val listeners: MutableSharedFlow<Feed> = MutableSharedFlow(replay = 1)
         val blobs: SharedFlow<ByteArray> = MutableSharedFlow(replay = 1)
         val feeds: SharedFlow<Feed> = MutableSharedFlow(replay = 1)
         suspend fun awaitDesk(): MutableSharedFlow<String> = headlines
@@ -202,17 +207,104 @@ class Tier1SharedFlowSurfaceTest {
     val kt: String = result.generated
     assertFalse("try_emit_lists" in kt || "try_emit_chunks" in kt, "no write export expected")
     assertContains(kt, "@CName(\"library_tier1_sharedsurface__bulletin_get_lists_replay_cache\")")
-    // Every owner ADR-205 binds names it: class, interface (ADR-174) and top-level suspend.
+    assertContains(cs, Regex("""public KotlinSharedFlow<[\w.:]*IFeed> Listeners\b"""))
+    assertFalse("try_emit_listeners" in kt, "no write export expected for an interface element")
+    // Every owner ADR-205 binds names it: class, interface (ADR-174) and top-level suspend. The
+    // sentence is the MutableStateFlow setter refusal's own, with this holder's name in it.
+    val container = "(the write seam does not build its wire container)"
+    mapOf(
+      "Bulletin.lists:" to "a List element of a MutableSharedFlow has no write arm $container",
+      "Bulletin.chunks:" to
+          "a ByteArray element of a MutableSharedFlow has no write arm $container",
+      "Bulletin.listeners:" to "an interface element of a MutableSharedFlow has no write arm " +
+          "(a C# implementation cannot be written into a Kotlin flow on the forward route)",
+      "Feed.batches:" to "a List element of a MutableSharedFlow has no write arm $container",
+      "bulletinBatches:" to "a List element of a MutableSharedFlow has no write arm $container",
+    ).forEach { (member, sentence) ->
+      val named: List<String> = result.kspWarnings.filter { warning ->
+        ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name in warning &&
+            "Skipping $member" in warning && "EmitAsync" in warning
+      }
+      assertEquals(1, named.size, "expected one named refusal for $member; got: $named")
+      assertContains(named.single(), sentence)
+      assertContains(named.single(), "read-only KotlinSharedFlow")
+    }
+  }
+
+  /**
+   * ADR-209 over ADR-071's nullable arms: `emit`/`tryEmit` take the value the `MutableStateFlow`
+   * setter takes, through the same write slot, so a nullable enum, a `Boolean?` and a `Char?`
+   * element emit as soon as that setter writes them: a has-value slot ahead of the value slot (the
+   * enum's ordinal), on the property, the held return and the awaited return. `null` and the
+   * entry at ordinal 0 are different emits.
+   */
+  @Test
+  fun `a nullable enum, Boolean or Char element emits through the has-value pair`() {
+    val cs: String = result.generatedCSharp.withoutDocComments()
+    assertContains(cs, "public KotlinMutableSharedFlow<bool?> Flags")
+    assertContains(cs, Regex("""public KotlinMutableSharedFlow<[\w.:]*Mood\?> MaybeMoods\b"""))
+    assertContains(cs, "public KotlinMutableSharedFlow<char?> Initials")
+    assertContains(
+      cs, Regex("""public KotlinMutableSharedFlow<[\w.:]*Mood\?> MaybeMoodDesk\(\)"""),
+    )
+    assertContains(
+      cs, Regex("""public Task<KotlinMutableSharedFlow<[\w.:]*Mood\?>> AwaitMaybeMoodsAsync\("""),
+    )
+    // The C# half: the pair on every write lambda, and its two slots on every import.
+    val pair = Regex(
+      """Native_(TryEmit|Emit)MaybeMoods\([^;]*v\.HasValue, \(int\)v\.GetValueOrDefault\(\)""",
+    )
+    assertEquals(2, pair.findAll(cs).count(), "expected the pair on emit and tryEmit")
+    listOf("TryEmitMaybeMoods", "MaybeMoodDeskTryEmit", "AwaitMaybeMoodsAsyncTryEmit")
+      .forEach { import ->
+        val declared = Regex(
+          """extern bool Native_$import\([^;]*bool valueHasValue, int value, out IntPtr""",
+        )
+        assertContains(cs, declared, message = "expected the has-value pair on Native_$import")
+      }
+    assertContains(
+      cs,
+      Regex(
+        """extern bool Native_TryEmitFlags\([^;]*\[MarshalAs\(UnmanagedType\.I1\)\] bool """ +
+            """valueHasValue, \[MarshalAs\(UnmanagedType\.I1\)\] bool value, out IntPtr""",
+      ),
+    )
+    assertContains(
+      cs,
+      Regex(
+        """extern bool Native_TryEmitInitials\([^;]*bool valueHasValue, """ +
+            """\[MarshalAs\(UnmanagedType\.U2\)\] char value, out IntPtr""",
+      ),
+    )
+    // The Kotlin half: the setter's own assignment, on all three routes.
+    val kt: String = result.generated
+    val entry = "if (valueHasValue) tier1.sharedsurface.Mood.entries[value] else null"
+    assertContains(kt, ".maybeMoods.tryEmit($entry)")
+    val prefix = "library_tier1_sharedsurface__bulletin"
     listOf(
-      "Bulletin.lists", "Bulletin.chunks", "Bulletin.flags", "Bulletin.maybeMoods", "Feed.batches",
-      "bulletinBatches",
-    ).forEach { member ->
+      "emit_maybeMoods", "try_emit_maybeMoods", "maybeMoodDesk_emit", "maybeMoodDesk_try_emit",
+      "awaitMaybeMoods_emit", "awaitMaybeMoods_try_emit", "try_emit_flags", "try_emit_initials",
+    ).forEach { name ->
+      val export: String =
+        kt.substringAfter("@CName(\"${prefix}_$name\")").substringBefore("@CName(")
+      assertContains(
+        export, Regex("""valueHasValue: Boolean,\s+`?value`?: (Int|Boolean|Char),"""),
+        message = "expected the has-value pair on $name",
+      )
+    }
+    assertContains(
+      kt.substringAfter("@CName(\"${prefix}_maybeMoodDesk_try_emit\")").substringBefore("@CName("),
+      entry,
+    )
+    assertContains(
+      kt.substringAfter("@CName(\"${prefix}_awaitMaybeMoods_emit\")").substringBefore("@CName("),
+      entry,
+    )
+    // Nothing about them is refused any more.
+    listOf("flags", "maybeMoods", "initials", "maybeMoodDesk", "awaitMaybeMoods").forEach { name ->
       assertTrue(
-        result.kspWarnings.any { warning ->
-          ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name in warning &&
-              member in warning && "EmitAsync" in warning
-        },
-        "expected a named refusal for $member; kspWarnings=${result.kspWarnings}",
+        result.kspWarnings.none { it.contains("[nuget:") && it.contains("Bulletin.$name:") },
+        "expected no diagnostic for $name; kspWarnings=${result.kspWarnings}",
       )
     }
   }
@@ -296,8 +388,24 @@ class Tier1SharedFlowSurfaceTest {
                   using KotlinMutableSharedFlow<int>? maybeAwait = await bulletin.MaybeAwaitAsync();
                   IReadOnlyList<System.Exception> faults = bulletin.Faults.ReplayCache;
                   IReadOnlyList<System.Exception?> maybeFaults = bulletin.MaybeFaults.ReplayCache;
-                  KotlinSharedFlow<bool?> flags = bulletin.Flags;
-                  KotlinSharedFlow<Mood?> maybeMoods = bulletin.MaybeMoods;
+                  KotlinMutableSharedFlow<bool?> flags = bulletin.Flags;
+                  flags.TryEmit(null);
+                  await flags.EmitAsync(true, token);
+                  IReadOnlyList<bool?> flagCache = flags.ReplayCache;
+                  KotlinMutableSharedFlow<Mood?> maybeMoods = bulletin.MaybeMoods;
+                  await maybeMoods.EmitAsync(null, token);
+                  maybeMoods.TryEmit(Mood.Happy);
+                  IReadOnlyList<Mood?> maybeMoodCache = maybeMoods.ReplayCache;
+                  bulletin.Initials.TryEmit('o');
+                  await bulletin.Initials.EmitAsync(null, token);
+                  IReadOnlyList<char?> initialCache = bulletin.Initials.ReplayCache;
+                  using KotlinMutableSharedFlow<Mood?> maybeMoodDesk = bulletin.MaybeMoodDesk();
+                  maybeMoodDesk.TryEmit(null);
+                  using KotlinMutableSharedFlow<Mood?> awaitedMoods =
+                      await bulletin.AwaitMaybeMoodsAsync();
+                  await awaitedMoods.EmitAsync(Mood.Grumpy, token);
+                  KotlinSharedFlow<IFeed> listeners = bulletin.Listeners;
+                  IReadOnlyList<IFeed> listenerCache = listeners.ReplayCache;
                   IReadOnlyList<byte[]> blobs = bulletin.Blobs.ReplayCache;
                   IReadOnlyList<IFeed> feeds = bulletin.Feeds.ReplayCache;
                   using KotlinMutableSharedFlow<string> awaited = await bulletin.AwaitDeskAsync();

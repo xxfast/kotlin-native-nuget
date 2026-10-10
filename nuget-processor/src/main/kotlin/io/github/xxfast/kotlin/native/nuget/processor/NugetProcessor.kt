@@ -48,6 +48,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.classifyMutableStateFl
 import io.github.xxfast.kotlin.native.nuget.processor.cir.MUTABLE_SHARED_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.SharedFlowSurface
 import io.github.xxfast.kotlin.native.nuget.processor.cir.sharedFlowSurface
+import io.github.xxfast.kotlin.native.nuget.processor.cir.MutableStateFlowReadOnlyElement
+import io.github.xxfast.kotlin.native.nuget.processor.cir.readOnlyMutableStateFlowElement
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.isMutableStateFlowElementWritable
 import io.github.xxfast.kotlin.native.nuget.processor.cir.translate
@@ -1064,6 +1066,115 @@ internal fun warnRefusedLegacyRouteMembers(
       }
   }
 
+  // ADR-071: a declared `MutableStateFlow` of a collection, a `ByteArray` or an interface binds the
+  // read-only `KotlinStateFlow<T>` on purpose: the first two cross as a wire container the write
+  // seam has no arm to build, and no forward arm carries a C# implementation of an interface into
+  // a Kotlin flow. Named here, on the value-class refusal's path below, because it used to be
+  // silent: the author wrote `MutableStateFlow` and got a holder with no setter and no word why.
+  // Only a member that SURVIVES read-only is named. One the Flow route refuses whole (a nullable
+  // collection element) or the suspend route refuses whole (an awaited `MutableStateFlow` of
+  // either kind) already carries that refusal's own diagnostic.
+  fun MutableList<ForwardDiagnostic>.nameReadOnlyElementWrite(
+    member: KSDeclaration,
+    declaration: String,
+    owner: ForwardDiagnosticOwner?,
+  ) {
+    val property: KSPropertyDeclaration? = member as? KSPropertyDeclaration
+    val function: KSFunctionDeclaration? = member as? KSFunctionDeclaration
+    val type: KSType = (property?.type ?: function?.returnType)?.resolve()?.expandAliases()
+      ?: return
+    if (type.declaration.qualifiedName?.asString() !in MUTABLE_STATE_FLOW_TYPES) return
+    val element: KSType? = type.arguments.firstOrNull()?.type?.resolve()?.expandAliases()
+    val readOnly: MutableStateFlowReadOnlyElement =
+      readOnlyMutableStateFlowElement(element) ?: return
+    // The value-class refusal's own two conditions below: a holder that was never a write
+    // candidate (a nullable member on a method, a nullable element on the awaited route).
+    if (function != null && type.isMarkedNullable) return
+    val awaited: Boolean = function?.modifiers?.contains(Modifier.SUSPEND) == true
+    if (awaited && element?.isMarkedNullable == true) return
+    val refusedWhole: Boolean = if (function != null) {
+      classifier.legacyRefusedReturnShape(function) != null
+    } else {
+      classifier.legacyRefusedFlowElementShape(type) != null
+    }
+    if (refusedWhole) return
+    val reason: String =
+      "${readOnly.noWriteArm("MutableStateFlow")}, so its `.Value` is not settable from C#"
+    val publicName: String = member.csharpMemberName()
+    val diagnostic: ForwardDiagnostic = if (property != null) {
+      ForwardDiagnostic(
+        kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
+        symbol = property,
+        declaration = declaration,
+        reason = "its setter is not generated because $reason",
+        hint = "the C# property $publicName is a read-only KotlinStateFlow; expose a function " +
+            "taking the new value to write it, or declare it StateFlow if it is read-only by " +
+            "design",
+        owner = owner?.let { container -> ForwardDiagnosticOwner.Property(container, publicName) },
+        member = property.simpleName.asString(),
+      )
+    } else {
+      ForwardDiagnostic(
+        kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
+        symbol = member,
+        declaration = declaration,
+        reason = "its returned holder's setter is not generated because $reason",
+        hint = "$publicName returns a read-only KotlinStateFlow; expose a function taking the " +
+            "new value to write it, or return StateFlow if it is read-only by design",
+        owner = null,
+      )
+    }
+    add(diagnostic)
+  }
+
+  // ADR-071: the ROUTES a declared `MutableStateFlow` return is read-only on whatever its element
+  // is: a nullable member on a method, a nullable element or member on the awaited route, and a
+  // top-level `suspend fun`. Each used to bind `KotlinStateFlow<T>` in silence, and each is named
+  // now, with the route in the reason. Only for a member that survives read-only: one the route
+  // refuses whole (a refused parameter or return) carries that refusal's own diagnostic.
+  // [topLevel] is the one caller that walks top-level suspend functions.
+  fun MutableList<ForwardDiagnostic>.nameReadOnlyRouteWrite(
+    member: KSDeclaration,
+    declaration: String,
+    topLevel: Boolean = false,
+  ) {
+    val function: KSFunctionDeclaration = member as? KSFunctionDeclaration ?: return
+    val type: KSType = function.returnType?.resolve()?.expandAliases() ?: return
+    if (type.declaration.qualifiedName?.asString() !in MUTABLE_STATE_FLOW_TYPES) return
+    val element: KSType? = type.arguments.firstOrNull()?.type?.resolve()?.expandAliases()
+    val awaited: Boolean = Modifier.SUSPEND in function.modifiers
+    val route: String = when {
+      topLevel ->
+        "a top-level suspend function's MutableStateFlow has no write arm (the awaited write " +
+            "is keyed on a class member)"
+
+      awaited && type.isMarkedNullable -> "an awaited nullable MutableStateFlow has no write arm"
+      awaited && element?.isMarkedNullable == true ->
+        "an awaited MutableStateFlow of a nullable element has no write arm"
+
+      !awaited && type.isMarkedNullable ->
+        "a nullable MutableStateFlow method return has no write arm (the held route has no " +
+            "null arm)"
+
+      else -> return
+    }
+    if (classifier.legacyRefusedParameterShape(function.parameters) != null) return
+    if (classifier.legacyRefusedReturnShape(function) != null) return
+    val publicName: String = member.csharpMemberName()
+    add(
+      ForwardDiagnostic(
+        kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
+        symbol = member,
+        declaration = declaration,
+        reason = "its returned holder's setter is not generated because $route, so its " +
+            "`.Value` is not settable from C#",
+        hint = "$publicName returns a read-only KotlinStateFlow; expose a function taking the " +
+            "new value to write it, or return StateFlow if it is read-only by design",
+        owner = null,
+      ),
+    )
+  }
+
   // ADR-071 amendment (value-class element write): a `MutableStateFlow<ValueClass>` member is
   // settable when the value class's underlying is one the synchronous value-class setter carries.
   // Any other value class binds the read-only `KotlinStateFlow<T>`, because no write arm carries
@@ -1077,6 +1188,10 @@ internal fun warnRefusedLegacyRouteMembers(
     declaration: String,
     owner: ForwardDiagnosticOwner?,
   ) {
+    // The collection / ByteArray / interface twin and the read-only routes ride this walk: one
+    // call each, every owner this is called for.
+    nameReadOnlyElementWrite(member, declaration, owner)
+    nameReadOnlyRouteWrite(member, declaration)
     val property: KSPropertyDeclaration? = member as? KSPropertyDeclaration
     val function: KSFunctionDeclaration? = member as? KSFunctionDeclaration
     val type: KSType = (property?.type ?: function?.returnType)?.resolve()?.expandAliases()
@@ -1174,11 +1289,17 @@ internal fun warnRefusedLegacyRouteMembers(
             "${classified.underlying} has no write arm (a value class emits as a non-null " +
             "String, a primitive other than Char, an enum, or an exported class or object)"
 
+      // No kind's nullable form is held back today ([isMutableStateFlowElementWritable] admits
+      // every one, nullable enum, `Boolean?` and `Char?` included), so this arm is cold. It stays
+      // as the named refusal for the day that gate holds one back again, never a silent holder.
       is MutableStateFlowElement.Writable ->
         "a MutableSharedFlow element of nullable $spelled has no write arm"
 
+      // A collection, a `ByteArray` or an interface: the MutableStateFlow setter's own sentence
+      // ([MutableStateFlowReadOnlyElement.noWriteArm]), so the two holders cannot drift.
       MutableStateFlowElement.ReadOnly ->
-        "a MutableSharedFlow element of $spelled has no write arm"
+        readOnlyMutableStateFlowElement(element)?.noWriteArm("MutableSharedFlow")
+          ?: "a MutableSharedFlow element of $spelled has no write arm"
     }
     val publicName: String = member.csharpMemberName()
     val reason: String =
@@ -1217,8 +1338,9 @@ internal fun warnRefusedLegacyRouteMembers(
   }
 
   val diagnostics: List<ForwardDiagnostic> = buildList {
-    // ADR-209: a reachable interface's flow members bind on `I<Name>` (ADR-174), so a refused
-    // shared-flow write there is named too.
+    // ADR-209 / ADR-071: a reachable interface's flow members bind on `I<Name>` (ADR-174), so a
+    // refused write there is named too, shared-flow emit and state-flow setter alike. The
+    // implementer may not be exported, and then this is the only owner that can say it.
     interfaces.forEach { iface ->
       val owner: String = iface.simpleName.asString()
       val ownerDeclaration: ForwardDiagnosticOwner = iface.forwardDiagnosticOwner()
@@ -1226,7 +1348,7 @@ internal fun warnRefusedLegacyRouteMembers(
           iface.forwardInterfaceFlowMethods(classifier) +
           iface.forwardInterfaceSuspendMethods(classifier)
       members.forEach { member ->
-        nameRefusedSharedFlowWrite(
+        nameRefusedWrites(
           member, "$owner.${member.simpleName.asString()}", ownerDeclaration,
         )
       }
@@ -1388,6 +1510,7 @@ internal fun warnRefusedLegacyRouteMembers(
     suspendFunctions.forEach { func ->
       nameRefused(func, func.simpleName.asString(), func.forwardFileClassOwner())
       nameRefusedSharedFlowWrite(func, func.simpleName.asString(), func.forwardFileClassOwner())
+      nameReadOnlyRouteWrite(func, func.simpleName.asString(), topLevel = true)
     }
   }
   ForwardDiagnosticSink.emit(diagnostics, logger)

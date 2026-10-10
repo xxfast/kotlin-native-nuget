@@ -179,6 +179,73 @@ public class SharedFlowTests
         Assert.Equal(Mood.Grumpy, bulletin.LatestMood());
     }
 
+    // --- ADR-209 over ADR-071's nullable arms: a nullable enum, bool? and char? element emit
+    // through the MutableStateFlow setter's has-value pair. The enum and bool facts emit a null AND
+    // the value whose wire is all zeroes (Happy = ordinal 0, false), so a has-value slot that is
+    // dropped or always true cannot pass.
+
+    [Fact]
+    public async Task MutableSharedFlowProperty_NullableEnumElement_NullIsNotOrdinalZero_OreosHunches()
+    {
+        using var bulletin = new CatBulletin("Oreo");
+        KotlinMutableSharedFlow<Mood?> hunches = bulletin.Hunches;
+
+        Assert.True(hunches.TryEmit(Mood.Happy));
+        await hunches.EmitAsync(null);
+
+        Assert.Equal(new[] { "HAPPY", "none" }, bulletin.LatestHunches());
+        Assert.Equal(new Mood?[] { Mood.Happy, null }, hunches.ReplayCache);
+
+        Assert.True(hunches.TryEmit(Mood.Grumpy));
+        Assert.Equal(new[] { "none", "GRUMPY" }, bulletin.LatestHunches());
+        Assert.Equal(new Mood?[] { null, Mood.Grumpy }, hunches.ReplayCache);
+    }
+
+    [Fact]
+    public async Task MutableSharedFlowProperty_NullableEnumElement_OutOfRangeOrdinal_FaultsWithoutEmitting()
+    {
+        using var bulletin = new CatBulletin("Mylo");
+
+        Assert.ThrowsAny<KotlinException>(() => bulletin.Hunches.TryEmit((Mood)99));
+        await Assert.ThrowsAnyAsync<KotlinException>(() => bulletin.Hunches.EmitAsync((Mood)99));
+
+        Assert.Empty(bulletin.LatestHunches());
+        Assert.True(bulletin.Hunches.TryEmit(null));
+        Assert.Equal(new[] { "none" }, bulletin.LatestHunches());
+    }
+
+    [Fact]
+    public async Task MutableSharedFlowProperty_NullableBoolElement_NullIsNotFalse_MyloStopsPurring()
+    {
+        using var bulletin = new CatBulletin("Mylo");
+        KotlinMutableSharedFlow<bool?> purrs = bulletin.Purrs;
+
+        Assert.True(purrs.TryEmit(false));
+        await purrs.EmitAsync(null);
+        Assert.Equal(new[] { "false", "none" }, bulletin.LatestPurrs());
+        Assert.Equal(new bool?[] { false, null }, purrs.ReplayCache);
+
+        await purrs.EmitAsync(true);
+        Assert.Equal(new[] { "none", "true" }, bulletin.LatestPurrs());
+        Assert.Equal(new bool?[] { null, true }, purrs.ReplayCache);
+    }
+
+    [Fact]
+    public async Task MutableSharedFlowProperty_NullableCharElement_CrossesAsUtf16_OreosInitial()
+    {
+        using var bulletin = new CatBulletin("Oreo");
+        KotlinMutableSharedFlow<char?> initials = bulletin.Initials;
+
+        // U+00D8 is outside ASCII: a one-byte slot would not carry it.
+        Assert.True(initials.TryEmit('\u00D8'));
+        await initials.EmitAsync(null);
+        Assert.Equal(new[] { "\u00D8", "none" }, bulletin.LatestInitials());
+        Assert.Equal(new char?[] { '\u00D8', null }, initials.ReplayCache);
+
+        await initials.EmitAsync('o');
+        Assert.Equal(new[] { "none", "o" }, bulletin.LatestInitials());
+    }
+
     [Fact]
     public async Task MutableSharedFlowProperty_ObjectElement_EmitAsyncPassesTheHandle_MyloVisits()
     {
