@@ -3,11 +3,15 @@ package io.github.xxfast.kotlin.native.nuget.test.boxshelf
 import io.github.xxfast.kotlin.native.nuget.test.cat.Box
 import io.github.xxfast.kotlin.native.nuget.test.cat.Cat
 import io.github.xxfast.kotlin.native.nuget.test.cat.Mood
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
@@ -102,3 +106,67 @@ suspend fun laterBox(label: String): Box<String> {
   delay(1.milliseconds)
   return Box(label)
 }
+
+/**
+ * ADR-208 part E: a `Flow` / `StateFlow` as the type argument. `box.Value` is a `KotlinFlow<E>` /
+ * `KotlinStateFlow<E>` built from the flow's own handle, collected through one generated export
+ * per closed flow instantiation, on a scope the holder owns.
+ *
+ * | Argument | No conversion | Converted element |
+ * | -------- | ------------- | ----------------- |
+ * | `Flow` | [BoxRadio.ticks] (`Int`), [boxedTicks] | [BoxRadio.moods] (`Mood`, by ordinal) |
+ * | `StateFlow` | [BoxRadio.volume] (`Int`) | [BoxRadio.mood] (`Mood`) |
+ *
+ * [BoxRadio.endless] never completes, for the cells that dispose things mid-collection, and
+ * [BoxRadio.warmUp] gives the radio a scope of its own, so its `DisposeAsync` has something to
+ * drain. [BoxRadio.dial] is a declared `MutableStateFlow`, bound read-only, and
+ * [BoxRadio.jingles] a `SharedFlow`, bound as the plain `KotlinFlow`.
+ *
+ * Oreo's radio plays three ticks and stops. Mylo's never stops, so somebody has to switch it off.
+ */
+class BoxRadio {
+  private val level: MutableStateFlow<Int> = MutableStateFlow(3)
+  private val temper: MutableStateFlow<Mood> = MutableStateFlow(Mood.SLEEPY)
+  private val announcements: MutableSharedFlow<String> =
+    MutableSharedFlow<String>(replay = 1).also { flow -> flow.tryEmit("dinner") }
+
+  fun ticks(): Box<Flow<Int>> = Box(flowOf(1, 2, 3))
+
+  fun moods(): Box<Flow<Mood>> = Box(flowOf(Mood.SLEEPY, Mood.GRUMPY))
+
+  fun whispers(): Box<Flow<String?>> = Box(flowOf("psst", null))
+
+  val volume: Box<StateFlow<Int>> get() = Box(level)
+
+  fun mood(): Box<StateFlow<Mood>> = Box(temper)
+
+  fun dial(): Box<MutableStateFlow<Int>> = Box(level)
+
+  fun jingles(): Box<SharedFlow<String>> = Box(announcements)
+
+  fun silence(): Box<Flow<Int>?> = Box(null)
+
+  fun nestedTicks(): Box<Box<Flow<Int>>> = Box(Box(flowOf(4)))
+
+  fun endless(): Box<Flow<Int>> = Box(
+    flow {
+      emit(1)
+      awaitCancellation()
+    },
+  )
+
+  fun turnUp() {
+    level.value += 1
+  }
+
+  fun sulk() {
+    temper.value = Mood.GRUMPY
+  }
+
+  suspend fun warmUp(): Int {
+    delay(1.milliseconds)
+    return level.value
+  }
+}
+
+fun boxedTicks(): Box<Flow<Int>> = Box(flowOf(7, 8))

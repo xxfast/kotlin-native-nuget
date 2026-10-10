@@ -27,6 +27,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollection
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardExportOwnerTag
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParameterShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyReturnShape
@@ -405,28 +406,58 @@ internal fun FileSpec.Builder.addAcquiredFlowCollectExport(
   val boxed: String = itemBoxExpr(
     element.isMarkedNullable, collection, classifier.legacyFlowElementEnvelope(returnType),
   )
-  val export: FunSpec = FunSpec.builder("export_${prefix}_collect")
-    .addAnnotation(cNameAnnotation("${prefix}_collect", ownedBy(method)))
-    .addParameter("flowHandle", cOpaquePointer)
-    .addParameter("scopeHandle", cOpaquePointer.copy(nullable = true))
-    .addParameter("onNextPtr", cOpaquePointer)
-    .addParameter("onCompletePtr", cOpaquePointer)
-    .addParameter("onErrorPtr", cOpaquePointer)
-    .addParameter("userData", cOpaquePointer)
-    .returns(cOpaquePointer)
-    .addCode("val flow = flowHandle.asStableRef<%T>().get()\n", type)
-    .addCode(
-      "val scope = scopeHandle?.asStableRef<CoroutineScope>()?.get() " +
-        "?: CoroutineScope(Dispatchers.Default)\n",
-    )
-    .addCode(
-      "return collectForCSharp(scope, onNextPtr, onCompletePtr, onErrorPtr, " +
-        "userData, ::nugetMappedType) { emit ->\n" +
-        "  flow.collect { value -> emit($boxed) }\n}\n",
-    )
-    .build()
-  addFunction(export)
+  addFunction(handleKeyedFlowCollectExport(prefix, ownedBy(method), type, boxed))
 }
+
+/**
+ * The `${stem}_collect` export of a flow C# holds by its own handle: an acquired `Flow` (ADR-194),
+ * an awaited `StateFlow` of a collection (ADR-068) and a flow type argument (ADR-208 part E).
+ * [flowType] is the type the handle is read at and [boxed] the per-element projection
+ * ([itemBoxExpr]). A null scope launches on an ad-hoc root scope, the top-level routes' shape.
+ */
+internal fun handleKeyedFlowCollectExport(
+  stem: String,
+  owner: ForwardExportOwnerTag,
+  flowType: TypeName,
+  boxed: String,
+): FunSpec = FunSpec.builder("export_${stem}_collect")
+  .addAnnotation(cNameAnnotation("${stem}_collect", owner))
+  .addParameter("flowHandle", cOpaquePointer)
+  .addParameter("scopeHandle", cOpaquePointer.copy(nullable = true))
+  .addParameter("onNextPtr", cOpaquePointer)
+  .addParameter("onCompletePtr", cOpaquePointer)
+  .addParameter("onErrorPtr", cOpaquePointer)
+  .addParameter("userData", cOpaquePointer)
+  .returns(cOpaquePointer)
+  .addCode("val flow = flowHandle.asStableRef<%T>().get()\n", flowType)
+  .addCode(
+    "val scope = scopeHandle?.asStableRef<CoroutineScope>()?.get() " +
+      "?: CoroutineScope(Dispatchers.Default)\n",
+  )
+  .addCode(
+    "return collectForCSharp(scope, onNextPtr, onCompletePtr, onErrorPtr, " +
+      "userData, ::nugetMappedType) { emit ->\n" +
+      "  flow.collect { value -> emit($boxed) }\n}\n",
+  )
+  .build()
+
+/**
+ * The `${stem}_value` sibling for a held `StateFlow`: its current value through the same [boxed]
+ * projection. [nullable] is a nullable element, whose null value is a null handle.
+ */
+internal fun handleKeyedStateFlowValueExport(
+  stem: String,
+  owner: ForwardExportOwnerTag,
+  flowType: TypeName,
+  boxed: String,
+  nullable: Boolean = false,
+): FunSpec = FunSpec.builder("export_${stem}_value")
+  .addAnnotation(cNameAnnotation("${stem}_value", owner))
+  .addParameter("flowHandle", cOpaquePointer)
+  .returns(cOpaquePointer.copy(nullable = nullable))
+  .addCode("val value = flowHandle.asStableRef<%T>().get().value\n", flowType)
+  .addCode("return $boxed\n")
+  .build()
 
 /**
  * ADR-068, collection element: an awaited read-only `StateFlow<List<T>>` (or `Set`/`Map`) reads
@@ -455,34 +486,6 @@ private fun FileSpec.Builder.addAwaitedStateFlowCollectionExports(
   )
   val boxed: String = itemBoxExpr(elementNullable = false, collection = collection)
 
-  val value: FunSpec = FunSpec.builder("export_${prefix}_value")
-    .addAnnotation(cNameAnnotation("${prefix}_value", ownedBy(method)))
-    .addParameter("flowHandle", cOpaquePointer)
-    .returns(cOpaquePointer)
-    .addCode("val value = flowHandle.asStableRef<%T>().get().value\n", type)
-    .addCode("return $boxed\n")
-    .build()
-  addFunction(value)
-
-  val collect: FunSpec = FunSpec.builder("export_${prefix}_collect")
-    .addAnnotation(cNameAnnotation("${prefix}_collect", ownedBy(method)))
-    .addParameter("flowHandle", cOpaquePointer)
-    .addParameter("scopeHandle", cOpaquePointer.copy(nullable = true))
-    .addParameter("onNextPtr", cOpaquePointer)
-    .addParameter("onCompletePtr", cOpaquePointer)
-    .addParameter("onErrorPtr", cOpaquePointer)
-    .addParameter("userData", cOpaquePointer)
-    .returns(cOpaquePointer)
-    .addCode("val flow = flowHandle.asStableRef<%T>().get()\n", type)
-    .addCode(
-      "val scope = scopeHandle?.asStableRef<CoroutineScope>()?.get() " +
-        "?: CoroutineScope(Dispatchers.Default)\n",
-    )
-    .addCode(
-      "return collectForCSharp(scope, onNextPtr, onCompletePtr, onErrorPtr, " +
-        "userData, ::nugetMappedType) { emit ->\n" +
-        "  flow.collect { value -> emit($boxed) }\n}\n",
-    )
-    .build()
-  addFunction(collect)
+  addFunction(handleKeyedStateFlowValueExport(prefix, ownedBy(method), type, boxed))
+  addFunction(handleKeyedFlowCollectExport(prefix, ownedBy(method), type, boxed))
 }

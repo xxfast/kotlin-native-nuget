@@ -146,7 +146,7 @@ the same symbol numbering and namespace rules as acquisition.
   refusals for nullable collections and unsupported generic elements. Do not widen StateFlow's
   narrower suspend-return element set.
 - Nullable Flow containers (since mapped, see the amendment at the end), SharedFlow, Flow
-  parameters/type arguments, and backpressure redesign
+  parameters (type arguments since mapped, see the 2026-10-10 amendment), and backpressure redesign
   stay deferred. This decision adds IDisposable to the fixed KotlinFlow type, an additive surface
   usable on the Task's actual advertised result type.
 - Integration tests cover repeated enumeration of one acquired Flow, projected elements,
@@ -168,5 +168,25 @@ header was spiked for this ADR.
 "Nullable Flow containers ... stay deferred" in the Consequences no longer holds for the container.
 `suspend fun (): Flow<T>?` awaits to `Task<KotlinFlow<T>?>` on the class and top-level routes, null
 when Kotlin returns no flow; see [ADR-026](026-flow-mapping.md)'s 2026-10-09 amendment. The
-`SharedFlow` deferral was closed by ADR-205; Flow parameters/type arguments and backpressure stay
-deferred.
+`SharedFlow` deferral was closed by ADR-205; Flow parameters (type arguments since mapped, see the
+2026-10-10 amendment) and backpressure stay deferred.
+
+## Amendment (2026-10-10): the type-argument case, and what an acquired holder borrows
+
+**Alternative 3 stays rejected; its reason does not cover a per-instantiation export.** A shared,
+handle-keyed runtime `nuget_flow_collect` cannot project an enum, value-class or collection
+element, so it is still not added. A `Flow<E>` / `StateFlow<E>` reached as the type argument of an
+exported generic class (`Box<Flow<Mood>>`) is served by one **generated** export per closed
+instantiation, named by its element type (`<lib>_flowarg_flow_kotlin_Int_collect`; a `StateFlow`
+adds `_value`). The export reuses the per-member collect's element conversion, so enum,
+value-class, collection, nullable, interface, `ByteArray` and `Throwable` elements all project, and
+no `nuget_*` runtime export changes. The mechanism, its scope rule and its declined shapes are in
+[ADR-208](208-generic-instantiation-member-positions.md)'s amendment "Flow and StateFlow as the
+type argument". The "Flow parameters/type arguments" deferral is therefore narrowed to Flow **parameters**
+(sentences in Consequences and the 2026-10-09 amendment corrected in place).
+
+**What a suspend-returned `KotlinFlow<E>` borrows.** The holder this ADR returns owns only the flow
+handle. Collections it starts run on the scope of the declaring owner (the instance scope captured
+before acquisition), or on the ad-hoc root for a top-level function, so cancelling that scope or
+draining the owner reaches them. That is the opposite of the type-argument holder, which creates
+and owns its own scope because it is built inside `Box<T>.Value` with no owner in hand.

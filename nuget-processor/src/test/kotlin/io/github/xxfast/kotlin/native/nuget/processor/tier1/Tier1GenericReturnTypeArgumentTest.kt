@@ -22,8 +22,9 @@ import kotlin.test.assertTrue
  * ADR-208 put the return on the plan route and deleted the legacy one. A closed instantiation
  * binds, nullable outer and nested instantiation included; an argument the erased wire cannot
  * read (a generic carrier reads its `T` through `NugetMarshal.FromHandle<T>`, which has no
- * materialiser for a collection, a lambda or a Flow) refuses the use site, named, as
- * `SKIPPED_UNSUPPORTED_TYPE`; an outer type the module does not export is refused as the
+ * materialiser for a collection or a lambda) refuses the use site, named, as
+ * `SKIPPED_UNSUPPORTED_TYPE`; a `Flow` argument binds through its own generated collect export
+ * (ADR-208 part E); an outer type the module does not export is refused as the
  * unsupported type it is.
  *
  * A skip is absent on BOTH halves now: the legacy route used to leave an orphan `@CName` export.
@@ -112,13 +113,12 @@ class Tier1GenericReturnTypeArgumentTest {
 
   /**
    * Every refused use site of an exported outer, each with the type argument its diagnostic must
-   * name, as the author wrote it. `crateOfFlow` is here until ADR-208 part E binds a Flow argument.
+   * name, as the author wrote it.
    */
   private val refusedArguments: Map<String, String> = linkedMapOf(
     "crateOfList" to "List<Int>",
     "crateOfNullableList" to "List<Int>?",
     "crateOfMap" to "Map<String, Int>",
-    "crateOfFlow" to "Flow<Int>",
     "crateOfLambda" to "Function1<Int, Int>",
     "crateOfAny" to "Any",
     "crateOfBytes" to "ByteArray",
@@ -257,6 +257,19 @@ class Tier1GenericReturnTypeArgumentTest {
       "expected Crate<Snapshot> to keep binding, qualified; got: " +
           "${result.generatedCSharp.lines().filter { it.contains("CrateOfSnapshot") }}",
     )
+    // ADR-208 part E: a Flow argument binds; `crate.Item` is a `KotlinFlow<int>` materialised
+    // through the instantiation's own generated collect export.
+    assertTrue(
+      result.generatedCSharp.contains(
+        "public static global::Interop.Catcam.Crate<global::Interop.KotlinFlow<int>> CrateOfFlow()",
+      ),
+      "expected Crate<Flow<Int>> to bind; got: " +
+          "${result.generatedCSharp.lines().filter { it.contains("CrateOfFlow") }}",
+    )
+    assertTrue(
+      result.generated.contains("\"library_flowarg_flow_kotlin_Int_collect\""),
+      "expected the Flow<Int> argument's collect export in CNameExports.kt",
+    )
     // ADR-208: a nested instantiation binds too; its inner wrapper has its own factory.
     assertTrue(
       result.generatedCSharp.contains(
@@ -271,7 +284,9 @@ class Tier1GenericReturnTypeArgumentTest {
       "expected a type-parameter return to keep binding; got: " +
           "${result.generatedCSharp.lines().filter { it.contains("CrateOf<") }}",
     )
-    listOf("crateOfInt", "crateOfSnapshot", "crateOfCrate", "crateOf").forEach { function ->
+    val bound: List<String> =
+      listOf("crateOfInt", "crateOfSnapshot", "crateOfCrate", "crateOfFlow", "crateOf")
+    bound.forEach { function ->
       assertTrue(
         result.kspWarnings.none { it.contains("[nuget:SKIPPED_") && it.contains("$function: ") },
         "expected no skip for $function; kspWarnings=${result.kspWarnings}",
