@@ -145,6 +145,52 @@ public class MutableStateFlowTests
     }
 
     [Fact]
+    public void NullableBooleanElementWrite_NullFalseAndTrueAreThreeWrites_MyloMayBePurring()
+    {
+        // ADR-067 had deferred `Boolean?` on bool width. The has-value slot and the value slot are
+        // both one byte now, and the read unboxes at the same width.
+        using var tracker = new CatMoodTracker("Mylo");
+        Assert.Null(tracker.Purring.Value);
+        Assert.Equal("unknown", tracker.PurringNote());
+
+        tracker.Purring.Value = false;
+        Assert.Equal("silent", tracker.PurringNote());
+        Assert.False(tracker.Purring.Value);
+
+        tracker.Purring.Value = true;
+        Assert.Equal("purring", tracker.PurringNote());
+        Assert.True(tracker.Purring.Value);
+
+        tracker.Purring.Value = null;
+        Assert.Equal("unknown", tracker.PurringNote());
+        Assert.Null(tracker.Purring.Value);
+
+        Assert.True(tracker.Purring.CompareAndSet(null, false));
+        Assert.Equal("silent", tracker.PurringNote());
+    }
+
+    [Fact]
+    public void NullableCharElementWrite_KeepsATwoByteChar_OreoGetsAnInitial()
+    {
+        // `Char?` at the two-byte width: a Hangul syllable must survive the write and the read.
+        using var tracker = new CatMoodTracker("Oreo");
+        Assert.Null(tracker.Initial.Value);
+        Assert.Equal(-1, tracker.InitialCode());
+
+        tracker.Initial.Value = 'O';
+        Assert.Equal((int)'O', tracker.InitialCode());
+        Assert.Equal('O', tracker.Initial.Value);
+
+        tracker.Initial.Value = '한';
+        Assert.Equal(0xD55C, tracker.InitialCode());
+        Assert.Equal('한', tracker.Initial.Value);
+
+        tracker.Initial.Value = null;
+        Assert.Equal(-1, tracker.InitialCode());
+        Assert.Null(tracker.Initial.Value);
+    }
+
+    [Fact]
     public void NullableValueElementWrite_NullIsNotZero_MylosNapIsUntracked()
     {
         // The has-value pair: a null write must not land as 0, and a 0 write must not land as null.

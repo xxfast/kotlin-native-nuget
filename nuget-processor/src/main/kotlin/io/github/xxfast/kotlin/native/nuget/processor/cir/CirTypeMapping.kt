@@ -328,7 +328,9 @@ internal sealed interface MutableStateFlowElement {
 
   /**
    * Everything else (collections, `ByteArray`, lambdas, interfaces): the declared
-   * `MutableStateFlow<T>` keeps ADR-065/067's read-only `KotlinStateFlow<T>` mapping, unnamed.
+   * `MutableStateFlow<T>` keeps ADR-065/067's read-only `KotlinStateFlow<T>` mapping. A member
+   * that survives read-only is named (`SKIPPED_UNSUPPORTED_INPUT`); the kinds left read-only on
+   * purpose carry their own reason ([readOnlyMutableStateFlowElement]).
    */
   data object ReadOnly : MutableStateFlowElement
 }
@@ -423,6 +425,56 @@ private fun valueClassElement(
   )
 }
 
+/**
+ * ADR-071: why a declared `MutableStateFlow` of [element] (`a List element`) is left read-only,
+ * as the refusal's parenthesis says it.
+ */
+internal class MutableStateFlowReadOnlyElement(val element: String, val why: String) {
+  /**
+   * The refusal's sentence for a declared [holder] (`MutableStateFlow`, or `MutableSharedFlow`,
+   * whose emit rides the same write slot): one wording for both, so they cannot drift.
+   */
+  fun noWriteArm(holder: String): String = "$element of a $holder has no write arm ($why)"
+}
+
+/**
+ * ADR-071: the element kinds a declared `MutableStateFlow` leaves read-only on purpose, or null
+ * for every other element. [classifyMutableStateFlowElement] answers
+ * [MutableStateFlowElement.ReadOnly] for each; this says which, and why, for the diagnostic.
+ *
+ * A collection and a `ByteArray` cross as a handle to a wire container (`nuget_list_*`,
+ * `nuget_bytes_create`) that no write arm builds. An interface element is read through its
+ * ADR-040 backing wrapper, and the forward route has no arm that carries a C# implementation
+ * into a Kotlin flow.
+ */
+internal fun readOnlyMutableStateFlowElement(
+  elementType: KSType?,
+): MutableStateFlowReadOnlyElement? {
+  val declaration: KSDeclaration = elementType?.expandAliases()?.declaration ?: return null
+  val container = "the write seam does not build its wire container"
+  return when (declaration.qualifiedName?.asString()) {
+    "kotlin.ByteArray" -> MutableStateFlowReadOnlyElement("a ByteArray element", container)
+    "kotlin.collections.List", "kotlin.collections.MutableList" ->
+      MutableStateFlowReadOnlyElement("a List element", container)
+
+    "kotlin.collections.Set", "kotlin.collections.MutableSet" ->
+      MutableStateFlowReadOnlyElement("a Set element", container)
+
+    "kotlin.collections.Map", "kotlin.collections.MutableMap" ->
+      MutableStateFlowReadOnlyElement("a Map element", container)
+
+    else -> {
+      val isInterface: Boolean =
+        (declaration as? KSClassDeclaration)?.classKind == ClassKind.INTERFACE
+      if (!isInterface) return null
+      MutableStateFlowReadOnlyElement(
+        "an interface element",
+        "a C# implementation cannot be written into a Kotlin flow on the forward route",
+      )
+    }
+  }
+}
+
 /** The [MutableStateFlowElement.Writable] arm of an element a gate already admitted. */
 internal fun writableMutableStateFlowElement(
   elementType: KSType?,
@@ -436,19 +488,21 @@ internal fun writableMutableStateFlowElement(
 
 /**
  * ADR-071: whether a `MutableStateFlow<T>` element gets a settable `.Value`. A non-null element is
- * exactly a [MutableStateFlowElement.Writable] one. A nullable one additionally refuses `Boolean?`
- * and `Char?`, mirroring ADR-067's read-side width deferral, and an enum (whose ordinal wire has no
- * null), so those keep the read-only `KotlinStateFlow<T?>` mapping. Read by every gate on both
- * halves, so a setter export and its C# import cannot disagree.
+ * exactly a [MutableStateFlowElement.Writable] one, and so is a nullable one of every writable
+ * kind today. `Boolean?` and `Char?` used to be held back by ADR-067's width deferral; both widths
+ * are pinned now (`I1`, ADR-069; `U2`, ADR-098) on the write slots and on the boxed read, so they
+ * take the nullable scalars' has-value pair. A nullable enum rides the same has-value slot ahead
+ * of its ordinal slot. The per-kind `when` stays as the one place a kind's nullable form can be
+ * held back. Read by every gate on both halves, so a setter export and its C# import cannot
+ * disagree.
  */
 internal fun isMutableStateFlowElementWritable(elementType: KSType?): Boolean {
   val element: MutableStateFlowElement = classifyMutableStateFlowElement(elementType)
   if (element !is MutableStateFlowElement.Writable) return false
   if (elementType?.isMarkedNullable != true) return true
-  val simpleName: String = elementType.expandAliases().declaration.simpleName.asString()
   return when (element) {
-    MutableStateFlowElement.Scalar -> simpleName != "Boolean" && simpleName != "Char"
-    is MutableStateFlowElement.Enum -> false
+    MutableStateFlowElement.Scalar -> true
+    is MutableStateFlowElement.Enum -> true
     is MutableStateFlowElement.Handle -> true
     // The ordinary property route plans every nullable value class it plans non-null (ADR-079):
     // an in-band null for a String or handle underlying, the has-value pair otherwise. That rule
@@ -482,9 +536,17 @@ internal fun mutableStateFlowWrite(elementType: KSType?, csElementType: String):
       )
     }
 
-    is MutableStateFlowElement.Enum -> {
-      // The gate keeps a nullable enum read-only: the ordinal wire has no null.
-      require(!nullable) { "nullable enum element ${element.qualifiedName} is not writable" }
+    // A nullable enum is the nullable scalar's has-value pair over the ordinal slot: the ordinal
+    // wire has no null of its own, so `null` crosses as `valueHasValue = false`, never ordinal 0.
+    is MutableStateFlowElement.Enum -> if (nullable) {
+      CirStateFlowWrite(
+        parameters = listOf(
+          CirParameter("valueHasValue", "bool"),
+          CirParameter("value", "int"),
+        ),
+        arguments = "v.HasValue, (int)v.GetValueOrDefault()",
+      )
+    } else {
       CirStateFlowWrite(
         parameters = listOf(CirParameter("value", "int")),
         arguments = "(int)v",

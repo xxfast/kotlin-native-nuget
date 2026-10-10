@@ -13,7 +13,11 @@ import kotlin.test.assertTrue
  * Kotlin. Covers the class property, the held method return, the sealed arm property and the
  * awaited `suspend fun` holder, which all share the one write classifier.
  *
- * A nullable enum element stays the read-only `KotlinStateFlow<Mood?>`, and a value-class element
+ * A nullable enum element (`MutableStateFlow<Mood?>`) is settable too, on the property and the
+ * held return: it is the composition of two wires that already existed, the nullable scalar's
+ * has-value pair and this ordinal (`v.HasValue, (int)v.GetValueOrDefault()` in C#,
+ * `if (valueHasValue) Mood.entries[value] else null` in Kotlin). The awaited route keeps every
+ * nullable element read-only, this one included. A value-class element
  * with no boxed form (here over `String?`) is skipped BY NAME (it used to pass the gate as an
  * ordinary class and take the object-handle arm, spelling `v._handle` on a C# record struct, and
  * later bound a read-only holder nothing could read). The writable value-class shapes live in
@@ -38,9 +42,11 @@ class Tier1MutableStateFlowEnumElementTest {
       val maybeOutlook: MutableStateFlow<Mood?> = MutableStateFlow(null)
       val tag: MutableStateFlow<Tag> = MutableStateFlow(Tag("oreo-1"))
       fun outlookDial(): MutableStateFlow<Mood> = outlook
+      fun maybeDial(): MutableStateFlow<Mood?> = maybeOutlook
       fun tagDial(): MutableStateFlow<Tag> = tag
       suspend fun awaitOutlook(): MutableStateFlow<Mood> = outlook
       suspend fun awaitMaybeOutlook(): StateFlow<Mood?> = maybeOutlook
+      suspend fun awaitMaybeDial(): MutableStateFlow<Mood?> = maybeOutlook
     }
 
     sealed class Pet {
@@ -121,24 +127,127 @@ class Tier1MutableStateFlowEnumElementTest {
     )
   }
 
+  /**
+   * The property route: the setter and both `compareAndSet` slots cross as the has-value pair
+   * over the ordinal slot, so a null is never ordinal 0.
+   */
   @Test
-  fun `a nullable enum element stays read-only`() {
+  fun `a nullable enum element property writes a has-value pair over the ordinal`() {
     val result = Tier1Harness.run(source, libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore))
 
     assertTrue(result.compiledClean, "got: ${result.compileErrors} ${result.kspErrors}")
 
+    val kotlin: String = result.generated
+    val csharp: String = result.generatedCSharp
+
     assertContains(
-      result.generatedCSharp,
-      Regex("""public KotlinStateFlow<[\w.:]*Mood\?> MaybeOutlook\b"""),
+      csharp,
+      Regex("""public KotlinMutableStateFlow<[\w.:]*Mood\?> MaybeOutlook\b"""),
     )
-    assertFalse(
-      "tracker_set_maybeOutlook_value" in result.generated,
-      "expected no Kotlin setter for a nullable enum element; generated=${result.generated}",
+    assertContains(kotlin, "@CName(\"library_tier1_enumwrite__tracker_set_maybeOutlook_value\")")
+    assertContains(
+      kotlin,
+      ".maybeOutlook.value = if (valueHasValue) tier1.enumwrite.Mood.entries[value] else null",
     )
+    assertContains(
+      kotlin,
+      ".maybeOutlook.compareAndSet(" +
+          "if (expectHasValue) tier1.enumwrite.Mood.entries[expect] else null, " +
+          "if (updateHasValue) tier1.enumwrite.Mood.entries[update] else null)",
+    )
+    assertContains(
+      csharp,
+      "private static extern void Native_SetMaybeOutlookValue(NugetKotlinHandle handle, " +
+          "[MarshalAs(UnmanagedType.I1)] bool valueHasValue, int value, out IntPtr error);",
+    )
+    assertContains(
+      csharp,
+      "Native_SetMaybeOutlookValue(_handle, v.HasValue, (int)v.GetValueOrDefault(), " +
+          "out IntPtr error);",
+    )
+    assertContains(
+      csharp,
+      "expect.HasValue, (int)expect.GetValueOrDefault(), " +
+          "update.HasValue, (int)update.GetValueOrDefault(), out IntPtr error)",
+    )
+    assertTrue(
+      result.kspWarnings.none { it.contains("[nuget:") && it.contains("maybeOutlook") },
+      "expected no diagnostic for maybeOutlook; kspWarnings=${result.kspWarnings}",
+    )
+  }
+
+  /** The held return shares the property's slot, keyed on the flow handle. */
+  @Test
+  fun `a nullable enum element held return writes the same pair`() {
+    val result = Tier1Harness.run(source, libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore))
+
+    assertTrue(result.compiledClean, "got: ${result.compileErrors} ${result.kspErrors}")
+
+    val kotlin: String = result.generated
+    val csharp: String = result.generatedCSharp
+
+    assertContains(
+      csharp,
+      Regex("""public KotlinMutableStateFlow<[\w.:]*Mood\?> MaybeDial\(\)"""),
+    )
+    assertContains(kotlin, "@CName(\"library_tier1_enumwrite__tracker_maybeDial_set_value\")")
+    assertContains(
+      kotlin,
+      "flowHandle.asStableRef<kotlinx.coroutines.flow.MutableStateFlow<tier1.enumwrite.Mood?>>()" +
+          ".get().value = if (valueHasValue) tier1.enumwrite.Mood.entries[value] else null",
+    )
+    assertContains(
+      csharp,
+      "Native_MaybeDialSetValue(owned, v.HasValue, (int)v.GetValueOrDefault(), out IntPtr error);",
+    )
+    // A null current value has no ordinal: the held holder reads through the null-aware export.
+    val heldBody: String =
+      csharp.substringAfter("MaybeDial()").substringBefore("\n        }\n")
+    assertContains(heldBody, "() => NugetStateFlowNative.ValueOrNull(")
+  }
+
+  /** The awaited route keeps a nullable element read-only for every kind (ADR-071). */
+  @Test
+  fun `an awaited nullable enum element stays read-only`() {
+    val result = Tier1Harness.run(source, libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore))
+
+    val csharp: String = result.generatedCSharp
+    assertContains(csharp, Regex("""Task<KotlinStateFlow<[\w.:]*Mood\?>> AwaitMaybeDial"""))
     assertFalse(
-      "EntryPoint = \"library_tier1_enumwrite__tracker_set_maybeOutlook_value\"" in
-          result.generatedCSharp,
-      "expected no setter import for a nullable enum element",
+      "tracker_awaitMaybeDial_set_value" in result.generated,
+      "expected no Kotlin setter for an awaited nullable element; generated=${result.generated}",
+    )
+  }
+
+  @Test
+  fun `the consumer writes null and an entry through a nullable enum element`() {
+    val result = Tier1Harness.run(source, libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore))
+
+    Tier1CSharpCompile.assertCompiles(
+      result,
+      """
+      using Interop;
+
+      namespace Consumer
+      {
+          public static class Probe
+          {
+              public static bool Run(Tracker tracker)
+              {
+                  KotlinMutableStateFlow<Mood?> maybe = tracker.MaybeOutlook;
+                  maybe.Value = Mood.Grumpy;
+                  maybe.Value = null;
+                  bool swapped = maybe.CompareAndSet(null, Mood.Happy);
+                  maybe.Update(mood => mood == null ? Mood.Sleepy : null);
+                  Mood? after = maybe.UpdateAndGet(_ => Mood.Happy);
+                  using KotlinMutableStateFlow<Mood?> dial = tracker.MaybeDial();
+                  dial.Value = after;
+                  return swapped && dial.Value == Mood.Happy;
+              }
+          }
+      }
+      """.trimIndent(),
+      allowUnsafe = true,
     )
   }
 
