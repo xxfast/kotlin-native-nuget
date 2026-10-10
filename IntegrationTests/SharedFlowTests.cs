@@ -347,12 +347,17 @@ public class SharedFlowTests
     /// enumerator that never asks for a second item: ADR-207's credit gate parks its Kotlin
     /// collector inside the second item, and the third emit then has nowhere to go.
     /// </summary>
+    /// <param name="collectThrough">
+    /// The wrapper the stalled collector subscribes through, and so the owner whose scope it runs
+    /// on. Defaults to the bulletin's own.
+    /// </param>
     private static async Task<(IAsyncEnumerator<int> Stalled, Task Parked)> ParkAnEmitAsync(
-        CatBulletin bulletin, CancellationToken token = default)
+        CatBulletin bulletin, CancellationToken token = default,
+        KotlinFlow<int>? collectThrough = null)
     {
         KotlinMutableSharedFlow<int> pulses = bulletin.Pulses;
         using KotlinStateFlow<int> subscribers = pulses.SubscriptionCount;
-        IAsyncEnumerator<int> stalled = pulses.GetAsyncEnumerator();
+        IAsyncEnumerator<int> stalled = (collectThrough ?? pulses).GetAsyncEnumerator();
         await WaitUntilAsync(() => subscribers.Value == 1, "the stalled collector to subscribe");
 
         await pulses.EmitAsync(1).WaitAsync(Patience);
@@ -383,8 +388,14 @@ public class SharedFlowTests
     {
         // ADR-209: EmitAsync launches on the owner's scope, the one its collect uses, so disposing
         // the owner cancels a parked emit instead of leaving its Task pending forever.
+        //
+        // The stalled collector subscribes through a SECOND owner of the same Kotlin flow, so it
+        // outlives the bulletin and the emit is cancelled alone. On the bulletin's own scope the
+        // two are cancelled together, and the collector leaving can free the emit first: the Task
+        // then completes instead (never pending either way; the DisposeAsync cell below).
         var bulletin = new CatBulletin("Oreo");
-        var (stalled, parked) = await ParkAnEmitAsync(bulletin);
+        using var monitor = new CatBulletinMonitor(bulletin);
+        var (stalled, parked) = await ParkAnEmitAsync(bulletin, collectThrough: monitor.Pulses);
 
         bulletin.Dispose();
 

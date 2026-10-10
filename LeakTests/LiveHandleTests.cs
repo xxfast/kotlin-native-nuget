@@ -2508,10 +2508,13 @@ public class LiveHandleTests
         await AssertNoLeakAsync(async () =>
         {
             var bulletin = new CatBulletin("Oreo");
+            // The stalled collector runs on a second owner's scope, so the bulletin's `Dispose()`
+            // cancels the emit alone; on one scope the collector leaving can free the emit first.
+            using var monitor = new CatBulletinMonitor(bulletin);
             KotlinMutableSharedFlow<int> pulses = bulletin.Pulses;
             using (KotlinStateFlow<int> subscribers = pulses.SubscriptionCount)
             {
-                IAsyncEnumerator<int> stalled = pulses.GetAsyncEnumerator();
+                IAsyncEnumerator<int> stalled = monitor.Pulses.GetAsyncEnumerator();
                 await WaitUntilAsync(() => subscribers.Value == 1);
                 await pulses.EmitAsync(1).WaitAsync(TimeSpan.FromSeconds(10));
                 await pulses.EmitAsync(2).WaitAsync(TimeSpan.FromSeconds(10));

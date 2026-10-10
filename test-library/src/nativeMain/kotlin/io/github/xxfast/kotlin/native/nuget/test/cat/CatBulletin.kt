@@ -76,3 +76,14 @@ class CatBulletin(private val name: String) {
     _sightings.tryEmit(Cat(name))
   }
 }
+
+/**
+ * ADR-209: a second owner over one bulletin's [CatBulletin.pulses], with its own C# wrapper and so
+ * its own coroutine scope. A collector started through it outlives the bulletin's `Dispose()`,
+ * which is what lets a test park an emit on the bulletin and then cancel that emit ALONE. With the
+ * stalled collector on the bulletin's own scope the two are cancelled together, and the collector
+ * leaving can free the emit before the emit's own cancellation lands.
+ */
+class CatBulletinMonitor(bulletin: CatBulletin) {
+  val pulses: SharedFlow<Int> = bulletin.pulses
+}
