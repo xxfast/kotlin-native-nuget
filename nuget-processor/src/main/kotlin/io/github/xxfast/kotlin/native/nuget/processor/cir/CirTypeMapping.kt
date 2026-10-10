@@ -118,17 +118,62 @@ internal val SUSPEND_LAMBDA_TYPES = setOf(
   "kotlin.coroutines.SuspendFunction3",
 )
 
-// ADR-205: SharedFlow<T> (and, as a read-only view, MutableSharedFlow<T>) is-a Flow whose
-// `collect` replays the Kotlin-side replay cache and never completes, so it rides the plain Flow
-// `_collect` route unchanged and is spelled `KotlinFlow<T>`. Kept as its own set (the ADR-071
-// union pattern) so a later `KotlinSharedFlow<T>` with `ReplayCache` stays a local diff;
-// FLOW_TYPES stays the union so every existing call site picks the shared types up.
+// ADR-205: SharedFlow<T> (and MutableSharedFlow<T>) is-a Flow whose `collect` replays the
+// Kotlin-side replay cache and never completes, so it rides the plain Flow `_collect` route
+// unchanged. FLOW_TYPES stays the union so every existing call site picks the shared types up.
+// ADR-209: split into READ_ONLY_SHARED_FLOW_TYPES / MUTABLE_SHARED_FLOW_TYPES (the ADR-071
+// union pattern), read through [sharedFlowSurface], so a declared MutableSharedFlow<T> can gain
+// its write surface beside the `ReplayCache` every shared flow has.
 internal val PLAIN_FLOW_TYPES = setOf("kotlinx.coroutines.flow.Flow")
-internal val SHARED_FLOW_TYPES = setOf(
-  "kotlinx.coroutines.flow.SharedFlow",
-  "kotlinx.coroutines.flow.MutableSharedFlow",
-)
+internal val READ_ONLY_SHARED_FLOW_TYPES = setOf("kotlinx.coroutines.flow.SharedFlow")
+internal val MUTABLE_SHARED_FLOW_TYPES = setOf("kotlinx.coroutines.flow.MutableSharedFlow")
+internal val SHARED_FLOW_TYPES = READ_ONLY_SHARED_FLOW_TYPES + MUTABLE_SHARED_FLOW_TYPES
 internal val FLOW_TYPES = PLAIN_FLOW_TYPES + SHARED_FLOW_TYPES
+
+/**
+ * ADR-209: what a `Flow`-family member surfaces beyond `KotlinFlow<T>`. Decided once per member by
+ * [sharedFlowSurface] and read by every half (the Kotlin exports, the C# spelling and imports, the
+ * tracker bits and the named refusal), so an export and its import cannot disagree.
+ */
+internal enum class SharedFlowSurface {
+  /** A plain `Flow<T>`: `KotlinFlow<T>`, nothing added. */
+  NONE,
+
+  /**
+   * `KotlinSharedFlow<T>`, adding `ReplayCache`: a `SharedFlow<T>`, or a `MutableSharedFlow<T>`
+   * whose element has no ADR-071 write arm (that refusal is named).
+   */
+  READ_ONLY,
+
+  /** `KotlinMutableSharedFlow<T>`, adding `SubscriptionCount`, `EmitAsync` and `TryEmit`. */
+  MUTABLE,
+}
+
+/**
+ * ADR-209: the surface of the alias-expanded declared flow type [flowType]. A declared
+ * `MutableSharedFlow<T>` is mutable exactly when its element would give a `MutableStateFlow<T>` a
+ * settable `.Value` ([isMutableStateFlowElementWritable]): `emit`/`tryEmit` take the value that
+ * setter takes, so they cross through the same write slot.
+ */
+internal fun sharedFlowSurface(flowType: KSType?): SharedFlowSurface {
+  val resolved: KSType = flowType?.expandAliases() ?: return SharedFlowSurface.NONE
+  val qualified: String? = resolved.declaration.qualifiedName?.asString()
+  if (qualified in READ_ONLY_SHARED_FLOW_TYPES) return SharedFlowSurface.READ_ONLY
+  if (qualified !in MUTABLE_SHARED_FLOW_TYPES) return SharedFlowSurface.NONE
+  val element: KSType? = resolved.arguments.firstOrNull()?.type?.resolve()?.expandAliases()
+  if (isMutableStateFlowElementWritable(element)) return SharedFlowSurface.MUTABLE
+  return SharedFlowSurface.READ_ONLY
+}
+
+/**
+ * ADR-209: the C# spelling of a flow member's holder for [surface]: `KotlinFlow`,
+ * `KotlinSharedFlow` or `KotlinMutableSharedFlow`, without type arguments.
+ */
+internal fun SharedFlowSurface.csharpHolder(): String = when (this) {
+  SharedFlowSurface.NONE -> "KotlinFlow"
+  SharedFlowSurface.READ_ONLY -> "KotlinSharedFlow"
+  SharedFlowSurface.MUTABLE -> "KotlinMutableSharedFlow"
+}
 
 // ADR-065: StateFlow<T> (and, as a read-only view, MutableStateFlow<T>) is a hot,
 // always-current-value stream. It is-a Flow, so detection is on the DECLARED type's exact
@@ -159,6 +204,23 @@ internal class CollectionHelperTracker {
   // ADR-071: at least one publicly-DECLARED MutableStateFlow<T> member/return needs the settable
   // `KotlinMutableStateFlow<T>` subclass emitted (implies needsStateFlow, which implies needsFlow).
   var needsMutableStateFlow: Boolean = false
+
+  // ADR-209: at least one `KotlinSharedFlow<T>` member (implies needsFlow and, for `ReplayCache`'s
+  // `NugetMarshal.ReadList`, needsList).
+  var needsSharedFlow: Boolean = false
+
+  // ADR-209: at least one `KotlinMutableSharedFlow<T>` member (implies needsSharedFlow, and, for
+  // `SubscriptionCount`, needsStateFlow plus the `NugetStateFlowNative` handle helper).
+  var needsMutableSharedFlow: Boolean = false
+
+  /** ADR-209: marks the helper bits a member of [surface] needs. */
+  fun trackSharedFlow(surface: SharedFlowSurface) {
+    if (surface == SharedFlowSurface.NONE) return
+    needsFlow = true
+    needsAsync = true
+    needsSharedFlow = true
+    if (surface == SharedFlowSurface.MUTABLE) needsMutableSharedFlow = true
+  }
 
   // ADR-068: at least one `suspend fun` returns StateFlow<T>/MutableStateFlow<T> -- gates the two
   // shared generic `nuget_stateflow_collect`/`nuget_stateflow_value` handle-keyed exports.
