@@ -171,8 +171,10 @@ implementer. The held and awaited flows' `_emit` launches on the parent's scope 
 construction, the scope their `_collect` uses. **A top-level `suspend` owner has no scope**, so its
 `_emit` uses the same ad-hoc `CoroutineScope(Dispatchers.Default)` its `_collect` already uses.
 Disposing the owner cancels a parked `EmitAsync` on a property, held or awaited flow of a class
-(verified natively for a property). A top-level `suspend` return has no owner scope to cancel
-(inferred, not run).
+(verified natively for a property, with the emit parked alone on the owner's scope). When the stalled
+collector runs on that same scope, the collector leaving can free the emit before its own
+cancellation lands, so the `Task` settles (completes or is cancelled) and never stays pending. A
+top-level `suspend` return has no owner scope to cancel (inferred, not run).
 
 Detecting an awaited plain `Flow` used to depend on the C# spelling prefix `KotlinFlow<`. The
 translators now carry a structural `acquiredFlow` flag, so respelling the awaited return as
@@ -212,7 +214,8 @@ sealed-arm, interface and top-level `suspend` owners.
 `String` and object elements at property, re-invoked method and awaited positions; `EmitAsync` and
 `TryEmit` for `String`, enum and object elements; held and awaited `MutableSharedFlow<String>`;
 `SubscriptionCount` rising to 1 while a collector is live and returning to 0; an already-cancelled
-`EmitAsync`; a parked `EmitAsync` cancelled by its token and by the owner's `Dispose()`; and
+`EmitAsync`; a parked `EmitAsync` cancelled by its token and, with the stalled collector
+subscribed through a second owner (`CatBulletinMonitor`), by the owner's `Dispose()`; and
 `DisposeAsync` draining a parked emit without hanging.
 
 **Tier 1 only** (generated Kotlin and C# compile, not run natively): `ReplayCache` of collection,
@@ -246,7 +249,7 @@ refusals.
   release notes.
 - A stalled subscriber not on the owner's scope still hangs the drain like any parked `suspend`
   call. A parked emit on the owner's scope does not: `DisposeAsync` cancels the collection first,
-  which frees the emit.
+  which frees the emit, so its `Task` settles (completing or cancelled) rather than hanging.
 - ADR-205 carries a dated amendment: its read-only `MutableSharedFlow` decision is superseded, and
   its `SubscriptionCount` placement and "source-compatible" claims are corrected here. ADR-071's
   parked `Emit`/`TryEmit`/`ReplayCache`/`SubscriptionCount` list now points here.
