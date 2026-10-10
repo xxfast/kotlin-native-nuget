@@ -19,8 +19,8 @@ import kotlin.test.assertTrue
  * its underlying is null, which the non-null Kotlin slot cannot take (and which, nullable, would
  * emit a null nobody passed). The refusal is the unwrap itself, the one expression every
  * value-class crossing shares (`(v.Id ?? throw new ArgumentException(...))`), not a statement of
- * its own. A value class whose underlying the setter refuses stays the read-only
- * `KotlinSharedFlow<V>` and is named with that underlying.
+ * its own. A value class whose underlying the setter refuses is not a flow element at all (no
+ * record struct, or no boxed form to read back), so the member is skipped by name.
  */
 class Tier1MutableSharedFlowValueClassElementTest {
 
@@ -341,32 +341,35 @@ class Tier1MutableSharedFlowValueClassElementTest {
     )
   }
 
+  /**
+   * `Nick` wraps a `String?`: a record struct but no ADR-171 box/unbox pair, so nothing could
+   * read a bare `Nick` element back (`FromHandle<Nick>` has no `Factories` entry). It used to
+   * bind as a read-only `KotlinSharedFlow<Nick>` whose collect and `ReplayCache` would throw; the
+   * flow route now drops the member and names it, and the write refusal, which describes a
+   * member that survives read-only, stays silent.
+   */
   @Test
-  fun `a value class over an underlying the setter refuses stays read-only and is named`() {
+  fun `a value class over an underlying the setter refuses is skipped by name`() {
     assertClean()
     val kotlin: String = result.generated
     val csharp: String = result.generatedCSharp
-    assertContains(csharp, Regex("""public KotlinSharedFlow<[\w.:]*Nick> Nicks\b"""))
-    assertContains(csharp, Regex("""public KotlinSharedFlow<[\w.:]*Nick> NickDesk\(\)"""))
     assertFalse(
-      Regex("""KotlinMutableSharedFlow<[\w.:]*Nick>""").containsMatchIn(csharp),
-      "expected no writable holder of a Nick element; generatedCSharp=$csharp",
+      Regex("""SharedFlow<[\w.:]*Nick\??>""").containsMatchIn(csharp),
+      "expected no holder of a bare Nick element; generatedCSharp=$csharp",
     )
     assertFalse("try_emit_nicks" in kotlin, "expected no Kotlin tryEmit export for Nick")
     assertFalse("nickDesk_try_emit" in kotlin, "expected no held tryEmit export for Nick")
-    assertContains(kotlin, "@CName(\"library_tier1_sharedvc__bulletin_get_nicks_replay_cache\")")
-    listOf("Bulletin.nicks:", "Bulletin.nickDesk").forEach { member ->
-      assertTrue(
-        result.kspWarnings.any {
-          it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) &&
-            it.contains(member) && it.contains("EmitAsync") &&
-            it.contains("value class tier1.sharedvc.Nick over kotlin.String?") &&
-            it.contains("has no write arm")
-        },
-        "expected a SKIPPED_UNSUPPORTED_INPUT naming $member and its underlying; " +
-          "kspWarnings=${result.kspWarnings}",
-      )
+    assertFalse("get_nicks_replay_cache" in kotlin, "expected no replay-cache export for Nick")
+    listOf("Bulletin.nicks:", "Bulletin.nickDesk:").forEach { member ->
+      val named: List<String> = result.kspWarnings.filter { it.contains(member) }
+      assertEquals(1, named.size, "expected $member named once; got: ${result.kspWarnings}")
+      assertContains(named.single(), "Nick")
+      assertContains(named.single(), "those are the underlyings it has a boxed form for")
     }
+    assertFalse(
+      result.kspWarnings.any { it.contains("Nick") && it.contains("has no write arm") },
+      "a dropped member has no read-only surface to describe; got: ${result.kspWarnings}",
+    )
     // Every writable element is silent: nothing names Tag, Naps, MoodRing, Collar or Flag.
     listOf(
       "Bulletin.tags:", "Bulletin.naps:", "Bulletin.spareTags:", "Bulletin.flags:",
@@ -383,10 +386,12 @@ class Tier1MutableSharedFlowValueClassElementTest {
   }
 
   /**
-   * The other underlyings the synchronous value-class setter refuses. Each is named with its
-   * underlying and gets no write export. Asserted on the Kotlin half and the diagnostics only:
-   * none of these value classes has a C# record struct at all, exactly as on the
-   * `MutableStateFlow` twin (`Tier1MutableStateFlowValueClassElementTest`).
+   * The other underlyings the synchronous value-class setter refuses. None of these value classes
+   * has a C# record struct at all, so the classifier refuses the type at every position and the
+   * member is named once with the value class and its underlying (`SKIPPED_UNSUPPORTED_TYPE`),
+   * exactly as on the `MutableStateFlow` twin (`Tier1MutableStateFlowValueClassElementTest`). The
+   * C# is compiled for real: this cell used to assert the Kotlin half only, while the C# half
+   * spelled the undeclared type.
    */
   @Test
   fun `a Char, stdlib class, nested value class or generic underlying is refused by name`() {
@@ -427,25 +432,38 @@ class Tier1MutableSharedFlowValueClassElementTest {
       Regex("""bulletin_(try_)?emit_\w+""").containsMatchIn(refusing.generated),
       "expected no Kotlin emit export for a refused value class element",
     )
+    val members: String = refusing.generatedCSharp.lines()
+      .filter { line -> line.trimStart().startsWith("public Kotlin") }
+      .joinToString("\n")
     assertFalse(
-      Regex("""KotlinMutableSharedFlow<[^>\n]*> \w+\b""").containsMatchIn(refusing.generatedCSharp),
-      "expected no writable holder for a refused value class element",
+      Regex("""Kotlin(Mutable)?SharedFlow<[^>\n]*> \w+\b""").containsMatchIn(members),
+      "expected no holder at all for a refused value class element; got:\n$members",
     )
+    val pkg = "tier1.sharedvcrefused"
     mapOf(
-      "Bulletin.initials:" to "kotlin.Char",
-      "Bulletin.stamps:" to "kotlin.time.Instant",
-      "Bulletin.outers:" to "tier1.sharedvcrefused.Inner",
-      "Bulletin.oopses:" to "kotlin.Throwable",
+      "Bulletin.initials:" to listOf("`$pkg.Initial`", "`kotlin.Char`"),
+      "Bulletin.stamps:" to listOf("`$pkg.Stamp`", "`kotlin.time.Instant`"),
+      "Bulletin.outers:" to listOf("`$pkg.Outer`", "`$pkg.Inner`"),
+      "Bulletin.oopses:" to listOf("`$pkg.Oops`", "`kotlin.Throwable`"),
     ).forEach { (member, named) ->
-      assertTrue(
-        refusing.kspWarnings.any {
-          it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) &&
-            it.contains(member) && it.contains("over $named has no write arm") &&
-            it.contains("EmitAsync")
-        },
-        "expected $member refused naming $named; kspWarnings=${refusing.kspWarnings}",
-      )
+      val skips: List<String> = refusing.kspWarnings.filter {
+        it.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE.name}]") &&
+          it.contains(member) && it.contains("has no C# record struct")
+      }
+      assertEquals(1, skips.size, "expected $member skipped once; got: ${refusing.kspWarnings}")
+      named.forEach { text ->
+        assertContains(skips.single(), text, message = "expected $member to name $text")
+      }
     }
+    assertFalse(
+      refusing.kspWarnings.any { it.contains("has no write arm") },
+      "a dropped member has no read-only surface to describe; got: ${refusing.kspWarnings}",
+    )
+    Tier1CSharpCompile.assertCompiles(
+      refusing,
+      "namespace Consumer { public static class Probe { } }",
+      allowUnsafe = true,
+    )
   }
 
   @Test
@@ -482,7 +500,6 @@ class Tier1MutableSharedFlowValueClassElementTest {
                   bulletin.SpareCollars.TryEmit(null);
                   bulletin.Flags.TryEmit(new Flag(true));
                   IReadOnlyList<Tag?> spares = bulletin.SpareTags.ReplayCache;
-                  KotlinSharedFlow<Nick> nicks = bulletin.Nicks;
                   using KotlinMutableSharedFlow<Tag> desk = bulletin.TagDesk();
                   desk.TryEmit(new Tag("held"));
                   using KotlinMutableSharedFlow<Tag> awaited = await bulletin.AwaitTagsAsync();

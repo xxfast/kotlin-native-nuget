@@ -110,12 +110,20 @@ class Tier1MutableStateFlowGenericElementTest {
       "expected no Crate member; got: ${cs.lines().filter { " Crate" in it }}",
     )
     assertFalse(result.generated.contains("_crate_"), "expected no export for crate")
+    // A generic value class has no C# record struct, so the classifier refuses it at every
+    // position and the skip says so, as the one undeclarable type it is.
     assertTrue(
       result.kspWarnings.any {
-        it.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name}]") &&
-          it.contains("Shelf.crate")
+        it.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE.name}]") &&
+          it.contains("Shelf.crate") &&
+          it.contains("value class type `tier1.cells.VCrate` has no C# record struct")
       },
       "expected crate to be a named skip; kspWarnings=${result.kspWarnings}",
+    )
+    // The property is absent, so no "its setter is not generated" line may claim it survives.
+    assertTrue(
+      result.kspWarnings.none { it.contains("Shelf.crate") && it.contains("setter") },
+      "expected no setter diagnostic for an absent property; kspWarnings=${result.kspWarnings}",
     )
   }
 
