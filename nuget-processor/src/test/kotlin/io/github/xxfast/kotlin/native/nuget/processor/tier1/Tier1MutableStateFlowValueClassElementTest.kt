@@ -18,7 +18,7 @@ import kotlin.test.assertTrue
  *
  * A nullable `V?` element writes too, on the ordinary route's nullable value-class seam: an
  * in-band null for a String or handle underlying, the has-value pair for a primitive or enum one.
- * A reference underlying guards `default(V)` in C# (its underlying is null, which no non-null
+ * A reference underlying refuses `default(V)` in C# (its underlying is null, which no non-null
  * Kotlin slot can take). A value class whose underlying the ordinary setter refuses (here a
  * nullable `String?` underlying) stays read-only and is named.
  */
@@ -77,6 +77,20 @@ class Tier1MutableStateFlowValueClassElementTest {
     assertTrue(result.compiledClean, "generated Kotlin must compile; got: ${result.compileErrors}")
   }
 
+  /**
+   * The unwrap every value-class crossing shares (`valueClassUnderlyingOrThrow`): a reference
+   * underlying is read through a `?? throw`, so `default(V)` never reaches Kotlin.
+   */
+  private fun guarded(struct: String, property: String, type: String, parameter: String): String =
+    "($struct.$property ?? throw new ArgumentException(" +
+      "\"default($type) carries no $property; construct a $type instead\", nameof($parameter)))"
+
+  private fun tag(struct: String, parameter: String = struct): String =
+    guarded(struct, "Id", "Tag", parameter)
+
+  private fun collar(struct: String, parameter: String = struct): String =
+    guarded(struct, "Cat", "Collar", parameter)
+
   @Test
   fun `a String underlying crosses as the string and re-wraps in Kotlin`() {
     assertClean()
@@ -89,7 +103,7 @@ class Tier1MutableStateFlowValueClassElementTest {
       Regex("""private static extern void Native_SetTagValue\(NugetKotlinHandle handle, """ +
         """\[MarshalAs\(UnmanagedType\.LPUTF8Str\)\] string value, out IntPtr error\);"""),
     )
-    assertContains(csharp, "Native_SetTagValue(_handle, v.Id, out IntPtr error);")
+    assertContains(csharp, "Native_SetTagValue(_handle, ${tag("v")}, out IntPtr error);")
   }
 
   @Test
@@ -108,7 +122,10 @@ class Tier1MutableStateFlowValueClassElementTest {
       kotlin,
       ".collar.value = tier1.vcwrite.Collar(value.asStableRef<tier1.vcwrite.Cat>().get())",
     )
-    assertContains(csharp, "Native_SetCollarValue(_handle, v.Cat._handle, out IntPtr error);")
+    assertContains(
+      csharp,
+      "Native_SetCollarValue(_handle, ${collar("v")}._handle, out IntPtr error);",
+    )
   }
 
   @Test
@@ -118,7 +135,11 @@ class Tier1MutableStateFlowValueClassElementTest {
     val csharp: String = result.generatedCSharp
     assertContains(csharp, Regex("""public KotlinMutableStateFlow<[\w.:]*Tag\?> SpareTag\b"""))
     assertContains(kotlin, ".spareTag.value = value?.let { tier1.vcwrite.Tag(it) }")
-    assertContains(csharp, "Native_SetSpareTagValue(_handle, v?.Id, out IntPtr error);")
+    assertContains(
+      csharp,
+      "Native_SetSpareTagValue(_handle, v.HasValue ? ${tag("v.Value", "v")} : null, " +
+        "out IntPtr error);",
+    )
     assertContains(
       kotlin,
       ".spareNaps.value = if (valueHasValue) tier1.vcwrite.Naps(value) else null",
@@ -140,8 +161,8 @@ class Tier1MutableStateFlowValueClassElementTest {
     )
     assertContains(
       csharp,
-      "Native_SetSpareCollarValue(_handle, v?.Cat._handle ?? NugetKotlinHandle.Null, " +
-        "out IntPtr error);",
+      "Native_SetSpareCollarValue(_handle, v.HasValue ? ${collar("v.Value", "v")}._handle " +
+        ": NugetKotlinHandle.Null, out IntPtr error);",
     )
     assertContains(csharp, Regex("""public KotlinMutableStateFlow<[\w.:]*Flag\?> Flag\b"""))
   }
@@ -150,36 +171,18 @@ class Tier1MutableStateFlowValueClassElementTest {
   fun `default of a reference-underlying record struct is refused in C# before it crosses`() {
     assertClean()
     val csharp: String = result.generatedCSharp
-    assertContains(
-      csharp,
-      "if (v.Id is null) throw new ArgumentException(" +
-        "\"default(Tag) carries no Id; construct a Tag instead\", nameof(v));",
-    )
-    assertContains(
-      csharp,
-      "if (v.Cat is null) throw new ArgumentException(" +
-        "\"default(Collar) carries no Cat; construct a Collar instead\", nameof(v));",
-    )
+    // The guard is the unwrap itself, in the native call's argument list.
+    assertContains(csharp, "Native_SetTagValue(_handle, ${tag("v")}, out IntPtr error);")
+    assertContains(csharp, "${collar("v")}._handle")
     // The nullable spelling: `v?.Id` on a non-null default would ship a null and silently clear
-    // the flow, so the guard tests the present value.
-    assertContains(
-      csharp,
-      "if (v.HasValue && v.Value.Id is null) throw new ArgumentException(" +
-        "\"default(Tag) carries no Id; construct a Tag instead\", nameof(v));",
-    )
+    // the flow, so only a PRESENT value is unwrapped, through the same guard.
+    assertContains(csharp, "v.HasValue ? ${tag("v.Value", "v")} : null")
     // Both compare-and-set slots carry the same guard, relabelled.
-    assertContains(
-      csharp,
-      "if (expect.Id is null) throw new ArgumentException(" +
-        "\"default(Tag) carries no Id; construct a Tag instead\", nameof(expect));",
-    )
-    assertContains(
-      csharp,
-      "if (update.Id is null) throw new ArgumentException(" +
-        "\"default(Tag) carries no Id; construct a Tag instead\", nameof(update));",
-    )
+    assertContains(csharp, tag("expect"))
+    assertContains(csharp, tag("update"))
     // A primitive or enum underlying's default is a legitimate value, so it is not guarded.
-    assertFalse("v.Count is null" in csharp, "a primitive underlying must not be guarded")
+    assertFalse("default(Naps)" in csharp, "a primitive underlying must not be guarded")
+    assertFalse("default(MoodRing)" in csharp, "an enum underlying must not be guarded")
   }
 
   @Test
@@ -189,7 +192,8 @@ class Tier1MutableStateFlowValueClassElementTest {
     val csharp: String = result.generatedCSharp
     assertContains(
       csharp,
-      "Native_CompareAndSetTagValue(_handle, expect.Id, update.Id, out IntPtr error), error);",
+      "Native_CompareAndSetTagValue(_handle, ${tag("expect")}, ${tag("update")}, " +
+        "out IntPtr error), error);",
     )
     assertContains(kotlin, "compareAndSet(tier1.vcwrite.Tag(expect), tier1.vcwrite.Tag(update))")
   }
@@ -203,8 +207,8 @@ class Tier1MutableStateFlowValueClassElementTest {
       csharp,
       Regex("""public Task<KotlinMutableStateFlow<[\w.:]*Tag>> AwaitTagAsync\("""),
     )
-    assertContains(csharp, "Native_TagDialSetValue(owned, v.Id, out IntPtr error);")
-    assertContains(csharp, Regex("""\w+SetValue\(flowHandle, v\.Id, out IntPtr error\);"""))
+    assertContains(csharp, "Native_TagDialSetValue(owned, ${tag("v")}, out IntPtr error);")
+    assertContains(csharp, "SetValue(flowHandle, ${tag("v")}, out IntPtr error);")
     assertContains(
       result.generated,
       "@CName(\"library_tier1_vcwrite__tracker_awaitTag_set_value\")",

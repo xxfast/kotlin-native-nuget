@@ -157,12 +157,13 @@ internal fun sharedFlowArguments(
   val userData: String = mint("userData")
   val write: CirStateFlowWrite = mutable.write.relabelled("value", v)
   // Receiver state first (a disposed owner refuses the write whatever was passed), then the
-  // ADR-071 guards in the setter's order: a null object, then the value-class `default(V)`
-  // check, whose `v` [relabelled] already moved onto this lambda's parameter.
+  // ADR-071 null check. The value-class `default(V)` refusal is no statement of its own: it is
+  // the unwrap inside [CirStateFlowWrite.arguments] (`valueClassUnderlyingOrThrow`), whose `v`
+  // [relabelled] already moved onto this lambda's parameter. It throws while the extern's
+  // arguments are evaluated, so after both statements and before the extern is entered.
   val guard: String = listOfNotNull(
     ownerGuard,
     "if ($v is null) throw new ArgumentNullException(nameof($v));".takeIf { write.rejectsNull },
-    write.guard,
   ).joinToString("") { statement -> "$statement " }
   return listOf(
     replay,

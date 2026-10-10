@@ -1126,16 +1126,13 @@ internal val CirMethod.resolvedExternName: String
  * [parameters] are the native slots after the receiver handle: one by-value slot, one object
  * handle, or (nullable element write) the has-value pair of a nullable scalar. [arguments] is the
  * C# argument list that fills them from the lambda's `v`. [rejectsNull] keeps the
- * `ArgumentNullException` guard a non-null object element needs before it reads `v._handle`.
+ * `ArgumentNullException` guard a non-null object element needs before it reads `v._handle`, and a
+ * non-null `String` element before its null pointer reaches a non-null Kotlin slot.
  */
 internal data class CirStateFlowWrite(
   val parameters: List<CirParameter>,
   val arguments: String,
   val rejectsNull: Boolean = false,
-  // ADR-071 amendment (value-class element write): a statement over `v` that throws before the
-  // native call, rendered after the `rejectsNull` check. A reference-underlying record struct's
-  // `default(V)` has a null underlying, which no non-null Kotlin slot can take.
-  val guard: String? = null,
 )
 
 /**
@@ -1180,13 +1177,11 @@ internal data class CirMutableSharedFlow(
  */
 internal fun CirStateFlowWrite.relabelled(stem: String, variable: String): CirStateFlowWrite {
   val name = Regex("""(?<![.\w])value(HasValue)?\b""")
-  val lambdaParameter = Regex("""(?<![.\w])v\b""")
   return copy(
     parameters = parameters.map { param ->
       param.copy(name = name.replace(param.name) { "$stem${it.groupValues[1]}" })
     },
-    arguments = lambdaParameter.replace(arguments, variable),
-    guard = guard?.let { statement -> lambdaParameter.replace(statement, variable) },
+    arguments = Regex("""(?<![.\w])v\b""").replace(arguments, variable),
   )
 }
 

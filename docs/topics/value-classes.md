@@ -68,6 +68,16 @@ A value class wrapping an enum or another bridged class crosses the same way, ri
 underlying's own wire (an `int` ordinal for an enum, the wrapped object's handle for a class), and
 is re-wrapped on the way back.
 
+A `default(ChartId)` of a `String`- or class-wrapping value class carries no underlying value, which
+Kotlin could never have built. Passing one into a non-null parameter, property, or collection
+element throws `ArgumentException` in C#, naming the struct (`default(ChartId) carries no Value;
+construct a ChartId instead`). A `ChartId?` still accepts `null`.
+
+```C#
+oreo.Retag(default);   // throws ArgumentException before the call
+oreo.Retag(new ChartId("CH-9"));
+```
+
 ## Nullable
 
 `ChartId?` binds as a genuine `Nullable<ChartId>`, not a reference nullable, everywhere a value

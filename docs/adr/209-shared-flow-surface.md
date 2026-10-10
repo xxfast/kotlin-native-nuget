@@ -191,7 +191,8 @@ A value class element emits by value, through the ADR-071 value-class arm (its 2
 amendment): over a non-null `String`, a primitive other than `Char`, an enum, or an exported class
 or object, C# sends the underlying (`v.Id`) and Kotlin re-wraps it, so its `init` runs on every
 emit; a nullable `V?` element emits too. `EmitAsync` and `TryEmit` carry that arm's `default(V)`
-guard: a `String` or object underlying throws `ArgumentException` in C# before anything crosses.
+guard: a `String` or object underlying throws `ArgumentException` in C# before the P/Invoke (on an
+owner-keyed `EmitAsync` the owner's lazy scope may be created first; it is disposed with the owner).
 
 A declared `MutableSharedFlow<T>` whose element has no write arm (collections, `ByteArray`,
 interfaces, the nullable cases above, and a value class over any other underlying) binds as

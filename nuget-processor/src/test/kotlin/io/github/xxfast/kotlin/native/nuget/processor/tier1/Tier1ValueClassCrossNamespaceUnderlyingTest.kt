@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.valueClassUnderlyingOrThrow
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertTrue
@@ -81,6 +82,8 @@ class Tier1ValueClassCrossNamespaceUnderlyingTest {
     // IntPtr, so a regression that qualified the *native* signature would fail here too.
     assertContains(cs, "private static extern int Native_Create(int mood, out IntPtr error);")
     assertContains(cs, "Native_Flip(_handle, (int)disposition.Mood, out IntPtr error)")
-    assertContains(cs, "Native_Describe(_handle, referral.Patient._handle, out IntPtr error)")
+    assertContains(cs, "Native_Describe(_handle, " +
+      valueClassUnderlyingOrThrow("referral", "Patient", "PatientRef", "referral") +
+      "._handle, out IntPtr error)")
   }
 }
