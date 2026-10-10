@@ -578,7 +578,7 @@ machinery that has been in the repo since ADR-030. The item belongs in Phase 6 n
   that retry loop).
 - **`Emit`/`TryEmit`/`ReplayCache`/`SubscriptionCount`**: the `MutableSharedFlow` half of
   `MutableStateFlow`'s supertype list. SKIE exposes all of them; they belong with the deferred
-  `SharedFlow<T>` mapping (ROADMAP.md:108), not here.
+  `SharedFlow<T>` mapping (shipped as ADR-209), not here.
 - **Nullable element writes** (`MutableStateFlow<T?>`; shipped, see the 2026-10-09 amendments): a
   nullable *primitive* element needs the
   two-export `NullableDispatch` shape (verified, `ForwardPropertyPlanner.kt:124-134`); a nullable
@@ -872,7 +872,7 @@ is not broken.
   transform propagates unchanged without touching the flow.
 - No handle is minted on the success path, so there is no LeakTests row.
 - Not built, still open under Alternative 4: `Emit`, `TryEmit`, `ReplayCache`, `SubscriptionCount`.
-  They belong with the `SharedFlow<T>` mapping (see the SharedFlow line in ROADMAP Phase 6).
+  They shipped on `KotlinMutableSharedFlow<T>` (ADR-209), not on `KotlinMutableStateFlow<T>`.
 
 Verified: `Tier1MutableStateFlowCompareAndSetTest`; `IntegrationTests/MutableStateFlowTests.cs` and
 `MutableStateFlowFunctionTests.cs`; processor suite, IntegrationTests, LeakTests and both AOT runs
@@ -942,3 +942,16 @@ new row).
 
 Inferred, not run: reading back a `Flag?` over a `Boolean` underlying is compile-checked only. The
 object and enum underlyings are covered by Tier 1 cells, not by an IntegrationTests fixture.
+
+Inferred, not verified: the setter lambda's parameter `v` is not freshly named, so a held method
+with a user parameter named `v` may generate non-compiling C#. Recorded as a ROADMAP Phase 6 item.
+
+## Amendment 2026-10-10: the `MutableSharedFlow` half shipped as ADR-209
+
+`Emit`, `TryEmit`, `ReplayCache` and `SubscriptionCount` were built on
+`KotlinMutableSharedFlow<T>`, not on `KotlinMutableStateFlow<T>`
+([ADR-209](209-shared-flow-surface.md)). `EmitAsync` and `TryEmit` reuse this ADR's write arms
+(`mutableStateFlowWrite`, `mutableStateFlowWriteSlot` and `isMutableStateFlowElementWritable`), so a
+`MutableSharedFlow<T>` is writable for exactly the elements whose `MutableStateFlow<T>` `.Value`
+is settable, and a value-class outcome here lands on both. The four members are still not exposed
+on a `MutableStateFlow<T>`.

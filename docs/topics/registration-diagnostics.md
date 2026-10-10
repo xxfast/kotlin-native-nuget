@@ -527,6 +527,22 @@ A hot [`SharedFlow<T>`](coroutines-and-flow.md#shared-flow-t) never completes, s
 abandoned shape: `SharedFlow_AbandonedAfterReplay_ReturnsToBaseline` (row 8k) takes the replayed
 item from a property and a `suspend` return, disposes each enumerator, and returns to baseline.
 
+The [`SharedFlow` surface](coroutines-and-flow.md#shared-flow-emit) (`ReplayCache`, `EmitAsync`,
+`TryEmit`, `SubscriptionCount`) has six more rows in `LeakTests/LiveHandleTests.cs`:
+
+- Row 8m, `SharedFlow_ReplayCache_ObjectElement_ReturnsToBaseline`: a `ReplayCache` read consumes the
+  list handle and each item's box.
+- Row 8n, `MutableSharedFlow_SubscriptionCount_DisposedAndAbandoned_ReturnsToBaseline`: the owned
+  `StateFlow<Int>` handle, disposed and dropped for the GC.
+- Row 8o, `MutableSharedFlow_EmitAsync_CompletedAndCancelled_ReturnsToBaseline`: the emit job
+  handle of a completed emit; an already-cancelled one crosses nothing.
+- Row 8p, `MutableSharedFlow_ParkedEmitAsync_CancelledByOwnerDispose_ReturnsToBaseline`: an emit
+  parked behind a stalled collector, cancelled by the owner's `Dispose()`.
+- Row 8q, `MutableSharedFlow_TryEmit_ObjectAndEnumElements_ReturnsToBaseline`: a borrowed object
+  argument and an enum ordinal.
+- Row 8r, `MutableSharedFlow_HeldMethodReturn_DisposedAndAbandoned_ReturnsToBaseline`: a held
+  `MutableSharedFlow<T>` method return, disposed and dropped for the GC.
+
 | Row | Test | Pins |
 |---|---|---|
 | 16 | `UndisposedClassWrapper_IsReleasedByTheGc` | a class wrapper |
