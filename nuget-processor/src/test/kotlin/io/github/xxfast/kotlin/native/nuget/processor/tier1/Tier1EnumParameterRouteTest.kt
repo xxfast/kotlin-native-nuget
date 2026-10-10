@@ -8,8 +8,10 @@ import kotlin.test.assertTrue
  * (`fun reaction(mood: Mood): Crate<Int>`) used to fail the whole build with
  * `ERROR_UNSUPPORTED_ENUM_PARAMETER_ROUTE`. The Kotlin export already took the ordinal and decoded
  * it; only the C# half's hand-built native call passed the enum uncast. It binds now, and the kind
- * is gone. The overload beside it is a planned one (`reaction(level: Int): Int`), which takes the
- * next overload suffix (`Tier1GenericReturnRouteParametersTest` covers two overloads on this route).
+ * is gone. Since ADR-208 the function is on the ADR-062 plan (the hand-built route is deleted), so
+ * the ordinal cast is the plan's own. The overload beside it (`reaction(level: Int): Int`) takes
+ * the next overload suffix (`Tier1GenericReturnRouteParametersTest` covers two generic-returning
+ * overloads).
  *
  * The collection-return cells pin that the six collection arms that also raised the kind were
  * unreachable: a collection return is plan-owned, so each of these binds on the plan route.
@@ -38,11 +40,11 @@ class Tier1EnumParameterRouteTest {
     assertTrue(result.compileErrors.isEmpty(), "compileErrors=${result.compileErrors}")
     val cs: String = result.generatedCSharp
     assertTrue(
-      Regex("""Reaction_native\(\(int\)mood, out IntPtr error\)""").containsMatchIn(cs),
+      Regex("""Native_Reaction\(\(int\)mood, out IntPtr error\)""").containsMatchIn(cs),
       "expected the enum cast down to its ordinal at the native call; cs=$cs",
     )
     assertTrue(
-      Regex("""Standoff_native\(\(int\)oreo, \(int\)mylo, out IntPtr error\)""")
+      Regex("""Native_Standoff\(\(int\)oreo, \(int\)mylo, out IntPtr error\)""")
         .containsMatchIn(cs),
       "expected both enum parameters cast at the native call; cs=$cs",
     )
@@ -56,7 +58,7 @@ class Tier1EnumParameterRouteTest {
     )
     val kotlin: String = result.generated
     assertTrue(
-      "tier1.enumparam.Mood.entries.getOrNull(mood)" in kotlin,
+      "tier1.enumparam.Mood.entries[mood]" in kotlin,
       "expected the Kotlin export to decode the ordinal; generated=$kotlin",
     )
   }

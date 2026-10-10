@@ -167,17 +167,17 @@ internal fun KSTypeParameter.isUnrecoverableArmParameter(): Boolean {
 
 /**
  * ADR-199: whether `NugetMarshal.FromHandle<T>` can read this type argument of a generic sealed
- * reference, ADR-147's rule for `T`: a primitive, `Char`, `String`, an exported class, object,
- * interface or enum, a boxed value class, a type parameter in scope, another generic sealed
- * instantiation, or any of those nullable.
+ * reference, and (ADR-208) of any exported generic class reference. ADR-147's rule for `T`: a
+ * primitive, `Char`, `String`, an exported class, object, interface or enum, a boxed value class,
+ * a type parameter in scope, another closed generic instantiation, or any of those nullable.
  */
-internal fun BridgeType.isErasedSealedArgument(): Boolean = when (this) {
+internal fun BridgeType.isErasedTypeArgument(): Boolean = when (this) {
   is BridgeType.Primitive, BridgeType.Char, BridgeType.String, is BridgeType.Enum,
   is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.TypeParameter,
     -> true
 
   is BridgeType.ValueClass -> typeArguments.isEmpty() && hasErasedCrossing()
-  is BridgeType.Nullable -> type.isErasedSealedArgument()
+  is BridgeType.Nullable -> type.isErasedTypeArgument()
   BridgeType.Unit,
   BridgeType.Instant,
   BridgeType.Duration,

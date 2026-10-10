@@ -90,7 +90,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.enumReceiverName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticOwner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardDiagnosticOwner
-import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardFileClassOwner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
@@ -145,7 +144,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyMarshalledRe
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyDiscriminatedRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyFlowElementShape
-import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyGenericSealedElement
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyGenericElement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBytesCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBytesElementReadArgument
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBytesRead
@@ -2023,7 +2022,7 @@ internal fun flowProperty(
     // ADR-066: qualified, not by simple name: an admitted dependency-module element type is
     // not guaranteed to share this class's own namespace.
     isFlowType || isStateFlowType ->
-      classifier.legacyGenericSealedElement(flowElementTypeResolved, isNullableElement)
+      classifier.legacyGenericElement(flowElementTypeResolved, isNullableElement)
         ?: qualifiedElementCsType(flowElementTypeResolved, context, isNullableElement)
 
     else -> null
@@ -2231,7 +2230,7 @@ internal fun flowMembers(
       ?: legacyBytesCsharpType(isNullableElement).takeIf { flowElementBytes }
       ?: legacyEnvelopeCsharpType(isNullableElement).takeIf { flowElementEnvelope }
       ?: flowElementInterface?.let { it.csharpType + if (isNullableElement) "?" else "" }
-      ?: classifier.legacyGenericSealedElement(flowElementTypeResolved, isNullableElement)
+      ?: classifier.legacyGenericElement(flowElementTypeResolved, isNullableElement)
       ?: qualifiedElementCsType(flowElementTypeResolved, context, isNullableElement)
     val flowElementRead: String? = flowElementCollection
       ?.let { collection -> legacyFlowElementReadArgument(collection) }
@@ -2789,7 +2788,7 @@ internal fun suspendStateFlowElement(
       ?: legacyBytesCsharpType(nullable).takeIf { bytes }
       ?: legacyEnvelopeCsharpType(nullable).takeIf { envelope }
       ?: iface?.let { it.csharpType + if (nullable) "?" else "" }
-      ?: classifier.legacyGenericSealedElement(element, nullable)
+      ?: classifier.legacyGenericElement(element, nullable)
       ?: qualifiedElementCsType(element, context, nullable)
     val read = collection?.let { legacyFlowElementReadArgument(it) }
       ?: iface?.let { legacyInterfaceElementReadArgument(it, nullable) }
@@ -2816,7 +2815,7 @@ internal fun suspendStateFlowElement(
     ?.let { return it }
   val elementInterface: BridgeType.Interface? = classifier.legacyFlowElementInterface(element)
   val csElementType: String = elementInterface?.let { it.csharpType + if (nullable) "?" else "" }
-    ?: classifier.legacyGenericSealedElement(element, nullable)
+    ?: classifier.legacyGenericElement(element, nullable)
     ?: qualifiedElementCsType(element, context, nullable)
   return SuspendStateFlowElement(
     asyncReturnType = "KotlinStateFlow<$csElementType>" + if (memberNullable) "?" else "",
