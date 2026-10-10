@@ -774,12 +774,12 @@ private fun valueClassWriteSlot(
     is MutableStateFlowElement.Handle -> if (nullable) {
       MutableStateFlowWriteSlot(
         listOf("value" to cOpaquePointer.copy(nullable = true)),
-        "value?.asStableRef<${underlying.qualifiedName}>()?.get()?.let { ${wrap("it")} }",
+        "value?.asStableRef<${underlying.kotlinType}>()?.get()?.let { ${wrap("it")} }",
       )
     } else {
       MutableStateFlowWriteSlot(
         listOf("value" to cOpaquePointer),
-        wrap("value.asStableRef<${underlying.qualifiedName}>().get()"),
+        wrap("value.asStableRef<${underlying.kotlinType}>().get()"),
       )
     }
 

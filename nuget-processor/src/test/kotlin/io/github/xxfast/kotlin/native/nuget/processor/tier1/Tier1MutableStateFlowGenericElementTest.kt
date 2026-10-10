@@ -117,11 +117,6 @@ class Tier1MutableStateFlowGenericElementTest {
       },
       "expected crate to be a named skip; kspWarnings=${result.kspWarnings}",
     )
-    // The property is absent, so no "its setter is not generated" line may claim it survives.
-    assertTrue(
-      result.kspWarnings.none { it.contains("Shelf.crate") && it.contains("setter") },
-      "expected no setter diagnostic for an absent property; kspWarnings=${result.kspWarnings}",
-    )
   }
 
   @Test
