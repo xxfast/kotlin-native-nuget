@@ -462,3 +462,33 @@ Neither inferred claim is load-bearing for the drop: nothing is implemented on t
 
 - The processor-emitted file-level `@OptIn` for `CoroutineStart.ATOMIC` in the generated `CNameExports.kt` (Implementation Addendum 2026-08-20) is a different thing: generated, not author-facing.
 - The reverse direction's opt-in (ADR-181, designed in parallel) is coherent where this one was not, because it gates *use* of generated Kotlin declarations. If a Kotlin-side forward marker is ever reintroduced, `ExperimentalNuget*Api` is the naming prefix.
+
+## Amendment (2026-10-10): a flow wrapper that outlives its owner throws `ObjectDisposedException`
+
+**A flow wrapper whose delegates read the owner's `_handle` lazily now guards that read.** Each such
+delegate opens with `if (_handle.IsInvalid) throw new ObjectDisposedException(nameof(Owner));`,
+before any P/Invoke and before anything is minted (the lazy scope, a collection argument's wire
+handle). The member that built the wrapper checked the owner once; the wrapper then read `_handle` on
+every use, so one kept past `Dispose()` passed the zero sentinel to Kotlin, which dereferenced it.
+**Verified** before the fix: a `Flow`/`StateFlow` collect or `ReplayCache` on a wrapper whose owner
+was disposed raised `kotlin.NullPointerException` in the `..._get_editions_replay_cache` export and
+took the test host down. This extends the "Async methods check `_handle` at entry" rule above from
+methods to the wrappers they hand out.
+
+- **Guarded:** a property-position `Flow`, `StateFlow`, `MutableStateFlow`, `SharedFlow` or
+  `MutableSharedFlow` (collect, `.Value` get and set, `CompareAndSet`, `ReplayCache`,
+  `SubscriptionCount`, `EmitAsync`, `TryEmit`), and a re-invoked method return (collect, `.Value`,
+  `ReplayCache`), on class, sealed-arm and interface owners.
+- **Immune, unguarded:** a held `MutableStateFlow` / `MutableSharedFlow` method return and every
+  awaited `suspend` return. They key on their own flow handle, so they keep reading and writing after
+  the owner is disposed. A new collect or `EmitAsync` on them is still refused by the closed scope
+  handle, as before. A `SubscriptionCount` wrapper taken earlier still reads `.Value`, but its
+  collect now throws naming the owner.
+- **Synchronous throw.** `EmitAsync` and starting a collection (`GetAsyncEnumerator`) throw at the
+  call, like a `suspend` method on a disposed owner, not through the returned `Task` or the first
+  `MoveNextAsync`. A collection already in flight at `Dispose()` still ends cleanly.
+- No export or ABI change, and no new `LeakTests` row: the guard precedes every mint.
+
+**Verified natively:** `IntegrationTests/FlowWrapperAfterOwnerDisposeTests.cs` (class owners only).
+**Tier 1 only:** sealed-arm and interface owners, and that the guard precedes every mint
+(`Tier1FlowWrapperOwnerDisposeTest`).

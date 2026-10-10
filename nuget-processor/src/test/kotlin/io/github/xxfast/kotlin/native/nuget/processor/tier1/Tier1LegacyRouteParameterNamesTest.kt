@@ -152,8 +152,8 @@ class Tier1LegacyRouteParameterNamesTest {
     assertContains(generated, "public KotlinFlow<int> Watch(string @params)")
     assertContains(
       generated,
-      "Native_WatchCollect(_handle, GetOrCreateScope(), @params, onNext, onComplete, onError, " +
-          "userData));",
+      "return Native_WatchCollect(_handle, GetOrCreateScope(), @params, onNext, onComplete, " +
+          "onError, userData);",
     )
   }
 
