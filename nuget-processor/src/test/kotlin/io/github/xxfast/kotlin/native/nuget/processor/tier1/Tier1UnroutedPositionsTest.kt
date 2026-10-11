@@ -62,7 +62,8 @@ class Tier1UnroutedPositionsTest {
     Cell(member, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_COMBINATION)
 
   /**
-   * The 24 individually-named silent cells (ADR-160 took three of the original 29 out: the object,
+   * The 23 individually-named silent cells (ADR-210 took the `suspend` lambda parameter out;
+   * ADR-160 took three of the original 29 out: the object,
    * top-level and extension per-call lambda parameters all bind off the plan now, and ADR-197 two
    * more: the class and object structural own-`<T>` members). The three
    * `Dock` secondary constructors are the 30th to 32nd: they all render the one symbol
@@ -80,9 +81,8 @@ class Tier1UnroutedPositionsTest {
     // reference the bridge still defers from the witness.
     returns("tier1.unrouted.Depot.genericReturnOnClass"),
     input("tier1.unrouted.Depot.genericParamOnClass"),
-    // extra cell X1: `SUSPEND_CALLBACK_PROTOCOL` — a `suspend` lambda parameter. Fully silent
-    // today even on the one owner the ordinary lambda route does serve.
-    input("tier1.unrouted.Depot.suspendCallbackParamOnClass"),
+    // (extra cell X1, the `suspend` lambda parameter, binds since ADR-210: asserted in its own
+    // test below.)
     // rows 7 / 14 / 23: the reason is carried by the collection *element*; the position is the
     // collection's own, which here is a return.
     returns("tier1.unrouted.Depot.flowElementOnClass"),
@@ -356,7 +356,6 @@ class Tier1UnroutedPositionsTest {
       "CallbackReturnOnClass(",
       "GenericReturnOnClass(",
       "GenericParamOnClass(",
-      "SuspendCallbackParamOnClass(",
       "FlowElementOnClass(",
       "CallbackElementOnClass(",
       "GenericElementOnClass(",
@@ -399,6 +398,28 @@ class Tier1UnroutedPositionsTest {
       result.kspWarnings.any { it.contains("Depot.flowReturnOnClass") },
       "warning about a member the consumer can still call is a false positive; " +
           "kspWarnings=${result.kspWarnings}",
+    )
+  }
+
+  /**
+   * ADR-210: the cell this matrix lost when a `suspend` lambda parameter moved onto the plan. A
+   * non-suspend member can only store it, which the Kotlin-owned lifetime makes sound.
+   */
+  @Test
+  fun `the class suspend lambda parameter binds off the plan`() {
+    val result: Tier1Result = run()
+
+    assertTrue(
+      result.generatedCSharp.contains(
+        "public int SuspendCallbackParamOnClass(Func<int, " +
+            "global::System.Threading.CancellationToken, global::System.Threading.Tasks.Task> cb)"
+      ),
+      "ADR-210 binds this position now; got=" +
+          result.generatedCSharp.lines().filter { it.contains("SuspendCallbackParamOnClass") },
+    )
+    assertFalse(
+      result.kspWarnings.any { it.contains("Depot.suspendCallbackParamOnClass") },
+      "a bound member must not be named as a skip; kspWarnings=${result.kspWarnings}",
     )
   }
 

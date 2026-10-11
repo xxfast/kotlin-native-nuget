@@ -67,6 +67,8 @@ internal fun BridgeType.forwardPublicCsharpType(): String = when (this) {
       (payload + result.forwardPublicCsharpType()).joinToString(", ", "Func<", ">")
     }
   }
+  // ADR-210: `Func<T, CancellationToken, Task<R>>`, or `Task` for a `Unit` result.
+  is BridgeType.AsyncCallback -> forwardAsyncCallbackCsharpType()
   // ADR-160 amendment: ADR-012's consumer type, `KotlinFunc<...>`, or `KotlinAction<...>` for a
   // `Unit` result (issue #114). Only reached once [unnameableTypeArgument] found nothing.
   is BridgeType.ReturnedLambda ->
@@ -109,6 +111,11 @@ internal fun BridgeType.isPubliclySpellable(
   // ADR-160: a callback's C# spelling is an `Action<>`/`Func<>` over components that are each
   // publicly spellable in their own right; the classifier admits no other shape.
   is BridgeType.Callback -> parameters.all { parameter ->
+    parameter.isPubliclySpellable(typeParametersInScope)
+  } && result.isPubliclySpellable(typeParametersInScope)
+
+  // ADR-210: the same rule over a suspend lambda's components.
+  is BridgeType.AsyncCallback -> parameters.all { parameter ->
     parameter.isPubliclySpellable(typeParametersInScope)
   } && result.isPubliclySpellable(typeParametersInScope)
 
@@ -192,6 +199,7 @@ internal fun BridgeType.isKotlinHandleWire(): Boolean =
     is BridgeType.Collection,
     is BridgeType.Nullable,
     is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -252,6 +260,7 @@ private fun BridgeType.isLambdaTypeArgument(isResult: Boolean): Boolean = when (
   BridgeType.ByteArray,
   is BridgeType.Collection,
   is BridgeType.Callback,
+  is BridgeType.AsyncCallback,
   is BridgeType.ReturnedLambda,
   is BridgeType.SpecializedProtocol,
   is BridgeType.RawKSType,

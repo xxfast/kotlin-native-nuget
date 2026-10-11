@@ -79,6 +79,13 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
   // error slot is set, so it must not depend on what an unwritten one-byte `out bool` holds: every
   // out slot of such an export is zeroed before the call.
   if (resultFailed != null) builder.addOutSlotZeroing(call)
+  // ADR-210: the holder that owns each suspend lambda's C# key is the export's FIRST statement,
+  // ahead of the `try`, the receiver read and every other argument's lowering. C# stops owning the
+  // key the moment this call returns, so nothing may be able to throw before Kotlin owns it.
+  plan.publicSignature.parameters.forEach { parameter ->
+    val slots: ForwardAsyncSlots = parameter.asyncSlots ?: return@forEach
+    builder.addStatement("val %L = %L", slots.holder, asyncCallbackHolderConstruction(slots))
+  }
 
   when (val result: BridgeType = plan.publicSignature.result) {
     BridgeType.Unit -> builder.addCode(
@@ -203,6 +210,7 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
       addValueClassOrdinaryResult(builder, result, invocation, call.result, error.name)
 
     is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
     is BridgeType.Unsupported,
@@ -286,6 +294,7 @@ private fun addValueClassOrdinaryResult(
     is BridgeType.Collection,
     is BridgeType.Nullable,
     is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -482,6 +491,7 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
 
     is BridgeType.BoundInterface,
     is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -534,6 +544,7 @@ private fun valueClassReconstruction(plan: ForwardCallablePlan, call: ForwardNat
     is BridgeType.Collection,
     is BridgeType.Nullable,
     is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -591,6 +602,7 @@ private fun elementKotlinTypeName(type: BridgeType): String = when (type) {
   is BridgeType.Collection,
   is BridgeType.Nullable,
   is BridgeType.Callback,
+  is BridgeType.AsyncCallback,
   is BridgeType.ReturnedLambda,
   is BridgeType.SpecializedProtocol,
   is BridgeType.RawKSType,
@@ -647,6 +659,7 @@ internal fun componentLowering(
     is BridgeType.Collection,
     is BridgeType.Nullable,
     is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -690,6 +703,7 @@ internal fun componentLowering(
       is BridgeType.Collection,
       is BridgeType.Nullable,
       is BridgeType.Callback,
+      is BridgeType.AsyncCallback,
       is BridgeType.ReturnedLambda,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,
@@ -719,6 +733,7 @@ internal fun componentLowering(
     is BridgeType.Collection,
     is BridgeType.Nullable,
     is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -740,6 +755,7 @@ internal fun componentLowering(
   is BridgeType.BoundInterface,
   BridgeType.ByteArray,
   is BridgeType.Callback,
+  is BridgeType.AsyncCallback,
   is BridgeType.ReturnedLambda,
   is BridgeType.SpecializedProtocol,
   is BridgeType.RawKSType,
@@ -1022,6 +1038,7 @@ private fun addNullableResult(
     is BridgeType.BoundInterface,
     is BridgeType.Nullable,
     is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -1623,6 +1640,8 @@ private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): Typ
   BridgeType.ByteArray, is BridgeType.TypeParameter -> cOpaquePointer
   // ADR-088: the transfer GCHandle the C# wrapper allocated.
   is BridgeType.BoundInterface -> cOpaquePointer
+  // ADR-210: every slot of a suspend lambda is an opaque address or key.
+  is BridgeType.AsyncCallback -> cOpaquePointer
   // ADR-160: both of a callback's two slots are opaque addresses -- the ADR-102 thunk and the
   // GCHandle ctx it dispatches through. Non-null: C# always supplies a real thunk address, and a
   // nullable `CFunction` reinterpret would need a guard at every invocation.
@@ -1649,6 +1668,7 @@ private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): Typ
     is BridgeType.BoundInterface,
     is BridgeType.Nullable,
     is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -1820,6 +1840,7 @@ private fun defaultResult(type: BridgeType): String = when (type) {
   is BridgeType.Collection,
   is BridgeType.Nullable,
   is BridgeType.Callback,
+  is BridgeType.AsyncCallback,
   is BridgeType.ReturnedLambda,
   is BridgeType.SpecializedProtocol,
   is BridgeType.RawKSType,
@@ -1874,6 +1895,13 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
     // author wrote it. The reinterpret lives inside the lambda deliberately: it is a cast, it costs
     // nothing per invocation, and it keeps the expression self-contained (a second callback
     // parameter on the same member cannot collide with this one's locals).
+    // ADR-210: a real Kotlin `suspend` lambda over `awaitForKotlin`, capturing the holder whose
+    // cleaner releases the C# key, so the member may invoke it now or store it.
+    is BridgeType.AsyncCallback ->
+      asyncCallbackExpression(
+        parameter.ref, type, requireNotNull(parameter.asyncSlots), holderBuilt = true,
+      )
+
     is BridgeType.Callback -> loweredCallbackExpression(
       parameter.ref, type, parameter.callbackPtrSlot, parameter.callbackUserDataSlot,
     )
@@ -1948,6 +1976,7 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
       is BridgeType.BoundInterface,
       is BridgeType.Nullable,
       is BridgeType.Callback,
+      is BridgeType.AsyncCallback,
       is BridgeType.ReturnedLambda,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,
@@ -2001,6 +2030,7 @@ private fun loweredCallbackExpression(
     is BridgeType.Collection,
     is BridgeType.Nullable,
     is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -2033,6 +2063,7 @@ private fun loweredCallbackExpression(
     is BridgeType.Collection,
     is BridgeType.Nullable,
     is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -2071,6 +2102,7 @@ private fun loweredCallbackExpression(
           is BridgeType.Collection,
           is BridgeType.Nullable,
           is BridgeType.Callback,
+          is BridgeType.AsyncCallback,
           is BridgeType.ReturnedLambda,
           is BridgeType.SpecializedProtocol,
           is BridgeType.RawKSType,
@@ -2130,6 +2162,7 @@ private fun loweredCallbackExpression(
       is BridgeType.Collection,
       is BridgeType.Nullable,
       is BridgeType.Callback,
+      is BridgeType.AsyncCallback,
       is BridgeType.ReturnedLambda,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,
@@ -2167,6 +2200,7 @@ internal fun valueClassUnderlyingLowering(name: String, underlying: BridgeType):
     is BridgeType.Collection,
     is BridgeType.Nullable,
     is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,

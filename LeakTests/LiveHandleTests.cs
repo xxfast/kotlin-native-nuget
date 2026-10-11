@@ -28,6 +28,7 @@ using Rankings = TestLibrary.Rankings;
 using TestLibrary.Kennel;
 using Lineage = TestLibrary.Lineage;
 using Torpor = TestLibrary.Torpor;
+using Treatprep = TestLibrary.Treatprep;
 using Outcomes = TestLibrary.Outcome;
 using Cubby = TestLibrary.Cubby;
 using TestLibrary.Boxshelf;
@@ -5192,5 +5193,157 @@ public class LiveHandleTests
         Settle();
 
         Assert.Equal(baseline, NugetMarshal.LiveHandles);
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Rows 17a to 17f. ADR-210 slice (a): a suspend lambda PARAMETER
+    // (`suspend (T) -> R` as `Func<T, CancellationToken, Task<R>>`).
+    //
+    // Each invocation of the C# lambda is an `awaitForKotlin` flight, so it mints the same counted
+    // pending-continuation ctx and Task handle rows 9 to 9l watch on the reverse bridge, plus
+    // whatever the forward half mints to carry a `String` payload across. The C# delegate itself is
+    // released by a Kotlin cleaner (the ADR-084 rule) rather than when the call returns, so every
+    // row here depends on `Settle`'s cleaner rounds.
+    //
+    // WHAT THESE ROWS CANNOT SEE. `nuget_live_handles` counts Kotlin handles only, and the C#
+    // context table (`NugetThunks._ctxTable`) has no observable: a C# key the cleaner never
+    // released is silent here. `CollectabilityTests` carries that half, through a `WeakReference`
+    // on an object the lambda captured.
+    // ------------------------------------------------------------------------------------------
+
+    // Row 17a. The happy path with a lambda that really suspends, three flights per crossing, so
+    // the completion callback always arrives from the thread pool after Begin returned.
+    [Fact]
+    public async Task SuspendLambdaParameter_SuspendingLambda_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var chef = new Treatprep.TreatChef("Oreo");
+            string plated = await chef.PlateAsync(3, async (treat, token) =>
+            {
+                await Task.Delay(1, token);
+                return $"tuna#{treat}";
+            });
+            Assert.Equal("tuna#1,tuna#2,tuna#3", plated);
+        });
+    }
+
+    // Row 17b. The TIGHT LOOP row, the forward mirror of Row 9a: `Task.FromResult`, thousands of
+    // flights inside one Kotlin coroutine. The completion can land before the Begin thunk has
+    // returned, which releases the ctx on a path Row 17a's delayed task almost never takes, and at
+    // this count a per-flight leak is a five-figure delta. The sum is asserted so a run in which
+    // the lambda was not really invoked that many times cannot pass as a clean one.
+    [Fact]
+    public async Task SuspendLambdaParameter_AlreadyCompletedTask_TightLoop_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(
+            async () =>
+            {
+                using var chef = new Treatprep.TreatChef("Mylo");
+                Assert.Equal(7 * 2_000, await chef.WeighAsync(2_000, (_, _) => Task.FromResult(7)));
+            },
+            iterations: 5);
+    }
+
+    // Row 17c. The SYNCHRONOUS THROW: the lambda throws before any Task exists, so Begin reports
+    // through `errOut` and no task handle was ever minted, while `awaitForKotlin` has to release a
+    // ctx whose completion callback will never fire. Driven through the host that CATCHES in
+    // Kotlin, so the outer call completes normally and only the invocation's own cleanup is in
+    // play.
+    [Fact]
+    public async Task SuspendLambdaParameter_SynchronousThrow_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var chef = new Treatprep.TreatChef("Oreo");
+            string report = await chef.RecoverAsync(
+                (_, _) => throw new InvalidOperationException("the tuna tin is empty"));
+            Assert.StartsWith("recovered ", report);
+            Assert.Contains("the tuna tin is empty", report);
+        });
+    }
+
+    // Row 17d. The FAULTED TASK, through the host that lets it PROPAGATE: the task handle is freed
+    // in End's `finally` or not at all, and the outer suspend call then fails, so the ADR-128/130
+    // error envelope crosses on the same call. The first invocation succeeds on purpose: its
+    // `String` result is minted and must be released even though the call as a whole throws.
+    [Fact]
+    public async Task SuspendLambdaParameter_FaultedTask_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var chef = new Treatprep.TreatChef("Oreo");
+            Exception ex = await Assert.ThrowsAnyAsync<Exception>(() => chef.PlateAsync(
+                3,
+                (treat, _) => treat == 1
+                    ? Task.FromResult("plate1")
+                    : Task.FromException<string>(new InvalidOperationException("Mylo sat on plate two"))));
+            Assert.Contains("Mylo sat on plate two", ex.ToString());
+        });
+    }
+
+    // Row 17e. The CANCEL row: the outer token is cancelled while the C# Task is pending, and the
+    // lambda IGNORES its token. Kotlin's wait ends on its own cancellation and End is never
+    // called, but the ctx is released only by the completion callback (ADR-210, "Lifetime"), so
+    // one counted handle stays held until the lambda's Task really completes. That is a bounded
+    // hold, not a leak: the crossing therefore awaits the lambda's own Task before it returns, and
+    // only then may the baseline be asserted. A channel that drops the ctx on the cancelled path,
+    // or one that never frees the task handle of an abandoned flight, shows up here and nowhere in
+    // rows 17a to 17d.
+    [Fact]
+    public async Task SuspendLambdaParameter_OuterTokenCancelledWhilePending_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(
+            async () =>
+            {
+                using var chef = new Treatprep.TreatChef("Mylo");
+                using var cts = new CancellationTokenSource();
+                var started = new TaskCompletionSource<Task<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
+                var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+                async Task<string> Dawdle()
+                {
+                    await release.Task;   // deliberately not the token: Mylo finishes when Mylo finishes
+                    return "late";
+                }
+
+                Task<string> plating = chef.PlateAsync(
+                    1,
+                    (_, _) =>
+                    {
+                        Task<string> dawdling = Dawdle();
+                        started.TrySetResult(dawdling);
+                        return dawdling;
+                    },
+                    cts.Token);
+
+                Task<string> pending = await started.Task.WaitAsync(TimeSpan.FromSeconds(30));
+                cts.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => plating);
+                Assert.False(pending.IsCompleted, "the lambda finished before the cancel, so nothing was abandoned");
+
+                release.SetResult();
+                Assert.Equal("late", await pending);
+            },
+            iterations: 5);
+    }
+
+    // Row 17f. The STORED lambda, through the constructor host: the delegate outlives the call
+    // that supplied it, is invoked by a later suspend member, and is released by the cleaner only
+    // once the Kotlin object that stored it is unreachable, which is after this wrapper's Dispose.
+    // A holder that is never collected, or a key released twice, moves the count here.
+    [Fact]
+    public async Task SuspendLambdaParameter_StoredByAConstructor_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var timer = new Treatprep.TreatTimer(async (treat, token) =>
+            {
+                await Task.Delay(1, token);
+                return $"ding{treat}";
+            });
+            Assert.Equal("ding1,ding2", await timer.RingAsync(2));
+            Assert.Equal("ding1", await timer.RingAsync(1));
+        });
     }
 }

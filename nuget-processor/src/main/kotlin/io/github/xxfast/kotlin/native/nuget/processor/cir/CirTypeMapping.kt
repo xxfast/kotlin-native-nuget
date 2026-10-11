@@ -233,6 +233,9 @@ internal class CollectionHelperTracker {
   val suspendLambdaArities: MutableSet<Int> = mutableSetOf()
   val callbackDelegates: MutableList<CirCallbackDelegate> = mutableListOf()
 
+  /** ADR-210: every suspend lambda parameter shape a translated legacy-route member takes. */
+  val asyncCallbacks: MutableSet<BridgeType.AsyncCallback> = linkedSetOf()
+
   /** Marks List/Map/Set helper needs from a planned [BridgeType] (result, parameter, or property). */
   fun trackCollection(type: BridgeType) {
     val unwrapped: BridgeType = if (type is BridgeType.Nullable) type.type else type

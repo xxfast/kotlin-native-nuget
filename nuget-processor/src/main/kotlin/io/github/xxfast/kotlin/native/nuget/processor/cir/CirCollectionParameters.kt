@@ -5,7 +5,13 @@ import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSValueParameter
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAsyncSlots
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParameterShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncCallbackArguments
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncCallbackCleanup
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncCallbackHandOver
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncCallbackRegistration
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncCallbackCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.managedExceptionTextCs
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyNullableScalarArgument
@@ -53,6 +59,10 @@ internal val CirParameter.collectionHandleLocal: String
  */
 internal fun List<CirParameter>.nativeImportParameters(): List<CirParameter> =
   flatMap { parameter ->
+    // ADR-210: a suspend lambda's flat thunk and key slots, in the planner's order.
+    parameter.nativeSlots?.let { slots ->
+      return@flatMap slots.map { slot -> CirParameter(slot, "IntPtr") }
+    }
     if (parameter.hasValueSlot == null && parameter.isSetSlot == null) {
       return@flatMap listOf(parameter)
     }
@@ -77,7 +87,7 @@ internal fun List<CirParameter>.localScopeNames(): MutableSet<String> =
 
 /** Whether any parameter needs a wire handle built before the native call. */
 internal fun List<CirParameter>.hasCollectionHandles(): Boolean =
-  any { it.collectionCreate != null }
+  any { it.collectionCreate != null || it.asyncKeyLocal != null }
 
 /**
  * The native call [call] wrapped in create-then-`finally`-dispose for every collection parameter,
@@ -90,7 +100,16 @@ internal fun List<CirParameter>.collectionScopedCall(
   returns: Boolean = true,
 ): List<String>? {
   val handles: List<CirParameter> = filter { it.collectionCreate != null }
-  if (handles.isEmpty()) return null
+  // ADR-210: a suspend lambda's key is C#'s until the native call has returned. It is registered
+  // inside the `try`, zeroed as the statement after the call (the Kotlin holder owns it from
+  // there) and unregistered in the `finally`, where a zero key is a no-op: so a later argument
+  // that throws, a second registration that throws and a P/Invoke that throws before reaching
+  // Kotlin all release every key registered so far.
+  val keys: List<CirParameter> = filter { it.asyncKeyLocal != null }
+  if (handles.isEmpty() && keys.isEmpty()) return null
+  require(keys.isEmpty() || !returns) {
+    "A suspend lambda key is handed over by the statement after the native call"
+  }
   val body: String = if (returns) "return $call;" else "$call;"
   return buildList {
     add("$indent{")
@@ -98,9 +117,16 @@ internal fun List<CirParameter>.collectionScopedCall(
       val create = "IntPtr ${parameter.collectionHandleLocal} = ${parameter.collectionCreate};"
       add("$indent    $create")
     }
+    keys.forEach { parameter -> add("$indent    IntPtr ${parameter.asyncKeyLocal} = IntPtr.Zero;") }
     add("$indent    try")
     add("$indent    {")
+    keys.forEach { parameter ->
+      add("$indent        ${parameter.asyncKeyLocal} = ${parameter.asyncKeyRegister};")
+    }
     add("$indent        $body")
+    keys.forEach { parameter ->
+      add("$indent        ${forwardAsyncCallbackHandOver(requireNotNull(parameter.asyncKeyLocal))}")
+    }
     add("$indent    }")
     add("$indent    finally")
     add("$indent    {")
@@ -109,6 +135,9 @@ internal fun List<CirParameter>.collectionScopedCall(
     handles.forEach { parameter ->
       val handle: String = parameter.collectionHandleLocal
       add("$indent        if ($handle != IntPtr.Zero) NugetMarshal.Dispose($handle);")
+    }
+    keys.forEach { parameter ->
+      add("$indent        ${forwardAsyncCallbackCleanup(requireNotNull(parameter.asyncKeyLocal))}")
     }
     add("$indent    }")
     add("$indent}")
@@ -283,6 +312,26 @@ private fun legacyRouteParameter(
           isSetSlot = names.isSetSlots[index],
         )
       }
+    }
+
+    // ADR-210: the consumer's `Func<T, CancellationToken, Task<R>>`. The key is registered into a
+    // local `collectionScopedCall` guards: C# owns it until the native call returns, the Kotlin
+    // holder's cleaner from then on. Tracked so `Interop.cs` renders this shape's thunks.
+    is ForwardLegacyParameterShape.AsyncCallback -> {
+      tracker.asyncCallbacks += shape.type
+      val slots: ForwardAsyncSlots = requireNotNull(names.asyncSlots[index])
+      CirParameter(
+        name,
+        type = shape.type.forwardAsyncCallbackCsharpType(),
+        nativeType = "IntPtr",
+        isReferenceType = true,
+        nativeArgumentExpression =
+          forwardAsyncCallbackArguments(shape.type, slots.csharpKey, slots.carriesShared)
+            .joinToString(", "),
+        nativeSlots = slots.declared,
+        asyncKeyLocal = slots.csharpKey,
+        asyncKeyRegister = forwardAsyncCallbackRegistration(name, shape.type),
+      )
     }
 
     // ADR-201 amendment: the sync route's wire, one `string` slot of managed-exception text.

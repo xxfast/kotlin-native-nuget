@@ -93,9 +93,13 @@ public class UnroutedPositionsTests
             // ADR-208: `GenericReturnOnClass`, `GenericParamOnClass` and `GenericElementOnClass`
             // BIND now (a closed `Box<Int>` is an ordinary handle at every position) and are called
             // in GenericInstantiationsBindOnEveryOwner instead of being absent here.
-            "SuspendCallbackParamOnClass",
+            // ADR-210: `SuspendCallbackParamOnClass` BINDS now too (a `suspend` lambda parameter is
+            // `Func<T, CancellationToken, Task>`), asserted present below.
             "FlowElementOnClass",
             "CallbackElementOnClass");
+
+        // ADR-210: the cell this row lost. Asserted positively so it cannot quietly go back.
+        Assert.NotNull(typeof(Depot).GetMethod("SuspendCallbackParamOnClass", PublicInstance));
     }
 
     /// <summary>

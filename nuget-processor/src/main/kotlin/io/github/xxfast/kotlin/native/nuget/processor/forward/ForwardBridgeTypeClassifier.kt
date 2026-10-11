@@ -90,6 +90,12 @@ internal class ForwardBridgeTypeClassifier(
   internal val closedFlowArguments: MutableMap<String, ForwardFlowArgument> = sortedMapOf()
 
   /**
+   * ADR-210: every suspend lambda parameter shape [asyncCallbackOrNull] minted. The generated
+   * Kotlin file reads it to decide whether the holder class and its imports are needed.
+   */
+  internal val asyncCallbacks: MutableSet<BridgeType.AsyncCallback> = linkedSetOf()
+
+  /**
    * ADR-208 part E: every declared `MutableStateFlow<E>` type argument, by its Kotlin spelling,
    * with the generic class first seen holding it. It binds as a read-only `KotlinStateFlow<E>`
    * (ADR-071's write seam is keyed on a member), so its dropped setter is named once.
@@ -1057,6 +1063,7 @@ internal class ForwardBridgeTypeClassifier(
           BridgeType.ByteArray,
           is BridgeType.Collection,
           is BridgeType.Callback,
+          is BridgeType.AsyncCallback,
           is BridgeType.ReturnedLambda,
           is BridgeType.RawKSType,
           is BridgeType.Unsupported,
@@ -1073,6 +1080,36 @@ internal class ForwardBridgeTypeClassifier(
     }
     return BridgeType.ReturnedLambda(typeArguments, kotlinTypeArguments)
   }
+
+  /**
+   * ADR-210: the [BridgeType.AsyncCallback] for a non-nullable `suspend (T) -> R` of arity 0 to 3,
+   * or null for any other type. Position-specific, so [classify] never calls it and a suspend
+   * lambda everywhere else stays the `suspend lambda` protocol: the planner and the legacy suspend
+   * route ask only at a PARAMETER.
+   *
+   * Payloads are exactly [isCallbackPayload]. The result is `Unit`, a primitive or `String`:
+   * [isCallbackResult] minus `Throwable`, which the ADR leaves refusable in v1 because the End
+   * thunk casts the `Task<R>` it names.
+   */
+  fun asyncCallbackOrNull(type: KSType): BridgeType.AsyncCallback? {
+    val expanded: KSType = type.expandAliases()
+    if (type.isMarkedNullable || expanded.isMarkedNullable) return null
+    val qualifiedName: String = expanded.declaration.qualifiedName?.asString() ?: return null
+    if (qualifiedName !in SUSPEND_LAMBDA_TYPES) return null
+    val arguments: List<KSTypeArgument> = expanded.arguments
+    if (arguments.isEmpty() || arguments.size > MAX_ASYNC_CALLBACK_ARITY + 1) return null
+    val components: List<BridgeType> = arguments.map { argument ->
+      classify(argument.type?.resolve() ?: return null)
+    }
+    val parameters: List<BridgeType> = components.dropLast(1)
+    val result: BridgeType = components.last()
+    if (!parameters.all { parameter -> parameter.isCallbackPayload() }) return null
+    if (result is BridgeType.Throwable || !result.isCallbackResult()) return null
+    return BridgeType.AsyncCallback(parameters, result).also { minted -> asyncCallbacks += minted }
+  }
+
+  /** [classify] at a parameter position: ADR-210's suspend lambda first, then everything else. */
+  fun classifyParameter(type: KSType): BridgeType = asyncCallbackOrNull(type) ?: classify(type)
 
   /** The payload shapes both callback halves lower, in. See [callbackType]. */
   internal fun BridgeType.isCallbackPayload(): Boolean = when (this) {
@@ -1094,6 +1131,7 @@ internal class ForwardBridgeTypeClassifier(
     is BridgeType.Collection,
     is BridgeType.Nullable,
     is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -1122,6 +1160,7 @@ internal class ForwardBridgeTypeClassifier(
     is BridgeType.Collection,
     is BridgeType.Nullable,
     is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -1144,6 +1183,9 @@ internal class ForwardBridgeTypeClassifier(
     else -> null
   }
 }
+
+/** ADR-210: the widest `suspend` lambda a parameter binds, `suspend (A, B, C) -> R`. */
+private const val MAX_ASYNC_CALLBACK_ARITY: Int = 3
 
 internal fun KSType.toBridgeType(context: ForwardBridgeTypeContext): BridgeType =
   ForwardBridgeTypeClassifier(context).classify(this)

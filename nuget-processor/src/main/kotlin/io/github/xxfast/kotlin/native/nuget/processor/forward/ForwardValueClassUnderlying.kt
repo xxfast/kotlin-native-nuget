@@ -59,6 +59,7 @@ private fun BridgeType.valueClassUnderlyingRole(): ForwardValueClassUnderlying =
   BridgeType.ByteArray,
   is BridgeType.Collection,
   is BridgeType.Callback,
+  is BridgeType.AsyncCallback,
   is BridgeType.ReturnedLambda,
   is BridgeType.RawKSType,
   is BridgeType.Unsupported,
