@@ -1114,6 +1114,10 @@ internal data class CirStateFlowWrite(
   val parameters: List<CirParameter>,
   val arguments: String,
   val rejectsNull: Boolean = false,
+  // ADR-071 amendment (value-class element write): a statement over `v` that throws before the
+  // native call, rendered after the `rejectsNull` check. A reference-underlying record struct's
+  // `default(V)` has a null underlying, which no non-null Kotlin slot can take.
+  val guard: String? = null,
 )
 
 /**
@@ -1124,11 +1128,13 @@ internal data class CirStateFlowWrite(
  */
 internal fun CirStateFlowWrite.relabelled(stem: String, variable: String): CirStateFlowWrite {
   val name = Regex("""(?<![.\w])value(HasValue)?\b""")
+  val lambdaParameter = Regex("""(?<![.\w])v\b""")
   return copy(
     parameters = parameters.map { param ->
       param.copy(name = name.replace(param.name) { "$stem${it.groupValues[1]}" })
     },
-    arguments = Regex("""(?<![.\w])v\b""").replace(arguments, variable),
+    arguments = lambdaParameter.replace(arguments, variable),
+    guard = guard?.let { statement -> lambdaParameter.replace(statement, variable) },
   )
 }
 

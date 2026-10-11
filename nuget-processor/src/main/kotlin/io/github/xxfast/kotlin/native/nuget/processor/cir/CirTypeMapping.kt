@@ -9,6 +9,7 @@ import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSTypeAlias
 import com.google.devtools.ksp.symbol.KSTypeArgument
 import com.google.devtools.ksp.symbol.KSTypeParameter
+import com.google.devtools.ksp.symbol.KSValueParameter
 import com.google.devtools.ksp.symbol.Variance
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.CollectionKind
@@ -230,10 +231,35 @@ internal sealed interface MutableStateFlowElement {
   data class Handle(val qualifiedName: String) : Writable
 
   /**
-   * A value class: no write arm carries its unwrapped underlying, so the member binds read-only
-   * and the refusal is named (`SKIPPED_UNSUPPORTED_INPUT`) rather than silent.
+   * ADR-071 amendment (value-class element write): a value class whose underlying the synchronous
+   * value-class setter carries (ADR-077: a non-null String or primitive other than `Char`, an
+   * enum, or an exported class or object). It crosses as that [underlying] (`v.Id`, `(int)v.Mood`,
+   * `v.Cat._handle`) and Kotlin re-wraps it, re-running the value class's `init`.
+   * [underlyingProperty] is the Kotlin name of the underlying (the C# record struct capitalizes
+   * it); [underlyingSimpleName] is the underlying's Kotlin simple name, read by the scalar arm.
    */
-  data class RefusedValueClass(val qualifiedName: String) : MutableStateFlowElement
+  data class ValueClass(
+    val qualifiedName: String,
+    val simpleName: String,
+    val underlyingProperty: String,
+    val underlying: Writable,
+    val underlyingSimpleName: String,
+  ) : Writable {
+    /** The C# record struct's underlying property, capitalized as `CirValueClass` declares it. */
+    val csProperty: String get() = underlyingProperty.replaceFirstChar { it.uppercase() }
+
+    /** A reference underlying, whose `default(V)` carries a null no Kotlin slot can take. */
+    val isReferenceUnderlying: Boolean
+      get() = underlying is Handle || underlyingSimpleName == "String"
+  }
+
+  /**
+   * A value class over an underlying no write arm carries ([underlying], spelled for the
+   * diagnostic): the member binds read-only and the refusal is named (`SKIPPED_UNSUPPORTED_INPUT`)
+   * rather than silent.
+   */
+  data class RefusedValueClass(val qualifiedName: String, val underlying: String) :
+    MutableStateFlowElement
 
   /**
    * Everything else (collections, `ByteArray`, lambdas, interfaces): the declared
@@ -266,7 +292,7 @@ internal fun classifyMutableStateFlowElement(elementType: KSType?): MutableState
       MutableStateFlowElement.Enum(qualifiedName)
 
     // Before the CLASS arm: a value class is a `CLASS` too.
-    classDeclaration.isValueClass() -> MutableStateFlowElement.RefusedValueClass(qualifiedName)
+    classDeclaration.isValueClass() -> valueClassElement(classDeclaration, qualifiedName)
 
     classDeclaration.classKind == ClassKind.CLASS ||
         classDeclaration.classKind == ClassKind.OBJECT ->
@@ -274,6 +300,58 @@ internal fun classifyMutableStateFlowElement(elementType: KSType?): MutableState
 
     else -> MutableStateFlowElement.ReadOnly
   }
+}
+
+/**
+ * ADR-071 amendment (value-class element write): admits exactly the underlyings the synchronous
+ * value-class property setter lowers (`ForwardPropertyPlanner.isPlannable`): a non-null String or
+ * primitive other than `Char`, an enum, or an exported class or object. A generic value class, a
+ * nullable, `Char`, nested value-class, collection or `kotlin.*` class underlying (which the
+ * ordinary classifier maps to `Instant`, `Uuid` or `Throwable`, never to an object handle) is
+ * refused, naming that underlying.
+ */
+private fun valueClassElement(
+  declaration: KSClassDeclaration,
+  qualifiedName: String,
+): MutableStateFlowElement {
+  val parameter: KSValueParameter? = declaration.primaryConstructor?.parameters?.singleOrNull()
+  val type: KSType? = parameter?.type?.resolve()?.expandAliases()
+  val underlyingDeclaration: KSDeclaration? = type?.declaration
+  val underlyingQualified: String =
+    underlyingDeclaration?.qualifiedName?.asString() ?: "an unresolved type"
+  val refused = MutableStateFlowElement.RefusedValueClass(
+    qualifiedName,
+    underlyingQualified + if (type?.isMarkedNullable == true) "?" else "",
+  )
+  val underlyingProperty: String = parameter?.name?.asString() ?: return refused
+  if (type == null || underlyingDeclaration == null) return refused
+  if (declaration.typeParameters.isNotEmpty() || type.isMarkedNullable) return refused
+  val underlyingSimpleName: String = underlyingDeclaration.simpleName.asString()
+  val underlying: MutableStateFlowElement.Writable = when (
+    val element: MutableStateFlowElement = classifyMutableStateFlowElement(type)
+  ) {
+    MutableStateFlowElement.Scalar ->
+      if (underlyingSimpleName == "Char") return refused else MutableStateFlowElement.Scalar
+
+    is MutableStateFlowElement.Enum -> element
+    is MutableStateFlowElement.Handle -> {
+      val packageName: String = underlyingDeclaration.packageName.asString()
+      if (packageName == "kotlin" || packageName.startsWith("kotlin.")) return refused
+      element
+    }
+
+    is MutableStateFlowElement.ValueClass,
+    is MutableStateFlowElement.RefusedValueClass,
+    MutableStateFlowElement.ReadOnly,
+      -> return refused
+  }
+  return MutableStateFlowElement.ValueClass(
+    qualifiedName = qualifiedName,
+    simpleName = declaration.simpleName.asString(),
+    underlyingProperty = underlyingProperty,
+    underlying = underlying,
+    underlyingSimpleName = underlyingSimpleName,
+  )
 }
 
 /** The [MutableStateFlowElement.Writable] arm of an element a gate already admitted. */
@@ -303,6 +381,10 @@ internal fun isMutableStateFlowElementWritable(elementType: KSType?): Boolean {
     MutableStateFlowElement.Scalar -> simpleName != "Boolean" && simpleName != "Char"
     is MutableStateFlowElement.Enum -> false
     is MutableStateFlowElement.Handle -> true
+    // The ordinary property route plans every nullable value class it plans non-null (ADR-079):
+    // an in-band null for a String or handle underlying, the has-value pair otherwise. That rule
+    // admits a `Boolean` underlying too, so this does; the read is the ADR-171 factory path.
+    is MutableStateFlowElement.ValueClass -> true
   }
 }
 
@@ -354,6 +436,67 @@ internal fun mutableStateFlowWrite(elementType: KSType?, csElementType: String):
         arguments = "v",
       )
     }
+
+    is MutableStateFlowElement.ValueClass -> valueClassStateFlowWrite(element, nullable)
+  }
+}
+
+/**
+ * ADR-071 amendment (value-class element write): the C# half, the synchronous value-class
+ * setter's unwrap (`ForwardCirPropertyProjection`, ADR-077) over the lambda's `v`. The extern
+ * slot is the underlying's own wire; a nullable element rides that underlying's nullable spelling
+ * (an in-band null for a String or handle, the has-value pair for a primitive or enum ordinal).
+ * A struct is never null, so nothing rejects null; a reference underlying instead [guard]s
+ * `default(V)`, whose null underlying would otherwise reach a non-null Kotlin slot (or, nullable,
+ * silently clear the flow).
+ */
+private fun valueClassStateFlowWrite(
+  element: MutableStateFlowElement.ValueClass,
+  nullable: Boolean,
+): CirStateFlowWrite {
+  val prop: String = element.csProperty
+  val guard: String? = if (element.isReferenceUnderlying) {
+    val absent: String = if (nullable) "v.HasValue && v.Value.$prop is null" else "v.$prop is null"
+    "if ($absent) throw new ArgumentException(\"default(${element.simpleName}) carries no " +
+        "$prop; construct a ${element.simpleName} instead\", nameof(v));"
+  } else {
+    null
+  }
+  val hasValuePair: (String, String) -> CirStateFlowWrite = { wire: String, unwrapped: String ->
+    CirStateFlowWrite(
+      parameters = listOf(CirParameter("valueHasValue", "bool"), CirParameter("value", wire)),
+      arguments = "v.HasValue, $unwrapped",
+    )
+  }
+  return when (element.underlying) {
+    is MutableStateFlowElement.Handle -> CirStateFlowWrite(
+      parameters = listOf(CirParameter("value", KOTLIN_HANDLE)),
+      arguments = if (nullable) "v?.$prop._handle ?? NugetKotlinHandle.Null" else "v.$prop._handle",
+      guard = guard,
+    )
+
+    is MutableStateFlowElement.Enum -> if (nullable) {
+      hasValuePair("int", "(int)v.GetValueOrDefault().$prop")
+    } else {
+      CirStateFlowWrite(listOf(CirParameter("value", "int")), "(int)v.$prop")
+    }
+
+    MutableStateFlowElement.Scalar -> {
+      val wire: String = KOTLIN_TO_CSHARP_PARAM.getValue(element.underlyingSimpleName)
+      when {
+        wire == "string" -> CirStateFlowWrite(
+          parameters = listOf(CirParameter("value", if (nullable) "string?" else "string")),
+          arguments = if (nullable) "v?.$prop" else "v.$prop",
+          guard = guard,
+        )
+
+        nullable -> hasValuePair(wire, "v.GetValueOrDefault().$prop")
+        else -> CirStateFlowWrite(listOf(CirParameter("value", wire)), "v.$prop")
+      }
+    }
+
+    is MutableStateFlowElement.ValueClass ->
+      error("value class ${element.qualifiedName} over a value class has no write arm")
   }
 }
 

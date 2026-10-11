@@ -704,9 +704,39 @@ tracker.Outlook.Value = Mood.Grumpy;
 
 A nullable element (`MutableStateFlow<Mood?>`) stays a get-only `KotlinStateFlow`.
 
-A `MutableStateFlow` of a value class also binds a get-only `KotlinStateFlow<T>`, and the build
-reports `SKIPPED_UNSUPPORTED_INPUT` for it. On a property the remark names the read-only C#
-property; expose a function that takes the value class to write it.
+A `MutableStateFlow` of a value class is settable on the same routes, and `CompareAndSet` and the
+`Update` family work on it. The write crosses as the underlying value and Kotlin wraps it again, so
+the value class's `init` runs on every write:
+
+```kotlin
+class CatMoodTracker(private val catName: String) {
+  val chipId: MutableStateFlow<CatId> = MutableStateFlow(CatId("oreo-chip"))   // value class CatId(val id: String)
+  val spareChipId: MutableStateFlow<CatId?> = MutableStateFlow(null)
+}
+```
+
+```C#
+tracker.ChipId.Value = new CatId("oreo-9");
+bool swapped = tracker.ChipId.CompareAndSet(new CatId("oreo-9"), new CatId("mylo-2"));  // true
+
+tracker.SpareChipId.Value = new CatId("spare-1");
+tracker.SpareChipId.Value = null;
+```
+
+- `CompareAndSet`, `Update`, `UpdateAndGet` and `GetAndUpdate` compare with Kotlin `equals` on the
+  underlying value, never C# record-struct equality, so a freshly built `CatId` matches the stored
+  one and a stale one does not.
+- A nullable element (`MutableStateFlow<CatId?>`) is settable too and `null` clears it, except on a
+  `suspend` return, which stays get-only for a nullable element of any kind.
+- `default(CatId)` has no `Id`, so writing it, or passing it to `CompareAndSet`, throws
+  `ArgumentException` in C# before anything crosses. This applies to a value class over a `String`
+  or an object.
+- The underlying must be a non-null `String`, a primitive other than `Char`, an enum, or an
+  exported class or object. A value class over anything else (a `Char`, a nullable, another value
+  class, a `kotlin.*` class such as `Instant` or `Uuid`) and a generic value class bind a get-only
+  `KotlinStateFlow<T>`, and the build reports `SKIPPED_UNSUPPORTED_INPUT` naming the underlying.
+  On a property the remark names the read-only C# property; expose a function that takes the value
+  class to write it.
 
 ## Settable `.Value` on `MutableStateFlow<T>` {id="settable-value"}
 

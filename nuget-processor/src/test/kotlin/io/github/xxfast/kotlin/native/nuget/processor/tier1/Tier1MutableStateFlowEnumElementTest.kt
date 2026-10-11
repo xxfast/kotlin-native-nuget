@@ -14,9 +14,10 @@ import kotlin.test.assertTrue
  * awaited `suspend fun` holder, which all share the one write classifier.
  *
  * A nullable enum element stays the read-only `KotlinStateFlow<Mood?>`, and a value-class element
- * is refused BY NAME (it used to pass the gate as an ordinary class and take the object-handle arm,
- * spelling `v._handle` on a C# record struct). The end-to-end half lives in `CatMoodTracker` /
- * `MutableStateFlowEnumElementTests.cs`.
+ * over an underlying no write arm carries (here `String?`) is refused BY NAME (it used to pass the
+ * gate as an ordinary class and take the object-handle arm, spelling `v._handle` on a C# record
+ * struct). The writable value-class shapes live in `Tier1MutableStateFlowValueClassElementTest`.
+ * The end-to-end half lives in `CatMoodTracker` / `MutableStateFlowEnumElementTests.cs`.
  */
 class Tier1MutableStateFlowEnumElementTest {
 
@@ -29,7 +30,7 @@ class Tier1MutableStateFlowEnumElementTest {
     enum class Mood { HAPPY, SLEEPY, GRUMPY }
 
     @JvmInline
-    value class Tag(val id: String)
+    value class Tag(val id: String?)
 
     class Tracker {
       val outlook: MutableStateFlow<Mood> = MutableStateFlow(Mood.SLEEPY)
@@ -155,7 +156,7 @@ class Tier1MutableStateFlowEnumElementTest {
   }
 
   @Test
-  fun `a value class element is refused by name and binds read-only`() {
+  fun `a value class element over a nullable underlying is refused by name and binds read-only`() {
     val result = Tier1Harness.run(source, libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore))
 
     assertTrue(result.compiledClean, "got: ${result.compileErrors} ${result.kspErrors}")

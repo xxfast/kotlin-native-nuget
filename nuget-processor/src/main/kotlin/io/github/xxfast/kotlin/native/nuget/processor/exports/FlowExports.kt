@@ -651,7 +651,8 @@ private data class MutableStateFlowWriteSlot(
  * crosses as its ordinal and is read back with `entries[value]`, byte-for-byte the synchronous
  * enum setter's shape (`ForwardPropertyKotlinEmitter`); an ordinary class/object element crosses
  * as a `COpaquePointer` and is unwrapped via `asStableRef`, the same shape as
- * `ForwardPropertyKotlinEmitter.valueExpression`'s `ObjectHandle` branch.
+ * `ForwardPropertyKotlinEmitter.valueExpression`'s `ObjectHandle` branch. A value class crosses as
+ * its underlying and is re-wrapped ([valueClassWriteSlot]).
  *
  * Nullable element write: a `String?` is one nullable slot, an object a nullable pointer unwrapped
  * null-safely, and a scalar the has-value pair `addLegacyScalarParameter` gives every sibling
@@ -689,6 +690,66 @@ private fun mutableStateFlowWriteSlot(elementType: KSType?): MutableStateFlowWri
         "value",
       )
     }
+
+    is MutableStateFlowElement.ValueClass -> valueClassWriteSlot(element, nullable)
+  }
+}
+
+/**
+ * ADR-071 amendment (value-class element write): the Kotlin half, the synchronous value-class
+ * setter's re-wrap (`ForwardPropertyKotlinEmitter`, ADR-077): the slot is the underlying's own
+ * wire and the assignment rebuilds the value class around it, so its `init` re-runs. A nullable
+ * element is null exactly when the underlying slot says so (a null pointer, or the has-value
+ * pair's flag).
+ */
+private fun valueClassWriteSlot(
+  element: MutableStateFlowElement.ValueClass,
+  nullable: Boolean,
+): MutableStateFlowWriteSlot {
+  val wrap: (String) -> String = { underlying: String -> "${element.qualifiedName}($underlying)" }
+  val hasValuePair: (TypeName, String) -> MutableStateFlowWriteSlot = { wire, unwrapped ->
+    MutableStateFlowWriteSlot(
+      listOf("valueHasValue" to BOOLEAN, "value" to wire),
+      "if (valueHasValue) ${wrap(unwrapped)} else null",
+    )
+  }
+  return when (val underlying: MutableStateFlowElement.Writable = element.underlying) {
+    is MutableStateFlowElement.Handle -> if (nullable) {
+      MutableStateFlowWriteSlot(
+        listOf("value" to cOpaquePointer.copy(nullable = true)),
+        "value?.asStableRef<${underlying.qualifiedName}>()?.get()?.let { ${wrap("it")} }",
+      )
+    } else {
+      MutableStateFlowWriteSlot(
+        listOf("value" to cOpaquePointer),
+        wrap("value.asStableRef<${underlying.qualifiedName}>().get()"),
+      )
+    }
+
+    is MutableStateFlowElement.Enum -> if (nullable) {
+      hasValuePair(INT, "${underlying.qualifiedName}.entries[value]")
+    } else {
+      MutableStateFlowWriteSlot(
+        listOf("value" to INT),
+        wrap("${underlying.qualifiedName}.entries[value]"),
+      )
+    }
+
+    MutableStateFlowElement.Scalar -> {
+      val wire = ClassName("kotlin", element.underlyingSimpleName)
+      when {
+        element.underlyingSimpleName == "String" -> MutableStateFlowWriteSlot(
+          listOf("value" to wire.copy(nullable = nullable)),
+          if (nullable) "value?.let { ${wrap("it")} }" else wrap("value"),
+        )
+
+        nullable -> hasValuePair(wire, "value")
+        else -> MutableStateFlowWriteSlot(listOf("value" to wire), wrap("value"))
+      }
+    }
+
+    is MutableStateFlowElement.ValueClass ->
+      error("value class ${element.qualifiedName} over a value class has no write arm")
   }
 }
 
