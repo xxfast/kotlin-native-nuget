@@ -41,6 +41,19 @@ class CatBulletin(private val name: String) {
   val tags: MutableSharedFlow<CatId> = MutableSharedFlow(replay = 2)
 
   /**
+   * ADR-209 over ADR-071's nullable arms: a nullable enum element, emitted from C# as a has-value
+   * slot ahead of the ordinal, so `null` and `HAPPY` (ordinal 0) are different emits. Replays
+   * two.
+   */
+  val hunches: MutableSharedFlow<Mood?> = MutableSharedFlow(replay = 2)
+
+  /** ADR-209: a `Boolean?` element, an `I1` value behind the has-value slot. Replays two. */
+  val purrs: MutableSharedFlow<Boolean?> = MutableSharedFlow(replay = 2)
+
+  /** ADR-209: a `Char?` element, a `U2` value behind the has-value slot. Replays two. */
+  val initials: MutableSharedFlow<Char?> = MutableSharedFlow(replay = 2)
+
+  /**
    * ADR-209: no replay and no buffer, so an emit parks for as long as a subscriber is busy with
    * the previous item. The deterministic shape of a parked `EmitAsync`.
    */
@@ -69,6 +82,16 @@ class CatBulletin(private val name: String) {
 
   /** The id of the last tag [tags] replays, read on the Kotlin side. */
   fun latestTag(): String? = tags.replayCache.lastOrNull()?.id
+
+  /** [hunches]' replay cache read on the Kotlin side: each entry's name, `none` for null. */
+  fun latestHunches(): List<String> = hunches.replayCache.map { mood -> mood?.name ?: "none" }
+
+  /** [purrs]' replay cache read on the Kotlin side, `none` for null. */
+  fun latestPurrs(): List<String> = purrs.replayCache.map { purr -> purr?.toString() ?: "none" }
+
+  /** [initials]' replay cache read on the Kotlin side, `none` for null. */
+  fun latestInitials(): List<String> =
+    initials.replayCache.map { initial -> initial?.toString() ?: "none" }
 
   fun publish(headline: String, edition: Int) {
     headlines.tryEmit("$name: $headline")

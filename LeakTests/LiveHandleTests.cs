@@ -2859,6 +2859,9 @@ public class LiveHandleTests
     // `.Value` reads after Oreo sulks, and a generic `Box<Mood>.Value` read (ADR-147). The ADR-071
     // enum element write crosses by ordinal and mints nothing, so one settable `Outlook` write and
     // its read-back ride along: the write must not leak and the read must still release its entry.
+    // The NULLABLE enum element write (`Hunch`) is the same ordinal behind a has-value slot: an
+    // entry written and read back, a `CompareAndSet` to null, and the null read (which mints
+    // nothing) ride along on the property and on the held `HunchDial()`.
     [Fact]
     public void EnumStateFlowElement_RepeatedValueReads_ReturnToBaseline()
     {
@@ -2874,6 +2877,17 @@ public class LiveHandleTests
                     Assert.Equal(Mood.Grumpy, tracker.Temper.Value);
                     Assert.Equal(Mood.Grumpy, tracker.MaybeTemper.Value);
                     Assert.Equal(Mood.Grumpy, tracker.Outlook.Value);
+                }
+                tracker.Hunch.Value = Mood.Grumpy;
+                Assert.Equal(Mood.Grumpy, tracker.Hunch.Value);
+                Assert.True(tracker.Hunch.CompareAndSet(Mood.Grumpy, null));
+                Assert.Null(tracker.Hunch.Value);
+                using (KotlinMutableStateFlow<Mood?> dial = tracker.HunchDial())
+                {
+                    dial.Value = Mood.Sleepy;
+                    Assert.Equal(Mood.Sleepy, dial.Value);
+                    dial.Value = null;
+                    Assert.Null(dial.Value);
                 }
                 using Box<Mood> box = CatMoodTrackerKt.SulkBox();
                 Assert.Equal(Mood.Grumpy, box.Value);

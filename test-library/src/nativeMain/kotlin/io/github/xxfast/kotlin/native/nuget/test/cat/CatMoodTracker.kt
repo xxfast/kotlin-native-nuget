@@ -258,6 +258,28 @@ class CatMoodTracker(private val catName: String) {
   /** Kotlin-side read-back: proves a C# write of [bestFriend] (null included) landed in Kotlin. */
   fun bestFriendName(): String? = bestFriend.value?.name
 
+  /**
+   * MutableStateFlow<Boolean?> -- a nullable Boolean element: the has-value pair at the one-byte
+   * width, so null, `false` and `true` are three different writes.
+   */
+  val purring: MutableStateFlow<Boolean?> = MutableStateFlow(null)
+
+  /**
+   * MutableStateFlow<Char?> -- a nullable Char element: the has-value pair at the two-byte width,
+   * so a non-ASCII initial survives both directions.
+   */
+  val initial: MutableStateFlow<Char?> = MutableStateFlow(null)
+
+  /** Kotlin-side read-back of [purring]: a null that crossed as `false` would answer `silent`. */
+  fun purringNote(): String = when (purring.value) {
+    null -> "unknown"
+    true -> "purring"
+    false -> "silent"
+  }
+
+  /** Kotlin-side read-back of [initial], as its UTF-16 code unit; -1 for null. */
+  fun initialCode(): Int = initial.value?.code ?: -1
+
   // --- ADR-071 amendment (nullable member write): a `MutableStateFlow<T>?` absent until
   // [openDiary], settable once present. [closeDiary] makes it absent again, so a C# holder obtained
   // before the close finds the member gone on its next write. ---
@@ -356,6 +378,22 @@ class CatMoodTracker(private val catName: String) {
 
   /** Kotlin-side read-back: proves a C# write of [outlook] landed in Kotlin as the real entry. */
   fun currentOutlook(): Mood = outlook.value
+
+  // --- ADR-071 (nullable enum element write): a `MutableStateFlow<Mood?>` is settable too. Its
+  // write is the nullable scalar's has-value pair over the enum's ordinal slot, so `null` and
+  // `HAPPY` (ordinal 0) are different writes. Starts null. ---
+
+  /** MutableStateFlow<Mood?> -- a nullable enum element: a has-value slot, then the ordinal. */
+  val hunch: MutableStateFlow<Mood?> = MutableStateFlow(null)
+
+  /** The held function-return twin of [hunch], sharing its storage. */
+  fun hunchDial(): MutableStateFlow<Mood?> = hunch
+
+  /**
+   * Kotlin-side read-back of [hunch]: the entry's name, or `none` for null. A null that crossed
+   * as ordinal 0 would answer `HAPPY` here.
+   */
+  fun currentHunch(): String = hunch.value?.name ?: "none"
 
   // --- ADR-071 amendment (value-class element write): a `MutableStateFlow<V>` of an exported
   // value class binds a settable `KotlinMutableStateFlow<V>`. The write crosses as the underlying,

@@ -10,7 +10,7 @@ import kotlin.test.assertTrue
  * `.Value` that accepts null, on the property route and the held function-return route alike. A
  * `String?` crosses as one nullable string slot, an object element as a nullable handle
  * (`IntPtr.Zero` for null), and a nullable scalar as the legacy route's has-value pair. `Boolean?`
- * and `Char?` keep the read-only `KotlinStateFlow<T?>` mapping, mirroring ADR-067's read side.
+ * and `Char?` are that pair too, now that both widths are pinned (ADR-067 had deferred them).
  *
  * The end-to-end half lives in `CatMoodTracker` / `MutableStateFlowTests.cs`.
  */
@@ -30,6 +30,7 @@ class Tier1MutableStateFlowNullableElementWriteTest {
       val asleep: MutableStateFlow<Boolean?> = MutableStateFlow(null)
       val initial: MutableStateFlow<Char?> = MutableStateFlow(null)
       fun napJar(): MutableStateFlow<Int?> = naps
+      fun asleepSwitch(): MutableStateFlow<Boolean?> = asleep
       fun toyBox(): MutableStateFlow<Toy?> = toy
     }
     """.trimIndent()
@@ -79,19 +80,96 @@ class Tier1MutableStateFlowNullableElementWriteTest {
       "Native_SetToyValue(_handle, v?._handle ?? NugetKotlinHandle.Null, out IntPtr error);",
     )
 
-    // Boolean? and Char? stay read-only (ADR-067 width deferral), with no setter on either half.
-    assertContains(csharp, "public KotlinStateFlow<bool?> Asleep")
-    assertContains(csharp, "public KotlinStateFlow<char?> Initial")
-    assertFalse(
-      kotlin.contains("tracker_set_asleep_value") || kotlin.contains("tracker_set_initial_value"),
-      "expected no setter for Boolean?/Char? elements; generated=$kotlin",
+  }
+
+  /**
+   * `Boolean?` and `Char?` were held back by ADR-067's width deferral. Both widths are pinned now
+   * (`I1` for `bool`, ADR-069; `U2` for `char`, ADR-098), on the has-value slot, the value slot and
+   * the boxed read alike, so they are the same pair as every other nullable scalar.
+   */
+  @Test
+  fun `a nullable Boolean or Char element is the same has-value pair, at a pinned width`() {
+    val result = Tier1Harness.run(source, libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore))
+
+    assertTrue(result.compiledClean, "got: ${result.compileErrors} ${result.kspErrors}")
+
+    val kotlin: String = result.generated
+    val csharp: String = result.generatedCSharp
+
+    assertContains(csharp, "public KotlinMutableStateFlow<bool?> Asleep")
+    assertContains(csharp, "public KotlinMutableStateFlow<char?> Initial")
+    assertContains(kotlin, ".asleep.value = if (valueHasValue) value else null")
+    assertContains(kotlin, ".initial.value = if (valueHasValue) value else null")
+    assertContains(
+      kotlin,
+      Regex("""tracker_set_asleep_value\([^)]*valueHasValue: Boolean,\s*`?value`?: Boolean,"""),
     )
-    assertFalse(
-      csharp.contains("EntryPoint = \"library_tier1_nullablewrite__tracker_set_asleep_value\"") ||
-          csharp.contains(
-            "EntryPoint = \"library_tier1_nullablewrite__tracker_set_initial_value\"",
-          ),
-      "expected no setter import for Boolean?/Char? elements; generatedCSharp=$csharp",
+    assertContains(
+      kotlin,
+      Regex("""tracker_set_initial_value\([^)]*valueHasValue: Boolean,\s*`?value`?: Char,"""),
+    )
+    assertContains(
+      csharp,
+      "private static extern void Native_SetAsleepValue(NugetKotlinHandle handle, " +
+          "[MarshalAs(UnmanagedType.I1)] bool valueHasValue, " +
+          "[MarshalAs(UnmanagedType.I1)] bool value, out IntPtr error);",
+    )
+    assertContains(
+      csharp,
+      "private static extern void Native_SetInitialValue(NugetKotlinHandle handle, " +
+          "[MarshalAs(UnmanagedType.I1)] bool valueHasValue, " +
+          "[MarshalAs(UnmanagedType.U2)] char value, out IntPtr error);",
+    )
+    assertContains(
+      csharp,
+      "Native_SetAsleepValue(_handle, v.HasValue, v.GetValueOrDefault(), out IntPtr error);",
+    )
+    // The held twin shares the slot and reads a null current value through the null-aware export.
+    assertContains(csharp, "public KotlinMutableStateFlow<bool?> AsleepSwitch()")
+    assertContains(
+      csharp,
+      "Native_AsleepSwitchSetValue(owned, v.HasValue, v.GetValueOrDefault(), out IntPtr error);",
+    )
+    assertTrue(
+      result.kspWarnings.none { it.contains("[nuget:") && it.contains("Tracker.") },
+      "expected no diagnostic for a settable nullable element; kspWarnings=${result.kspWarnings}",
+    )
+  }
+
+  @Test
+  fun `the consumer writes null, false and a char through nullable Boolean and Char elements`() {
+    val result = Tier1Harness.run(source, libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore))
+
+    Tier1CSharpCompile.assertCompiles(
+      result,
+      """
+      using Interop;
+
+      namespace Consumer
+      {
+          public static class Probe
+          {
+              public static bool Run(Tracker tracker)
+              {
+                  KotlinMutableStateFlow<bool?> asleep = tracker.Asleep;
+                  asleep.Value = false;
+                  asleep.Value = null;
+                  bool swapped = asleep.CompareAndSet(null, true);
+                  asleep.Update(value => value == true ? null : false);
+
+                  KotlinMutableStateFlow<char?> initial = tracker.Initial;
+                  initial.Value = 'O';
+                  initial.Value = null;
+                  char? after = initial.UpdateAndGet(_ => 'M');
+
+                  using KotlinMutableStateFlow<bool?> held = tracker.AsleepSwitch();
+                  held.Value = true;
+                  return swapped && after == 'M' && held.Value == true;
+              }
+          }
+      }
+      """.trimIndent(),
+      allowUnsafe = true,
     )
   }
 

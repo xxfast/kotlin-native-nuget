@@ -185,7 +185,8 @@ translators now carry a structural `acquiredFlow` flag, so respelling the awaite
 `EmitAsync` and `TryEmit` take the slot the ADR-071 `.Value` setter takes
 (`mutableStateFlowWrite` / `mutableStateFlowWriteSlot`, gated by `isMutableStateFlowElementWritable`):
 scalar and `String` by value, enum by ordinal, object by handle, and nullable `String?`, `Int?` and
-nullable object elements. `Boolean?`, `Char?` and a nullable enum have no write arm.
+nullable object elements. `Boolean?`, `Char?` and a nullable enum had no write arm when this
+shipped; the 2026-10-10 amendment at the end of this file gives them one.
 
 A value class element emits by value, through the ADR-071 value-class arm (its 2026-10-10
 amendment): over a non-null `String`, a primitive other than `Char`, an enum, or an exported class
@@ -195,11 +196,13 @@ guard: a `String` or object underlying throws `ArgumentException` in C# before t
 owner-keyed `EmitAsync` the owner's lazy scope may be created first; it is disposed with the owner).
 
 A declared `MutableSharedFlow<T>` whose element has no write arm (collections, `ByteArray`,
-interfaces, the nullable cases above, and a value class over any other underlying; one with no
+interfaces, and a value class over any other underlying; one with no
 record struct or no boxed form is skipped instead, see the 2026-10-10 amendment) binds as
 `KotlinSharedFlow<T>` and keeps `ReplayCache`. The dropped members are named with
 `SKIPPED_UNSUPPORTED_INPUT`: "its EmitAsync, TryEmit and SubscriptionCount are not generated
-because a MutableSharedFlow element of X has no write arm", with a hint that the C# property is a
+because a List element of a MutableSharedFlow has no write arm (the write seam does not build its
+wire container)" (the 2026-10-10 wording; it was "a MutableSharedFlow element of X has no write
+arm"), with a hint that the C# property is a
 read-only `KotlinSharedFlow` and to expose a function taking X to emit it. A refused value class is
 named with its underlying ("of value class X over U has no write arm"). The warning covers class,
 sealed-arm, interface and top-level `suspend` owners.
@@ -267,3 +270,17 @@ that has a record struct but no box/unbox pair (`Nick(val name: String?)`). This
 for those two kinds; the rule is in the 2026-10-10 amendments to ADR-071 and ADR-077. Verified by
 `Tier1ValueClassWithoutStructSharedFlowAndGenericTest` (property, held and awaited returns, with a
 `dotnet build`).
+
+## Amendment (2026-10-10): nullable `Boolean`, `Char` and enum elements emit
+
+`MutableSharedFlow<Mood?>`, `<Boolean?>` and `<Char?>` bind `KotlinMutableSharedFlow<Mood?>`,
+`<bool?>` and `<char?>` with `EmitAsync` and `TryEmit` on property, held and awaited routes. This
+replaces the "have no write arm" sentence under "Write arms and named refusals": the surface shares
+ADR-071's element classifier, and [ADR-071's 2026-10-10 amendment](071-mutable-stateflow-mapping.md)
+makes those three nullable forms writable (the has-value pair, over the ordinal slot for an enum).
+A null is its own emit, never `false`, `'\0'` or ordinal 0.
+
+The refusal sentence for a collection, `ByteArray` or interface element is now the one
+`MutableStateFlow`'s setter uses ("a List element of a MutableSharedFlow has no write arm (...)"),
+built by one shared function. Verified natively by four facts in `IntegrationTests/SharedFlowTests.cs`
+over `CatBulletin.hunches`, `purrs` and `initials`, AOT included, and by `Tier1SharedFlowSurfaceTest`.

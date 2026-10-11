@@ -731,8 +731,14 @@ internal fun mutableStateFlowWriteSlot(elementType: KSType?): MutableStateFlowWr
       MutableStateFlowWriteSlot(listOf("value" to cOpaquePointer.copy(nullable = nullable)), unwrap)
     }
 
-    is MutableStateFlowElement.Enum -> {
-      require(!nullable) { "nullable enum element ${element.qualifiedName} is not writable" }
+    // A nullable enum is the nullable scalar's has-value pair over the ordinal slot, so a null is
+    // never ordinal 0; an out-of-range ordinal still throws out of `entries[value]`.
+    is MutableStateFlowElement.Enum -> if (nullable) {
+      MutableStateFlowWriteSlot(
+        listOf("valueHasValue" to BOOLEAN, "value" to INT),
+        "if (valueHasValue) ${element.qualifiedName}.entries[value] else null",
+      )
+    } else {
       MutableStateFlowWriteSlot(listOf("value" to INT), "${element.qualifiedName}.entries[value]")
     }
 
