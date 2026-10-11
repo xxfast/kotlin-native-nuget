@@ -137,9 +137,31 @@ internal sealed interface ForwardLegacyParameterShape {
   ) : ForwardLegacyParameterShape
 }
 
-/** The out-of-scope dependency refusal [classified] carries, nullable unwrapped, or null. */
+/**
+ * The refusal [classified] carries that has a sentence of its own, nullable unwrapped, or null: an
+ * out-of-scope dependency type (ADR-154's `admit(...)` remedy), or a value class with no C# record
+ * struct, itself or as a component of the collection [classified] is. The diagnostic walk names
+ * the member with that type's own reason instead of the route's generic wording.
+ */
 internal fun legacyDependencyRefusal(classified: BridgeType): BridgeType.Unsupported? =
   (classified.unwrapNullable() as? BridgeType.Unsupported)?.takeIf { it.isUnexportedDependency }
+    ?: classified.valueClassWithoutStruct()
+
+/**
+ * The value class with no C# record struct in [this]: itself, or a component of the collection it
+ * is, at any depth. The classifier refuses such a class at every position
+ * (`BridgeType.Unsupported.valueClassUnderlying`), so this only finds what is already refused, to
+ * name it.
+ */
+internal fun BridgeType.valueClassWithoutStruct(): BridgeType.Unsupported? =
+  when (val unwrapped: BridgeType = unwrapNullable()) {
+    is BridgeType.Unsupported -> unwrapped.takeIf { it.valueClassUnderlying != null }
+    is BridgeType.Collection ->
+      listOfNotNull(unwrapped.element, unwrapped.key, unwrapped.value)
+        .firstNotNullOfOrNull { component -> component.valueClassWithoutStruct() }
+
+    else -> null
+  }
 
 /**
  * ADR-171: whether a value class has the `NugetBox`/`NugetUnbox` pair generated for it. The
@@ -217,7 +239,10 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
   return if (collection != null && collection.isLegacyMarshallableInput()) {
     ForwardLegacyParameterShape.Marshalled(collection, nullable = nullable)
   } else {
-    ForwardLegacyParameterShape.Refused(expanded.legacyDescription())
+    ForwardLegacyParameterShape.Refused(
+      expanded.legacyDescription(),
+      unwritten.valueClassWithoutStruct(),
+    )
   }
 }
 
@@ -729,7 +754,9 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
     return if (classified.hasErasedCrossing()) {
       ForwardLegacyReturnShape.ValueClass(classified, expanded.isMarkedNullable)
     } else {
-      ForwardLegacyReturnShape.Refused(expanded.legacyDescription())
+      ForwardLegacyReturnShape.Refused(
+        "${expanded.legacyDescription()}$VALUE_CLASS_WITHOUT_BOX_REFUSAL",
+      )
     }
   }
   // ADR-208: a closed instantiation of an exported generic class (`Box<String>`) is a handle
@@ -787,7 +814,18 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
     return if (elementShape is ForwardLegacyFlowElementShape.Plain || bindsPerMember) {
       ForwardLegacyReturnShape.Plain
     } else {
-      ForwardLegacyReturnShape.Refused(expanded.legacyDescription())
+      // An element refused for a reason of its own (a value class with no record struct, or with
+      // no boxed form) keeps that reason, whichever holder awaits it.
+      val refused: ForwardLegacyFlowElementShape.Refused? =
+        elementShape as? ForwardLegacyFlowElementShape.Refused
+      val clause: String = if (
+        refused?.description?.endsWith(VALUE_CLASS_WITHOUT_BOX_REFUSAL) == true
+      ) {
+        VALUE_CLASS_WITHOUT_BOX_REFUSAL
+      } else {
+        ""
+      }
+      ForwardLegacyReturnShape.Refused("${expanded.legacyDescription()}$clause", refused?.refusal)
     }
   }
 
@@ -800,7 +838,10 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
   return if (collection != null && collection.isBridgeableComponent()) {
     ForwardLegacyReturnShape.Marshalled(collection, nullable = expanded.isMarkedNullable)
   } else {
-    ForwardLegacyReturnShape.Refused(expanded.legacyDescription())
+    ForwardLegacyReturnShape.Refused(
+      expanded.legacyDescription(),
+      rewritten.valueClassWithoutStruct(),
+    )
   }
 }
 
@@ -938,6 +979,19 @@ internal fun ForwardBridgeTypeClassifier.legacyFlowElementShape(
     }
   }
 
+  // A bare value-class element is read back through `NugetMarshal.Factories`, whose entry is the
+  // ADR-171 `NugetUnbox`. A value class that has a record struct but no box/unbox pair (a nullable
+  // underlying such as `String?`) has no entry, so its `.Value` and every emission would throw at
+  // the first read. Refused by name, on the one rule the planner builds the pair from; the sealed
+  // rewrite is the planner's own (`valueClassBoxingEntries`).
+  val valueClass: BridgeType.ValueClass? =
+    classified.sealedAsHandle() as? BridgeType.ValueClass
+  if (valueClass != null && expanded.arguments.isEmpty() && !valueClass.hasErasedCrossing()) {
+    return ForwardLegacyFlowElementShape.Refused(
+      "${expanded.legacyDescription()}$VALUE_CLASS_WITHOUT_BOX_REFUSAL",
+    )
+  }
+
   if (expanded.arguments.isEmpty()) return ForwardLegacyFlowElementShape.Plain
 
   // ADR-208: a closed instantiation of an exported generic class reads through its `Factories`
@@ -947,14 +1001,26 @@ internal fun ForwardBridgeTypeClassifier.legacyFlowElementShape(
   // ADR-119 amendment: the suspend return's ADR-105 rewrite, so `Flow<List<Shape>>` of an eligible
   // sealed base admits its `ObjectHandle(viaDiscriminator)` elements. A nullable collection element
   // is still `Nullable`, not `Collection`, so it stays refused (the `StateFlow<T?>` problem).
-  val collection: BridgeType.Collection? =
-    classify(type).sealedAsHandle() as? BridgeType.Collection
+  val rewritten: BridgeType = classify(type).sealedAsHandle()
+  val collection: BridgeType.Collection? = rewritten as? BridgeType.Collection
   return if (collection != null && collection.isBridgeableComponent()) {
     ForwardLegacyFlowElementShape.Marshalled(collection)
   } else {
-    ForwardLegacyFlowElementShape.Refused(expanded.legacyDescription())
+    ForwardLegacyFlowElementShape.Refused(
+      expanded.legacyDescription(),
+      rewritten.valueClassWithoutStruct(),
+    )
   }
 }
+
+/**
+ * The clause appended to a refused value-class `Flow`/`StateFlow` element or awaited result that
+ * HAS a C# record struct but no ADR-171 box/unbox pair, so the skip says what is actually missing.
+ */
+internal const val VALUE_CLASS_WITHOUT_BOX_REFUSAL: String =
+  " (a value class is a Flow or StateFlow element, or an awaited result, only over a String, a " +
+    "primitive other than Char, an enum or an exported class: those are the underlyings it has a " +
+    "boxed form for)"
 
 /**
  * ADR-123: the element of a `Flow`/`StateFlow` type, or null when [type] is neither. The one place

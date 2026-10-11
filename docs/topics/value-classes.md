@@ -33,7 +33,10 @@ Only a value class over `String`, a primitive other than `Char`, an enum, a null
 primitive, an object handle, or a sealed base/eligible sealed interface is declared at all. A value
 class over `Char`, a plain interface, a nullable non-scalar, `Instant`, `Duration`, `Uuid`,
 `ByteArray`, a collection, another value class, or a type outside the export set is refused by
-name; every member typed with it is a separate named skip.
+name; every member typed with it, at any position, is a separate named skip
+(`SKIPPED_UNSUPPORTED_TYPE`: "its value class type `X` has no C# record struct, because it wraps
+`kotlin.Char`, which no value-class wire carries"). That covers a generic value class, and a
+`Box<X>`, `List<X>`, lambda or `Flow` of one.
 
 ## As an ordinary parameter, property, or return type
 
@@ -208,12 +211,13 @@ using var nameless = new Patient("");
 Assert.ThrowsAny<ArgumentException>(() => new Box<WardBand>(new WardBand(nameless)));
 ```
 
-Not every declared value class crosses here: a value class whose underlying is itself nullable, a
-generic value class, or an ineligible sealed interface has no crossing at this position. A lambda
-over one of those is refused by name at build time, but a generic class's `T` has no build-time
-gate to refuse it with -- `Box<T>` is an open C# generic -- so `new Box<V>(v)` for such a `V` still
-compiles and throws `NotSupportedException` at the call, the same way it does for an unsupported
-`T` of any other kind.
+Not every declared value class crosses here: a value class whose underlying is itself nullable or
+an ineligible sealed interface has no crossing at this position. A lambda payload, a bare
+`Flow`/`StateFlow`/`SharedFlow` element or an awaited result over one is a named skip (inside a
+`List` it still binds), and so is a `Box<V>` member over one. But `Box<T>` is an
+open C# generic with no build-time gate of its own, so `new Box<V>(v)` written in your C# code for
+such a `V` still compiles and throws `NotSupportedException` at the call, as it does for an
+unsupported `T` of any other kind.
 
 ## As an extension receiver
 

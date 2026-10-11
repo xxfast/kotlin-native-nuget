@@ -1369,7 +1369,7 @@ internal fun translateClass(
   // lambda whose payload or return is nullable, whose payload is a Kotlin builtin non-scalar, or
   // whose result is not `Unit`/primitive/`String` has no crossing on this route at all.
   val crossableNonFlowMethods: List<KSFunctionDeclaration> = nonFlowMethods
-    .filterNot { method -> method.refusedLegacyLambdaShape() != null }
+    .filterNot { method -> method.refusedLegacyLambdaShape(classifier) != null }
 
   val (lambdaParamMethods, normalMethods) = crossableNonFlowMethods.partition { method ->
     method.parameters.any { param ->

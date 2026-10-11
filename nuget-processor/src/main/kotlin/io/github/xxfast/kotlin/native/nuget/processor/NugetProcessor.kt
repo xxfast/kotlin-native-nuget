@@ -1002,7 +1002,7 @@ internal fun warnRefusedLegacyRouteMembers(
     findStoredCallbackPairs(
       members
         .filter { it.hasLegacyLambdaParameter() }
-        .filter { it.refusedLegacyLambdaShape() == null },
+        .filter { it.refusedLegacyLambdaShape(classifier) == null },
     ).forEach { (addMethod, removeMethod) ->
       if (nameMarkedPair(addMethod, removeMethod, "stored-callback", owner, ownerDeclaration)) {
         return@forEach
@@ -1082,6 +1082,17 @@ internal fun warnRefusedLegacyRouteMembers(
     val type: KSType = (property?.type ?: function?.returnType)?.resolve()?.expandAliases()
       ?: return
     if (type.declaration.qualifiedName?.asString() !in MUTABLE_STATE_FLOW_TYPES) return
+    // Only a member that SURVIVES read-only is named here. One the flow route dropped altogether
+    // (a value class with no C# record struct, or with no boxed form) has no C# property or holder
+    // to call read-only, and its own skip already names it.
+    val dropped: Boolean = when {
+      property != null -> classifier.legacyRefusedFlowElement(property.type.resolve()) != null
+      function != null -> classifier.legacyRefusedParameterShape(function.parameters) != null ||
+          classifier.legacyRefusedReturn(function) != null
+
+      else -> false
+    }
+    if (dropped) return
     val element: KSType? = type.arguments.firstOrNull()?.type?.resolve()?.expandAliases()
     // Any value-class element that is not writable is named, whichever arm says so, so a gate
     // that narrows later cannot reintroduce a silent read-only value class.
@@ -1233,7 +1244,7 @@ internal fun warnRefusedLegacyRouteMembers(
         .filter { method -> method.getVisibility() == Visibility.PUBLIC }
         .forEach { method ->
           val refused: LegacyRefusedInterfaceBridgePair =
-            method.refusedLegacyLambdaShape() ?: return@forEach
+            method.refusedLegacyLambdaShape(classifier) ?: return@forEach
           add(
             refusedCallbackPayload(
               method, "$owner.${method.simpleName.asString()}", refused, ownerDeclaration,
@@ -1332,7 +1343,7 @@ internal fun warnRefusedLegacyRouteMembers(
           .filter { method -> subclass.isForwardArmMember(method) }
           .forEach { method ->
             val refused: LegacyRefusedInterfaceBridgePair =
-              method.refusedLegacyLambdaShape() ?: return@forEach
+              method.refusedLegacyLambdaShape(classifier) ?: return@forEach
             add(
               refusedCallbackPayload(
                 method, "$owner.${method.simpleName.asString()}", refused, ownerDeclaration,

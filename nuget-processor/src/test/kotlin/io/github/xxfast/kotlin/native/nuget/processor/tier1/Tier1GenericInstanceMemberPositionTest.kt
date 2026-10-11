@@ -3,6 +3,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.tier1
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import kotlin.test.Test
 import kotlin.test.assertContains
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -446,23 +447,28 @@ class Tier1GenericInstanceMemberPositionTest {
   }
 
 
-  /** Every member of the [crates] fixture, with the named skip its position gives it. */
+  /**
+   * Every member of the [crates] fixture, with its named skip. A generic value class has no C#
+   * record struct, so the classifier refuses it as one undeclarable type at every position
+   * (`SKIPPED_UNSUPPORTED_TYPE`), flow and `suspend` routes included; an ordinary property keeps
+   * the property kind.
+   */
   private val crateMembers: Map<String, ForwardDiagnosticKind> = mapOf(
     "held" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
     "spare" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
     "fetch" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
     "stow" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
-    "maybeFetch" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
+    "maybeFetch" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
     "maybeStow" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
     "boxed" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
     "listed" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
-    "later" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
-    "laterWith" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
-    "stream" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
-    "state" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
-    "mutable" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
-    "streamOf" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
-    "dial" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
+    "later" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
+    "laterWith" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
+    "stream" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
+    "state" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
+    "mutable" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
+    "streamOf" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
+    "dial" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
     "topCrate" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
     "topFetch" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
     "topStow" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
@@ -536,21 +542,25 @@ class Tier1GenericInstanceMemberPositionTest {
 
   /**
    * ADR-208's read-only gate on a generic `MutableStateFlow` element is for a generic CLASS, whose
-   * refusal is silent because the member still binds. A generic value class element keeps
-   * ADR-071's named write refusal, on a property and on a returned holder.
+   * refusal is silent because the member still binds. A generic value class element is not a
+   * flow element at all (no record struct): the member is dropped and named once, by that reason,
+   * on a property and on a returned holder. ADR-071's write refusal describes a member that
+   * survives read-only, so it must not also fire for one that is gone.
    */
   @Test
-  fun `a MutableStateFlow of a generic value class keeps its named write refusal`() {
+  fun `a MutableStateFlow of a generic value class is one named skip, not a write refusal`() {
     listOf("mutable", "dial").forEach { member ->
-      assertTrue(
-        crates.kspWarnings.any {
-          it.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name}]") &&
-            it.contains(".$member: ") && it.contains("value class tier1.crates.Crate") &&
-            it.contains("has no write arm")
-        },
-        "expected $member refused naming its value class; kspWarnings=${crates.kspWarnings}",
+      val named: List<String> = crates.kspWarnings.filter { it.contains(".$member: ") }
+      assertEquals(1, named.size, "expected $member named once; kspWarnings=${crates.kspWarnings}")
+      assertContains(
+        named.single(),
+        "its value class type `tier1.crates.Crate` has no C# record struct",
       )
     }
+    assertFalse(
+      crates.kspWarnings.any { it.contains("has no write arm") },
+      "a dropped member has no read-only surface to describe; got: ${crates.kspWarnings}",
+    )
     assertFalse(
       Regex("""depot_set_\w+_value""").containsMatchIn(crates.generated),
       "expected no Kotlin setter for a generic value class element",

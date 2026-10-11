@@ -920,7 +920,8 @@ The classifier gains a fourth writable arm, `ValueClass`, beside `Scalar`, `Enum
   to something other than an object handle. These bind the read-only `KotlinStateFlow<V>` and
   the `SKIPPED_UNSUPPORTED_INPUT` reason now names the underlying. Any value class element that is
   not writable is named, whichever arm says so, so a later gate change cannot make one silently
-  read-only.
+  read-only. (Superseded for a value class with no record struct or no boxed form: that member is
+  now skipped, see the last 2026-10-10 amendment.)
 - **Equality.** `CompareAndSet` and the `Update` family compare with Kotlin `equals` on the
   underlying, as the 2026-10-09 amendment says for every element. C# record-struct equality takes
   no part.
@@ -1000,3 +1001,21 @@ Verified: `Tier1MutableStateFlowGenericElementTest` (signatures, the applied spe
 half, the refused value class, and a `dotnet build` of a consumer that sets, compares and updates);
 `IntegrationTests/MutableStateFlowGenericElementTests.cs` run natively against `BoxDisplay`;
 LeakTests row `MutableStateFlowGenericElement_Writes_ReturnToBaseline`.
+
+## Amendment (2026-10-10): a struct-less or box-less value class element is a member-level skip
+
+Supersedes the "Declined, named ... bind the read-only `KotlinStateFlow<V>`" sentence in the
+value class amendment above. A value class that has no C# record struct (its underlying is a `Char`,
+a `kotlin.*` class such as `Instant` or `Uuid`, a `Throwable`, another value class, a `List`, or it
+is generic) is no longer classified as a value class at all, so a `Flow`, `StateFlow` or
+`MutableStateFlow` over it skips the member by name with `SKIPPED_UNSUPPORTED_TYPE` instead of
+binding a read-only holder over a struct that is never declared. A value class that has a record
+struct but no box/unbox pair (`Nick(val name: String?)`) has no `Factories` entry, so as a bare
+element, an awaited result or a lambda payload it is a named skip too; inside a `List` it still
+binds.
+
+- **Write refusal.** The "its setter is not generated ... read-only `KotlinStateFlow`" warning now
+  fires only for a member that survives. It used to name a property that was dropped.
+- **Rationale and evidence.** See the 2026-10-10 amendment to ADR-077. Verified by
+  `Tier1FlowElementValueClassWithoutStructTest` with a real `dotnet build`. The box-less case is
+  read from the generated reader (it would have thrown `NotSupportedException`), not executed.

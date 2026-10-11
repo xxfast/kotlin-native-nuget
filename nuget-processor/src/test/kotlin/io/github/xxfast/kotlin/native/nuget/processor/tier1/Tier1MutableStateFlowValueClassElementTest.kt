@@ -20,7 +20,7 @@ import kotlin.test.assertTrue
  * in-band null for a String or handle underlying, the has-value pair for a primitive or enum one.
  * A reference underlying refuses `default(V)` in C# (its underlying is null, which no non-null
  * Kotlin slot can take). A value class whose underlying the ordinary setter refuses (here a
- * nullable `String?` underlying) stays read-only and is named.
+ * nullable `String?` underlying) is not a flow element at all, and the member is skipped by name.
  */
 class Tier1MutableStateFlowValueClassElementTest {
 
@@ -215,29 +215,33 @@ class Tier1MutableStateFlowValueClassElementTest {
     )
   }
 
+  /**
+   * `Nick` wraps a `String?`. It has a record struct but no ADR-171 box/unbox pair, so nothing
+   * could read a bare `Nick` element back (`FromHandle<Nick>` has no `Factories` entry). It used
+   * to bind as a read-only holder whose `.Value` would throw; the flow route now drops the member
+   * and names it, and the write-arm refusal, which describes a member that survives read-only,
+   * stays silent.
+   */
   @Test
-  fun `a value class over an underlying the setter refuses stays read-only and is named`() {
+  fun `a value class over an underlying the setter refuses is skipped by name`() {
     assertClean()
     val kotlin: String = result.generated
     val csharp: String = result.generatedCSharp
-    assertContains(csharp, Regex("""public KotlinStateFlow<[\w.:]*Nick> Nick\b"""))
-    assertContains(csharp, Regex("""public KotlinStateFlow<[\w.:]*Nick> NickDial\(\)"""))
     assertFalse(
-      Regex("""KotlinMutableStateFlow<[\w.:]*Nick>""").containsMatchIn(csharp),
-      "expected no settable holder of a Nick element; generatedCSharp=$csharp",
+      Regex("""Flow<[\w.:]*Nick\??>""").containsMatchIn(csharp),
+      "expected no holder of a bare Nick element; generatedCSharp=$csharp",
     )
     assertFalse("tracker_set_nick_value" in kotlin, "expected no Kotlin setter for Nick")
-    listOf("Tracker.nick:", "Tracker.nickDial").forEach { member ->
-      assertTrue(
-        result.kspWarnings.any {
-          it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) &&
-            it.contains(member) && it.contains("value class tier1.vcwrite.Nick") &&
-            it.contains("kotlin.String?")
-        },
-        "expected a SKIPPED_UNSUPPORTED_INPUT naming $member and its underlying; " +
-          "kspWarnings=${result.kspWarnings}",
-      )
+    listOf("Tracker.nick:", "Tracker.nickDial:").forEach { member ->
+      val named: List<String> = result.kspWarnings.filter { it.contains(member) }
+      assertEquals(1, named.size, "expected $member named once; got: ${result.kspWarnings}")
+      assertContains(named.single(), "Nick")
+      assertContains(named.single(), "those are the underlyings it has a boxed form for")
     }
+    assertFalse(
+      result.kspWarnings.any { it.contains("has no write arm") },
+      "a dropped member has no read-only surface to describe; got: ${result.kspWarnings}",
+    )
     // Every writable element is silent: nothing names Tag, Naps, MoodRing, Collar or Flag.
     listOf("Tracker.tag:", "Tracker.spareTag:", "Tracker.flag:", "Tracker.tagDial").forEach {
       assertFalse(
@@ -248,9 +252,12 @@ class Tier1MutableStateFlowValueClassElementTest {
   }
 
   /**
-   * The other underlyings the synchronous value-class setter refuses. Each is named with its
-   * underlying and gets no setter. Asserted on the Kotlin half and the diagnostics only: none of
-   * these value classes has a C# record struct at all.
+   * The other underlyings the synchronous value-class setter refuses. None of these value classes
+   * has a C# record struct at all, so the classifier refuses the type at every position and the
+   * member is named with the value class and its underlying (`SKIPPED_UNSUPPORTED_TYPE`), and the
+   * write-arm refusal, which describes a member that survives read-only, stays silent. The C# is
+   * compiled for real:
+   * this cell used to assert the Kotlin half only, while the C# half spelled the undeclared type.
    */
   @Test
   fun `a Char, stdlib class, nested value class or generic underlying is refused by name`() {
@@ -296,20 +303,30 @@ class Tier1MutableStateFlowValueClassElementTest {
       "expected no Kotlin setter for a refused value class element",
     )
     mapOf(
-      "Tracker.initial:" to "kotlin.Char",
-      "Tracker.stamp:" to "kotlin.time.Instant",
-      "Tracker.outer:" to "tier1.vcrefused.Inner",
-      "Tracker.crate:" to "value class tier1.vcrefused.Crate",
-      "Tracker.oops:" to "kotlin.Throwable",
+      "Tracker.initial:" to listOf("`tier1.vcrefused.Initial`", "`kotlin.Char`"),
+      "Tracker.stamp:" to listOf("`tier1.vcrefused.Stamp`", "`kotlin.time.Instant`"),
+      "Tracker.outer:" to listOf("`tier1.vcrefused.Outer`", "`tier1.vcrefused.Inner`"),
+      "Tracker.oops:" to listOf("`tier1.vcrefused.Oops`", "`kotlin.Throwable`"),
+      "Tracker.crate:" to listOf("`tier1.vcrefused.Crate`"),
     ).forEach { (member, named) ->
-      assertTrue(
-        refusing.kspWarnings.any {
-          it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) &&
-            it.contains(member) && it.contains(named) && it.contains("has no write arm")
-        },
-        "expected $member refused naming $named; kspWarnings=${refusing.kspWarnings}",
-      )
+      val skips: List<String> = refusing.kspWarnings.filter {
+        it.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE.name}]") &&
+          it.contains(member) && it.contains("has no C# record struct")
+      }
+      assertEquals(1, skips.size, "expected $member skipped once; got: ${refusing.kspWarnings}")
+      named.forEach { text ->
+        assertContains(skips.single(), text, message = "expected $member to name $text")
+      }
     }
+    assertFalse(
+      refusing.kspWarnings.any { it.contains("has no write arm") },
+      "a dropped member has no read-only surface to describe; got: ${refusing.kspWarnings}",
+    )
+    Tier1CSharpCompile.assertCompiles(
+      refusing,
+      "namespace Consumer { public static class Probe { } }",
+      allowUnsafe = true,
+    )
   }
 
   @Test
