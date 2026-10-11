@@ -187,6 +187,7 @@ internal fun BridgeType.isErasedTypeArgument(): Boolean = when (this) {
   BridgeType.ByteArray,
   is BridgeType.Collection,
   is BridgeType.Callback,
+  is BridgeType.AsyncCallback,
   is BridgeType.ReturnedLambda,
   is BridgeType.SpecializedProtocol,
   is BridgeType.RawKSType,

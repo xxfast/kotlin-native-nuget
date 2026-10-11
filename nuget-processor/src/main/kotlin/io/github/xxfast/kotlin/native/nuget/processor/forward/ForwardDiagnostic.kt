@@ -896,8 +896,10 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
             "payload/return has no route"
 
       ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL.name ->
-        "a `suspend` lambda binds as a class property (`KotlinSuspendFunc<...>`), but not as a " +
-            "parameter or as a function return"
+        // ADR-210: it binds at a parameter now, for the payload and result types the route carries.
+        "a `suspend` lambda binds as a class property (`KotlinSuspendFunc<...>`) and as a " +
+            "parameter (`Func<T, CancellationToken, Task<R>>`, up to three primitive, String, " +
+            "enum or class payloads and a Unit, primitive or String result), but not here"
 
       // ROADMAP Phase 4 line 23 fold-in: the suspend route covers top-level functions and class,
       // sealed-arm members, never an extension. The ADR-064 audit amendment: one sentence for
@@ -1392,8 +1394,9 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
           "add/remove pair), or return it from a top-level function"
 
     ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL.name ->
-      "take or return a plain (non-suspend) lambda instead, or expose the `suspend` lambda as " +
-          "a property of an ordinary class"
+      "take the `suspend` lambda as a non-nullable parameter with a Unit, primitive or String " +
+          "result, take or return a plain (non-suspend) lambda instead, or expose it as a " +
+          "property of an ordinary class"
 
     ForwardPlanSkipReason.SUSPEND.name ->
       "declare it as a `suspend` member of a class (or of an interface a function returns), or " +
@@ -1659,6 +1662,12 @@ internal fun BridgeType.diagnosticTypeName(): String = when (this) {
   // `(Int) -> Unit` rather than a model constant.
   is BridgeType.Callback -> parameters.joinToString(
     prefix = "(",
+    postfix = ") -> ${result.diagnosticTypeName()}",
+  ) { parameter -> parameter.diagnosticTypeName() }
+
+  // ADR-210: the same, as the `suspend` function type the author wrote.
+  is BridgeType.AsyncCallback -> parameters.joinToString(
+    prefix = "suspend (",
     postfix = ") -> ${result.diagnosticTypeName()}",
   ) { parameter -> parameter.diagnosticTypeName() }
 

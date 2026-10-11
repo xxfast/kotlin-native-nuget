@@ -1,7 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
-import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPlanSkipReason
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -20,7 +19,8 @@ import kotlin.test.assertTrue
  *    *parameter*; the cause is read from that site, the behaviour is measured here. The ordinary
  *    class owner names the same shape `SKIPPED_UNSUPPORTED_INPUT` ([Tier1UnroutedPositionsTest],
  *    `Depot.flowParamOnClass`).
- *  - (b) `fun watchPrepare(prepare: suspend (Int) -> String): Int` is named
+ *  - (b) `fun watchPrepare(prepare: suspend (Int) -> String): Int` BINDS since ADR-210 slice (a),
+ *    as `Func<int, CancellationToken, Task<string>>`. It was named
  *    `SKIPPED_UNSUPPORTED_COMBINATION` (`SUSPEND_CALLBACK_PROTOCOL` member of a sealed subclass).
  *  - (c) `suspend fun watchFlowSuspended(ticks: Flow<Int>): Int` is named
  *    `SKIPPED_UNSUPPORTED_INPUT` by the refused-legacy-route walk, under the package-less symbol
@@ -89,7 +89,7 @@ class Tier1AsyncParameterSealedArmTest {
       "watchFlow is in neither half today, not even as a `Not generated from Kotlin` remark",
     )
     assertFalse(
-      Regex("watch_flow\\b").containsMatchIn(result.generated),
+      result.generated.contains("shape_circle_watchFlow\")"),
       "no Kotlin export either",
     )
     // The pinned defect: nothing names it. When ADR-210 binds it (or a fix names it), this cell
@@ -101,24 +101,24 @@ class Tier1AsyncParameterSealedArmTest {
     )
   }
 
+  // ADR-210 slice (a): the cell that flipped. A non-suspend arm member can only store the lambda,
+  // which the Kotlin-owned lifetime makes sound, so it binds off the plan like any other owner.
   @Test
-  fun `a suspend lambda parameter on a sealed arm method is named as a sealed combination skip`() {
+  fun `a suspend lambda parameter on a sealed arm method binds and is not named`() {
     val result: Tier1Result = run()
 
-    assertFalse(result.generatedCSharp.contains("WatchPrepare("), "absent from Interop.cs")
-    val named: List<String> = result.diagnosticsMentioning("watchPrepare")
-    assertEquals(1, named.size, "named exactly once; got=$named")
-    val warning: String = named.single()
     assertTrue(
-      warning.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_COMBINATION.name}]"),
-      warning,
+      result.generatedCSharp.contains(
+        "public int WatchPrepare(Func<int, global::System.Threading.CancellationToken, " +
+            "global::System.Threading.Tasks.Task<string>> prepare)"
+      ),
+      "got=" + result.generatedCSharp.lines().filter { it.contains("WatchPrepare") },
     )
-    assertTrue(warning.contains("tier1.armasync.Shape.Circle.watchPrepare"), warning)
     assertTrue(
-      warning.contains(ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL.name) &&
-          warning.contains("member of a sealed subclass"),
-      warning,
+      result.generated.contains("shape_circle_watchPrepare\")"),
+      "the Kotlin half exports it too",
     )
+    assertEquals(emptyList(), result.diagnosticsMentioning("watchPrepare"))
   }
 
   @Test

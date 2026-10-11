@@ -314,4 +314,114 @@ public class CollectabilityTests
             timer?.Dispose();
         }
     }
+
+    // ------------------------------------------------------------------------------------------
+    // The call that FAILS BEFORE KOTLIN TAKES OWNERSHIP. The lambda's context key is only ever
+    // released by a Kotlin cleaner, so a wrapper that registers the key and then throws before the
+    // P/Invoke has handed it over leaves an entry nobody will ever release: a permanent root on the
+    // delegate and everything it captured. Two ways for a call to fail that early, one row each.
+    // Both exceptions are thrown synchronously, as on every neighbouring suspend member (the
+    // `...Async` wrapper is not an `async` method), so no Task is ever returned.
+    // ------------------------------------------------------------------------------------------
+
+    // Way 1: the wrapper is already disposed.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference PlateOnADisposedChef()
+    {
+        var marker = new TreatMarker();
+        var chef = new Treatprep.TreatChef("Oreo");
+        chef.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() =>
+        {
+            _ = chef.PlateAsync(2, async (treat, token) =>
+            {
+                await Task.Delay(1, token);
+                return $"tuna#{treat}:{Interlocked.Increment(ref marker.Touches)}";
+            });
+        });
+
+        Assert.Equal(0, marker.Touches);
+        return new WeakReference(marker);
+    }
+
+    [Fact]
+    public void SuspendLambdaParameter_CallOnADisposedWrapper_ItsClosureIsCollected()
+    {
+        WeakReference marker = PlateOnADisposedChef();
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the lambda passed to PlateAsync on a disposed TreatChef stayed reachable after the call threw ObjectDisposedException: its C# context key was registered before the throw and never released");
+    }
+
+    // Way 2: an argument AFTER the lambda fails its null guard. `GarnishAsync(prepare, topping)`
+    // exists for this row: arguments are evaluated left to right, so by the time the non-null
+    // `String` is refused the lambda's argument has already been prepared.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference GarnishWithANullTopping()
+    {
+        var marker = new TreatMarker();
+        using var chef = new Treatprep.TreatChef("Mylo");
+
+        ArgumentNullException refused = Assert.Throws<ArgumentNullException>(() =>
+        {
+            _ = chef.GarnishAsync(
+                async (treat, token) =>
+                {
+                    await Task.Delay(1, token);
+                    return $"pate#{treat}:{Interlocked.Increment(ref marker.Touches)}";
+                },
+                null!);
+        });
+
+        Assert.Equal("topping", refused.ParamName);
+        Assert.Equal(0, marker.Touches);
+        return new WeakReference(marker);
+    }
+
+    [Fact]
+    public void SuspendLambdaParameter_LaterArgumentFailsItsNullGuard_ItsClosureIsCollected()
+    {
+        WeakReference marker = GarnishWithANullTopping();
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the lambda passed to GarnishAsync stayed reachable after a later argument threw ArgumentNullException: its C# context key was registered before the throw and never released");
+    }
+
+    // The control for way 2: the same member with a real topping works, and its closure goes.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (Task<string> Garnishing, WeakReference Marker) StartGarnishing(Treatprep.TreatChef chef)
+    {
+        var marker = new TreatMarker();
+        Task<string> garnishing = chef.GarnishAsync(
+            async (treat, token) =>
+            {
+                await Task.Delay(1, token);
+                return $"pate#{treat}:{Interlocked.Increment(ref marker.Touches)}";
+            },
+            "catnip");
+        return (garnishing, new WeakReference(marker));
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference> GarnishAndDispose()
+    {
+        using var chef = new Treatprep.TreatChef("Mylo");
+        (Task<string> garnishing, WeakReference marker) = StartGarnishing(chef);
+
+        Assert.Equal("pate#1:1 with catnip", await garnishing);
+        return marker;
+    }
+
+    [Fact]
+    public async Task SuspendLambdaParameter_LambdaBeforeAString_AfterTheCallCompletes_ItsClosureIsCollected()
+    {
+        WeakReference marker = await GarnishAndDispose();
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the lambda passed to GarnishAsync stayed reachable after the call completed and its owner was disposed");
+    }
 }

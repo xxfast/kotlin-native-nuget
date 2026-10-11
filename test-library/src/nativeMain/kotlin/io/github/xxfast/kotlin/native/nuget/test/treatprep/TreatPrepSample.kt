@@ -78,6 +78,15 @@ class TreatChef(val cat: String) {
   suspend fun label(tag: suspend (String) -> String): String = tag(cat)
 
   /**
+   * The lambda comes **before** a non-null `String`: the cell for a call that fails *after* the
+   * lambda's argument was prepared and *before* Kotlin took ownership of it. A null [topping] is
+   * refused by the C# null guard, and whatever the wrapper had already set up for [prepare] must
+   * not outlive that refusal.
+   */
+  suspend fun garnish(prepare: suspend (Int) -> String, topping: String): String =
+    "${prepare(1)} with $topping"
+
+  /**
    * Kotlin **catches** whatever [prepare] threw and reports the class and message it saw. A
    * cancellation is rethrown on purpose: a catch-all that swallowed it would hide whether a
    * cancelled C# `Task` really cancels the invoking coroutine.

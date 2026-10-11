@@ -173,8 +173,9 @@ class ForwardSkippedCallableWarningTest {
         symbol = "com.example.Shape.Circle.later",
         reason = ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED,
         detail = ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL.name,
-      ) to "take or return a plain (non-suspend) lambda instead, or expose the `suspend` lambda " +
-          "as a property of an ordinary class",
+      ) to "take the `suspend` lambda as a non-nullable parameter with a Unit, primitive or " +
+          "String result, take or return a plain (non-suspend) lambda instead, or expose it as " +
+          "a property of an ordinary class",
     )
 
     val logger = RecordingLogger()

@@ -183,6 +183,11 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
 
     method.parameters.forEachIndexed { index, param ->
       val paramName: String = param.name?.asString() ?: "_"
+      // ADR-210: a suspend lambda's flat thunk and key slots, in the planner's order.
+      names.asyncSlots[index]?.let { slots ->
+        slots.declared.forEach { slot -> builder.addParameter(slot, cOpaquePointer) }
+        return@forEachIndexed
+      }
       // ADR-114: a collection crosses as a handle to its boxed wire container.
       // ADR-122: so does a class/object/sealed parameter, as the borrowed handle C# already holds.
       if (paramShapes[index].isLegacyLowered()) {
@@ -344,6 +349,11 @@ private fun FunSpec.Builder.addLegacySuspendParameters(
 ): FunSpec.Builder {
   func.parameters.forEachIndexed { index, param ->
     val name: String = param.name?.asString() ?: "_"
+    // ADR-210: a suspend lambda's flat thunk and key slots, in the planner's order.
+    names.asyncSlots[index]?.let { slots ->
+      slots.declared.forEach { slot -> addParameter(slot, cOpaquePointer) }
+      return@forEachIndexed
+    }
     if (shapes[index].isLegacyLowered()) {
       // ADR-164 rule 2: an optional handle's leading `IsSet` slot.
       names.isSetSlots[index]?.let { isSet -> addParameter(isSet, BOOLEAN) }

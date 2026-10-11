@@ -175,6 +175,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedRetur
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedFlowElementShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameterShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParameterShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.asyncCallbackHolderType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardSkipPosition
 import io.github.xxfast.kotlin.native.nuget.processor.forward.skipReason
 import io.github.xxfast.kotlin.native.nuget.processor.forward.skipDetail
@@ -2473,6 +2474,7 @@ internal class NugetProcessor(
       is BridgeType.ValueClass,
       BridgeType.ByteArray,
       is BridgeType.Callback,
+      is BridgeType.AsyncCallback,
       is BridgeType.ReturnedLambda,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,
@@ -3871,6 +3873,22 @@ internal class NugetProcessor(
     // every route above has classified its types; a sighting only the C# half makes fails the
     // forward ABI contract (an import with no export) rather than a consumer's first collect.
     builder.addFlowArgumentExports(forwardClassifier.closedFlowArguments.values, context.symbols)
+    // ADR-210: the holder a generated `suspend` lambda captures, and the two cinterop extensions
+    // its lambda and cleaner call. Last for the same reason as the line above: the legacy suspend
+    // routes record their sightings on the classifier as they emit. Everything else the lambda
+    // names is spelled fully qualified, so a module with no suspend lambda parameter gains nothing.
+    val hasAsyncCallbackParameters: Boolean = forwardClassifier.asyncCallbacks.isNotEmpty() ||
+        callableCatalog.plans.any { plan ->
+          plan.publicSignature.parameters.any { parameter ->
+            parameter.type is BridgeType.AsyncCallback
+          }
+        }
+    if (hasAsyncCallbackParameters) {
+      builder.addImport("kotlinx.cinterop", "reinterpret")
+      builder.addImport("kotlinx.cinterop", "invoke")
+      builder.addImport("kotlinx.cinterop", "asStableRef")
+      builder.addType(asyncCallbackHolderType())
+    }
     ForwardDiagnosticSink.emit(
       forwardClassifier.readOnlyMutableStateFlowArguments.map { (spelling, holder) ->
         ForwardDiagnostic(

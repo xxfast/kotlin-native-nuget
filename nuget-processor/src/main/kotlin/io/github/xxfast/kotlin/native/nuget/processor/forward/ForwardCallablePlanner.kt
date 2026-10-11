@@ -1329,7 +1329,7 @@ internal class ForwardCallablePlanner(
         exportName = export,
         receiver = ForwardReceiver.Static,
         parameters = ctor.parameters.map { parameter ->
-          parameter.bridgeName() to classifier.classify(parameter.type.resolve())
+          parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
         },
         result = underlyingType,
         origin = ForwardCallableOrigin.VALUE_CLASS,
@@ -1442,7 +1442,7 @@ internal class ForwardCallablePlanner(
             exportName = "${prefix}_$name$suffix",
             receiver = receiver,
             parameters = method.parameters.map { parameter ->
-              parameter.bridgeName() to classifier.classify(parameter.type.resolve())
+              parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
             },
             result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
             origin = ForwardCallableOrigin.VALUE_CLASS,
@@ -1530,7 +1530,7 @@ internal class ForwardCallablePlanner(
           exportName = "${prefix}_$name$suffix",
           receiver = ForwardReceiver.Handle(receiverType),
           parameters = method.parameters.map { parameter ->
-            parameter.bridgeName() to classifier.classify(parameter.type.resolve())
+            parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
           },
           result = resultType?.let(classifier::classify) ?: BridgeType.Unit,
           origin = ForwardCallableOrigin.CLASS,
@@ -1654,7 +1654,7 @@ internal class ForwardCallablePlanner(
         exportName = "${prefix}_$name$suffix",
         receiver = ForwardReceiver.Handle(receiverType),
         parameters = method.parameters.map { parameter ->
-          parameter.bridgeName() to classifier.classify(parameter.type.resolve())
+          parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
         },
         result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
         origin = ForwardCallableOrigin.CLASS,
@@ -1864,7 +1864,7 @@ internal class ForwardCallablePlanner(
           exportName = "${prefix}_$name$suffix",
           receiver = ForwardReceiver.Handle(receiverType),
           parameters = method.parameters.map { parameter ->
-            parameter.bridgeName() to classifier.classify(parameter.type.resolve())
+            parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
           },
           result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
           origin = ForwardCallableOrigin.CLASS,
@@ -2008,7 +2008,7 @@ internal class ForwardCallablePlanner(
           exportName = "${prefix}_$name$suffix",
           receiver = ForwardReceiver.Handle(receiverType),
           parameters = method.parameters.map { parameter ->
-            parameter.bridgeName() to classifier.classify(parameter.type.resolve())
+            parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
           },
           result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
           origin = ForwardCallableOrigin.CLASS,
@@ -2174,7 +2174,7 @@ internal class ForwardCallablePlanner(
             exportName = "${prefix}_copy",
             receiver = receiver,
             parameters = primary.parameters.map { parameter ->
-              parameter.bridgeName() to classifier.classify(parameter.type.resolve())
+              parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
             },
             result = result,
             origin = ForwardCallableOrigin.COPY,
@@ -2300,7 +2300,7 @@ internal class ForwardCallablePlanner(
       // named `outer`. Every other constructor keeps `Static` and renders byte-identically.
       receiver = innerConstructorReceiver(cls),
       parameters = constructor.parameters.map { parameter ->
-        parameter.bridgeName() to classifier.classify(parameter.type.resolve())
+        parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
       },
       result = result,
       origin = ForwardCallableOrigin.CONSTRUCTOR,
@@ -2494,7 +2494,7 @@ internal class ForwardCallablePlanner(
         exportName = "${prefix}_${toCName(name)}$suffix",
         receiver = ForwardReceiver.Value(type),
         parameters = function.parameters.map { parameter ->
-          parameter.bridgeName() to classifier.classify(parameter.type.resolve())
+          parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
         },
         result = function.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
         origin = ForwardCallableOrigin.ENUM_MEMBER,
@@ -2603,7 +2603,7 @@ internal class ForwardCallablePlanner(
       ?: BridgeType.Unit
     val parameters: List<Pair<String, BridgeType>> = function.parameters
       .map { parameter ->
-        parameter.bridgeName() to classifier.classify(parameter.type.resolve())
+        parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
       }
     val declaredDefaults: ForwardDeclaredDefaults = declaredDefaults(function.parameters, defaults)
     // ADR-170: a top-level nullable scalar (`Int?`, `Char?`, `Instant?`, `Duration?`, an enum, a
@@ -2757,7 +2757,7 @@ internal class ForwardCallablePlanner(
       // receiver; an ineligible or out-of-scope one carries no `sealedHandle` and still skips.
       receiver = ForwardReceiver.Value(receiverType.sealedAsHandle()),
       parameters = function.parameters.map { parameter ->
-        parameter.bridgeName() to classifier.classify(parameter.type.resolve())
+        parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
       },
       result = function.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
       origin = ForwardCallableOrigin.EXTENSION,
@@ -2898,9 +2898,13 @@ internal class ForwardCallablePlanner(
         hasValueSlot = if (type.isHasValueFanOutInput()) kotlin.mint(flag) else flag,
       )
     }
-    val slotted: List<ForwardPublicParameter> = parameters.map { parameter ->
+    val asyncSlots: List<ForwardAsyncSlots?> = mintAsyncSlots(
+      parameters.map { parameter -> parameter.name to (parameter.type is BridgeType.AsyncCallback) },
+    ) { base -> kotlin.mint(base) }
+    val slotted: List<ForwardPublicParameter> = parameters.mapIndexed { index, parameter ->
       val callback: Boolean = parameter.type is BridgeType.Callback
       parameter.copy(
+        asyncSlots = asyncSlots[index],
         hasValueSlot = if (parameter.type.isHasValueFanOutInput()) {
           kotlin.mint("${parameter.name}HasValue")
         } else {
@@ -3023,6 +3027,7 @@ internal class ForwardCallablePlanner(
     val encoded: List<ForwardAbiParameter> = nativeInputParameters(
       parameter.name, parameter.type, hasValueSlot = parameter.hasValueSlot,
       callbackSlots = listOf(parameter.callbackPtrSlot, parameter.callbackUserDataSlot),
+      asyncSlots = parameter.asyncSlots?.declared.orEmpty(),
     )
     if (!parameter.hasPresenceSlot) return encoded
     val presence = ForwardAbiParameter(
@@ -3173,6 +3178,22 @@ internal class ForwardCallablePlanner(
         ?.let { (name, type) -> name to type }
     } else {
       null
+    }
+    // ADR-210: a suspend lambda binds at the member, constructor and top-level origins. A
+    // data-class `copy`, an enum-arm box and the enum and value-class member routes keep today's
+    // named skip.
+    val misplacedAsync: Pair<String?, BridgeType>? = if (origin !in ASYNC_CALLBACK_ORIGINS) {
+      declared.firstOrNull { (_, type) -> type is BridgeType.AsyncCallback }
+        ?.let { (name, type) -> name to type }
+    } else {
+      null
+    }
+    if (misplacedAsync != null) {
+      return ForwardCallableCatalogEntry.Skipped(
+        symbol, ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL, node = node,
+        position = ForwardSkipPosition.INPUT,
+        parameter = misplacedAsync.first,
+      )
     }
     if (storedCallback != null) {
       return ForwardCallableCatalogEntry.Skipped(
@@ -3443,6 +3464,8 @@ internal class ForwardCallablePlanner(
     hasValueSlot: String = "${name}HasValue",
     // Likewise `ForwardPublicParameter.callbackPtrSlot` / `callbackUserDataSlot`.
     callbackSlots: List<String> = listOf("${name}Ptr", "${name}UserData"),
+    // ADR-210: `ForwardPublicParameter.asyncSlots`, the slots this parameter itself declares.
+    asyncSlots: List<String> = emptyList(),
   ): List<ForwardAbiParameter> = when (type) {
     is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> listOf(
       valueParameter(name, type, ForwardFlow.INTO_KOTLIN, role),
@@ -3453,6 +3476,22 @@ internal class ForwardCallablePlanner(
     // delegate the thunk dispatches to. Both BORROWED with no conversion: the C# wrapper allocates
     // and frees the GCHandle around the call, Kotlin only reinterprets the address for the duration
     // of the invocation and stores nothing (per-call, never a stored ADR-037 subscription).
+    // ADR-210: Begin thunk, End thunk and key, then (on the export's first suspend lambda only)
+    // the three parameter-independent release thunks. All BORROWED addresses: the C# context the
+    // key names is released by the Kotlin holder's cleaner, not by a transfer rule.
+    is BridgeType.AsyncCallback -> asyncSlots.map { slot ->
+      ForwardAbiParameter(
+        name = slot,
+        wireType = ForwardAbiWireType.POINTER,
+        direction = ForwardAbiDirection.IN,
+        transfer = ForwardTransfer(
+          slot, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+          ForwardOwnership.BORROWED, null,
+        ),
+        role = role,
+      )
+    }
+
     is BridgeType.Callback -> callbackSlots.map { slot ->
       ForwardAbiParameter(
         name = slot,
@@ -3853,6 +3892,7 @@ internal class ForwardCallablePlanner(
       is BridgeType.BoundInterface,
       is BridgeType.Nullable,
       is BridgeType.Callback,
+      is BridgeType.AsyncCallback,
       is BridgeType.ReturnedLambda,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,
@@ -3998,6 +4038,7 @@ internal class ForwardCallablePlanner(
 
     is BridgeType.Nullable -> nullableResultShape(type)
     is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
     is BridgeType.Unsupported,
@@ -4135,6 +4176,7 @@ internal class ForwardCallablePlanner(
       is BridgeType.Collection,
       is BridgeType.Nullable,
       is BridgeType.Callback,
+      is BridgeType.AsyncCallback,
       is BridgeType.ReturnedLambda,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,
@@ -4306,6 +4348,7 @@ internal class ForwardCallablePlanner(
     is BridgeType.BoundInterface,
     is BridgeType.Nullable,
     is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -4364,6 +4407,7 @@ internal class ForwardCallablePlanner(
         is BridgeType.ValueClass,
         is BridgeType.Nullable,
         is BridgeType.Callback,
+        is BridgeType.AsyncCallback,
         is BridgeType.ReturnedLambda,
         is BridgeType.SpecializedProtocol,
         is BridgeType.RawKSType,
@@ -4536,6 +4580,9 @@ internal class ForwardCallablePlanner(
     // or lambda-result shape the two halves cannot lower, so a `Callback` reaching here is
     // emittable by construction.
     is BridgeType.Callback -> null
+    // ADR-210: a suspend lambda binds wherever the plan reaches (the entry builder refuses the
+    // origins that cannot carry it), stored or not: its lifetime is Kotlin-owned.
+    is BridgeType.AsyncCallback -> null
 
     // ADR-106: Uuid is admissible at every input position, over the String wire.
     BridgeType.String, BridgeType.Char, BridgeType.Instant, BridgeType.Duration,
@@ -4644,6 +4691,9 @@ internal class ForwardCallablePlanner(
       // `ArgumentNullException.ThrowIfNull`. Without this arm the member binds in `Interop.cs` AND
       // reports itself skipped, which is the contradiction part A2 removed.
       is BridgeType.Callback -> ForwardPlanSkipReason.CALLBACK_PROTOCOL
+      // ADR-210: never minted nullable (`asyncCallbackOrNull` declines it), so this only answers
+      // the default-widening probe: a defaulted suspend lambda stays required.
+      is BridgeType.AsyncCallback -> ForwardPlanSkipReason.NULLABLE
 
       // ADR-088: `IFeedable?` is on this ADR's deferred list. The null-pointer ride is natural,
       // but it needs its own lowering in four emitter positions; until then the skip names the
@@ -4744,6 +4794,8 @@ internal class ForwardCallablePlanner(
     // `nativeInputParameters`; this is the wire of each of them, and never of a result (a callback
     // has no result shape).
     is BridgeType.Callback -> ForwardAbiWireType.POINTER
+    // ADR-210: each of a suspend lambda's flat slots is an opaque address or key.
+    is BridgeType.AsyncCallback -> ForwardAbiWireType.POINTER
     // ADR-160 amendment: the one OWNED handle a returned lambda crosses as.
     is BridgeType.ReturnedLambda -> ForwardAbiWireType.POINTER
     // ADR-107: the error-envelope pointer. Unreachable from a callable plan today (no shape and
@@ -4820,6 +4872,7 @@ internal class ForwardCallablePlanner(
     is BridgeType.Collection,
     is BridgeType.Nullable,
     is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -4879,6 +4932,7 @@ internal fun BridgeType.sealedAsHandle(): BridgeType = when (this) {
   is BridgeType.BoundInterface,
   BridgeType.ByteArray,
   is BridgeType.Callback,
+  is BridgeType.AsyncCallback,
   is BridgeType.ReturnedLambda,
   is BridgeType.RawKSType,
   is BridgeType.Unsupported,
@@ -4923,6 +4977,7 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
   // ADR-160: a callback is a parameter-position type only; a `List<(Int) -> Unit>` has no wire at
   // all, so the member skips named rather than half-binding.
   is BridgeType.Callback -> false
+  is BridgeType.AsyncCallback -> false
 
   // ADR-160 amendment: a returned lambda binds at a top-level result only, never nested.
   is BridgeType.ReturnedLambda -> false
@@ -5006,6 +5061,7 @@ internal fun BridgeType.containsByteArray(): Boolean {
     is BridgeType.ValueClass,
     is BridgeType.Nullable,
     is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -5238,6 +5294,7 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
   BridgeType.Uuid,
   is BridgeType.BoundInterface,
   is BridgeType.Callback,
+  is BridgeType.AsyncCallback,
   is BridgeType.ReturnedLambda,
   is BridgeType.SpecializedProtocol,
   is BridgeType.RawKSType,
@@ -5479,6 +5536,7 @@ internal fun BridgeType.unexportedDependencyDetail(): String? {
     BridgeType.ByteArray,
     is BridgeType.Nullable,
     is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -5551,6 +5609,7 @@ internal fun BridgeType.optInMarkerDetail(): String? {
     BridgeType.ByteArray,
     is BridgeType.Nullable,
     is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -5586,6 +5645,7 @@ internal fun BridgeType.undeclaredTypeDetail(): String? {
     BridgeType.ByteArray,
     is BridgeType.Nullable,
     is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -5653,6 +5713,7 @@ internal fun BridgeType.sealedTypeDetail(): String? {
     BridgeType.ByteArray,
     is BridgeType.Nullable,
     is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -5681,6 +5742,9 @@ internal fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
   // a collection component.
   // A parameter-position callback plans a shape and never asks.
   is BridgeType.Callback -> ForwardPlanSkipReason.CALLBACK_PROTOCOL
+  // ADR-210: parameter position only, like [BridgeType.Callback]; anywhere else keeps the reason
+  // the `suspend lambda` protocol carries.
+  is BridgeType.AsyncCallback -> ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL
   // ADR-160 amendment: a returned lambda has a shape exactly when every type argument has a C#
   // spelling, so reaching here means one does not (or it was nested somewhere it cannot bind).
   is BridgeType.ReturnedLambda -> ForwardPlanSkipReason.LAMBDA_TYPE_ARGUMENT
@@ -5877,7 +5941,8 @@ internal const val MAX_OPTIONAL_DEFAULTS: Int = 8
  * [ForwardPublicParameter.localStem]. None is a suffix of another, so two stems' locals can only
  * meet if the stems do.
  */
-internal val CSHARP_LOCAL_SUFFIXES: List<String> = listOf("Handle", "Owned", "Box", "Ctx", "Native")
+internal val CSHARP_LOCAL_SUFFIXES: List<String> =
+  listOf("Handle", "Owned", "Box", "Ctx", "Native", "AsyncKey")
 
 /** ADR-164: the defaulted-parameter facts of one entry, aligned with its declared parameters. */
 internal data class ForwardDeclaredDefaults(
@@ -5920,6 +5985,16 @@ private val DECLARED_NAME_ORIGINS: Set<ForwardCallableOrigin> = setOf(
   ForwardCallableOrigin.COMPANION,
   ForwardCallableOrigin.ENUM_MEMBER,
   ForwardCallableOrigin.VALUE_CLASS,
+)
+
+/** ADR-210: the origins a suspend lambda parameter binds at. */
+private val ASYNC_CALLBACK_ORIGINS: Set<ForwardCallableOrigin> = setOf(
+  ForwardCallableOrigin.CLASS,
+  ForwardCallableOrigin.EXTENSION,
+  ForwardCallableOrigin.TOP_LEVEL,
+  ForwardCallableOrigin.OBJECT,
+  ForwardCallableOrigin.COMPANION,
+  ForwardCallableOrigin.CONSTRUCTOR,
 )
 
 private val STORED_CALLBACK_ORIGINS: Set<ForwardCallableOrigin> = setOf(

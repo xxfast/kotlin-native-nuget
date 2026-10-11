@@ -15,6 +15,12 @@ internal data class ForwardCirHandleStep(
   val flat: String,
   val declarations: List<String> = emptyList(),
   val statement: String = flat,
+  /**
+   * ADR-210: a statement to run the moment the native call has returned, before its error check.
+   * A suspend lambda's key uses it to give up ownership: from then on the Kotlin holder owns it,
+   * and the `finally` must no longer unregister it.
+   */
+  val afterCall: String? = null,
 )
 
 /**
@@ -26,6 +32,9 @@ internal data class ForwardCirHandleStep(
  * When [cleanup] is empty there is nothing to guard and the body keeps its flat shape byte for
  * byte: bodies with no collection or interface handle are unchanged by this.
  */
+/** The trailing error slot every plan-route native call passes; it marks the call statement. */
+private const val NATIVE_CALL_MARKER: String = "out IntPtr error)"
+
 internal fun forwardCirHandleScope(
   prelude: List<ForwardCirHandleStep>,
   cleanup: List<String>,
@@ -48,10 +57,20 @@ internal fun forwardCirHandleScope(
     // ADR-164: a step whose whole effect is its hoisted declaration has no statement left.
     prelude.filter { step -> step.statement.isNotEmpty() }
       .forEach { step -> appendLine("$inner${step.statement}") }
+    val afterCall: List<String> = prelude.mapNotNull { step -> step.afterCall }
+    val coreLines: List<String> = core.trim('\n').lines()
+    // Every plan-route native call ends in the error slot and is one whole statement, which is
+    // what lets the hand-over land between the call returning and its error check.
+    val callLine: Int = coreLines.indexOfFirst { line -> line.contains(NATIVE_CALL_MARKER) }
+    require(afterCall.isEmpty() || (callLine >= 0 && coreLines[callLine].trimEnd().endsWith(";"))) {
+      "Forward CIR handle scope found no native call statement to hand ownership over after"
+    }
     val indentedCore: String =
-      core.trim('\n').lines().joinToString("\n") { line ->
-        if (line.isBlank()) line else "    $line"
-      }
+      coreLines.flatMapIndexed { index, line ->
+        val indented: String = if (line.isBlank()) line else "    $line"
+        if (index == callLine) listOf(indented) + afterCall.map { after -> "$inner$after" }
+        else listOf(indented)
+      }.joinToString("\n")
     appendLine(indentedCore)
     appendLine("$indent}")
     appendLine("${indent}finally")

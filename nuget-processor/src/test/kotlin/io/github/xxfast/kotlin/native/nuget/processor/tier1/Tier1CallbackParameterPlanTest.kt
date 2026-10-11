@@ -131,8 +131,9 @@ class Tier1CallbackParameterPlanTest {
         // An enum LAMBDA return, refused for the same reason.
         fun pickMood(make: (Int) -> Mood): Int = make(beats).ordinal
 
-        // A `suspend` lambda, which binds only as a class property, never as a parameter.
-        fun awaitAll(step: suspend (Int) -> Unit): Int = if (step === step) beats else 0
+        // A `suspend` lambda whose result no End thunk casts: ADR-210 binds one at a parameter only
+        // for a Unit, primitive or String result.
+        fun awaitAll(step: suspend (Int) -> Char): Int = if (step === step) beats else 0
 
         // A non-lambda parameter beside a lambda the plan declines: the legacy route drops `min`
         // from both halves and the generated Kotlin then fails to compile.
