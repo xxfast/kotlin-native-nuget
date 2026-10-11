@@ -217,13 +217,22 @@ private fun componentWireExpression(
   val valueClass: BridgeType.ValueClass = component.componentValueClass() ?: return access
   val property: String = valueClass.underlyingPropertyName.replaceFirstChar { it.uppercase() }
   val isEnum: Boolean = valueClass.underlying is BridgeType.Enum
+  // A String or handle underlying refuses `default(V)` in the unwrap itself: the element sits in
+  // a `Select` lambda, so there is no parameter to name, and `CreateList`/`CreateSet`/`CreateMap`
+  // dispose the half-built container when the throw unwinds through them.
   if (component !is BridgeType.Nullable) {
-    return if (isEnum) "(int)$access.$property" else "$access.$property"
+    return if (isEnum) "(int)$access.$property" else valueClass.underlyingCs(access, null)
   }
   // A `Nullable<T>` of a record struct still projects its underlying through `?.`; the enum
-  // ordinal needs the explicit conditional because the `(int)` cast is not itself lifted.
-  return if (isEnum) "$access == null ? (int?)null : (int)$access.Value.$property"
-  else "$access?.$property"
+  // ordinal needs the explicit conditional because the `(int)` cast is not itself lifted. A
+  // guarded underlying keeps null as null and refuses only a PRESENT default.
+  return when {
+    isEnum -> "$access == null ? (int?)null : (int)$access.Value.$property"
+    valueClass.hasNullDefault() ->
+      "$access.HasValue ? ${valueClass.underlyingCs("$access.Value", null)} : null"
+
+    else -> "$access?.$property"
+  }
 }
 
 /** The value class a component projects through, seeing past ADR-083's nullable spelling; `null`

@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import io.github.xxfast.kotlin.native.nuget.processor.valueClassUnderlyingOrThrow
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirConstructor
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDllImport
@@ -125,7 +126,9 @@ class ForwardCirPlanProjectionTest {
     // Public surface takes the struct; the native import takes its underlying string.
     assertEquals(listOf("ChartId"), method.parameters.map { it.type })
     assertEquals(listOf("NugetKotlinHandle", "string"), import.parameters.map { it.nativeType })
-    assertEquals(true, method.body?.contains("Native_Retag(_handle, id.Value, out IntPtr error)"))
+    assertEquals(true, method.body?.contains("Native_Retag(_handle, " +
+      valueClassUnderlyingOrThrow("id", "Value", "ChartId", "id") +
+      ", out IntPtr error)"))
   }
 
   /**

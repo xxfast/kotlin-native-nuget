@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
 import kotlin.test.Test
 import kotlin.test.assertContains
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -96,6 +97,16 @@ class Tier1FlowWrapperOwnerDisposeTest {
       }
       .toList()
 
+  /**
+   * The argument list of every call to [extern] on the owner's `_handle`, up to the end of its
+   * line (each such call is rendered on one). A value-class unwrap is evaluated there, and with
+   * it the `default(V)` refusal: after every statement of the lambda, before the extern is entered.
+   */
+  private fun String.argumentsOf(extern: String): List<String> =
+    Regex("""\b${Regex.escape(extern)}\(_handle(.*)""").findAll(this)
+      .map { call -> call.groupValues[1] }
+      .toList()
+
   private fun assertGuarded(cs: String, extern: String, owner: String?) {
     val lambdas: List<String> = cs.lambdasCalling(extern)
     assertTrue(lambdas.isNotEmpty(), "expected a call to $extern; generatedCSharp=$cs")
@@ -116,14 +127,27 @@ class Tier1FlowWrapperOwnerDisposeTest {
   @Test
   fun `the owner guard precedes a write's argument guards, which stay`() {
     val cs: String = result.generatedCSharp
-    // ADR-071's value-class arm: `default(Tag)` is refused in C#, after the owner check.
-    listOf(
-      "Native_SetTagValue", "Native_CompareAndSetTagValue", "Native_EmitTags",
-      "Native_TryEmitTags",
-    ).forEach { extern ->
+    // ADR-071's value-class arm: `default(Tag)` is refused in C#, after the owner check. The
+    // refusal is the unwrap itself, so it sits in the call's argument list, which is evaluated
+    // after the owner guard's statement. Every `Tag` slot carries it: one on a write, the
+    // `expect` and the `update` on a compare-and-set.
+    val refusal = Regex(
+      """\(\w+\.Id \?\? throw new ArgumentException\("default\(Tag\) carries no Id;""",
+    )
+    mapOf(
+      "Native_SetTagValue" to 1, "Native_CompareAndSetTagValue" to 2, "Native_EmitTags" to 1,
+      "Native_TryEmitTags" to 1,
+    ).forEach { (extern, slots) ->
       assertGuarded(cs, extern, owner = "Desk")
+      val calls: List<String> = cs.argumentsOf(extern)
+      assertEquals(cs.lambdasCalling(extern).size, calls.size, "calls to $extern")
+      calls.forEach { arguments ->
+        assertEquals(slots, refusal.findAll(arguments).count(), "unguarded slot in:\n$arguments")
+      }
+      // The unwrap is the argument's only refusal: no statement ahead of the call throws for it,
+      // so nothing answers for the argument before the owner guard has answered for the owner.
       cs.lambdasCalling(extern).forEach { lambda ->
-        assertContains(lambda, "throw new ArgumentException(\"default(Tag) carries no Id;")
+        assertFalse("throw new Argument" in lambda, "argument check ahead of the call:\n$lambda")
       }
     }
     // A non-null object element: the null check stays, after the owner check.

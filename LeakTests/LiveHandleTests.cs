@@ -2887,6 +2887,24 @@ public class LiveHandleTests
             iterations: 200);
     }
 
+    // Row 8d-valueclass-default. A `default` record struct over a String is refused in C# while
+    // the call's arguments are evaluated, which is AFTER the call has built what precedes it: the
+    // `names` list handle on `RegisterNamed`, and the half-filled list on `RegisterAll` (the
+    // default is its second element). Both are released on the way out, the first by the call's
+    // own `finally` and the second by `CreateList`'s catch.
+    [Fact]
+    public void DefaultValueClass_RefusedAfterAHandleWasBuilt_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var ledger = new ChipLedger(new CatId("oreo-1"));
+            var names = new List<string> { "Oreo", "Mylo" };
+            Assert.Throws<ArgumentException>(() => ledger.RegisterNamed(names, default));
+            var ids = new List<CatId> { new("oreo-1"), default };
+            Assert.Throws<ArgumentException>(() => ledger.RegisterAll(ids));
+        });
+    }
+
     // Row 8e. Issue #129 / ADR-124: the same flow route as Row 7, with a *sealed arm* as the owner.
     // The arm mints nothing new (the per-item box, the job handle and the subscription all come
     // from the same builders), but it owns its scope through the arm's own `_scopeHandle` and

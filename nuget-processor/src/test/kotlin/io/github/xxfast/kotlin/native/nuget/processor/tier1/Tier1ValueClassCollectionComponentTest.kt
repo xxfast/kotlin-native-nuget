@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.valueClassUnderlyingOrThrow
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertTrue
@@ -66,9 +67,16 @@ class Tier1ValueClassCollectionComponentTest {
     )
 
     val cs: String = result.generatedCSharp
-    assertContains(cs, "NugetMarshal.CreateList(global::System.Linq.Enumerable.Select(charts, x => x.Value))")
+    assertContains(
+      cs,
+      "NugetMarshal.CreateList(global::System.Linq.Enumerable.Select(charts, x => " +
+        valueClassUnderlyingOrThrow("x", "Value", "ChartId") +
+        "))",
+    )
     assertContains(cs, "NugetMarshal.CreateList(global::System.Linq.Enumerable.Select(doses, x => x.Milligrams))")
-    assertContains(cs, "NugetMarshal.CreateList(global::System.Linq.Enumerable.Select(refs, x => x.Patient))")
+    assertContains(cs, "NugetMarshal.CreateList(global::System.Linq.Enumerable.Select(refs, x => " +
+      valueClassUnderlyingOrThrow("x", "Patient", "ChartRef") +
+      "))")
     // The enum underlying is pre-cast to int so `Wrap<T>`'s existing int branch fires.
     assertContains(cs, "NugetMarshal.CreateSet(global::System.Linq.Enumerable.Select(moods, x => (int)x.Mood))")
   }
@@ -106,12 +114,16 @@ class Tier1ValueClassCollectionComponentTest {
     assertContains(
       cs,
       "NugetMarshal.CreateMap(global::System.Linq.Enumerable.Select(sections, " +
-          "x => new KeyValuePair<string, string>(x.Key, x.Value.Value)))",
+          "x => new KeyValuePair<string, string>(x.Key, " +
+            valueClassUnderlyingOrThrow("x.Value", "Value", "ChartId") +
+            ")))",
     )
     assertContains(
       cs,
       "NugetMarshal.CreateMap(global::System.Linq.Enumerable.Select(counts, " +
-          "x => new KeyValuePair<string, int>(x.Key.Value, x.Value)))",
+          "x => new KeyValuePair<string, int>(" +
+            valueClassUnderlyingOrThrow("x.Key", "Value", "ChartId") +
+            ", x.Value)))",
     )
   }
 
@@ -144,7 +156,9 @@ class Tier1ValueClassCollectionComponentTest {
     val cs: String = result.generatedCSharp
     assertContains(
       cs,
-      "NugetMarshal.CreateList(global::System.Linq.Enumerable.Select(value, x => x.Value))",
+      "NugetMarshal.CreateList(global::System.Linq.Enumerable.Select(value, x => " +
+        valueClassUnderlyingOrThrow("x", "Value", "ChartId") +
+        "))",
     )
     assertContains(
       cs,

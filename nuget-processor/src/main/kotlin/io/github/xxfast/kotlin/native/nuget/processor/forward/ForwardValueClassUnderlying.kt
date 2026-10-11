@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.forward
 
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSValueParameter
+import io.github.xxfast.kotlin.native.nuget.processor.valueClassUnderlyingOrThrow
 
 /**
  * How a value class's underlying crosses the wire, decided once for both halves.
@@ -64,4 +65,24 @@ private fun BridgeType.valueClassUnderlyingRole(): ForwardValueClassUnderlying =
   is BridgeType.RawCollection,
   is BridgeType.TypeParameter,
     -> ForwardValueClassUnderlying.REFUSED
+}
+
+/**
+ * Whether `default(V)` of this value class's C# record struct carries a null that no non-null
+ * Kotlin slot can take: a String or an exported-class underlying. A primitive or enum default is a
+ * real value, and a nullable underlying's null is one too, so neither is refused.
+ */
+internal fun BridgeType.ValueClass.hasNullDefault(): Boolean =
+  underlying == BridgeType.String || underlying is BridgeType.ObjectHandle
+
+/**
+ * [struct]'s underlying property in C#, the unwrap every C# to Kotlin crossing of a value class
+ * starts from. A [hasNullDefault] struct is unwrapped through [valueClassUnderlyingOrThrow], so a
+ * `default(V)` throws before anything crosses; [parameter] is its `nameof` target, when it has one.
+ */
+internal fun BridgeType.ValueClass.underlyingCs(struct: String, parameter: String?): String {
+  val property: String = underlyingPropertyName.replaceFirstChar { it.uppercase() }
+  if (!hasNullDefault()) return "$struct.$property"
+  val structName: String = qualifiedName.substringAfterLast('.')
+  return valueClassUnderlyingOrThrow(struct, property, structName, parameter)
 }

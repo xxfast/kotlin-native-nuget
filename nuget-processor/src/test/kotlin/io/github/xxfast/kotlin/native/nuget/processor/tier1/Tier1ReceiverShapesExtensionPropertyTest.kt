@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.valueClassUnderlyingOrThrow
 import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
@@ -682,7 +683,9 @@ class Tier1ReceiverShapesExtensionPropertyTest {
         "            public string PatientName\n",
     )
     assertContains(result.generatedCSharp, "Native_ChartrefGetPatientName(NugetKotlinHandle receiver")
-    assertContains(result.generatedCSharp, "receiver?.Chart._handle ?? NugetKotlinHandle.Null")
+    assertContains(result.generatedCSharp, "receiver.HasValue ? " +
+      valueClassUnderlyingOrThrow("receiver.Value", "Chart", "ChartRef", "receiver") +
+      "._handle : NugetKotlinHandle.Null")
   }
 
   /**

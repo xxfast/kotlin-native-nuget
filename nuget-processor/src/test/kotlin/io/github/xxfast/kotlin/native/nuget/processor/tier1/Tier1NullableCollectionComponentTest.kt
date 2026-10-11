@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.valueClassUnderlyingOrThrow
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertTrue
@@ -68,7 +69,9 @@ class Tier1NullableCollectionComponentTest {
     assertContains(cs, "public int File(IReadOnlyList<global::Interop.ChartId?> charts)")
     assertContains(
       cs,
-      "NugetMarshal.CreateList(global::System.Linq.Enumerable.Select(charts, x => x?.Value))",
+      "NugetMarshal.CreateList(global::System.Linq.Enumerable.Select(charts, x => x.HasValue ? " +
+        valueClassUnderlyingOrThrow("x.Value", "Value", "ChartId") +
+        " : null))",
     )
   }
 

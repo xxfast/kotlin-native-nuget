@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.valueClassUnderlyingOrThrow
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertTrue
@@ -69,7 +70,9 @@ class Tier1ValueClassOverSealedPropertyTest {
     )
     assertContains(
       cs,
-      "Native_Set_maybe(_handle, value?.Shape._handle ?? NugetKotlinHandle.Null, out IntPtr error)",
+      "Native_Set_maybe(_handle, value.HasValue ? " +
+        valueClassUnderlyingOrThrow("value.Value", "Shape", "Wrapped", "value") +
+        "._handle : NugetKotlinHandle.Null, out IntPtr error)",
     )
   }
 
@@ -79,7 +82,9 @@ class Tier1ValueClassOverSealedPropertyTest {
 
     assertContains(
       result.generatedCSharp,
-      "Native_Set_current(_handle, value.Shape._handle, out IntPtr error)",
+      "Native_Set_current(_handle, " +
+        valueClassUnderlyingOrThrow("value", "Shape", "Wrapped", "value") +
+        "._handle, out IntPtr error)",
     )
   }
 
@@ -100,7 +105,9 @@ class Tier1ValueClassOverSealedPropertyTest {
 
     val cs: String = result.generatedCSharp
     assertContains(cs, "public global::Interop.Wrapped Take(global::Interop.Wrapped w)")
-    assertContains(cs, "Native_Take(_handle, w.Shape._handle, out IntPtr error)")
+    assertContains(cs, "Native_Take(_handle, " +
+      valueClassUnderlyingOrThrow("w", "Shape", "Wrapped", "w") +
+      "._handle, out IntPtr error)")
     assertContains(
       cs,
       "return new global::Interop.Wrapped(global::Interop.Shape.FromHandle(nativeResult));",

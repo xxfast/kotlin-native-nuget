@@ -169,6 +169,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyEnumRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
+import io.github.xxfast.kotlin.native.nuget.processor.valueClassUnderlyingOrThrow
 
 /** Which half of issue #42 a dropped supertype is: both re-home their public members onto the
  *  owner, but they lose different relations, so they get different messages. */
@@ -2105,7 +2106,6 @@ internal fun flowProperty(
           if (stateFlowWrite.rejectsNull) {
             appendLine("                        if (v is null) throw new ArgumentNullException(nameof(v));")
           }
-          stateFlowWrite.guard?.let { guard -> appendLine("                        $guard") }
           appendLine("                        $setValueNativeName(_handle, ${stateFlowWrite.arguments}, out IntPtr error);")
           appendLine("                        if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
           appendLine("                        NugetErrorNative.ClearManagedFault();")
@@ -5028,7 +5028,16 @@ internal fun translateValueClass(
   val isReferenceUnderlying: Boolean =
     !isEnumUnderlying && underlyingType !in KOTLIN_TO_CSHARP_PARAM
 
-  val nativeArg: String = if (isReferenceUnderlying) "${underlyingName}._handle" else underlyingName
+  // The receiver of the struct's own members is `this`, so `default(V).Member` reaches here with a
+  // null String or class underlying; the unwrap refuses it, like every other value-class crossing.
+  // A nullable underlying's null is a real value and stays unguarded.
+  val hasNullDefault: Boolean = !underlyingResolved.isMarkedNullable &&
+      (isReferenceUnderlying || underlyingType == "String")
+  val receiverUnderlying: String =
+    if (hasNullDefault) valueClassUnderlyingOrThrow("this", underlyingName, name)
+    else underlyingName
+  val nativeArg: String =
+    if (isReferenceUnderlying) "$receiverUnderlying._handle" else receiverUnderlying
 
   fun buildConstructorFromPlan(plan: ForwardCallablePlan, suffix: String): CirValueClassConstructor {
     return ForwardCirPlanProjection.valueClassConstructor(plan, suffix, underlyingType == "String")

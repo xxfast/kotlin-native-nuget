@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.valueClassUnderlyingOrThrow
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertTrue
@@ -45,9 +46,13 @@ class Tier1ValueClassParameterTest {
 
     val cs: String = result.generatedCSharp
     assertContains(cs, "public string Retag(global::Interop.ChartId id)")
-    assertContains(cs, "Native_Retag(_handle, id.Value, out IntPtr error)")
+    assertContains(cs, "Native_Retag(_handle, " +
+      valueClassUnderlyingOrThrow("id", "Value", "ChartId", "id") +
+      ", out IntPtr error)")
     assertContains(cs, "public static string ChartSummary(global::Interop.ChartId id)")
-    assertContains(cs, "Native_ChartSummary(id.Value, out IntPtr error)")
+    assertContains(cs, "Native_ChartSummary(" +
+      valueClassUnderlyingOrThrow("id", "Value", "ChartId", "id") +
+      ", out IntPtr error)")
     assertContains(cs, "public static int? ChartLength(global::Interop.ChartId id)")
   }
 
@@ -80,7 +85,9 @@ class Tier1ValueClassParameterTest {
 
     val cs: String = result.generatedCSharp
     assertContains(cs, "public string TransferTo(global::Interop.ChartId? to)")
-    assertContains(cs, "Native_TransferTo(_handle, to?.Value, out IntPtr error)")
+    assertContains(cs, "Native_TransferTo(_handle, to.HasValue ? " +
+      valueClassUnderlyingOrThrow("to.Value", "Value", "ChartId", "to") +
+      " : null, out IntPtr error)")
     assertContains(cs, "string? to, out IntPtr error);")
     assertContains(cs, "public global::Interop.ChartId? PreviousChart()")
     assertContains(
