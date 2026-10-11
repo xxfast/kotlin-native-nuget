@@ -926,8 +926,8 @@ default value (`cat: Cat? = null`) is still required in C#, so pass `null` expli
 
 Any other generic parameter (`Pair<A, B>`, `Array<T>`, a lambda), `Instant`/`Duration`/`Uuid`, a
 value class or an interface is not supported at these positions and is skipped with a diagnostic
-naming the member. Pass a class/object/sealed handle (nullable or not), a `List`/`Set`/`Map`, an
-enum, or a primitive/`String` (nullable or not) instead, or split the parameter across separate
+naming the member. Pass an enum, or a class/object/sealed handle, `List`/`Set`/`Map` or
+primitive/`String` (each of these nullable or not) instead, or split the parameter across separate
 members. A `Throwable`, `Exception` or `RuntimeException` parameter does bind, as a
 `System.Exception` (see [Throwable values](exceptions.md#throwable-values)).
 
