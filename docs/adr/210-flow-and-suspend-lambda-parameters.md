@@ -6,7 +6,9 @@ Proposed. Amended 2026-10-12 after an independent review ("accept with named cha
 shell, the admitted v1 types, the slot layout, the thread wording, the lifetime note and the price
 below are the amended text. Each amended point was re-read in source before it was written.
 Amended again the same day with the human's gate decisions (memo questions 1 to 7, all decided as
-recommended) and two spike results, recorded under "Spike results" below.
+recommended) and two spike results, recorded under "Spike results" below. Slice (a) has shipped and
+the ADR stays Proposed until slice (b) lands; the shipped slice corrected the price and the
+`Throwable` result, and added the key-ownership rule, below.
 
 ## Context
 
@@ -138,8 +140,9 @@ thunks are per result type and can only cast what they name (`Task<int>`, `Task<
   only), `Boolean`, `Byte`, `UByte`, `Short`, `UShort`, `Int`, `UInt`, `Long`, `ULong`, `Float`,
   `Double` (the eleven `PrimitiveKind`s, `ForwardMarshallingModel.kt:425-437`) and `String`.
   `Throwable` is in `isCallbackResult` only where the declaration accepts a
-  `NugetManagedException`; whether it rides the `String` thunk here unchanged is **inferred**, so
-  v1 may refuse it by name.
+  `NugetManagedException`, but a `Throwable` suspend lambda result is **refused by name in v1**
+  (slice (a) as shipped): the End thunk casts the `Task<R>` it names, and nothing proved a
+  `Throwable` rides the `String` thunk unchanged. A `Throwable` flow element is slice (b)'s question.
 - **Suspend lambda payload** (Kotlin to C#, one per invocation, arity 0 to 3): exactly
   `isCallbackPayload` (**verified by reading** `ForwardBridgeTypeClassifier.kt:1078-1085`): a
   primitive by value, `String`, an exported enum by ordinal, an exported object or interface over a
@@ -284,6 +287,29 @@ the item.
   (**verified by reading** `NugetAwait.kt:42`). That is a bounded hold, not a leak, and the cancel
   leak row must await the C# task's real completion before it asserts the baseline.
 
+### Who owns the registered key, and when (added with slice (a))
+
+The lifetime rule above starts at the Kotlin holder. The implementation had to add the rule for the
+window before that, because the C# call site registers the delegate in the context table before the
+P/Invoke, and a call that fails first would otherwise strand the key (and the delegate it roots)
+with no Kotlin holder ever built to release it.
+
+- C# owns a registered key from registration until the native call returns. The generated call site
+  unregisters it on any earlier exit: `forwardCirHandleScope` on the plan route, `collectionScopedCall`
+  on the legacy suspend route. Once the call has returned the local is zeroed and Kotlin owns the key.
+- The Kotlin export builds the cleaner-owning holder (`NugetAsyncContext`) before anything else in the
+  export that can throw: the first statement on the plan route, the first statement of the argument's
+  block on the legacy suspend route (after the receiver and scope lookups). From then on the
+  cleaner owns the key.
+- A member that takes a suspend lambda also frees the completion callback's `GCHandle` when the call
+  throws before the P/Invoke (a later argument refused by its null guard, or a disposed wrapper). The
+  catch around the call does it. A suspend member that takes no suspend lambda is inferred not to have this
+  catch yet, from the shape of the fix and with no test (ROADMAP, Performance & Resource Hygiene).
+- Pinned by `LeakTests/CollectabilityTests.cs`: `SuspendLambdaParameter_CallOnADisposedWrapper_ItsClosureIsCollected`,
+  `SuspendLambdaParameter_LaterArgumentFailsItsNullGuard_ItsClosureIsCollected` and its control
+  `SuspendLambdaParameter_LambdaBeforeAString_AfterTheCallCompletes_ItsClosureIsCollected`. They are
+  collectability rows, because the context table is invisible to `nuget_live_handles`.
+
 ### Semantics a consumer can rely on
 
 - Cold: the C# enumerable's `GetAsyncEnumerator` is called once per Kotlin `collect`. Whether a
@@ -376,8 +402,9 @@ the human raised no objection.
 - `StateFlow<T>` at a parameter stays unbound, with a sentence that names the reason and the
   `Flow<T>` plus `stateIn` remedy. Handle passthrough is deferred to 1.x.
 - Nothing in `nuget-runtime` changes; no runtime version bump is required by this ADR.
-- Price: about 17 processor files for the suspend lambda slice, and for the `Flow` slice about 3
-  new files plus a second pass over about 10 of the first slice's. The memo lists them.
+- Price: slice (a), as shipped, changed 25 processor files and added one, `forward/ForwardAsyncCallback.kt`
+  (not the "about 17" first estimated). For the `Flow` slice about 3 new files plus a second pass
+  over about 10 of the first slice's. The memo lists them.
 - A C# closure passed for one of these parameters is released by a Kotlin cleaner, not at the end
   of the call. Leak rows for the route settle through the existing cleaner round.
 - For the implementer: the `createCleaner` import is emitted only when the module has bridge
@@ -386,6 +413,7 @@ the human raised no objection.
   export carries (`InterfaceBridgeFactoryExports.kt:83`).
 - The new thunks run user C# on Kotlin dispatcher threads, which widens the reach of the open
   `_lastManagedFault` stash residual (ROADMAP Phase 7).
-- Deferred: every result, element and payload type outside the v1 list; nullable `Flow<T>?` and
+- Deferred: every result, element and payload type outside the v1 list, a `Throwable` suspend lambda
+  result included; nullable `Flow<T>?` and
   nullable suspend lambda parameters; arity above 3; batch pull; a plain `(T) -> R` parameter on a
   `suspend fun` (refused today by the same legacy gate).

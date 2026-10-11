@@ -125,7 +125,7 @@ property is dropped from the generated class instead of emitting code that won't
 lambda-typed property you expect is missing, check the build's warnings, and the owner and
 nullability rules above.
 
-## C# → Kotlin: per-call lambda parameters
+## C# → Kotlin: per-call lambda parameters {id="c-kotlin-per-call-lambda-parameters"}
 
 ```kotlin
 fun describeWith(format: (String) -> String): String = format(name)
@@ -193,12 +193,14 @@ non-scalar (`List`, `Set`, `Map`, `Any`, `Pair`, an array, `Duration`, or anythi
 `kotlin`/`kotlinx` outside a primitive, `String`, `Char` or a `Throwable`, which binds as an unthrown
 `Exception`, see [Throwable values](exceptions.md#throwable-values)); a lambda's *own* return
 outside `Unit`, a primitive, `String` or a `Throwable`, `Exception` or `RuntimeException` (an
-object, an enum, `Char`, or one of those same builtins); a suspend
-lambda (`suspend (T) -> R`); a lambda type nested inside a `List`/`Set`/`Map`; a class or object member
+object, an enum, `Char`, or one of those same builtins); a lambda type nested inside a `List`/`Set`/`Map`; a class or object member
 that returns a lambda rather than taking one (a [top-level function](#a-top-level-function-that-returns-a-lambda) can; expose a
 [lambda property](#kotlin-c-lambda-properties-and-returns) on the class instead); and a lambda parameter
 on a constructor, a data class's `copy()`, an enum-arm box constructor, or a value-class member,
 since none of those can keep the callback registered past the single call that creates them.
+A [`suspend` lambda parameter](coroutines-and-flow.md#suspend-lambda-parameter) is a different
+shape with its own rules: it is not per-call, it binds on a constructor and on a method that stores
+it, and Kotlin owns its lifetime.
 
 ```kotlin
 fun onBatch(cb: (List<Int>) -> Unit) = cb(listOf(1))
