@@ -385,6 +385,12 @@ await service.DisposeAsync(); // waits for quickNap, then releases
 string result = await quickNap;
 ```
 
+A flow wrapper you read from a property, or from a method that returns a read-only flow, throws
+`ObjectDisposedException` naming the owner if you use it after the owner is disposed, as a method
+call would. A collection already running when you dispose still ends cleanly. A held or awaited
+`MutableStateFlow` or `MutableSharedFlow` keeps reading and writing after the owner is disposed, but
+a new collection or `EmitAsync` on it throws.
+
 A wrapper you drop without disposing is not cancelled mid-flight: a pending `suspend` call, a running
 `await foreach` and a held or awaited `StateFlow` keep the owner alive until they finish, and the
 GC releases it afterwards (see [Classes and objects](classes-and-objects.md#object-identity-and-disposal)).

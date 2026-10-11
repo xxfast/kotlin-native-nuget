@@ -87,6 +87,13 @@ class Tier1MutableSharedFlowValueClassElementTest {
   private val tagGuard: String = "if (v.Id is null) throw new ArgumentException(" +
     "\"default(Tag) carries no Id; construct a Tag instead\", nameof(v));"
 
+  /**
+   * The disposed-owner guard an owner-keyed delegate opens with, AHEAD of the argument guards: a
+   * wrapper that outlives its `Bulletin` answers `ObjectDisposedException` whatever was passed.
+   */
+  private val ownerGuard: String =
+    "if (_handle.IsInvalid) throw new ObjectDisposedException(nameof(Bulletin));"
+
   private fun assertClean() {
     assertEquals(emptyList(), result.kspErrors, "KSP errors (an ADR-055 mismatch lands here)")
     assertTrue(result.compiledClean, "generated Kotlin must compile; got: ${result.compileErrors}")
@@ -207,36 +214,42 @@ class Tier1MutableSharedFlowValueClassElementTest {
     // Both delegates carry the guard ahead of the native call, in the same statement block.
     assertContains(
       csharp,
-      "v => { ${tagGuard} return NugetErrorNative.Check(" +
+      "v => { $ownerGuard $tagGuard return NugetErrorNative.Check(" +
         "Native_TryEmitTags(_handle, v.Id, out IntPtr error), error); }",
     )
     assertContains(
       csharp,
-      "(v, callback, userData) => { ${tagGuard} return Native_EmitTags(" +
+      "(v, callback, userData) => { $ownerGuard $tagGuard return Native_EmitTags(" +
         "_handle, GetOrCreateScope(), v.Id, callback, userData); }",
     )
     val collarGuard: String = "if (v.Cat is null) throw new ArgumentException(" +
       "\"default(Collar) carries no Cat; construct a Collar instead\", nameof(v));"
     assertContains(
-      csharp, "v => { $collarGuard return NugetErrorNative.Check(Native_TryEmitCollars(",
+      csharp,
+      "v => { $ownerGuard $collarGuard return NugetErrorNative.Check(Native_TryEmitCollars(",
     )
-    assertContains(csharp, "(v, callback, userData) => { $collarGuard return Native_EmitCollars(")
+    assertContains(
+      csharp,
+      "(v, callback, userData) => { $ownerGuard $collarGuard return Native_EmitCollars(",
+    )
     // The nullable spelling: `v?.Id` on a non-null default would ship a null and emit a null
     // nobody passed, so the guard tests the present value.
     val spareGuard: String = "if (v.HasValue && v.Value.Id is null) throw new ArgumentException(" +
       "\"default(Tag) carries no Id; construct a Tag instead\", nameof(v));"
     assertContains(
-      csharp, "v => { $spareGuard return NugetErrorNative.Check(Native_TryEmitSpareTags(",
+      csharp,
+      "v => { $ownerGuard $spareGuard return NugetErrorNative.Check(Native_TryEmitSpareTags(",
     )
     assertContains(
-      csharp, "(v, callback, userData) => { $spareGuard return Native_EmitSpareTags(",
+      csharp,
+      "(v, callback, userData) => { $ownerGuard $spareGuard return Native_EmitSpareTags(",
     )
     // A primitive or enum underlying's default is a legitimate value, so it is not guarded.
     assertFalse("v.Count is null" in csharp, "a primitive underlying must not be guarded")
     assertFalse("v.Mood is null" in csharp, "an enum underlying must not be guarded")
     assertContains(
       csharp,
-      "v => { return NugetErrorNative.Check(Native_TryEmitNaps(_handle, v.Count, " +
+      "v => { $ownerGuard return NugetErrorNative.Check(Native_TryEmitNaps(_handle, v.Count, " +
         "out IntPtr error), error); }",
     )
   }
@@ -269,7 +282,17 @@ class Tier1MutableSharedFlowValueClassElementTest {
     routes.forEach { route ->
       assertTrue(writes.any { it.contains(route) }, "expected a write through $route; got $writes")
     }
-    writes.forEach { line -> assertContains(line, "{ $tagGuard return ") }
+    // The `default(Tag)` guard is the last statement before the call on every route. A flow
+    // keyed on its own handle opens with it; an owner-keyed delegate opens with the
+    // disposed-owner guard instead, which therefore wins on a disposed owner.
+    val disposedOwner = Regex(
+      """^if \(_handle\.IsInvalid\) throw new ObjectDisposedException\(nameof\([\w.:]+\)\); """,
+    )
+    writes.forEach { line ->
+      val body: String = line.substringAfter("=> { ")
+      assertEquals("(_handle," in line, disposedOwner.containsMatchIn(body), line)
+      assertTrue(disposedOwner.replace(body, "").startsWith("$tagGuard return "), line)
+    }
     // Two writes each on three owners (Bulletin, LoudWire and the Wire backing wrapper) of the
     // property and the held desk, plus the awaited and the top-level holder.
     assertEquals(16, writes.size, "expected sixteen Tag write lambdas; got $writes")

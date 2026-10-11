@@ -2066,13 +2066,19 @@ internal fun flowProperty(
     else -> "${surface.csharpHolder()}<$flowElementType>$memberSuffix"
   }
 
+  // The wrapper's delegates read the owner's `_handle` on each use, long after the getter's own
+  // disposed check, so each opens with the same guard: a wrapper that outlives its owner throws
+  // instead of handing Kotlin the zero handle.
+  val ownerGuard: String = disposedOwnerGuard(ownerCsName)
+  val collectCall: String = "${nativeCarrier}Native_Get${csPropName}Collect(_handle, " +
+      "GetOrCreateScope(), onNext, onComplete, onError, userData)"
+
   val getter: String = if (isStateFlowType) {
       // ADR-065: the collect wiring is byte-for-byte the plain-Flow getter above; the only
       // addition is the second constructor argument, a synchronous `_value` read lambda.
       // ADR-067: a nullable member additionally probes `_has_value` before constructing.
       // ADR-071: a settable member additionally passes a third `Action<T>` write lambda,
       // backed by the sibling `_set_value` export.
-      val collectNativeName = "${nativeCarrier}Native_Get${csPropName}Collect"
       val valueNativeName = "${nativeCarrier}Native_Get${csPropName}Value"
       val hasValueNativeName = "${nativeCarrier}Native_Get${csPropName}HasValue"
       val setValueNativeName = "${nativeCarrier}Native_Set${csPropName}Value"
@@ -2088,11 +2094,14 @@ internal fun flowProperty(
           appendLine("                    return null;")
         }
         appendLine("                return new $ctorName<$flowElementType>((onNext, onComplete, onError, userData) =>")
-        appendLine("                    $collectNativeName(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData),")
+        appendLine(guardedLambdaBody(ownerGuard, collectCall, "                    ") + ",")
+        val valueLambda = "() => { $ownerGuard return $valueNativeName(_handle); }"
         if (stateFlowWrite != null) {
-          appendLine("                    () => $valueNativeName(_handle),")
+          appendLine("                    $valueLambda,")
           appendLine("                    v =>")
           appendLine("                    {")
+          // Receiver state first: on a disposed owner the write is refused whatever was passed.
+          appendLine("                        $ownerGuard")
           if (stateFlowWrite.rejectsNull) {
             appendLine("                        if (v is null) throw new ArgumentNullException(nameof(v));")
           }
@@ -2104,20 +2113,19 @@ internal fun flowProperty(
           appendLine(
             stateFlowCompareAndSetLambda(
               compareAndSetNativeName, "_handle", stateFlowWrite, taken = emptySet(),
-              indent = "                    ",
+              indent = "                    ", ownerGuard = ownerGuard,
             ) + ");",
           )
         } else if (flowElementRead != null) {
           // ADR-123: `read:` is named, so it skips the ADR-068-only `ownedHandle` slot.
-          appendLine("                    () => $valueNativeName(_handle),")
+          appendLine("                    $valueLambda,")
           appendLine("                    $flowElementRead);")
         } else {
-          appendLine("                    () => $valueNativeName(_handle));")
+          appendLine("                    $valueLambda);")
         }
         append("            ")
       }
   } else {
-      val collectNativeName = "${nativeCarrier}Native_Get${csPropName}Collect"
       // ADR-026 amendment (2026-10-09): a nullable member probes `_has_value` first (ADR-067).
       val hasValueNativeName = "${nativeCarrier}Native_Get${csPropName}HasValue"
       buildString {
@@ -2130,12 +2138,14 @@ internal fun flowProperty(
         }
         // ADR-209: the shared flow's delegates sit between the collect delegate and `read`.
         val arguments: List<String> = listOf(
-          "(onNext, onComplete, onError, userData) =>\n                    " +
-              "$collectNativeName(_handle, GetOrCreateScope(), onNext, onComplete, onError, " +
-              "userData)",
+          "(onNext, onComplete, onError, userData) =>\n" +
+              guardedLambdaBody(ownerGuard, collectCall, "                    "),
         ) + sharedFlow
           ?.let { shared ->
-            sharedFlowArguments(shared, "_handle", "GetOrCreateScope()", "                    ")
+            sharedFlowArguments(
+              shared, "_handle", "GetOrCreateScope()", "                    ",
+              ownerGuard = ownerGuard,
+            )
           }
           .orEmpty() + listOfNotNull(flowElementRead?.let { read -> "                    $read" })
         appendLine(

@@ -137,28 +137,41 @@ internal fun sharedFlowArguments(
   // Every name in scope where the arguments are rendered: the lambdas' own names move off them,
   // so none shadows a user parameter or an enclosing closure's.
   taken: Set<String> = emptySet(),
+  // [disposedOwnerGuard] when [receiver] is the owner's lazily read `_handle`; null for a flow
+  // keyed on its own handle, which a disposed owner cannot zero.
+  ownerGuard: String? = null,
 ): List<String> {
   val names: MutableSet<String> = taken.toMutableSet()
   fun mint(base: String): String = freshName(base, names).also { names += it }
   val error: String = mint("error")
-  val replay: String = "$indent() => NugetErrorNative.Check(${shared.replayCache}($receiver, " +
-      "out IntPtr $error), $error)"
+  val receiverState: String = if (ownerGuard == null) "" else "$ownerGuard "
+  fun read(call: String): String {
+    if (ownerGuard == null) return "$indent() => $call"
+    return "$indent() => { ${receiverState}return $call; }"
+  }
+  val replay: String =
+    read("NugetErrorNative.Check(${shared.replayCache}($receiver, out IntPtr $error), $error)")
   val mutable: CirMutableSharedFlow = shared.mutable ?: return listOf(replay)
   val v: String = mint("v")
   val callback: String = mint("callback")
   val userData: String = mint("userData")
   val write: CirStateFlowWrite = mutable.write.relabelled("value", v)
-  // The ADR-071 guards, in the setter's order: a null object first, then the value-class
-  // `default(V)` check, whose `v` [relabelled] already moved onto this lambda's parameter.
+  // Receiver state first (a disposed owner refuses the write whatever was passed), then the
+  // ADR-071 guards in the setter's order: a null object, then the value-class `default(V)`
+  // check, whose `v` [relabelled] already moved onto this lambda's parameter.
   val guard: String = listOfNotNull(
+    ownerGuard,
     "if ($v is null) throw new ArgumentNullException(nameof($v));".takeIf { write.rejectsNull },
     write.guard,
   ).joinToString("") { statement -> "$statement " }
   return listOf(
     replay,
-    "$indent() => $scope",
-    "$indent() => NugetErrorNative.Check(${mutable.subscriptionCount}($receiver, " +
-        "out IntPtr $error), $error)",
+    // The scope feeds `SubscriptionCount`'s collect, which must not mint one on a disposed owner.
+    read(scope),
+    read(
+      "NugetErrorNative.Check(${mutable.subscriptionCount}($receiver, out IntPtr $error), " +
+          "$error)",
+    ),
     "$indent($v, $callback, $userData) => { ${guard}return ${mutable.emit}($receiver, $scope, " +
         "${write.arguments}, $callback, $userData); }",
     "$indent$v => { ${guard}return NugetErrorNative.Check(${mutable.tryEmit}($receiver, " +
@@ -175,13 +188,16 @@ internal fun reinvokedReplayArgument(
   method: CirMethod,
   replayCache: String,
   indent: String,
+  // The owner's [disposedOwnerGuard]: the delegate reads `_handle` on every `ReplayCache`.
+  ownerGuard: String,
 ): String {
   val names: MutableSet<String> = method.parameters.localScopeNames()
   val error: String = freshName("error", names)
   val paramNames: String = method.parameters.joinToString(", ") { it.nativeArgument }
   val args: String = if (paramNames.isEmpty()) "_handle" else "_handle, $paramNames"
   if (!method.parameters.hasCollectionHandles()) {
-    return "$indent() => NugetErrorNative.Check($replayCache($args, out IntPtr $error), $error)"
+    return "$indent() => { $ownerGuard return NugetErrorNative.Check(" +
+        "$replayCache($args, out IntPtr $error), $error); }"
   }
   val result: String = freshName("replay", names)
   val call = "$result = $replayCache($args, out $error)"
@@ -190,6 +206,7 @@ internal fun reinvokedReplayArgument(
   return buildString {
     appendLine("$indent() =>")
     appendLine("$indent{")
+    appendLine("$indent    $ownerGuard")
     appendLine("$indent    IntPtr $result;")
     appendLine("$indent    IntPtr $error;")
     scoped.forEach { line -> appendLine(line) }
