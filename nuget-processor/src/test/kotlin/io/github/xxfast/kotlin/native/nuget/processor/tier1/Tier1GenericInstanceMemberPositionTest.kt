@@ -339,8 +339,8 @@ class Tier1GenericInstanceMemberPositionTest {
       "Task<string> LaterWithAsync($box<string> box, $box<int>? spare",
       "KotlinFlow<$box<string>> Stream",
       "KotlinStateFlow<$box<int>> State",
-      // No write arm for a generic element (ADR-071 seam): read-only, as a collection element is.
-      "KotlinStateFlow<$box<string>> Mutable",
+      // Settable like any object-handle element (`Tier1MutableStateFlowGenericElementTest`).
+      "KotlinMutableStateFlow<$box<string>> Mutable",
       "KotlinFlow<$box<string>> StreamOf($box<string> box)",
       "Task<$box<string>> TopLaterAsync($box<string> box",
     ).forEach { signature ->
@@ -388,6 +388,7 @@ class Tier1GenericInstanceMemberPositionTest {
                   }
                   using Box<int> now = den.State.Value;
                   using Box<string> held = den.Mutable.Value;
+                  den.Mutable.Value = mine;
                   return later.Value + with + top.Value + seen + now.Value;
               }
           }

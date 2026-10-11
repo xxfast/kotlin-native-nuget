@@ -3,6 +3,7 @@ package io.github.xxfast.kotlin.native.nuget.test.boxshelf
 import io.github.xxfast.kotlin.native.nuget.test.cat.Box
 import io.github.xxfast.kotlin.native.nuget.test.cat.Cat
 import io.github.xxfast.kotlin.native.nuget.test.cat.Mood
+import io.github.xxfast.kotlin.native.nuget.test.outcome.Outcome
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -170,3 +171,46 @@ class BoxRadio {
 }
 
 fun boxedTicks(): Box<Flow<Int>> = Box(flowOf(7, 8))
+
+/**
+ * ADR-071 over ADR-208: a `MutableStateFlow` whose ELEMENT is a closed generic instantiation is
+ * settable from C#, like any other object-handle element: `.Value` set, `CompareAndSet` and the
+ * `Update` family, with the written box borrowed.
+ *
+ * | Route | Member |
+ * | ----- | ------ |
+ * | property | [BoxDisplay.front] |
+ * | property, nullable element | [BoxDisplay.spare] |
+ * | held function return | [BoxDisplay.window] |
+ * | awaited suspend return | [BoxDisplay.unveiled] |
+ * | property, generic sealed element | [BoxDisplay.verdict] |
+ *
+ * The `*Label` / `windowCount` members read what Kotlin holds after a C# write, through the box
+ * that was written, so a write that landed nowhere (or landed the wrong instantiation) shows.
+ *
+ * Oreo rearranges the display. Mylo checks it is still the box he was sleeping in.
+ */
+class BoxDisplay {
+  private val pane: MutableStateFlow<Box<Int>> = MutableStateFlow(Box(1))
+
+  val front: MutableStateFlow<Box<String>> = MutableStateFlow(Box("first"))
+
+  val spare: MutableStateFlow<Box<String>?> = MutableStateFlow(null)
+
+  val verdict: MutableStateFlow<Outcome<Int>> = MutableStateFlow(Outcome.Ok(1))
+
+  fun window(): MutableStateFlow<Box<Int>> = pane
+
+  suspend fun unveiled(): MutableStateFlow<Box<Int>> {
+    delay(1.milliseconds)
+    return pane
+  }
+
+  fun frontLabel(): String = front.value.value
+
+  fun spareLabel(): String = spare.value?.value ?: "none"
+
+  fun windowCount(): Int = pane.value.value
+
+  fun verdictLabel(): String = verdict.value.toString()
+}
