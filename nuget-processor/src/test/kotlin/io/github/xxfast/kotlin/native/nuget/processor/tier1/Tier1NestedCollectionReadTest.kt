@@ -55,10 +55,11 @@ class Tier1NestedCollectionReadTest {
   }
 
   /**
-   * The write half at depth 3, which is where the per-level lambda naming is load-bearing: C#
-   * rejects a lambda parameter that shadows an enclosing one (CS0136), so `x`/`x1`/`x2` is the
-   * difference between generated code that compiles and generated code that does not. The
-   * `test-library` corpus compiles this shape (`WardBoard.logCages`) but nothing pins the spelling.
+   * The write half at depth 3, where each level's lambda gets its own `x`/`x1`/`x2`. C# 8 and
+   * later accept a lambda parameter that shadows an enclosing one, so CS0136 does not force the
+   * distinct names (`Tier1AwaitedStateFlowLocalNamesTest` compiles a shadowing case); this pins
+   * the spelling. The `test-library` corpus compiles this shape (`WardBoard.logCages`) but
+   * nothing else pins it.
    */
   @Test
   fun `a nested input recurses through the same factory at every level`() {
