@@ -983,7 +983,9 @@ internal object ForwardCirPlanProjection {
       // per export) the three release thunks. The key is the local [asyncPrelude] registered into:
       // C# owns it until the call returns, the Kotlin holder from then on.
       is BridgeType.AsyncCallback -> forwardAsyncCallbackArguments(
-        type, "${parameter.csharpLocal}AsyncKey", requireNotNull(parameter.asyncSlots).carriesShared,
+        type,
+        "${parameter.csharpLocal}AsyncKey",
+        requireNotNull(parameter.asyncSlots).carriesShared,
       )
       // ADR-077: the generated `readonly record struct` capitalizes the Kotlin underlying
       // property (`value` -> `Value`, CirClassTranslator); the unwrapped value is lowered to its

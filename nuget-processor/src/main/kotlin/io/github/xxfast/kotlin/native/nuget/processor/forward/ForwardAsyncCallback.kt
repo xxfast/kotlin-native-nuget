@@ -24,7 +24,7 @@ internal data class ForwardAsyncSlots(
   val releaseCancellation: String,
   val releaseContext: String,
   val carriesShared: Boolean,
-  /** Kotlin: the local the holder that owns the key is bound to, built before anything can throw. */
+  /** Kotlin: the local the key-owning holder is bound to, built before anything can throw. */
   val holder: String,
   /**
    * C#: the local the key is registered into. Any exit between the registration and the native
@@ -104,7 +104,8 @@ internal fun asyncCallbackHolderType(): TypeSpec {
         .initializer(
           CodeBlock.of(
             "kotlin.native.ref.createCleaner(\n" +
-                "  releaseContext.reinterpret<$CFUNCTION<($POINTER,·$POINTER?)·->·Unit>>() to key\n" +
+                "  releaseContext.reinterpret<$CFUNCTION<($POINTER,·$POINTER?)·->·Unit>>()" +
+                " to key\n" +
                 ") { (fn, ctx) -> fn.invoke(ctx, null) }"
           )
         )

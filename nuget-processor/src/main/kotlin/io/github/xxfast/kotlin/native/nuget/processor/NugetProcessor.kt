@@ -3877,12 +3877,14 @@ internal class NugetProcessor(
     // its lambda and cleaner call. Last for the same reason as the line above: the legacy suspend
     // routes record their sightings on the classifier as they emit. Everything else the lambda
     // names is spelled fully qualified, so a module with no suspend lambda parameter gains nothing.
-    val hasAsyncCallbackParameters: Boolean = forwardClassifier.asyncCallbacks.isNotEmpty() ||
-        callableCatalog.plans.any { plan ->
-          plan.publicSignature.parameters.any { parameter ->
-            parameter.type is BridgeType.AsyncCallback
-          }
-        }
+    val legacyRoutesTakeAsyncCallbacks: Boolean = forwardClassifier.asyncCallbacks.isNotEmpty()
+    val plansTakeAsyncCallbacks: Boolean = callableCatalog.plans.any { plan ->
+      plan.publicSignature.parameters.any { parameter ->
+        parameter.type is BridgeType.AsyncCallback
+      }
+    }
+    val hasAsyncCallbackParameters: Boolean =
+      legacyRoutesTakeAsyncCallbacks || plansTakeAsyncCallbacks
     if (hasAsyncCallbackParameters) {
       builder.addImport("kotlinx.cinterop", "reinterpret")
       builder.addImport("kotlinx.cinterop", "invoke")

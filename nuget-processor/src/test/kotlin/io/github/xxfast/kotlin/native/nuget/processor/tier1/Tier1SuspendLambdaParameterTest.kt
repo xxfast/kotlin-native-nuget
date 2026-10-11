@@ -157,7 +157,8 @@ class Tier1SuspendLambdaParameterTest {
   /**
    * The ABI is positional, so the order is the contract. Per parameter: Begin, End, key. The three
    * release thunks do not depend on the parameter, so only the export's FIRST suspend lambda
-   * declares them, right after its own three; the second declares three slots and reads the first's.
+   * declares them, right after its own three; the second declares three slots and reads the
+   * first's.
    */
   @Test
   fun `the slots are flat and the release thunks cross once per export`() {
@@ -425,7 +426,10 @@ class Tier1SuspendLambdaParameterTest {
     assertTrue(tasks.contains("global::System.Threading.Tasks.TaskContinuationOptions.None,"))
     assertTrue(tasks.contains("global::System.Threading.Tasks.TaskScheduler.Default);"))
     val attach: String = tasks.substringAfter("static void Attach(").substringBefore("Begin(")
-    assertTrue(attach.contains("GCHandle.FromIntPtr(handle).Free();\n                throw;"), attach)
+    assertTrue(
+      attach.contains("GCHandle.FromIntPtr(handle).Free();\n                throw;"),
+      attach,
+    )
     // Begin: the source is minted before the user call, and its handle is allocated last.
     val begin: String = tasks.substringAfter("static IntPtr Begin(").substringBefore("void End(")
     val minted: Int = begin.indexOf("cts = new global::System.Threading.CancellationTokenSource()")
@@ -435,7 +439,8 @@ class Tier1SuspendLambdaParameterTest {
     assertTrue(minted in 0 until called, begin)
     assertTrue(called < attached && attached < allocated, begin)
     // End: GetResult, with the task handle freed in `finally` on every path.
-    val end: String = tasks.substringAfter("static T End<T>(").substringBefore("ReleaseCancellation")
+    val end: String = tasks.substringAfter("static T End<T>(")
+      .substringBefore("ReleaseCancellation")
     assertTrue(end.contains(".GetAwaiter().GetResult();"), end)
     assertTrue(end.contains("finally\n            {\n                handle.Free();"), end)
     // Release cancellation: free, then dispose, or queue the cancel off this thread.
@@ -464,8 +469,14 @@ class Tier1SuspendLambdaParameterTest {
           0 until plate.indexOf("launchForCSharp("),
       plate,
     )
-    assertTrue(plate.contains("val prepareArg: suspend (kotlin.Int) -> kotlin.String = run {"), plate)
-    assertTrue(plate.contains("io.github.xxfast.kotlin.native.nuget.runtime.awaitForKotlin("), plate)
+    assertTrue(
+      plate.contains("val prepareArg: suspend (kotlin.Int) -> kotlin.String = run {"),
+      plate,
+    )
+    assertTrue(
+      plate.contains("io.github.xxfast.kotlin.native.nuget.runtime.awaitForKotlin("),
+      plate,
+    )
     // Both user-code crossings go through the ADR-161 error channel, and the key rides last.
     assertEquals(2, Regex("nugetCallbackCall \\{ nugetErr ->").findAll(plate).count(), plate)
     assertTrue(
@@ -513,6 +524,7 @@ class Tier1SuspendLambdaParameterTest {
     assertFalse(result.generatedCSharp.contains("NugetAsyncReleaseContext"))
     assertFalse(result.generated.contains("NugetAsyncContext"))
   }
+
   /**
    * The same guard on every other plan-route owner: each renders its body through its own call
    * shape, and a registration whose key local was never declared would not compile for a consumer.

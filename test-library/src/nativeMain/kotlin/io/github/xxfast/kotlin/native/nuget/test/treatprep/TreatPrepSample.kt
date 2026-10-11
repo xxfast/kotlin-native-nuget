@@ -9,15 +9,15 @@ import kotlinx.coroutines.withTimeoutOrNull
  * ADR-210 slice (a) fixture: a **suspend lambda parameter**, `suspend (T) -> R`, which binds as
  * `Func<T, CancellationToken, Task<R>>` (`Func<T, CancellationToken, Task>` for `Unit`).
  *
- * Today every member below that takes one is a named skip, so the C# tests fail to compile on
- * exactly these members. The fixture crosses every seam the feature crosses and no more:
+ * Every member below that takes one binds, and the C# tests exercise exactly these members. The
+ * fixture crosses every seam the feature crosses and no more:
  *
  * ### Hosts
  *  - **class `suspend fun`** (legacy suspend route, the realistic host): everything on [TreatChef].
  *  - **`suspend fun` on a sealed arm** (ADR-118's arm suspend route): [Prep.Batch.cook].
- *  - **non-suspend member on a sealed arm that stores the lambda** (the ADR-062 plan route, pinned
- *    as a skip by `Tier1AsyncParameterSealedArmTest` cell (b)): [Prep.Batch.keep], invoked later
- *    by [Prep.Batch.cookKept].
+ *  - **non-suspend member on a sealed arm that stores the lambda** (the ADR-062 plan route, a skip
+ *    before ADR-210, see `Tier1AsyncParameterSealedArmTest` cell (b)): [Prep.Batch.keep], invoked
+ *    later by [Prep.Batch.cookKept].
  *  - **constructor that stores the lambda**: [TreatTimer], invoked later by [TreatTimer.ring]. The
  *    storing position the Kotlin-owned (cleaner) lifetime exists for.
  *  - **top-level `suspend fun`** (ADR-007 static class `TreatPrepSample`): [prepOnce].
@@ -48,7 +48,7 @@ class TreatChef(val cat: String) {
    */
   suspend fun plate(count: Int, prepare: suspend (Int) -> String): String {
     val plated: MutableList<String> = mutableListOf()
-    for (treat in 1..count) plated += prepare(treat)
+    (1..count).forEach { treat -> plated += prepare(treat) }
     return plated.joinToString(",")
   }
 
@@ -58,20 +58,20 @@ class TreatChef(val cat: String) {
    */
   suspend fun weigh(times: Int, scale: suspend (Int) -> Int): Int {
     var total = 0
-    for (treat in 1..times) total += scale(treat)
+    (1..times).forEach { treat -> total += scale(treat) }
     return total
   }
 
   /** `Unit` result: the lambda binds as `Func<int, CancellationToken, Task>`. */
   suspend fun serve(count: Int, bowl: suspend (Int) -> Unit): Int {
-    for (treat in 1..count) bowl(treat)
+    (1..count).forEach { treat -> bowl(treat) }
     return count
   }
 
   /** Arity 0: `Func<CancellationToken, Task<string>>`. */
   suspend fun announce(call: suspend () -> String): String = "$cat hears: ${call()}"
 
-  /** Arity 2: `Func<int, int, CancellationToken, Task<int>>`. Both payloads must arrive in order. */
+  /** Arity 2: `Func<int, int, CancellationToken, Task<int>>`; both payloads arrive in order. */
   suspend fun mix(wet: Int, dry: Int, blend: suspend (Int, Int) -> Int): Int = blend(wet, dry)
 
   /** `String` payload and result: the UTF8 pair on the invocation and on the completion. */
@@ -113,14 +113,15 @@ class TreatChef(val cat: String) {
 sealed class Prep {
   /** A batch of [size] treats. */
   class Batch(val size: Int) : Prep() {
-    // Written on the C# caller's thread by [keep], read on a Kotlin dispatcher thread by [cookKept].
+    // Written on the C# caller's thread by [keep], read on a Kotlin dispatcher thread by
+    // [cookKept].
     @Volatile
     private var kept: (suspend (Int) -> String)? = null
 
     /** `suspend` on an arm, invoking the lambda during the call. */
     suspend fun cook(prepare: suspend (Int) -> String): String {
       val cooked: MutableList<String> = mutableListOf()
-      for (treat in 1..size) cooked += prepare(treat)
+      (1..size).forEach { treat -> cooked += prepare(treat) }
       return cooked.joinToString("+")
     }
 
@@ -137,7 +138,7 @@ sealed class Prep {
     suspend fun cookKept(): String {
       val prepare: suspend (Int) -> String = kept ?: return "nothing kept"
       val cooked: MutableList<String> = mutableListOf()
-      for (treat in 1..size) cooked += prepare(treat)
+      (1..size).forEach { treat -> cooked += prepare(treat) }
       return cooked.joinToString("+")
     }
   }
@@ -155,7 +156,7 @@ class TreatTimer(private val prepare: suspend (Int) -> String) {
   /** Invokes the constructor's lambda [count] times, sequentially. */
   suspend fun ring(count: Int): String {
     val rung: MutableList<String> = mutableListOf()
-    for (treat in 1..count) rung += prepare(treat)
+    (1..count).forEach { treat -> rung += prepare(treat) }
     return rung.joinToString(",")
   }
 }

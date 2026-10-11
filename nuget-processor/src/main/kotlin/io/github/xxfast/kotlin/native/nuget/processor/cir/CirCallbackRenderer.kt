@@ -332,7 +332,9 @@ private fun StringBuilder.renderAsyncCallbackDeclarations(helper: CirCallbackDel
   appendLine("                    static (_, state) =>")
   appendLine("                    {")
   appendLine("                        var (cb, h, c) = ((IntPtr, IntPtr, IntPtr))state!;")
-  appendLine("                        ((delegate* unmanaged[Cdecl]<IntPtr, IntPtr, void>)cb)(h, c);")
+  appendLine(
+    "                        ((delegate* unmanaged[Cdecl]<IntPtr, IntPtr, void>)cb)(h, c);"
+  )
   appendLine("                    },")
   appendLine("                    (callback, handle, ctx),")
   appendLine("                    $token.None,")
@@ -430,7 +432,8 @@ private fun StringBuilder.appendAsyncCallbackThunks(helper: CirCallbackDelegateH
             listOf("IntPtr callback", "IntPtr awaitCtx", "IntPtr key", "IntPtr* errOut")
         ).joinToString(", ")
     val releases: List<String> = begin.payloadTypes.mapIndexedNotNull { index, type ->
-      if (type == "IntPtr") "    if (a$index != IntPtr.Zero) NugetMarshal.Dispose(a$index);" else null
+      if (type == "IntPtr") "    if (a$index != IntPtr.Zero) NugetMarshal.Dispose(a$index);"
+      else null
     }
     appendThunkBody(
       begin.name,

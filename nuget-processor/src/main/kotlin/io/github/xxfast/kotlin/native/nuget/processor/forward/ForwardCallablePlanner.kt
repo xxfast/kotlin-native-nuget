@@ -2899,7 +2899,9 @@ internal class ForwardCallablePlanner(
       )
     }
     val asyncSlots: List<ForwardAsyncSlots?> = mintAsyncSlots(
-      parameters.map { parameter -> parameter.name to (parameter.type is BridgeType.AsyncCallback) },
+      parameters.map { parameter ->
+        parameter.name to (parameter.type is BridgeType.AsyncCallback)
+      },
     ) { base -> kotlin.mint(base) }
     val slotted: List<ForwardPublicParameter> = parameters.mapIndexed { index, parameter ->
       val callback: Boolean = parameter.type is BridgeType.Callback

@@ -1524,7 +1524,8 @@ internal fun ForwardLegacyNames.legacyPrelude(parameters: List<String>): String 
   val ordered: List<Int> = parameters.indices.sortedBy { index -> asyncSlots[index] == null }
   ordered.forEach { index ->
     val parameter: String = parameters[index]
-    shapes[index].legacyPrelude(parameter.kotlinIdentifier(), loweredLocals[index], asyncSlots[index])
+    shapes[index]
+      .legacyPrelude(parameter.kotlinIdentifier(), loweredLocals[index], asyncSlots[index])
       ?.let { line -> appendLine(line) }
   }
   val mask: String = mask ?: return@buildString

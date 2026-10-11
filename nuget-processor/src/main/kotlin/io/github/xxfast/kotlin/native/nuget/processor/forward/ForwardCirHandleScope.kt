@@ -62,7 +62,8 @@ internal fun forwardCirHandleScope(
     // Every plan-route native call ends in the error slot and is one whole statement, which is
     // what lets the hand-over land between the call returning and its error check.
     val callLine: Int = coreLines.indexOfFirst { line -> line.contains(NATIVE_CALL_MARKER) }
-    require(afterCall.isEmpty() || (callLine >= 0 && coreLines[callLine].trimEnd().endsWith(";"))) {
+    val callIsStatement: Boolean = callLine >= 0 && coreLines[callLine].trimEnd().endsWith(";")
+    require(afterCall.isEmpty() || callIsStatement) {
       "Forward CIR handle scope found no native call statement to hand ownership over after"
     }
     val indentedCore: String =

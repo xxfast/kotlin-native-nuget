@@ -345,7 +345,10 @@ internal fun BridgeType.AsyncCallback.forwardAsyncEnd(): CirAsyncEnd {
  * every key registered so far. [forwardAsyncCallbackPrelude] is that shape on the plan route,
  * `collectionScopedCall` on the legacy suspend route.
  */
-internal fun forwardAsyncCallbackRegistration(name: String, type: BridgeType.AsyncCallback): String {
+internal fun forwardAsyncCallbackRegistration(
+  name: String,
+  type: BridgeType.AsyncCallback,
+): String {
   val taken: MutableSet<String> = mutableSetOf(name.removePrefix("@"))
   fun mint(base: String): String = freshName(base, taken).also { taken += it }
   val payloads: List<String> = type.parameters.indices.map { index -> mint("a$index") }

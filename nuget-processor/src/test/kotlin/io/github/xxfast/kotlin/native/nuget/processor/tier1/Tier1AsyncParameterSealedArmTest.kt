@@ -125,7 +125,10 @@ class Tier1AsyncParameterSealedArmTest {
   fun `a Flow parameter on a sealed arm suspend member is named as an unsupported input`() {
     val result: Tier1Result = run()
 
-    assertFalse(result.generatedCSharp.contains("WatchFlowSuspendedAsync("), "absent from Interop.cs")
+    assertFalse(
+      result.generatedCSharp.contains("WatchFlowSuspendedAsync("),
+      "absent from Interop.cs",
+    )
     assertFalse(result.generatedCSharp.contains("WatchFlowSuspended("), "absent from Interop.cs")
     val named: List<String> = result.diagnosticsMentioning("watchFlowSuspended")
     assertEquals(1, named.size, "named exactly once; got=$named")
