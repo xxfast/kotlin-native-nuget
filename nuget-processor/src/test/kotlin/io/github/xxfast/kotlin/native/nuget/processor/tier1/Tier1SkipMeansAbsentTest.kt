@@ -21,6 +21,9 @@ import kotlin.test.assertTrue
  *    degraded the parameter to a public `IntPtr` nobody can produce (issue #126's class, which
  *    ADR-122 fixed on the async routes only).
  *
+ * ADR-208 deleted that route outright (a generic-class return is planned like any other type), so
+ * these cells now pin that a plan skip leaves nothing behind it.
+ *
  * `Instant` is the probe rather than `ByteArray` on purpose: it is still a refused component after
  * this item ships, so these cells keep testing the general hole rather than one type's arms.
  */
@@ -65,19 +68,26 @@ class Tier1SkipMeansAbsentTest {
 
   @Test
   fun `a skip caused by a parameter does not leave the return route open`() {
+    // ADR-208: the generic return is on the plan, where a `Cat` parameter binds, so the refused
+    // parameter is a collection over [Tier1UnwrappableWitness.inputComponent].
+    val witness: Tier1UnwrappableCandidate = Tier1UnwrappableWitness.inputComponent
     val result: Tier1Result = Tier1Harness.run(
       """
       package tier1.skipabsentparam
 
       import kotlin.time.Instant
+      ${witness.importLine}
 
       class Cat(val name: String)
 
       class Box<T>(val value: T)
 
-      // A GENERIC return, which this legacy route really does own, with a parameter it cannot
-      // spell: `mapParamType` has no entry for `Cat`, so it used to render `IntPtr cat`.
-      fun wrap(cat: Cat): Box<Int> = Box(cat.name.length)
+      // A GENERIC return with a parameter no route can spell. The legacy generic-return route
+      // (deleted by ADR-208) rendered such a parameter as a public `IntPtr`.
+      fun wrap(items: List<${witness.kotlin}>): Box<Int> = Box(items.size)
+
+      // The control: the same return binds once its parameter does.
+      fun boxCat(cat: Cat): Box<Int> = Box(cat.name.length)
 
       // ...and the collection-return twin, skipped for its PARAMETER rather than its return.
       fun indices(stamps: List<Instant>): List<Int> = stamps.indices.toList()
@@ -92,7 +102,7 @@ class Tier1SkipMeansAbsentTest {
           "with an IntPtr slot; generatedCSharp=${result.generatedCSharp}",
     )
     assertTrue(
-      "IntPtr cat" !in result.generatedCSharp,
+      "IntPtr items" !in result.generatedCSharp && "IntPtr cat" !in result.generatedCSharp,
       "a parameter must never be degraded to a public IntPtr (issue #126); " +
           "generatedCSharp=${result.generatedCSharp}",
     )
@@ -101,8 +111,18 @@ class Tier1SkipMeansAbsentTest {
       "a member skipped for its parameter must not be emitted for its return; " +
           "generatedCSharp=${result.generatedCSharp}",
     )
-    // The control: the owner types themselves still bind, so the absences above are about the
-    // two functions rather than about the whole file being dropped.
+    assertTrue(
+      result.kspWarnings.any { "[nuget:SKIPPED_" in it && "tier1.skipabsentparam.wrap:" in it },
+      "expected wrap to be a named skip; kspWarnings=${result.kspWarnings}",
+    )
+    // The control: the owner types themselves still bind, and so does the generic return behind a
+    // spellable parameter, so the absences above are about the two functions rather than about
+    // the whole file being dropped.
+    assertTrue(
+      "Box<int> BoxCat(global::Interop.Cat cat)" in result.generatedCSharp,
+      "expected the generic return to bind behind a class parameter; generatedCSharp=" +
+          "${result.generatedCSharp.lines().filter { "BoxCat" in it }}",
+    )
     assertTrue(
       "class Cat" in result.generatedCSharp,
       "expected the parameter's own type to still be declared; " +

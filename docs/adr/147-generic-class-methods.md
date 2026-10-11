@@ -346,7 +346,8 @@ the bare receiver spelling, `asStableRef<LabelledCrate>()`.
   wrapping at `:70-71` is untouched, so `T?` is `Nullable(TypeParameter)` for free (verified).
   The `SpecializedProtocol("generic declaration ...")` branch for a *reference* to a generic
   class (`:251-253`) is **unchanged** in v1: `Crate<Cat>` as a parameter of another class stays
-  refused-named (it is a different feature, a generic instantiation at a position).
+  refused-named (it is a different feature, a generic instantiation at a position; lifted by the
+  2026-10-10 ADR-208 amendment below).
 - **Planner.** The seven exhaustive sites (above, verified by spike): `wireType()` groups
   `TypeParameter` with `ObjectHandle`, its own tagged transfer, spelled `IntPtr` on the wire;
   `skipReason()` returns `ForwardPlanSkipReason.UNSUPPORTED`, never `null`: it is only reached
@@ -463,7 +464,8 @@ directly under one `Nullable`. Concretely, in v1:
 - A generic **subclass** (`class Sub<T> : Base<T>`, ADR-101): still renders base-less, still on
   ROADMAP; unchanged by this ADR.
 - A reference to a generic instantiation at a position (`fun wrap(): Crate<Cat>`): still
-  `SpecializedProtocol("generic declaration")`, refused named, unchanged.
+  `SpecializedProtocol("generic declaration")`, refused named, unchanged (bound by the 2026-10-10
+  ADR-208 amendment).
 
 ### Sub-option fork, priced
 
@@ -641,7 +643,8 @@ Expected ledger per iteration: `nuget_wrap_int` +1 / dispose -1 (ctor), `crate_c
 - Deferred by name: `T` nested in collections / lambdas / `Flow` / value classes; `suspend`,
   `Flow` and stored-callback members of a generic class (refused named, one `if` each);
   generic subclasses (ADR-101, ROADMAP); generic instantiations at a position
-  (`Crate<Cat>` as a parameter); own method type parameters (bound by ADR-197, 2026-10-04).
+  (`Crate<Cat>` as a parameter, bound by ADR-208, 2026-10-10); own method type parameters (bound by
+  ADR-197, 2026-10-04).
 
 ## Amendment (2026-09-27): a bare `T` carries null
 
@@ -772,3 +775,20 @@ Evidence, verified: `Tier1MemberGenericMethodTest` and `MemberGenericMethodTests
 ## Amendment (2026-10-05): a closed generic sealed reference binds at member positions
 
 [ADR-199](199-generic-sealed-hierarchies.md) lets a closed instantiation of a generic sealed hierarchy (`Outcome<Int>`) bind at member positions that were `SpecializedProtocol("generic declaration")` here; `suspend`, `Flow` and stored-callback members declared on a generic sealed base or arm keep this ADR's generic-owner skip.
+
+## Amendment (2026-10-10): a closed generic class reference binds at every position (ADR-208)
+
+The classifier paragraph above that leaves a reference to a generic class as
+`SpecializedProtocol("generic declaration ...")`, so that `Crate<Cat>` as a parameter of another
+class "stays refused-named (it is a different feature, a generic instantiation at a position)", no
+longer holds for an exported, non-`inner` generic class.
+[ADR-208](208-generic-instantiation-member-positions.md) is that feature: a closed instantiation
+(`Box<String>`, `Box<Cat>`, `Box<Box<Int>>`, `Box<String>?`) binds at a property, member return and
+parameter, a constructor parameter, a companion, an object, the top level, an extension receiver, a
+`List` element, a suspend result and parameter and a `Flow` / `StateFlow` element. A returned wrapper
+is the caller's to dispose; a passed one is borrowed. A generic interface and an inner class of a
+generic owner keep the named skip. The legacy top-level generic-return route this ADR's
+`isGenericReturnType` arm belonged to is deleted.
+
+Evidence, verified: `IntegrationTests/GenericInstanceMemberTests.cs` and
+`Tier1GenericInstanceMemberPositionTest`.

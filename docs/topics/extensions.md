@@ -84,6 +84,9 @@ TestLibrary.Reserved.StringExtensions.Tag("Oreo", "Mylo"); // a different packag
 | Nullable collection, nullable bound C# interface | yes | no |
 | Generic type, unexported (non-stdlib, non-dependency) type, `ByteArray` | no | no |
 
+A closed instantiation of an exported generic class (`Box<Int>`) is the exception to the generic
+row for a property: `val Box<Int>.doubled: Int` binds as an extension on `Box<int>`.
+
 A receiver in a "no" cell is dropped with a named diagnostic: `SKIPPED_UNSUPPORTED_INPUT` for a
 function, `SKIPPED_UNSUPPORTED_PROPERTY` for a property
 (see [Publishing Kotlin to C#: Diagnostics](forward-overview.md#diagnostics)).

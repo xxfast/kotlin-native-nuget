@@ -9,7 +9,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpMemberName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.declaredCSharpName
 import io.github.xxfast.kotlin.native.nuget.processor.sanitizeLibrarySegment
 import io.github.xxfast.kotlin.native.nuget.processor.csharpIdentifier
-import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.kotlinConstantToPascalCase
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardGuardName
@@ -18,7 +17,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBoundInterf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardCallbackDelegate
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeContext
-import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
@@ -334,19 +332,9 @@ internal fun translate(
         tracker.trackPlan(planned)
         ForwardCirPlanProjection.static(planned, context.libraryName)
       } else {
-        // Named specialized adapters only (sealed / generic-declaration returns).
-        // ADR-171: its lambda-return and generic-return type arguments may name a value class
-        // that has a box/unbox pair.
-        translateSpecializedFunction(
-          function,
-          context.libraryName,
-          context,
-          tracker,
-          exportedTypes + callableCatalog.boxedValueClasses,
-          logger,
-          classifier,
-          callableCatalog,
-        )
+        // ADR-208: no legacy route is left for a top-level function. A generic-class return is
+        // planned (or refused by name) like every other type, so an unplanned function is absent.
+        emptyList()
       }
       recordStatic(
         namespace, finalClassName, emitted, function,
@@ -1013,7 +1001,7 @@ internal fun translate(
       // ADR-094: the walk happens here, before the helpers are prepended, because `namespaces`
       // already pairs every wrapper declaration with the namespace that names it.
       factories = factoryEntries(namespaces) +
-          classifier.closedSealedInstantiations.map { (type, construct) ->
+          classifier.closedInstantiations.map { (type, construct) ->
             CirFactoryEntry(type, constructExpression = construct)
           },
       includesFactorySlot = namespaces.any { namespace ->

@@ -121,36 +121,6 @@ internal fun FunSpec.Builder.addParameters(
 }
 
 /**
- * Same as [addParameters], except an enum param is declared as the ordinal [Int] it crosses the
- * C ABI as (ADR-006). Only for exports whose C# half maps enum params to `int`: top-level
- * functions today. [addParameters] stays as-is for the callers that do not.
- */
-internal fun FunSpec.Builder.addEnumAwareParameters(
-  func: KSFunctionDeclaration,
-): FunSpec.Builder {
-  for (param in func.parameters) {
-    val resolved: KSType = param.type.resolve().expandAliases()
-    val name: String = param.name?.asString() ?: "_"
-    val isEnum: Boolean = (resolved.declaration as? KSClassDeclaration)
-      ?.classKind == ClassKind.ENUM_CLASS
-    // The plan routes' nullable value encoding: a has-value slot, then the non-null value slot.
-    if (param.isLegacyHasValueParameter()) addParameter("${name}HasValue", Boolean::class)
-
-    if (isEnum) {
-      addParameter(name, Int::class)
-      continue
-    }
-
-    // A nullable String parameter keeps its nullability (ADR-060 cell 9): Kotlin/Native's @CName
-    // boundary already marshals a nullable C string to Kotlin `String?` transparently.
-    val isNullableString: Boolean =
-      resolved.declaration.qualifiedName?.asString() == "kotlin.String" && resolved.isMarkedNullable
-    addParameter(name, resolved.toBridgeTypeName(nullable = isNullableString))
-  }
-  return this
-}
-
-/**
  * The one `@CName` minter of the whole forward bridge (ADR-117 amendment, 2026-09-13). [owner] is
  * **required**: it hangs the owning Kotlin declaration on the `AnnotationSpec` itself, so
  * `ForwardExportOwners` can name the exact declaration behind a duplicate entry point on every

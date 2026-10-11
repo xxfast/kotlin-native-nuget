@@ -839,10 +839,8 @@ same way at any depth. A `Napper : Hibernator` returned as `Napper` answers `Nam
 which `Hibernator` leaves open, as well as its own members.
 
 A *generic* abstract class returned at a closed type comes back the same way, and so does an
-abstract class below one. Only a top-level function return binds a closed generic class today (see
-[Generics](generics.md#returning-an-instantiated-generic-class)); a property, parameter, list
-element or nullable of that type is a named skip (a [generic sealed hierarchy](#generic-sealed-hierarchy)
-is the exception):
+abstract class below one. A closed generic class binds at member positions too (see
+[Generics](generics.md#returning-an-instantiated-generic-class)):
 
 ```kotlin
 abstract class Trove<T>(val first: T) {

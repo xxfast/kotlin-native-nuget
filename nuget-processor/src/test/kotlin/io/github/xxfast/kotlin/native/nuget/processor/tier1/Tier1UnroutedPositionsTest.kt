@@ -37,8 +37,8 @@ import kotlin.test.assertTrue
  *  - (no longer a gap) the two interface-default PART cells (`flowReturnOnInterface`,
  *    `callbackParamOnInterface`): declared on `IManifest` since ADR-160 (the lambda) and ADR-174
  *    (the Flow, once `Manifest` is reachable); asserted in `the interface-default PART pair...`;
- *  - the cross-namespace generic return (`fun f(): Box<Int>` at top level) — emitted unqualified,
- *    `CS0246`;
+ *  - (no longer a gap) the cross-namespace generic return (`fun f(): Box<Int>` at top level): on
+ *    the plan since ADR-208, spelled `global::`-qualified;
  *  - `fun callbackParamOnClass(cb: (Int) -> Unit): Int` (non-`Unit` return): ADR-160 binds it off
  *    the plan, so the hard forward-ABI mismatch it used to be is gone; the `Unit` form below is
  *    still the one this class mirrors.
@@ -75,7 +75,9 @@ class Tier1UnroutedPositionsTest {
     // row 10: the mirror image of the routed lambda parameter — no route returns a lambda from a
     // class method.
     returns("tier1.unrouted.Depot.callbackReturnOnClass"),
-    // row 21a/21b: a generic *type* (`Box<Int>`) at either position on a class.
+    // row 21a/21b: an unrouted generic *type* ([generic]) at either position on a class. An
+    // exported generic class (`Box<Int>`) binds there since ADR-208, so the cells take a generic
+    // reference the bridge still defers from the witness.
     returns("tier1.unrouted.Depot.genericReturnOnClass"),
     input("tier1.unrouted.Depot.genericParamOnClass"),
     // extra cell X1: `SUSPEND_CALLBACK_PROTOCOL` — a `suspend` lambda parameter. Fully silent
@@ -143,10 +145,13 @@ class Tier1UnroutedPositionsTest {
     "callbackParamOnInterface",
   )
 
+  /** The generic reference the generic rows are typed with: one no route carries (ADR-208). */
+  private val generic: Tier1GenericCandidate = Tier1UnwrappableWitness.unroutedGeneric
+
   /**
    * Mirrors `test-library/.../test/unrouted/UnroutedPositionsSample.kt` and
-   * `UnroutedTopLevelFlow.kt` cell for cell. `Box<T>` is declared in the fixture's own package
-   * here (the cross-namespace spelling is the split-out `CS0246` bug, not a cell).
+   * `UnroutedTopLevelFlow.kt` cell for cell, except the generic rows: the sample's `Box<Int>`
+   * binds since ADR-208, so here they take [generic], a generic reference still unrouted.
    */
   private val source: String = """
     package tier1.unrouted
@@ -154,7 +159,7 @@ class Tier1UnroutedPositionsTest {
     import kotlinx.coroutines.flow.Flow
     import kotlinx.coroutines.flow.flowOf
 
-    class Box<T>(val value: T)
+    ${generic.declarations}
 
     class Depot {
       fun okOnClass(): Int = 1
@@ -162,19 +167,19 @@ class Tier1UnroutedPositionsTest {
       fun flowParamOnClass(events: Flow<Int>): Int = 0
       fun callbackParamOnClass(cb: (Int) -> Unit) { cb(1) }
       fun callbackReturnOnClass(): (Int) -> Unit = {}
-      fun genericReturnOnClass(): Box<Int> = Box(1)
-      fun genericParamOnClass(box: Box<Int>): Int = box.value
+      fun genericReturnOnClass(): ${generic.kotlin} = TODO()
+      fun genericParamOnClass(box: ${generic.kotlin}): Int = 0
       fun <T> structuralOnClass(value: T): T = value
       fun suspendCallbackParamOnClass(cb: suspend (Int) -> Unit): Int = if (cb === cb) 0 else 1
       fun flowElementOnClass(): List<Flow<Int>> = emptyList()
       fun callbackElementOnClass(): List<(Int) -> Unit> = emptyList()
-      fun genericElementOnClass(): List<Box<Int>> = emptyList()
+      fun genericElementOnClass(): List<${generic.kotlin}> = emptyList()
     }
 
     class Dock(val id: Int) {
       constructor(id: Int, onDockCallbackParamOnConstructor: (Int) -> Unit) : this(id)
       constructor(id: Int, flowParamOnConstructor: Flow<Int>) : this(id)
-      constructor(id: Int, genericParamOnConstructor: Box<Int>) : this(id)
+      constructor(id: Int, genericParamOnConstructor: ${generic.kotlin}) : this(id)
       fun okOnDock(): Int = id
     }
 
@@ -184,8 +189,8 @@ class Tier1UnroutedPositionsTest {
       fun flowParamOnObject(events: Flow<Int>): Int = 0
       fun callbackParamOnObject(cb: (Int) -> Unit): Int { cb(1); return 1 }
       fun callbackReturnOnObject(): (Int) -> Unit = {}
-      fun genericReturnOnObject(): Box<Int> = Box(1)
-      fun genericParamOnObject(box: Box<Int>): Int = box.value
+      fun genericReturnOnObject(): ${generic.kotlin} = TODO()
+      fun genericParamOnObject(box: ${generic.kotlin}): Int = 0
       fun <T> structuralOnObject(value: T): T = value
     }
 
@@ -194,7 +199,7 @@ class Tier1UnroutedPositionsTest {
       fun flowReturnOnInterface(): Flow<Int> = flowOf(1)
       fun flowParamOnInterface(events: Flow<Int>): Int = 0
       fun callbackParamOnInterface(cb: (Int) -> Unit) { cb(1) }
-      fun genericReturnOnInterface(): Box<Int> = Box(1)
+      fun genericReturnOnInterface(): ${generic.kotlin} = TODO()
       fun <T> structuralOnInterface(value: T): T = value
     }
 
@@ -208,14 +213,14 @@ class Tier1UnroutedPositionsTest {
     fun flowParamOnTopLevel(events: Flow<Int>): Int = 0
     fun callbackReturnOnTopLevel(): (String) -> String = { it }
     fun callbackParamOnTopLevel(cb: (Int) -> Unit): Int { cb(1); return 1 }
-    fun genericParamOnTopLevel(box: Box<Int>): Int = box.value
+    fun genericParamOnTopLevel(box: ${generic.kotlin}): Int = 0
     fun <T> structuralOnTopLevel(value: T): T = value
     fun <T> structuralRefusedOnTopLevel(): List<T> = emptyList()
 
     fun Depot.flowReturnOnExtension(): Flow<Int> = flowOf(1)
     fun Depot.flowParamOnExtension(events: Flow<Int>): Int = 0
     fun Depot.callbackParamOnExtension(cb: (Int) -> Unit): Int { cb(1); return 1 }
-    fun Depot.genericReturnOnExtension(): Box<Int> = Box(1)
+    fun Depot.genericReturnOnExtension(): ${generic.kotlin} = TODO()
     fun <T> Depot.structuralOnExtension(value: T): T = value
   """.trimIndent()
 

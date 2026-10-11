@@ -175,6 +175,19 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
   // `viaDiscriminator` flag only matters for C# reconstruction, which a parameter never does.
   val classified: BridgeType = classify(type).sealedAsHandle()
 
+  // ADR-208: a closed instantiation of an exported generic class (`Box<String>`) is a borrowed
+  // handle like any other class; only its Kotlin read is spelled applied. A generic sealed
+  // reference keeps the by-name refusal below.
+  if (expanded.arguments.isNotEmpty() && !expanded.isGenericSealedReference()) {
+    val handle: BridgeType.ObjectHandle? = classified.unwrapNullable() as? BridgeType.ObjectHandle
+    if (handle != null) {
+      return ForwardLegacyParameterShape.Handle(
+        handle,
+        nullable = classified is BridgeType.Nullable,
+      )
+    }
+  }
+
   if (expanded.arguments.isEmpty()) return when {
     classified.isLegacyScalar() -> ForwardLegacyParameterShape.Plain
     classified is BridgeType.ObjectHandle -> ForwardLegacyParameterShape.Handle(classified)
@@ -719,8 +732,11 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
       ForwardLegacyReturnShape.Refused(expanded.legacyDescription())
     }
   }
+  // ADR-208: a closed instantiation of an exported generic class (`Box<String>`) is a handle
+  // too, declared and constructed at its applied spelling. A generic sealed arm written with
+  // arguments keeps the generic refusal below.
   if (classified is BridgeType.ObjectHandle && !classified.viaDiscriminator &&
-    expanded.arguments.isEmpty()
+    (expanded.arguments.isEmpty() || !expanded.isGenericSealedReference())
   ) {
     return ForwardLegacyReturnShape.Handle(classified, expanded.isMarkedNullable)
   }
@@ -913,9 +929,9 @@ internal fun ForwardBridgeTypeClassifier.legacyFlowElementShape(
   }
 
   // ADR-199: a closed generic sealed element reads through its `Factories` entry, spelled by
-  // [legacyGenericSealedElement]; a use site C# cannot spell is refused by name.
+  // [legacyGenericElement]; a use site C# cannot spell is refused by name.
   if (expanded.isGenericSealedReference()) {
-    return if (legacyGenericSealedElement(expanded, nullable = false) != null) {
+    return if (legacyGenericElement(expanded, nullable = false) != null) {
       ForwardLegacyFlowElementShape.Plain
     } else {
       ForwardLegacyFlowElementShape.Refused(expanded.legacyDescription())
@@ -923,6 +939,10 @@ internal fun ForwardBridgeTypeClassifier.legacyFlowElementShape(
   }
 
   if (expanded.arguments.isEmpty()) return ForwardLegacyFlowElementShape.Plain
+
+  // ADR-208: a closed instantiation of an exported generic class reads through its `Factories`
+  // entry as the generic sealed element above does, spelled by [legacyGenericElement].
+  if (classified is BridgeType.ObjectHandle) return ForwardLegacyFlowElementShape.Plain
 
   // ADR-119 amendment: the suspend return's ADR-105 rewrite, so `Flow<List<Shape>>` of an eligible
   // sealed base admits its `ObjectHandle(viaDiscriminator)` elements. A nullable collection element
@@ -1285,10 +1305,14 @@ internal fun legacyHandleStatement(
   local: String,
   type: BridgeType.ObjectHandle,
   nullable: Boolean = false,
-): String = if (nullable) {
-  "val $local = $parameter?.asStableRef<${type.qualifiedName}>()?.get()"
-} else {
-  "val $local = $parameter.asStableRef<${type.qualifiedName}>().get()"
+): String {
+  // ADR-208: a generic class reads at its applied type (`pkg.Box<kotlin.String>`).
+  val read: String = type.kotlinReadType ?: type.qualifiedName
+  return if (nullable) {
+    "val $local = $parameter?.asStableRef<$read>()?.get()"
+  } else {
+    "val $local = $parameter.asStableRef<$read>().get()"
+  }
 }
 
 /**
@@ -1802,19 +1826,32 @@ internal fun BridgeType.interfaceBridgeWire(): InterfaceBridgeWire = when (this)
 }
 
 /**
- * ADR-199: a generic sealed element's C# spelling (`global::Ns.Outcome<int>`), or null for any
- * other element and for a generic sealed use site C# cannot spell. `qualifiedElementCsType`
- * drops type arguments, so every legacy element speller asks this first.
+ * ADR-199: a generic sealed element's C# spelling (`global::Ns.Outcome<int>`), and (ADR-208) a
+ * closed generic class instantiation's (`global::Ns.Box<string>`), or null for any other element
+ * and for a generic use site C# cannot spell. `qualifiedElementCsType` drops type arguments, so
+ * every legacy Flow element speller asks this first.
+ */
+internal fun ForwardBridgeTypeClassifier.legacyGenericElement(
+  type: KSType?,
+  nullable: Boolean,
+): String? {
+  val expanded: KSType = type?.expandAliases() ?: return null
+  if (!expanded.isGenericSealedReference() && expanded.arguments.isEmpty()) return null
+  val handle: BridgeType.ObjectHandle = classify(expanded.makeNotNullable()).sealedAsHandle()
+    as? BridgeType.ObjectHandle ?: return null
+  return handle.csharpType + if (nullable) "?" else ""
+}
+
+/**
+ * [legacyGenericElement] for a generic sealed reference only: the lambda and `KotlinFunc` type
+ * argument spellers (`csTypeArgument`) admit that one and still refuse a plain generic class.
  */
 internal fun ForwardBridgeTypeClassifier.legacyGenericSealedElement(
   type: KSType?,
   nullable: Boolean,
 ): String? {
-  val expanded: KSType = type?.expandAliases() ?: return null
-  if (!expanded.isGenericSealedReference()) return null
-  val handle: BridgeType.ObjectHandle = classify(expanded.makeNotNullable()).sealedAsHandle()
-    as? BridgeType.ObjectHandle ?: return null
-  return handle.csharpType + if (nullable) "?" else ""
+  if (type?.expandAliases()?.isGenericSealedReference() != true) return null
+  return legacyGenericElement(type, nullable)
 }
 
 /** ADR-199: a reference to a generic-route sealed type or one of its arms. */

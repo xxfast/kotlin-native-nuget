@@ -97,9 +97,10 @@ public Task<IReadOnlyDictionary<string, int>> AgesAsync(CancellationToken cancel
 ```
 
 `List<T>`, `Set<T>`, and `Map<K, V>` returns are spelled the same way a [property](collections.md)
-of that type is. Any other generic return (`Pair<A, B>`, `Result<T>`, `Flow<T>`) has no C# binding
-and is skipped with a diagnostic naming the member; expose the values through separate `suspend`
-functions instead.
+of that type is. A closed instantiation of your own generic class (`Box<String>`) is a handle and
+binds ([Generics](generics.md#returning-an-instantiated-generic-class)). Any other generic return
+(`Pair<A, B>`, `Result<T>`, `Flow<T>`) has no C# binding and is skipped with a diagnostic naming the
+member; expose the values through separate `suspend` functions instead.
 
 A nullable collection completes with `null`, never an empty collection, and an element that is a
 sealed base binds as the base type, each element arriving as its concrete arm. Both work on a
@@ -954,10 +955,11 @@ This holds for `suspend` members, sealed-subclass members, top-level `suspend` f
 `Flow`/`StateFlow` members and `suspend` functions returning `StateFlow`. A nullable handle with a
 default value (`cat: Cat? = null`) is still required in C#, so pass `null` explicitly.
 
-Any other generic parameter (`Pair<A, B>`, `Array<T>`, a lambda), `Instant`/`Duration`/`Uuid`, a
-value class or an interface is not supported at these positions and is skipped with a diagnostic
-naming the member. Pass an enum, or a class/object/sealed handle, `List`/`Set`/`Map` or
-primitive/`String` (each of these nullable or not) instead, or split the parameter across separate
+Any other generic parameter (`Pair<A, B>`, `Array<T>`, a lambda; your own `Box<String>` binds as a
+handle), `Instant`/`Duration`/`Uuid`, a value class or an interface is not supported at these
+positions and is skipped with a diagnostic naming the member. Pass an enum, or a
+class/object/sealed handle, `List`/`Set`/`Map` or primitive/`String` (each of these nullable or
+not) instead, or split the parameter across separate
 members. A `Throwable`, `Exception` or `RuntimeException` parameter does bind, as a
 `System.Exception` (see [Throwable values](exceptions.md#throwable-values)).
 

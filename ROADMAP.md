@@ -52,8 +52,7 @@ Complete.
 
 ## Phase 6: Async support
 - [ ] `ReplayCache` / `SubscriptionCount` on `SharedFlow<T>` and `Emit` / `TryEmit` on `MutableSharedFlow<T>` are not surfaced (ADR-205 alternative; `KotlinFlow<T>` was chosen so a later `KotlinSharedFlow<T>` subclass is source-compatible)
-- [ ] A user generic class instantiation (`Box<String>`) at a member position (property, method return, parameter) is `UNROUTED_POSITION`; only a top-level function return and generic sealed hierarchies bind one. Binding it is the feature the `Flow`/`StateFlow` type-argument line below waits on ([details](docs/backlog/flow-as-type-argument.md))
-- [ ] `Flow<T>` / `StateFlow<T>` as a generic type argument (`Box<Flow<String>>`) is blocked on a prerequisite: every member position refuses a plain generic instantiation before examining its argument (`ForwardBridgeTypeClassifier.kt` GENERIC -> `UNROUTED_POSITION`, ADR-147 calls it "a different feature"), and the one binding position (top-level function return) refuses `Flow`/`StateFlow` by name in `csTypeArgument` (`CirTypeMapping.kt`, pinned by `Tier1GenericReturnTypeArgumentTest`); plain `Flow` also lacks a handle-keyed collect export (ADR-194 Alternative 3 rejected it) ([details](docs/backlog/flow-as-type-argument.md))
+- [ ] `Flow<T>` / `StateFlow<T>` as a generic type argument (`Box<Flow<String>>`) is a named skip: its prerequisite, a plain generic instantiation at a member position, shipped with ADR-208, and what remains is the `Flow`/`StateFlow` argument itself, which needs a handle-keyed collect export (ADR-194 Alternative 3 rejected a shared one) ([details](docs/backlog/flow-as-type-argument.md))
 
 ## Phase 7: Bidirectional support (C# → Kotlin)
 - [ ] `Flow<T>` / `StateFlow<T>` / suspend lambda (`suspend (T) -> R`) as a function parameter, including on sealed arms

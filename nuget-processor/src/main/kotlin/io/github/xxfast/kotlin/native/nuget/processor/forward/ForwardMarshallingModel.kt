@@ -358,6 +358,10 @@ internal sealed interface BridgeType {
      *  which cannot be a parameter or return type (CS0722), wherever the object itself lives. */
     val isObjectPosition: kotlin.Boolean = false,
     val optInMarker: kotlin.String? = null,
+    /** ADR-208: [rendered] is an exported generic class whose use site has no C# spelling, and
+     *  [reason] says why (an argument the erased wire cannot read, a projection). The skip
+     *  sentence quotes [reason], which no other refusal surfaces. */
+    val isGenericRefusal: kotlin.Boolean = false,
   ) : BridgeType
 
   /** A collection whose component type was lost during classification. */

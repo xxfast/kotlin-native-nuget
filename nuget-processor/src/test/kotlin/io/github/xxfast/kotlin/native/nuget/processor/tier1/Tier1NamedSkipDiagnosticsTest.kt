@@ -450,20 +450,22 @@ class Tier1NamedSkipDiagnosticsTest {
    * The property planner's own honest-skip cell. `isPlannable` rejects a type the property
    * position has no shape for, and until now the property just vanished from the generated C#
    * with no diagnostic at all: the one gap in ADR-064's position naming (`_INPUT` covered a
-   * parameter, `_RETURN` a return, nothing covered a property). A `Box<Int>`-typed property is
-   * the simplest such type: the classifier hands back a generic declaration, which no property
-   * getter or setter can wire.
+   * parameter, `_RETURN` a return, nothing covered a property). The property is typed with
+   * [Tier1UnwrappableWitness.unroutedGeneric]: the classifier hands back a generic declaration,
+   * which no property getter or setter can wire. (An exported generic class such as `Box<Int>`
+   * was that type until ADR-208 bound it.)
    */
   @Test
   fun `class property with an unplannable type fires SKIPPED_UNSUPPORTED_PROPERTY and is omitted`() {
+    val generic: Tier1GenericCandidate = Tier1UnwrappableWitness.unroutedGeneric
     val result = Tier1Harness.run(
       """
       package tier1.skipproperty
 
-      class Box<T>(val value: T)
+      ${generic.declarations}
 
       class Patient(val name: String) {
-        var box: Box<Int> = Box(1)
+        var box: ${generic.kotlin} = TODO()
       }
       """.trimIndent()
     )
@@ -577,33 +579,35 @@ class Tier1NamedSkipDiagnosticsTest {
    */
   @Test
   fun `extension property with an unsupported receiver fires SKIPPED_UNSUPPORTED_PROPERTY and is omitted`() {
+    // The receiver is [Tier1UnwrappableWitness.unroutedGeneric]; `Box<Int>` binds since ADR-208.
+    val generic: Tier1GenericCandidate = Tier1UnwrappableWitness.unroutedGeneric
     val result = Tier1Harness.run(
       """
       package tier1.skipreceiver
 
-      class Box<T>(val value: T)
+      ${generic.declarations}
 
       class Patient(val name: String)
 
-      val Box<Int>.label: String get() = "x"
+      val ${generic.kotlin}.label: String get() = "x"
       """.trimIndent()
     )
 
     assertTrue(
       result.compiledClean,
-      "expected no broken source for Box<Int>.label; got: ${result.compileErrors}",
+      "expected no broken source for ${generic.kotlin}.label; got: ${result.compileErrors}",
     )
     assertFalse(
-      result.generated.contains("box_get_label"),
+      result.generated.contains("_get_label"),
       "expected the unsupported-receiver extension property to be entirely absent from the " +
           "generated exports; generated=${result.generated}",
     )
     assertTrue(
       result.kspWarnings.any {
         it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name) &&
-            it.contains("Box.label")
+            it.contains("${generic.simpleName}.label")
       },
-      "expected a SKIPPED_UNSUPPORTED_PROPERTY diagnostic naming the Box receiver; " +
+      "expected a SKIPPED_UNSUPPORTED_PROPERTY diagnostic naming the receiver; " +
           "kspWarnings=${result.kspWarnings}",
     )
   }

@@ -30,6 +30,7 @@ using Lineage = TestLibrary.Lineage;
 using Torpor = TestLibrary.Torpor;
 using Outcomes = TestLibrary.Outcome;
 using Cubby = TestLibrary.Cubby;
+using TestLibrary.Boxshelf;
 
 using Membergeneric = TestLibrary.Membergeneric;
 using Litterbox = TestLibrary.Litterbox;
@@ -293,6 +294,119 @@ public class LiveHandleTests
             foreach (Outcomes.Outcome<int> dinner in Outcomes.OutcomeDesk.All())
             {
                 using (dinner) Assert.NotEmpty(dinner.Label());
+            }
+        });
+    }
+
+    [Fact]
+    public void GenericInstance_ReturnedBoxes_ReturnToBaseline()
+    {
+        // ADR-208: every closed `Box<T>` Kotlin hands back at a member position (a property read, a
+        // member, companion, object and top-level return, a nullable one, a list element) is a
+        // fresh `StableRef` in a fresh wrapper the caller disposes. `Box<Box<int>>.Value` mints a
+        // second wrapper through the nested `Factories` line, and `Box<Cat>.Value` a `Cat`.
+        AssertNoLeak(() =>
+        {
+            using var shelf = new BoxShelf();
+            using (Box<string> label = shelf.Label)
+            {
+                Assert.Equal("Oreo", label.Value);
+            }
+            using (Box<Cat> favourite = shelf.Favourite)
+            using (Cat mylo = favourite.Value)
+            {
+                Assert.Equal("Mylo", mylo.Name);
+            }
+            using (Box<Box<int>> outer = shelf.Nested())
+            using (Box<int> inner = outer.Value)
+            {
+                Assert.Equal(7, inner.Value);
+            }
+            Assert.Null(shelf.Maybe(false));
+            using (Box<string>? here = shelf.Maybe(true))
+            {
+                Assert.Equal("here", here!.Value);
+            }
+            using (Box<Mood> mood = shelf.MoodBox())
+            {
+                Assert.Equal(Mood.Grumpy, mood.Value);
+            }
+            foreach (Box<string> box in shelf.Stack())
+            {
+                using (box) Assert.NotEmpty(box.Value);
+            }
+            using (Box<int> spare = BoxShelf.Spare())
+            {
+                Assert.Equal(9, spare.Value);
+            }
+            using (Box<string> fresh = BoxDepot.Fresh())
+            {
+                Assert.Equal("fresh", fresh.Value);
+            }
+            using (Box<string> top = BoxShelves.TopBox)
+            {
+                Assert.Equal("top shelf", top.Value);
+            }
+        });
+    }
+
+    [Fact]
+    public void GenericInstance_PassedBoxes_ReturnToBaseline()
+    {
+        // ADR-208: a `Box<T>` the consumer passes (a member, object and top-level parameter, a
+        // nullable one, a `var` setter, a constructor parameter, an extension receiver) is a
+        // borrow: `box._handle` crosses, Kotlin reads through it and releases nothing, and the
+        // caller's own Dispose is the only release.
+        AssertNoLeak(() =>
+        {
+            using var shelf = new BoxShelf();
+            using var words = new Box<string>("catnip");
+            Assert.Equal("catnip", shelf.Peek(words));
+            Assert.Equal("catnip", shelf.PeekMaybe(words));
+            Assert.Equal("none", shelf.PeekMaybe(null));
+
+            using var oreo = new Cat("Oreo", 9);
+            using var boxed = new Box<Cat>(oreo);
+            shelf.Favourite = boxed;
+            Assert.Equal(4, BoxDepot.Weigh(boxed));
+
+            using var nine = new Box<int>(9);
+            Assert.Equal(9, BoxShelves.Unbox(nine));
+            Assert.Equal(18, nine.Doubled);
+
+            using var plinth = new BoxPlinth(words);
+            Assert.Equal("plinth of catnip", plinth.Engraving);
+        });
+    }
+
+    [Fact]
+    public async Task GenericInstance_SuspendAndFlow_ReturnToBaseline()
+    {
+        // ADR-208: the suspend and Flow routes hand a closed `Box<T>` out as an awaited result, a
+        // collected element and a `StateFlow.Value` read (one owned wrapper each), and borrow one
+        // as a suspend parameter across the suspension.
+        await AssertNoLeakAsync(async () =>
+        {
+            using var courier = new BoxCourier();
+            using (Box<string> later = await courier.LaterAsync())
+            {
+                Assert.Equal("later", later.Value);
+            }
+            using (var feather = new Box<string>("feather"))
+            {
+                Assert.Equal("peeked feather", await courier.LaterPeekAsync(feather));
+            }
+            using (Box<string> bell = await BoxShelves.LaterBoxAsync("bell"))
+            {
+                Assert.Equal("bell", bell.Value);
+            }
+            await foreach (Box<string> box in courier.Stream)
+            {
+                using (box) Assert.NotEmpty(box.Value);
+            }
+            using (Box<int> latest = courier.Latest.Value)
+            {
+                Assert.Equal(1, latest.Value);
             }
         });
     }

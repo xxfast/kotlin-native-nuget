@@ -27,7 +27,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmStoredCa
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardClassLegacyMembers
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyFlowReturn
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasNullableLegacyFlowReturn
-import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyGenericReturnRoute
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyLambdaParameter
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasPlannedCallbackParameter
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMember
@@ -38,7 +37,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.bridgeParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.freshName
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
-import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.KOTLIN_EXCEPTION_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.KotlinExceptionMatch
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
@@ -2371,22 +2369,17 @@ internal class ForwardCallablePlanner(
     target = null,
     member = function.simpleName.asString(),
     defaults = expectDefaultFlags(function),
-  ).nameUnroutedPosition { skipped ->
-    // ADR-064 amendment (2026-09-13): the top-level owner has exactly one legacy route for these
-    // reasons — `addFunctionExports` / `translateSpecializedFunction`, keyed on a
-    // generic-declaration RETURN. It carries the generic-type return (`Box<Int>`, measured
-    // emitting); the lambda return it also used to carry is plan-owned since the ADR-160
-    // amendment (`BridgeType.ReturnedLambda`, built in `staticEntry`), so the gate refuses it and a
-    // lambda return that does not plan is named here. Since the ADR-064 amendment it refuses a
-    // Flow/StateFlow return, which is what makes cell 4 a named
-    // skip instead of a consumer-side CS0246. A PARAMETER of any of those types has no route here
-    // at all, and an element-carried one (`List<Box<Int>>`) is unmeasured and therefore named.
+  ).nameUnroutedPosition {
+    // ADR-208: the top-level owner has no legacy route left for these reasons. Its one route (a
+    // generic-class return, `fun f(): Box<Int>`) moved onto the plan, so every deferral that
+    // reaches here (a generic interface or an inner generic class at a return, a Flow, a
+    // lambda the plan does not carry) is named.
     //
     // The structural GENERIC deferral never reaches this entry builder: `catalog()` is called with
     // non-generic top-level functions only, so a `fun <T> f(...)` is named from `NugetProcessor`
     // instead (`warnUnroutedGenericFunctions`). A `suspend` one does arrive (ROADMAP line 29) and
     // leaves `staticEntry` as a structural SUSPEND skip, which is not an unrouted candidate.
-    skipped.position == ForwardSkipPosition.RETURN && function.hasLegacyGenericReturnRoute()
+    false
   }
 
   private fun objectEntries(obj: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
@@ -5660,11 +5653,12 @@ internal fun BridgeType.sealedTypeDetail(): String? {
     ?: return null
   val name: String = protocol.name.removePrefix(SEALED_HELPER_PREFIX)
   // ADR-199: a generic sealed reference refused at its use site carries the reason after the name.
-  return protocol.sealedRefusal?.let { why -> "$name$GENERIC_SEALED_REFUSAL_SEPARATOR$why" } ?: name
+  return protocol.sealedRefusal?.let { why -> "$name$GENERIC_REFUSAL_SEPARATOR$why" } ?: name
 }
 
-/** ADR-199: splits a SEALED_POSITION detail into the sealed type and its use-site refusal. */
-internal const val GENERIC_SEALED_REFUSAL_SEPARATOR: String = ": "
+/** ADR-199: splits a SEALED_POSITION detail into the sealed type and its use-site refusal, and
+ *  (ADR-208) an UNSUPPORTED one into the generic class and its use-site refusal. */
+internal const val GENERIC_REFUSAL_SEPARATOR: String = ": "
 
 
 internal fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
@@ -5849,7 +5843,15 @@ internal fun BridgeType.skipDetail(): String? = optInMarkerDetail()
  *  keeps its own wording. `null` for every type that is not [BridgeType.Unsupported], which is
  *  every type whose refusal is about a position rather than the type itself. */
 internal fun BridgeType.unsupportedTypeDetail(): String? =
-  (unwrapNullable() as? BridgeType.Unsupported)?.rendered
+  (unwrapNullable() as? BridgeType.Unsupported)?.let { unsupported ->
+    // ADR-208: a generic class refused at its use site carries the reason after the name, the
+    // ADR-199 SEALED_POSITION detail's shape.
+    if (unsupported.isGenericRefusal) {
+      "${unsupported.rendered}$GENERIC_REFUSAL_SEPARATOR${unsupported.reason}"
+    } else {
+      unsupported.rendered
+    }
+  }
 
 /**
  * ADR-164: the most defaulted parameters one callable widens. The Kotlin dispatch has one arm per

@@ -10,8 +10,9 @@ namespace IntegrationTests;
 /// measured every combination (<c>research/H-observed-matrix.md</c>) and found most of them vanish
 /// from both halves of the bridge with no diagnostic at all. The fix names every silent one. Since
 /// ADR-160 a per-call lambda parameter binds off the plan on every ordinary owner, and since
-/// ADR-197 so does a class or object member's own type parameter (<c>fun &lt;T&gt;</c>); both
-/// are asserted present below rather than absent. The Kotlin fixture is
+/// ADR-197 so does a class or object member's own type parameter (<c>fun &lt;T&gt;</c>), and since
+/// ADR-208 a closed instantiation of an exported generic class (<c>Box&lt;Int&gt;</c>) at every
+/// position; all three are asserted present below rather than absent. The Kotlin fixture is
 /// <c>test-library/.../test/unrouted/UnroutedPositionsSample.kt</c> plus
 /// <c>UnroutedTopLevelFlow.kt</c>.
 ///
@@ -89,12 +90,12 @@ public class UnroutedPositionsTests
             PublicInstance,
             "FlowParamOnClass",
             "CallbackReturnOnClass",
-            "GenericReturnOnClass",
-            "GenericParamOnClass",
+            // ADR-208: `GenericReturnOnClass`, `GenericParamOnClass` and `GenericElementOnClass`
+            // BIND now (a closed `Box<Int>` is an ordinary handle at every position) and are called
+            // in GenericInstantiationsBindOnEveryOwner instead of being absent here.
             "SuspendCallbackParamOnClass",
             "FlowElementOnClass",
-            "CallbackElementOnClass",
-            "GenericElementOnClass");
+            "CallbackElementOnClass");
     }
 
     /// <summary>
@@ -116,9 +117,8 @@ public class UnroutedPositionsTests
             // ADR-160 moved the per-call lambda parameter onto the ADR-062 plan, which is keyed to
             // the position rather than to the owner kind, so `CallbackParamOnObject` BINDS now and
             // is asserted present below instead of absent here.
-            "CallbackReturnOnObject",
-            "GenericReturnOnObject",
-            "GenericParamOnObject");
+            // ADR-208: `GenericReturnOnObject` and `GenericParamOnObject` bind too.
+            "CallbackReturnOnObject");
 
         // ADR-160: the object position's per-call lambda parameter is the one cell this matrix row
         // lost. Asserted positively so the row cannot silently go back to refusing it.
@@ -126,7 +126,8 @@ public class UnroutedPositionsTests
     }
 
     /// <summary>
-    /// Interface defaults. Only the three genuinely-silent ones are absent: a Flow <em>return</em>
+    /// Interface defaults. Only the two genuinely-silent ones are absent (the generic return left
+    /// the list with ADR-208 and is called through the interface below): a Flow <em>return</em>
     /// and a lambda <em>parameter</em> declared as an interface default are declared on
     /// <c>IManifest</c> (ADR-160 for the lambda, ADR-174 for the Flow) and are called through it in
     /// <see cref="InterfaceDefaultFlowAndLambdaAreCallableThroughTheInterfaceType"/>.
@@ -138,13 +139,11 @@ public class UnroutedPositionsTests
             typeof(IManifest),
             PublicInstance,
             "FlowParamOnInterface",
-            "GenericReturnOnInterface",
             "StructuralOnInterface");
         AssertAllAbsent(
             typeof(ManifestDesk),
             PublicInstance,
             "FlowParamOnInterface",
-            "GenericReturnOnInterface",
             "StructuralOnInterface");
     }
 
@@ -183,12 +182,11 @@ public class UnroutedPositionsTests
             PublicStatic,
             "FlowReturnOnExtension",
             "FlowParamOnExtension",
-            "GenericReturnOnExtension",
             "StructuralOnExtension",
             "FlowParamOnTopLevel",
             // ADR-160: the top-level per-call lambda parameter binds off the plan now, exactly as
-            // the class-method one does; asserted present below.
-            "GenericParamOnTopLevel",
+            // the class-method one does; asserted present below. ADR-208: so does the generic
+            // parameter (`GenericParamOnTopLevel`), called in GenericInstantiationsBindOnEveryOwner.
             "StructuralRefusedOnTopLevel");
 
         // ADR-160: the top-level per-call lambda parameter is the cell this row lost. Asserted
@@ -207,7 +205,6 @@ public class UnroutedPositionsTests
             PublicStatic,
             "FlowReturnOnExtension",
             "FlowParamOnExtension",
-            "GenericReturnOnExtension",
             "StructuralOnExtension");
         Assert.NotNull(extensions!.GetMethod("CallbackParamOnExtension", PublicStatic));
 
@@ -270,9 +267,10 @@ public class UnroutedPositionsTests
     }
 
     /// <summary>
-    /// Row 24: three secondary constructors each carry one unroutable parameter and are dropped,
-    /// but the good primary keeps the class constructible -- the class-level "no public
-    /// constructor" fallback must not have swallowed it.
+    /// Row 24: two secondary constructors each carry one unroutable parameter (a lambda, a Flow)
+    /// and are dropped, but the good primary keeps the class constructible -- the class-level "no
+    /// public constructor" fallback must not have swallowed it. The third secondary, over a
+    /// `Box<Int>`, binds since ADR-208.
     /// </summary>
     [Fact]
     public void DockIsStillConstructibleViaItsPrimaryConstructor()
@@ -280,6 +278,47 @@ public class UnroutedPositionsTests
         Assert.NotNull(typeof(Dock).GetConstructor([typeof(int)]));
         using Dock dock = new(7);
         Assert.Equal(7, dock.OkOnDock());
-        Assert.Single(typeof(Dock).GetConstructors());
+        Assert.Equal(2, typeof(Dock).GetConstructors().Length);
+
+        using var box = new TestLibrary.Cat.Box<int>(3);
+        using Dock boxed = new(8, box);
+        Assert.Equal(8, boxed.OkOnDock());
+    }
+
+    /// <summary>
+    /// ADR-208: the generic cells left this matrix when a closed instantiation of an exported
+    /// generic class became an ordinary handle at every position. Asserted by calling each one, on
+    /// every owner the matrix has, so no row can quietly go back to refusing them.
+    /// </summary>
+    [Fact]
+    public async Task GenericInstantiationsBindOnEveryOwner()
+    {
+        using var seven = new TestLibrary.Cat.Box<int>(7);
+
+        using var depot = new Depot();
+        using (TestLibrary.Cat.Box<int> returned = depot.GenericReturnOnClass())
+        {
+            Assert.Equal(1, returned.Value);
+        }
+        Assert.Equal(7, depot.GenericParamOnClass(seven));
+        Assert.Empty(depot.GenericElementOnClass());
+
+        using (TestLibrary.Cat.Box<int> returned = DepotRegistry.GenericReturnOnObject())
+        {
+            Assert.Equal(1, returned.Value);
+        }
+        Assert.Equal(7, DepotRegistry.GenericParamOnObject(seven));
+
+        await using IManifest manifest = UnroutedPositionsSample.MakeManifest();
+        using (TestLibrary.Cat.Box<int> returned = manifest.GenericReturnOnInterface())
+        {
+            Assert.Equal(1, returned.Value);
+        }
+
+        Assert.Equal(7, UnroutedPositionsSample.GenericParamOnTopLevel(seven));
+        using (TestLibrary.Cat.Box<int> returned = depot.GenericReturnOnExtension())
+        {
+            Assert.Equal(1, returned.Value);
+        }
     }
 }

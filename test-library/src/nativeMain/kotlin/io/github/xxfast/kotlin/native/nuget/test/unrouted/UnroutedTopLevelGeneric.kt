@@ -16,6 +16,9 @@ import io.github.xxfast.kotlin.native.nuget.test.cat.Box
  * `using`: `CS0246` in the consumer's build. The type ARGUMENTS were already qualified by #111, and
  * the same-package case (`cat.wrapInBox`) compiles today, so only the outer name is at fault.
  *
+ * Since ADR-208 the legacy route is gone: this return is on the ADR-062 plan, which spells the
+ * outer type `global::TestLibrary.Cat.Box<int>`.
+ *
  * Oreo gets in every box that arrives, whichever room it was addressed to.
  */
 fun genericReturnOnTopLevel(): Box<Int> = Box(1)
