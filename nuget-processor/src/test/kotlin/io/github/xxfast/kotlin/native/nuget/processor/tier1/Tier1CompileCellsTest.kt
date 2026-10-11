@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import kotlin.test.Test
 import kotlin.test.assertTrue
@@ -529,7 +530,8 @@ class Tier1CompileCellsTest {
       "expected the constructor to take the nullable collection parameter; generatedCSharp:\n$cs",
     )
     assertTrue(
-      "notesValue != null ? NugetMarshal.CreateList(notesValue) : IntPtr.Zero" in cs,
+      ("notesValue != null ? NugetMarshal.CreateList(global::System.Linq.Enumerable.Select(" +
+        "notesValue, x => ${nonNullStringOrThrow("x", "notes")})) : IntPtr.Zero") in cs,
       "expected the null-guarded CreateList prelude; generatedCSharp:\n$cs",
     )
   }

@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import io.github.xxfast.kotlin.native.nuget.processor.valueClassUnderlyingOrThrow
 import java.io.File
 import java.nio.file.Files
@@ -772,7 +773,11 @@ class Tier1ReceiverShapesExtensionPropertyTest {
       "extension(IReadOnlyList<string> receiver)\n        {\n" +
         "            public string LongestName\n",
     )
-    assertContains(cs, "receiverHandle = NugetMarshal.CreateList(receiver);")
+    assertContains(
+      cs,
+      "receiverHandle = NugetMarshal.CreateList(global::System.Linq.Enumerable.Select(" +
+        "receiver, x => ${nonNullStringOrThrow("x", "receiver")}));",
+    )
     assertContains(
       cs,
       "if (receiverHandle != IntPtr.Zero) { NugetListNative.Dispose(receiverHandle); }",

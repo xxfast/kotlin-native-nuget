@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -89,7 +90,8 @@ class Tier1LegacyRouteDefaultsTest {
           "global::Kotlin.Native.Interop.KotlinOptional<int?> treats = default, CancellationToken cancellationToken = default)"
     )
     assertCsharp(
-      "cat, portion.HasValue, portion.GetValueOrDefault(), note, treats.HasValue, " +
+      "${nonNullStringOrThrow("cat")}, portion.HasValue, portion.GetValueOrDefault(), note, " +
+          "treats.HasValue, " +
           "treats.Value.HasValue, treats.Value.GetValueOrDefault(),"
     )
   }
@@ -176,7 +178,10 @@ class Tier1LegacyRouteDefaultsTest {
           "global::Kotlin.Native.Interop.KotlinOptional<$PLACEMAT?> mat = default, " +
           "CancellationToken cancellationToken = default)"
     )
-    assertCsharp("cat, mat.HasValue, mat.Value?._handle ?? NugetKotlinHandle.Null,")
+    assertCsharp(
+      "${nonNullStringOrThrow("cat")}, mat.HasValue, " +
+        "mat.Value?._handle ?? NugetKotlinHandle.Null,",
+    )
     // The handle slot after the `IsSet` slot is spelled exactly as a required handle's is.
     assertCsharp(
       "[MarshalAs(UnmanagedType.I1)] bool matIsSet, NugetKotlinHandle mat, IntPtr callback"

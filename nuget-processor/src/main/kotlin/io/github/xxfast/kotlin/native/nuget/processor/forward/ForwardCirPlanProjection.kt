@@ -4,6 +4,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.RESULT_FAILED_SLOT
 import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.freshName
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDoc
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDllImport
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirConstructor
@@ -371,9 +372,9 @@ internal object ForwardCirPlanProjection {
     }
     val prelude: List<ForwardCirHandleStep> =
       inputs.mapNotNull { parameter -> parameter.optionalPrelude() } +
-          inputs.unwrapped().mapNotNull { parameter ->
+          inputs.unwrapped().zip(inputs).mapNotNull { (parameter, declared) ->
             plan.bytesPrelude(parameter)
-              ?: plan.collectionPrelude(parameter)
+              ?: plan.collectionPrelude(parameter, named = declared.csharpName)
               ?: plan.interfacePrelude(parameter)
               ?: plan.boundInterfacePrelude(parameter)
               ?: plan.typeParameterPrelude(parameter)
@@ -560,6 +561,12 @@ internal object ForwardCirPlanProjection {
       // ADR-034: `int?` is `Nullable<int>`, a distinct C# signature from `int`, so the ADR-095
       // `Int` / `Int?` receiver twin must not be normalized into a collision.
       isReferenceType = publicReceiver.type.isCSharpReferenceType(),
+      // A non-null `String` receiver is read through its null guard by the generic renderer too.
+      nativeArgumentExpression = if (publicReceiver.type == BridgeType.String) {
+        nonNullStringOrThrow(publicReceiverName.csharpParameterName())
+      } else {
+        null
+      },
     )
     val publicParams: List<CirParameter> = listOf(receiverParam) + declared
     val nativeName: String = "Native_${plan.publicSignature.name}${plan.overloadSuffix()}"
@@ -810,6 +817,13 @@ internal object ForwardCirPlanProjection {
           else -> type
         },
         isReferenceType = !parameter.isOptional && parameter.type.isCSharpReferenceType(),
+        // C# can pass `null!` where a `string` is declared; the generic renderers read a non-null
+        // one through the guard, the spelling [callArgument] gives a hand-built call site.
+        nativeArgumentExpression = if (parameter.type == BridgeType.String) {
+          nonNullStringOrThrow(parameter.csharpName)
+        } else {
+          null
+        },
         defaultValue = when {
           parameter.default?.omittable != true -> null
           parameter.isOptional -> "default"
@@ -882,6 +896,9 @@ internal object ForwardCirPlanProjection {
    * through the pre-existing generic (non-custom-body) rendering paths.
    */
   private fun BridgeType.isTrivialInput(): Boolean = when (this) {
+    // A non-null `String` stays trivial: its null guard rides the parameter itself
+    // (`CirParameter.nativeArgumentExpression`, set by [publicParameters]), so the generic
+    // renderers write it and the member keeps its shipped layout.
     is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> true
     is BridgeType.Nullable -> type == BridgeType.String
     BridgeType.Unit,
@@ -921,7 +938,9 @@ internal object ForwardCirPlanProjection {
     named: String = parameter.csharpName,
   ): List<String> =
     when (val type = parameter.type) {
-      is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> listOf(parameter.csharpName)
+      is BridgeType.Primitive, BridgeType.Char -> listOf(parameter.csharpName)
+      // C# can pass `null!` where a `string` is declared; the read refuses it before it crosses.
+      BridgeType.String -> listOf(nonNullStringOrThrow(parameter.csharpName, named))
       // ADR-106: the default "D" format is the lowercase hex-dash text `Uuid.parse` reads. Never
       // pass a format string here: "N" would still parse, "B"/"P"/"X" would not.
       BridgeType.Uuid -> listOf("${parameter.csharpName}.ToString()")
@@ -1189,6 +1208,9 @@ internal object ForwardCirPlanProjection {
 
   private fun ForwardCallablePlan.collectionPrelude(
     parameter: ForwardPublicParameter,
+    // The public parameter a refused null element is reported against (`nameof`): [parameter]
+    // itself except for an `Optional<T>`, read from its unwrapped local.
+    named: String = parameter.csharpName,
   ): ForwardCirHandleStep? {
     val (type, nullable) = parameter.type.asNullableAwareCollection() ?: return null
     val factory: String = when (type.kind) {
@@ -1197,7 +1219,8 @@ internal object ForwardCirPlanProjection {
       CollectionKind.SET, CollectionKind.MUTABLE_SET -> "CreateSet"
     }
     // ADR-081: a value-class component is projected to its underlying per element before boxing.
-    val source: String = collectionCreateArgument(parameter.csharpName, type) { it.csharpType() }
+    val source: String =
+      collectionCreateArgument(parameter.csharpName, type, root = named) { it.csharpType() }
     val value: String = if (nullable) {
       "${parameter.csharpName} != null ? NugetMarshal.$factory($source) : IntPtr.Zero"
     } else {
@@ -1373,9 +1396,9 @@ internal object ForwardCirPlanProjection {
     val prelude: List<ForwardCirHandleStep> =
       parameters.mapNotNull { parameter -> callbackNullGuard(parameter) } +
           parameters.mapNotNull { parameter -> parameter.optionalPrelude() } +
-          parameters.unwrapped().mapNotNull { parameter ->
+          parameters.unwrapped().zip(parameters).mapNotNull { (parameter, declared) ->
             bytesPrelude(parameter)
-              ?: collectionPrelude(parameter)
+              ?: collectionPrelude(parameter, named = declared.csharpName)
               ?: interfacePrelude(parameter)
               ?: boundInterfacePrelude(parameter)
               ?: typeParameterPrelude(parameter)

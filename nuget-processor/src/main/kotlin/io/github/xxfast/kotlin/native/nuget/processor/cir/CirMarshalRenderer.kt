@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
+
 internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("    internal static class NugetMarshal")
   appendLine("    {")
@@ -94,7 +96,15 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_string\")]")
   appendLine("        private static extern IntPtr nuget_wrap_string(string value);")
   appendLine()
-  appendLine("        public static IntPtr WrapString(string value) => nuget_wrap_string(value);")
+  // The reverse of a string argument: a callback's or a C#-implemented interface member's non-null
+  // `String` result, boxed for Kotlin. A null there used to reach `nuget_wrap_string`, which reads
+  // a non-null Kotlin `String`, and the `NullPointerException` it raised inside the callback was
+  // uncaught and took the process down. The guard throws on the managed side instead, where the
+  // callback's own fault path carries it back to the C# caller.
+  appendLine(
+    "        public static IntPtr WrapString(string value) => " +
+      "nuget_wrap_string(${nonNullStringOrThrow("value")});",
+  )
   appendLine()
   appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_int\")]")
   appendLine("        private static extern IntPtr nuget_wrap_int(int value);")

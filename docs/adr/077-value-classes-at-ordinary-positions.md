@@ -343,9 +343,10 @@ Verified: `IntegrationTests/ValueClassDefaultGuardTests.cs`; `Tier1ValueClassDef
 observed directly. Not covered by any fixture: the nullable primitive-underlying collection
 component arm (`ForwardCirCollectionComponents.kt`).
 
-Known and unchanged: an ordinary non-null `String` parameter or setter still accepts `null!` with
-no C# guard (the crash was measured for a constructor parameter). That is not a value-class case
-and this amendment does not change it.
+Superseded the same day for the plain `String` case: an ordinary non-null `String` parameter or
+setter now throws `ArgumentNullException` in C# through the sibling helper `nonNullStringOrThrow`;
+see the 2026-10-10 amendment to [ADR-003](003-memory-management-across-bridge.md). A value class
+over a `String` stays on this amendment's guard and keeps throwing `ArgumentException`.
 
 ## Amendment (2026-10-10): a value class with no C# record struct is refused at every position
 

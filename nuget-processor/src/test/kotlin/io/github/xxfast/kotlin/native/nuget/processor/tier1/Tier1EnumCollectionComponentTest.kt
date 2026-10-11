@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import kotlin.test.Test
 import kotlin.test.assertContains
@@ -89,12 +90,14 @@ class Tier1EnumCollectionComponentTest {
     assertContains(
       cs,
       "NugetMarshal.CreateMap(global::System.Linq.Enumerable.Select(byPatient, " +
-          "x => new KeyValuePair<string, int>(x.Key, (int)x.Value)))",
+          "x => new KeyValuePair<string, int>(" +
+          "${nonNullStringOrThrow("x.Key", "byPatient")}, (int)x.Value)))",
     )
     assertContains(
       cs,
       "NugetMarshal.CreateMap(global::System.Linq.Enumerable.Select(byMood, " +
-          "x => new KeyValuePair<int, string>((int)x.Key, x.Value)))",
+          "x => new KeyValuePair<int, string>((int)x.Key, " +
+          "${nonNullStringOrThrow("x.Value", "byMood")})))",
     )
     assertContains(
       cs,
@@ -106,7 +109,8 @@ class Tier1EnumCollectionComponentTest {
     assertContains(
       cs,
       "NugetMarshal.CreateMap(global::System.Linq.Enumerable.Select(byPatient, " +
-          "x => new KeyValuePair<string, int?>(x.Key, " +
+          "x => new KeyValuePair<string, int?>(" +
+          "${nonNullStringOrThrow("x.Key", "byPatient")}, " +
           "x.Value == null ? (int?)null : (int)x.Value.Value)))",
     )
   }

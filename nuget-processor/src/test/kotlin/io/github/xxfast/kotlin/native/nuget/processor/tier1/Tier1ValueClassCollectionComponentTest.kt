@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import io.github.xxfast.kotlin.native.nuget.processor.valueClassUnderlyingOrThrow
 import kotlin.test.Test
 import kotlin.test.assertContains
@@ -114,7 +115,8 @@ class Tier1ValueClassCollectionComponentTest {
     assertContains(
       cs,
       "NugetMarshal.CreateMap(global::System.Linq.Enumerable.Select(sections, " +
-          "x => new KeyValuePair<string, string>(x.Key, " +
+          "x => new KeyValuePair<string, string>(" +
+          "${nonNullStringOrThrow("x.Key", "sections")}, " +
             valueClassUnderlyingOrThrow("x.Value", "Value", "ChartId") +
             ")))",
     )

@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
@@ -95,8 +96,11 @@ class Tier1TopLevelNullableScalarSingleCallTest {
     val cs: String = result.generatedCSharp
     // Each handle the call names is declared, built inside `try`, and released in `finally`.
     listOf(
-      "itemsHandle = NugetMarshal.CreateList(items);" to "NugetListNative.Dispose(itemsHandle);",
-      "entriesHandle = NugetMarshal.CreateMap(entries);" to
+      "itemsHandle = NugetMarshal.CreateList(global::System.Linq.Enumerable.Select(items, " +
+        "x => ${nonNullStringOrThrow("x", "items")}));" to "NugetListNative.Dispose(itemsHandle);",
+      "entriesHandle = NugetMarshal.CreateMap(global::System.Linq.Enumerable.Select(entries, " +
+        "x => new KeyValuePair<string, int>(${nonNullStringOrThrow("x.Key", "entries")}, " +
+        "x.Value)));" to
           "NugetMapNative.Dispose(entriesHandle);",
       "idsHandle = NugetMarshal.CreateSet(ids);" to "NugetSetNative.Dispose(idsHandle);",
       "bytesHandle = NugetMarshal.CreateBytes(bytes);" to "NugetBytesNative.Dispose(bytesHandle);",

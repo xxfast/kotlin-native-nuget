@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertTrue
@@ -82,7 +83,8 @@ class Tier1NestedCollectionReadTest {
       result.generatedCSharp,
       "NugetMarshal.CreateList(global::System.Linq.Enumerable.Select(cages, " +
           "x => NugetMarshal.CreateList(global::System.Linq.Enumerable.Select(x, " +
-          "x1 => NugetMarshal.CreateSet(x1)))))",
+          "x1 => NugetMarshal.CreateSet(global::System.Linq.Enumerable.Select(x1, " +
+          "x2 => ${nonNullStringOrThrow("x2", "cages")}))))))",
     )
     // The Kotlin half casts to the WIRE container at every level, not to the declared element
     // type, and names each lambda parameter by depth so no nested implicit `it` shadows its

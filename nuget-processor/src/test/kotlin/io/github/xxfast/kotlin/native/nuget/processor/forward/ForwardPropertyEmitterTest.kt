@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import com.squareup.kotlinpoet.FileSpec
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirFile
@@ -37,7 +38,10 @@ class ForwardPropertyEmitterTest {
     val csharp = renderClassProperty(plan)
     assertContains(csharp, "public string Label")
     assertContains(csharp, "Marshal.PtrToStringUTF8(nativeResult)!")
-    assertContains(csharp, "Native_Set_label(_handle, value, out IntPtr error)")
+    assertContains(
+      csharp,
+      "Native_Set_label(_handle, ${nonNullStringOrThrow("value")}, out IntPtr error)",
+    )
   }
 
   @Test

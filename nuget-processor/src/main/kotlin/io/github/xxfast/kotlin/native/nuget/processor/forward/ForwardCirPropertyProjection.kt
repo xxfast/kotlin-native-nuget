@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
 import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDllImport
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirExtensionProperty
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirExtraNative
@@ -949,10 +950,16 @@ internal object ForwardCirPropertyProjection {
         }
       }
 
+      // C# can pass `null!` where a `string` is declared; a non-null slot's read refuses it before
+      // it crosses, and a `String?` slot passes its value straight through. [name] may be a member
+      // access (`value.Value`); its root is the accessor's own parameter.
+      BridgeType.String ->
+        if (this is BridgeType.Nullable && !nonNull) name
+        else nonNullStringOrThrow(name, name.substringBefore('.'))
+
       BridgeType.Unit,
       is BridgeType.Primitive,
       BridgeType.Char,
-      BridgeType.String,
       is BridgeType.Nullable,
       is BridgeType.Callback,
       is BridgeType.ReturnedLambda,

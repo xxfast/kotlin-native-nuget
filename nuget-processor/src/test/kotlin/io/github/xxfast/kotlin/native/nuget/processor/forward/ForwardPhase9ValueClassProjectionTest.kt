@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import com.squareup.kotlinpoet.FileSpec
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirMethod
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirValueClass
@@ -80,7 +81,10 @@ class ForwardPhase9ValueClassProjectionTest {
     assertEquals("string", method.returnType)
     assertEquals("IntPtr", method.nativeReturnType)
     assertContains(csharp, "public string Label(string suffix)")
-    assertContains(csharp, "Marshal.PtrToStringUTF8(Native_Label(Patient._handle, suffix))!")
+    assertContains(
+      csharp,
+      "Marshal.PtrToStringUTF8(Native_Label(Patient._handle, ${nonNullStringOrThrow("suffix")}))!",
+    )
   }
 
   @Test

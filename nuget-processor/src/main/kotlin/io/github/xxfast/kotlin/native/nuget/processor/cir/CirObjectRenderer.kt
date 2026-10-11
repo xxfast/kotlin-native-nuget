@@ -126,7 +126,7 @@ private fun StringBuilder.renderValueClassCreateChecked(
   ctor: CirValueClassConstructor,
 ): String {
   val paramStr: String = ctor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
-  val paramNames: String = ctor.parameters.joinToString(", ") { it.name }
+  val paramNames: String = ctor.parameters.joinToString(", ") { it.nativeArgument }
   // ADR-077: the native call lowers each argument to its wire shape when the projection
   // supplied one ((int)mood for an enum parameter); public and wire coincide otherwise.
   val nativeArgs: String = ctor.nativeArguments?.joinToString(", ") ?: paramNames

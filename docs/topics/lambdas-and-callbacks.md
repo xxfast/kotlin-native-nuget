@@ -529,6 +529,11 @@ one did, a `TaskCanceledException` or `OperationCanceledException` is rebuilt wi
 message, and a user subclass arrives as `KotlinOperationCanceledException`, which
 `catch (OperationCanceledException)` still catches.
 
+A callback that returns `null` for a non-null Kotlin `String`, such as `desk.StampWith(() => null!)`
+or a C#-implemented interface member returning `null`, is refused inside the bridge and travels this
+same path: Kotlin can catch it, and otherwise the C# caller of the outer call gets an
+`ArgumentNullException`.
+
 A callback that throws on a Kotlin coroutine or worker with no `try`/`catch` around the call still
 terminates the process, the same as any other uncaught Kotlin exception on that thread: catching
 at the Kotlin call site, as above, is what keeps the process alive, not merely the fact that the

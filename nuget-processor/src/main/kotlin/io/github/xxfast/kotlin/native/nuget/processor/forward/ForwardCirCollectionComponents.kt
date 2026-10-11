@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
+
 /**
  * ADR-081: the C# half of "a value-class collection component crosses as its underlying".
  *
@@ -31,6 +33,9 @@ internal fun collectionCreateArgument(
   name: String,
   type: BridgeType.Collection,
   depth: Int = 0,
+  // The collection the caller passed, which a refused null element is reported against
+  // (`nameof`): [name] itself at depth 0, where it may be a member access (`value.Value`).
+  root: String = name.substringBefore('.'),
   csharpType: (BridgeType) -> String,
 ): String = when (type.kind) {
   CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> {
@@ -44,8 +49,8 @@ internal fun collectionCreateArgument(
       val valueType: String = componentWireCsharpType(value, csharpType)
       val lambda: String = lambdaParameter(depth)
       "$SELECT($name, $lambda => new KeyValuePair<$keyType, $valueType>(" +
-          "${componentWireExpression("$lambda.Key", key, csharpType, depth)}, " +
-          "${componentWireExpression("$lambda.Value", value, csharpType, depth)}))"
+          "${componentWireExpression("$lambda.Key", key, csharpType, depth, root)}, " +
+          "${componentWireExpression("$lambda.Value", value, csharpType, depth, root)}))"
     }
   }
 
@@ -54,7 +59,10 @@ internal fun collectionCreateArgument(
       requireNotNull(type.element) { "Forward CIR collection input has no element type" }
     val lambda: String = lambdaParameter(depth)
     if (!element.componentNeedsWireProjection()) name
-    else "$SELECT($name, $lambda => ${componentWireExpression(lambda, element, csharpType, depth)})"
+    else {
+      val projected: String = componentWireExpression(lambda, element, csharpType, depth, root)
+      "$SELECT($name, $lambda => $projected)"
+    }
   }
 }
 
@@ -183,12 +191,14 @@ private fun componentWireExpression(
   component: BridgeType,
   csharpType: (BridgeType) -> String,
   depth: Int = 0,
+  root: String = access,
 ): String {
   // ADR-099: the inner collection is built by the *same* factory the outer one uses, one level
   // down, and its handle is the component's wire value. Arbitrary depth is this one arm.
   if (component is BridgeType.Collection) {
     val factory: String = collectionFactory(component.kind)
-    val argument: String = collectionCreateArgument(access, component, depth + 1, csharpType)
+    val argument: String =
+      collectionCreateArgument(access, component, depth + 1, root, csharpType)
     return "NugetMarshal.$factory($argument)"
   }
   // ROADMAP Phase 4 (ADR-151 amendment): one `nuget_bytes_create` handle per element, minted here
@@ -214,6 +224,10 @@ private fun componentWireExpression(
       "(int)$access"
     }
   }
+  // A non-null `String` element is read through the null guard, reported against the collection
+  // the caller passed: a null element used to reach Kotlin and surface as its
+  // `NullPointerException`. A `String?` element is a legitimate null and passes through.
+  if (component == BridgeType.String) return nonNullStringOrThrow(access, root)
   val valueClass: BridgeType.ValueClass = component.componentValueClass() ?: return access
   val property: String = valueClass.underlyingPropertyName.replaceFirstChar { it.uppercase() }
   val isEnum: Boolean = valueClass.underlying is BridgeType.Enum
@@ -315,7 +329,8 @@ internal fun BridgeType.componentNeedsProjection(): Boolean = when {
  */
 private fun BridgeType.componentNeedsWireProjection(): Boolean =
   this is BridgeType.Collection || unwrapNullable() == BridgeType.ByteArray ||
-      componentNeedsProjection()
+      // A non-null `String` crosses as itself, but its read is the null guard.
+      this == BridgeType.String || componentNeedsProjection()
 
 /**
  * ADR-099, read side: one nested component read back through the `ReadList`/`ReadSet`/`ReadMap`
