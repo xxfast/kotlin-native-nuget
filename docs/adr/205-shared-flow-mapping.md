@@ -61,8 +61,9 @@ returning a retained list of boxed elements, read through `NugetMarshal.ReadList
 
 - Pro: full prior-art parity.
 - Con: a new C# type, a new export shape and a new leak row for a shape no issue has asked for.
-- Not foreclosed by Alternative 1: narrowing a return type from `KotlinFlow<T>` to a subclass is
-  source-compatible for every consumer, and the package regenerates per module.
+- Not foreclosed by Alternative 1: the package regenerates per module. (Narrowing a return type
+  from `KotlinFlow<T>` to a subclass was thought source-compatible for every consumer; it is not,
+  see the 2026-10-10 amendment.)
 
 ### 3. `IObservable<T>`
 
@@ -214,8 +215,28 @@ by a native round trip.
   replay cache and never completes on its own, as it does for `StateFlow`.
 - ADR-026 and ADR-065 carry dated amendments pointing here; ADR-065's "C#-side replay buffer" sketch
   is retired. ADR-071 and ADR-194 are unchanged and still accurate.
-- Deferred, on one ROADMAP line: `ReplayCache` and `SubscriptionCount` on `SharedFlow<T>`, and
+- Deferred (shipped by ADR-209, see the 2026-10-10 amendment; `SubscriptionCount` lives on
+  `MutableSharedFlow<T>`, not `SharedFlow<T>`): `ReplayCache` and `SubscriptionCount`, and
   `Emit` / `TryEmit` on `MutableSharedFlow<T>` (Alternative 2's `KotlinSharedFlow<T>`). Nullable
   member `SharedFlow<T>?` binds with `Flow<T>?` (ADR-026 amendment, 2026-10-09); `SharedFlow` as a
   parameter or type
   argument follows the `Flow` parameter / type-argument lines.
+
+## Amendment 2026-10-10: the end state shipped as ADR-209
+
+[ADR-209](209-shared-flow-surface.md) implements Alternative 2 and corrects this ADR in three
+places.
+
+- **The read-only `MutableSharedFlow<T>` decision is reversed.** A declared `MutableSharedFlow<T>`
+  with a writable element now binds `KotlinMutableSharedFlow<T>`, with `EmitAsync` and `TryEmit`.
+  `SharedFlow<T>` binds `KotlinSharedFlow<T> : KotlinFlow<T>`, with `ReplayCache`. The `_collect`
+  route, the element vocabulary and the owners decided here are unchanged.
+- **`SubscriptionCount` is not a `SharedFlow<T>` member.** kotlinx declares `subscriptionCount` on
+  `MutableSharedFlow<T>` only (**verified by spike**: `Unresolved reference` on a
+  `SharedFlow<Int>`), so it sits on `KotlinMutableSharedFlow<T>`. The ROADMAP line that said
+  otherwise was wrong.
+- **"Source-compatible for every consumer" was wrong.** Narrowing the return type breaks three
+  spellings at compile time (**verified by spike**): `Task<KotlinFlow<T>> t = x.FooAsync();`
+  (CS0029), a C# class implementing a generated interface with a `KotlinFlow<T>` member (CS0738),
+  and `var e = x.Flow; e = new KotlinFlow<T>(...)` (CS0266). Base-typed locals, `await` into the
+  base, method groups and `await foreach` still compile.

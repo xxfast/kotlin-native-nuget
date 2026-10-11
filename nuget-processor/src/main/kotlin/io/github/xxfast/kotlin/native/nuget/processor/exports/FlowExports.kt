@@ -3,6 +3,9 @@ package io.github.xxfast.kotlin.native.nuget.processor.exports
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementEnvelope
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinIdentifier
 import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
+import io.github.xxfast.kotlin.native.nuget.processor.freshName
+import io.github.xxfast.kotlin.native.nuget.processor.cir.SharedFlowSurface
+import io.github.xxfast.kotlin.native.nuget.processor.cir.sharedFlowSurface
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
@@ -226,6 +229,11 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
       .build()
   )
 
+  // ADR-209: a SharedFlow's `ReplayCache`, and a writable MutableSharedFlow's write surface.
+  addSharedFlowPropertyExports(
+    prop, qualifiedName, prefix, propName, propCall, propTypeResolved, classifier,
+  )
+
   if (isStateFlowProperty) {
     // ADR-065: synchronous `_value` export -- boxes `stateFlow.value as Any` into a StableRef,
     // structurally identical to a single onNext emission. No errorOut: StateFlow.value cannot
@@ -366,6 +374,27 @@ internal fun FileSpec.Builder.addFlowMethodExports(
     }
   }
 
+  // ADR-209: a writable `MutableSharedFlow<T>` return is HELD for ADR-071's reason: one acquire,
+  // then the acquired flow's own `_collect` and the flow-keyed shared seams.
+  if (method.returnsHeldMutableSharedFlow()) {
+    val acquireBuilder: FunSpec.Builder = FunSpec
+      .builder("export_${prefix}_$cname")
+      .addAnnotation(cNameAnnotation("${prefix}_$cname", ownedBy(method)))
+      .addParameter("handle", cOpaquePointer)
+    acquireBuilder.addFlowParameters()
+    acquireBuilder
+      .returns(cOpaquePointer.copy(nullable = memberNullable))
+      .addCode(
+        buildSharedFlowAcquireMethodBody(
+          qualifiedName, call, paramPrelude, names.obj, memberNullable,
+        ),
+      )
+    addFunction(acquireBuilder.build())
+    addAcquiredFlowCollectExport(method, "${prefix}_$cname", returnType, classifier)
+    addFlowKeyedSharedFlowExports("${prefix}_$cname", method, returnType, classifier)
+    return
+  }
+
   // ADR-071 (2026-09-11): a `MutableStateFlow<T>`-declared function return is HELD. The call
   // happens exactly once, here, and hands its flow back as that flow's own handle; reads then go
   // through ADR-068's module-wide `nuget_stateflow_collect` / `nuget_stateflow_value` and the write
@@ -413,6 +442,33 @@ internal fun FileSpec.Builder.addFlowMethodExports(
     )
 
   addFunction(builder.build())
+
+  // ADR-209: a re-invoked SharedFlow return's `ReplayCache`, keyed like the collect: the owner and
+  // the method's own arguments, the method re-run per read.
+  if (sharedFlowSurface(returnType) != SharedFlowSurface.NONE) {
+    // The error slot moves off a user parameter spelled `errorOut`, as the fixed slots do.
+    val errorOut: String = freshName("errorOut", method.legacyParameterNames().toMutableSet())
+    val replayBuilder: FunSpec.Builder = FunSpec
+      .builder("export_${prefix}_${cname}_replay_cache")
+      .addAnnotation(cNameAnnotation("${prefix}_${cname}_replay_cache", ownedBy(method)))
+      .addParameter("handle", cOpaquePointer)
+    replayBuilder.addFlowParameters()
+    val flow: String = if (memberNullable) {
+      "($call ?: throw IllegalStateException(\"${methodName} returned null\"))"
+    } else {
+      call
+    }
+    replayBuilder
+      .addParameter(errorOut, cOpaquePointer.copy(nullable = true))
+      .returns(cOpaquePointer.copy(nullable = true))
+      .addCode("val ${names.obj} = handle.asStableRef<$qualifiedName>().get()\n")
+      .addCode(paramPrelude)
+      .addGuardedReturn(
+        classifier.replayCacheExpression(flow, requireNotNull(returnType)), "null",
+        errorOut = errorOut,
+      )
+    addFunction(replayBuilder.build())
+  }
 
   if (isStateFlowMethod) {
     // ADR-065: sibling synchronous `_value` export -- handle + the method's own parameters,
@@ -639,7 +695,7 @@ private fun buildFlowHasValueMethodBody(
  * ADR-071: the settable `.Value` write seam's Kotlin parameters (in order, after the receiver
  * handle) and the assignment expression that unwraps them into the element.
  */
-private data class MutableStateFlowWriteSlot(
+internal data class MutableStateFlowWriteSlot(
   val parameters: List<Pair<String, TypeName>>,
   val assignment: String,
 )
@@ -659,7 +715,7 @@ private data class MutableStateFlowWriteSlot(
  * legacy-route slot (`valueHasValue, value`), so a null is never a zero. A nullable enum never
  * reaches here: the gate keeps it read-only.
  */
-private fun mutableStateFlowWriteSlot(elementType: KSType?): MutableStateFlowWriteSlot {
+internal fun mutableStateFlowWriteSlot(elementType: KSType?): MutableStateFlowWriteSlot {
   val declaration = elementType?.expandAliases()?.declaration
   val simpleName: String = declaration?.simpleName?.asString() ?: "Any"
   val nullable: Boolean = elementType?.isMarkedNullable == true
@@ -753,7 +809,7 @@ private fun valueClassWriteSlot(
   }
 }
 
-private fun FunSpec.Builder.addMutableStateFlowWriteSlot(
+internal fun FunSpec.Builder.addMutableStateFlowWriteSlot(
   slot: MutableStateFlowWriteSlot,
 ): FunSpec.Builder = apply {
   slot.parameters.forEach { (name: String, type: TypeName) -> addParameter(name, type) }

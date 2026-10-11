@@ -820,6 +820,11 @@ internal data class CirFlowHelper(
   // ADR-071: also emit the KotlinMutableStateFlow<T> subclass (implies includesStateFlow -- set by
   // the tracker whenever a publicly-DECLARED MutableStateFlow<T> member/return is planned).
   val includesMutableStateFlow: Boolean = false,
+  // ADR-209: also emit KotlinSharedFlow<T> (`ReplayCache`), and KotlinMutableSharedFlow<T>
+  // (`SubscriptionCount`, `EmitAsync`, `TryEmit`), which implies includesSharedFlow and
+  // includesStateFlow.
+  val includesSharedFlow: Boolean = false,
+  val includesMutableSharedFlow: Boolean = false,
 ) : CirDeclaration
 
 // ADR-068: the two shared generic exports keyed on an already-obtained StateFlow<*> handle --
@@ -1010,6 +1015,13 @@ internal data class CirMethod(
   val flowElementNullable: Boolean = false,
   /** ADR-194: collector keyed on the acquired Flow, with no acquisition parameters. */
   val acquiredFlowCollectNativeName: String? = null,
+  // ADR-068: the awaited value is a `StateFlow` holder (`KotlinStateFlow<T>` or, ADR-071,
+  // `KotlinMutableStateFlow<T>`) over the runtime's handle-keyed pair. A structural flag, so the
+  // renderer never reads the route off [asyncReturnType]'s spelling (ADR-209).
+  val isAwaitedStateFlow: Boolean = false,
+  // ADR-209: the KotlinSharedFlow<T> / KotlinMutableSharedFlow<T> surface of a flow method return
+  // or an awaited flow; null for a plain Flow or a StateFlow.
+  val sharedFlow: CirSharedFlow? = null,
   // ADR-026 amendment (2026-10-09): the acquired Flow is a nullable member (`Flow<T>?`), so the
   // task yields `KotlinFlow<T>?` and a zero `resultPtr` completes with null. A flag, never a `?`
   // on [asyncReturnType], which the completion reuses inside `new ...(`.
@@ -1121,6 +1133,40 @@ internal data class CirStateFlowWrite(
 )
 
 /**
+ * ADR-209: the externs a `KotlinSharedFlow<T>` / `KotlinMutableSharedFlow<T>` member's delegates
+ * call, by their C# extern names. A generic implementer's forward ([carried]) prefixes each with
+ * the interface's carrier, the way ADR-174 carries every other native name.
+ */
+internal data class CirSharedFlow(
+  /** `${stem}ReplayCache`: the list handle of the replay cache, with an `out IntPtr error`. */
+  val replayCache: String,
+  /** The write surface, or null for a read-only `KotlinSharedFlow<T>`. */
+  val mutable: CirMutableSharedFlow? = null,
+) {
+  val surface: SharedFlowSurface
+    get() = if (mutable == null) SharedFlowSurface.READ_ONLY else SharedFlowSurface.MUTABLE
+
+  fun carried(carrier: String): CirSharedFlow = CirSharedFlow(
+    replayCache = "$carrier.$replayCache",
+    mutable = mutable?.let { write ->
+      write.copy(
+        subscriptionCount = "$carrier.${write.subscriptionCount}",
+        emit = "$carrier.${write.emit}",
+        tryEmit = "$carrier.${write.tryEmit}",
+      )
+    },
+  )
+}
+
+/** ADR-209: [CirSharedFlow]'s write half, crossing through the ADR-071 setter's [write] slot. */
+internal data class CirMutableSharedFlow(
+  val subscriptionCount: String,
+  val emit: String,
+  val tryEmit: String,
+  val write: CirStateFlowWrite,
+)
+
+/**
  * ADR-071 Alternative 4: [this] write re-labelled for one `compareAndSet` slot, so the
  * `_compare_and_set` extern and its lambda cross `expect` and `update` through the setter's own
  * slots. [stem] renames the native parameters (`value` to `expect`, `valueHasValue` to
@@ -1201,6 +1247,9 @@ internal data class CirProperty(
   // ADR-071: the `_set_value` slots after the owner handle and the C# arguments the write lambda
   // fills them with. Non-null exactly when [isMutableStateFlow].
   val stateFlowWrite: CirStateFlowWrite? = null,
+  // ADR-209: the KotlinSharedFlow<T> / KotlinMutableSharedFlow<T> surface; null for a plain Flow
+  // or a StateFlow. [renderFlowPropertyNativeImports] declares its externs from [nativeStem].
+  val sharedFlow: CirSharedFlow? = null,
   // Issue #38: true when this is a sealed-subclass property of a nullable non-String primitive
   // type (`Int?`), which crosses on the ADR-002 two-call pair (`_get_<p>_has_value` +
   // `_get_<p>_value`) instead of a single scalar slot. Read only by [renderSealedClass], which

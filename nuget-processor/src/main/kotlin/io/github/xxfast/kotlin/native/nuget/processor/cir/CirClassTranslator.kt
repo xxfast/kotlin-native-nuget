@@ -55,6 +55,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMem
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardFlowType
 import io.github.xxfast.kotlin.native.nuget.processor.exports.awaitsSettableMutableStateFlow
 import io.github.xxfast.kotlin.native.nuget.processor.exports.returnsHeldMutableStateFlow
+import io.github.xxfast.kotlin.native.nuget.processor.exports.returnsHeldMutableSharedFlow
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardLegacyPairMembers
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardLegacyRoute
@@ -2044,11 +2045,25 @@ internal fun flowProperty(
   val stateFlowWrite: CirStateFlowWrite? = if (isMutableStateFlowProperty) {
     mutableStateFlowWrite(flowElementTypeResolved, requireNotNull(flowElementType))
   } else null
+  // ADR-209: a SharedFlow is `KotlinSharedFlow<T>`, a writable MutableSharedFlow
+  // `KotlinMutableSharedFlow<T>`, each over the owner-keyed externs beside `_collect`.
+  val surface: SharedFlowSurface = sharedFlowSurface(propTypeResolved)
+  tracker.trackSharedFlow(surface)
+  val sharedFlow: CirSharedFlow? = if (surface == SharedFlowSurface.NONE) {
+    null
+  } else {
+    val write: CirStateFlowWrite? = if (surface == SharedFlowSurface.MUTABLE) {
+      mutableStateFlowWrite(flowElementTypeResolved, requireNotNull(flowElementType))
+    } else {
+      null
+    }
+    propertySharedFlow(csPropName, nativeCarrier, write)
+  }
   val memberSuffix: String = if (isNullableMember) "?" else ""
   val type: String = when {
     isMutableStateFlowProperty -> "KotlinMutableStateFlow<$flowElementType>$memberSuffix"
     isStateFlowType -> "KotlinStateFlow<$flowElementType>$memberSuffix"
-    else -> "KotlinFlow<$flowElementType>$memberSuffix"
+    else -> "${surface.csharpHolder()}<$flowElementType>$memberSuffix"
   }
 
   val getter: String = if (isStateFlowType) {
@@ -2113,13 +2128,20 @@ internal fun flowProperty(
           appendLine("                if (!$hasValueNativeName(_handle))")
           appendLine("                    return null;")
         }
-        appendLine("                return new KotlinFlow<$flowElementType>((onNext, onComplete, onError, userData) =>")
-        if (flowElementRead != null) {
-          appendLine("                    $collectNativeName(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData),")
-          appendLine("                    $flowElementRead);")
-        } else {
-          appendLine("                    $collectNativeName(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData));")
-        }
+        // ADR-209: the shared flow's delegates sit between the collect delegate and `read`.
+        val arguments: List<String> = listOf(
+          "(onNext, onComplete, onError, userData) =>\n                    " +
+              "$collectNativeName(_handle, GetOrCreateScope(), onNext, onComplete, onError, " +
+              "userData)",
+        ) + sharedFlow
+          ?.let { shared ->
+            sharedFlowArguments(shared, "_handle", "GetOrCreateScope()", "                    ")
+          }
+          .orEmpty() + listOfNotNull(flowElementRead?.let { read -> "                    $read" })
+        appendLine(
+          "                return new ${surface.csharpHolder()}<$flowElementType>(" +
+              arguments.joinToString(",\n") + ");",
+        )
         append("            ")
       }
   }
@@ -2141,6 +2163,7 @@ internal fun flowProperty(
     stateFlowSetValueNativeName =
       if (isMutableStateFlowProperty) "Native_Set${csPropName}Value" else "",
     stateFlowWrite = stateFlowWrite,
+    sharedFlow = sharedFlow,
   )
 }
 
@@ -2247,6 +2270,46 @@ internal fun flowMembers(
         callableCatalog.legacyDefaultFlags(method),
         callableCatalog.legacySuspendSiblingArities(method),
       )
+
+    // ADR-209: a SharedFlow return is `KotlinSharedFlow<T>`; a writable MutableSharedFlow one is
+    // `KotlinMutableSharedFlow<T>`, HELD for ADR-071's reason (an emit through a re-invoking
+    // lambda lands in a throwaway flow): one acquire, then every seam keyed on its flow handle.
+    val surface: SharedFlowSurface = sharedFlowSurface(returnType)
+    tracker.trackSharedFlow(surface)
+    if (method.returnsHeldMutableSharedFlow()) {
+      val acquireArgs: String = methodParams.joinToString(", ") { it.nativeArgument }
+      val acquireImport = CirDllImport(
+        libraryName = libraryName,
+        entryPoint = "${prefix}_$cname",
+        returnType = "IntPtr",
+        name = nativeStem,
+        parameters = listOf(CirParameter("handle", KOTLIN_HANDLE)) +
+            methodParams.nativeImportParameters(),
+        visibility = CirVisibility.PRIVATE,
+      )
+      val shared: CirSharedFlow = flowKeyedSharedFlow(
+        nativeStem, mutableStateFlowWrite(flowElementTypeResolved, flowCsElementType),
+      )
+      val heldMethod = CirMethod(
+        name = csMethodName,
+        returnType = "KotlinMutableSharedFlow<$flowCsElementType>" +
+            if (isNullableMember) "?" else "",
+        nativeName = nativeStem,
+        parameters = methodParams,
+        body = if (acquireArgs.isEmpty()) "_handle" else "_handle, $acquireArgs",
+        isFlow = true,
+        flowElementType = flowCsElementType,
+        flowElementRead = flowElementRead,
+        isStateFlowNullableMember = isNullableMember,
+        acquiredFlowCollectNativeName = "${nativeStem}Collect",
+        sharedFlow = shared,
+      )
+      return@flatMap listOf(
+        acquireImport,
+        acquiredFlowCollectImport(libraryName, "${prefix}_$cname", "${nativeStem}Collect"),
+      ) + flowKeyedSharedFlowImports(libraryName, "${prefix}_$cname", nativeStem, shared) +
+          heldMethod
+    }
 
     // ADR-071 (2026-09-11): a `MutableStateFlow<T>`-declared return is HELD -- the Kotlin half
     // invokes the function once and hands the flow's own handle back, so this member's imports are
@@ -2391,9 +2454,27 @@ internal fun flowMembers(
       )
     }
 
+    // ADR-209: a re-invoked shared return's `ReplayCache` re-runs the method, keyed on the owner
+    // and the method's own arguments exactly like the collect.
+    val replayImport: CirDllImport? = if (surface == SharedFlowSurface.NONE) {
+      null
+    } else {
+      CirDllImport(
+        libraryName = libraryName,
+        entryPoint = "${prefix}_${cname}_replay_cache",
+        returnType = "IntPtr",
+        name = "${nativeStem}ReplayCache",
+        parameters = listOf(CirParameter("handle", KOTLIN_HANDLE)) +
+            methodParams.nativeImportParameters(),
+        visibility = CirVisibility.PRIVATE,
+        hasSyncErrorOut = true,
+      )
+    }
     val flowMethod = CirMethod(
       name = csMethodName,
-      returnType = "KotlinFlow<$flowCsElementType>${if (isNullableMember) "?" else ""}",
+      returnType = "${surface.csharpHolder()}<$flowCsElementType>" +
+          if (isNullableMember) "?" else "",
+      sharedFlow = replayImport?.let { CirSharedFlow(replayCache = it.name) },
       nativeName = "${nativeStem}Collect",
       parameters = methodParams,
       body = nativeCallArgs,
@@ -2406,7 +2487,7 @@ internal fun flowMembers(
       flowCallbackNames = callbackNames,
     )
 
-    listOfNotNull(nativeImport, hasValueNativeImport, flowMethod)
+    listOfNotNull(nativeImport, hasValueNativeImport, replayImport, flowMethod)
   }
 }
 
@@ -2660,8 +2741,10 @@ internal fun suspendMembers(
     // ADR-071 held-route amendment: an awaited `MutableStateFlow<T>` is a settable holder, written
     // through the held route's flow-keyed `_set_value` (the shared predicate gates both halves).
     val settable: Boolean = method.awaitsSettableMutableStateFlow()
-    val csElementType: String =
-      element.asyncReturnType.removePrefix("KotlinStateFlow<").removeSuffix(">")
+    // ADR-209: an awaited shared flow's added seams, keyed on the awaited flow handle.
+    val shared: CirSharedFlow? =
+      awaitedSharedFlow(element, method.returnType?.resolve(), nativeStem)
+    val csElementType: String = element.elementType
     val asyncReturnType: String =
       if (settable) "KotlinMutableStateFlow<$csElementType>" else element.asyncReturnType
     val write: CirStateFlowWrite? = if (settable) {
@@ -2707,7 +2790,8 @@ internal fun suspendMembers(
       flowElementNullable = element.elementNullable,
       acquiredFlowNullable = element.memberNullable,
       acquiredFlowCollectNativeName =
-        if (element.asyncReturnType.startsWith("KotlinFlow<")) "${nativeStem}Collect" else null,
+        if (element.acquiredFlow) "${nativeStem}Collect" else null,
+      isAwaitedStateFlow = !element.acquiredFlow,
       awaitedStateFlowCollectNativeName =
         if (element.collection != null) "${nativeStem}Collect" else null,
       awaitedStateFlowValueNativeName =
@@ -2716,6 +2800,7 @@ internal fun suspendMembers(
       stateFlowCompareAndSetNativeName =
         if (write != null) "${nativeStem}CompareAndSet" else "",
       stateFlowWrite = write,
+      sharedFlow = shared,
     )
 
     val collector: List<CirMember> = if (asyncMethod.acquiredFlowCollectNativeName != null) {
@@ -2737,10 +2822,34 @@ internal fun suspendMembers(
     } else {
       emptyList()
     }
-    listOfNotNull(nativeImport, setValueImport, compareAndSetImport, asyncMethod) + collector + awaitedPair
+    listOfNotNull(nativeImport, setValueImport, compareAndSetImport, asyncMethod) + collector +
+      awaitedPair + shared?.let {
+        flowKeyedSharedFlowImports(libraryName, "${prefix}_${cname}", nativeStem, it)
+      }.orEmpty()
   }
 
   return asyncMembers + suspendStateFlowMembers
+}
+
+/**
+ * ADR-209: the seams an awaited `SharedFlow` / writable `MutableSharedFlow` adds, keyed on the
+ * awaited flow handle under [nativeStem], or null for every other awaited value. Shared by the
+ * class route and the top-level route, so the two cannot answer the same return differently.
+ */
+internal fun awaitedSharedFlow(
+  element: SuspendStateFlowElement,
+  returnType: KSType?,
+  nativeStem: String,
+): CirSharedFlow? {
+  if (element.surface == SharedFlowSurface.NONE) return null
+  val write: CirStateFlowWrite? = if (element.surface == SharedFlowSurface.MUTABLE) {
+    val elementType: KSType? = returnType?.expandAliases()
+      ?.arguments?.firstOrNull()?.type?.resolve()?.expandAliases()
+    mutableStateFlowWrite(elementType, element.elementType)
+  } else {
+    null
+  }
+  return flowKeyedSharedFlow(nativeStem, write)
 }
 
 /**
@@ -2751,6 +2860,18 @@ internal fun suspendMembers(
 internal data class SuspendStateFlowElement(
   /** `KotlinStateFlow<T>`, the type the `Task` yields. */
   val asyncReturnType: String,
+  /**
+   * The element's own C# spelling (`T`), so no reader recovers it by taking [asyncReturnType]
+   * apart: the holder's spelling is not a contract (ADR-209 respells the acquired `SharedFlow`).
+   */
+  val elementType: String,
+  /**
+   * ADR-194: the awaited value is a plain/shared `Flow` collected through its own flow-keyed
+   * `_collect`, not a `StateFlow` holder. Structural, never read off [asyncReturnType]'s prefix.
+   */
+  val acquiredFlow: Boolean = false,
+  /** ADR-209: an acquired shared flow's surface, spelled into [asyncReturnType]. */
+  val surface: SharedFlowSurface = SharedFlowSurface.NONE,
   /** The `read:` the holder is constructed with (ADR-123's slot), or null for the default read. */
   val read: String?,
   /** True for a `StateFlow<T?>` element, which reads through `nuget_stateflow_value_or_null`. */
@@ -2794,8 +2915,13 @@ internal fun suspendStateFlowElement(
       ?: iface?.let { legacyInterfaceElementReadArgument(it, nullable) }
       ?: legacyBytesElementReadArgument(nullable).takeIf { bytes }
       ?: legacyEnvelopeElementReadArgument(nullable).takeIf { envelope }
+    val surface: SharedFlowSurface = sharedFlowSurface(returnType)
+    tracker?.trackSharedFlow(surface)
     return SuspendStateFlowElement(
-      asyncReturnType = "KotlinFlow<$cs>",
+      asyncReturnType = "${surface.csharpHolder()}<$cs>",
+      surface = surface,
+      elementType = cs,
+      acquiredFlow = true,
       read = read,
       memberNullable = returnType?.expandAliases()?.isMarkedNullable == true,
     )
@@ -2819,6 +2945,7 @@ internal fun suspendStateFlowElement(
     ?: qualifiedElementCsType(element, context, nullable)
   return SuspendStateFlowElement(
     asyncReturnType = "KotlinStateFlow<$csElementType>" + if (memberNullable) "?" else "",
+    elementType = csElementType,
     read = elementInterface?.let { iface -> legacyInterfaceElementReadArgument(iface, nullable) },
     elementNullable = nullable,
   )
@@ -5640,6 +5767,8 @@ internal fun interfaceAsyncForwards(
             stateFlowSetValueNativeName = method.stateFlowSetValueNativeName.carried(),
             stateFlowCompareAndSetNativeName =
               method.stateFlowCompareAndSetNativeName.carried(),
+            // ADR-209: the shared flow's seams are the interface's imports too.
+            sharedFlow = method.sharedFlow?.carried(carrier),
           )
         },
         properties = projected.properties.map { prop ->
@@ -5813,6 +5942,7 @@ private fun awaitedStateFlowCollectionElement(
   return SuspendStateFlowElement(
     asyncReturnType = "KotlinStateFlow<${collection.forwardPublicCsharpType()}>" +
       if (memberNullable) "?" else "",
+    elementType = collection.forwardPublicCsharpType(),
     read = legacyFlowElementReadArgument(collection),
     collection = collection,
   )

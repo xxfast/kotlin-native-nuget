@@ -354,6 +354,8 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
       appendLine()
     }
   }
+
+  renderSharedFlowTemplates(helper)
 }
 
 /**
@@ -528,30 +530,92 @@ internal fun StringBuilder.renderFlowMethod(method: CirMethod, className: String
     return
   }
 
+  // ADR-209: a writable MutableSharedFlow return is held, like ADR-071's MutableStateFlow one.
+  if (method.sharedFlow?.mutable != null) {
+    renderHeldSharedFlowMethod(method, className)
+    return
+  }
+
   val paramStr: String = method.parameters.joinToString(", ") { it.declaration }
   val nativeName: String = method.nativeName
   // ADR-026 amendment (2026-10-09): a nullable member (`Flow<T>?` return) is `KotlinFlow<T>?`,
   // probed exactly as ADR-067's `StateFlow<T>?` return is.
   val nullableSuffix: String = if (method.isStateFlowNullableMember) "?" else ""
+  // ADR-209: a read-only SharedFlow return is `KotlinSharedFlow<T>`, re-invoked like the collect.
+  val holder: String = method.sharedFlow?.surface?.csharpHolder() ?: "KotlinFlow"
 
   appendLine(
-    "        ${method.memberHead("public ")}KotlinFlow<${method.flowElementType}>$nullableSuffix " +
+    "        ${method.memberHead("public ")}$holder<${method.flowElementType}>$nullableSuffix " +
         "${method.explicitName}($paramStr)",
   )
   appendLine("        {")
   appendLine("            if (_handle.IsInvalid)")
   appendLine("                throw new ObjectDisposedException(nameof($className));")
   appendHasValueProbe(method)
-  appendLine("            return new KotlinFlow<${method.flowElementType}>((${method.flowCallbackNames.joinToString(", ")}) =>")
+  appendLine("            return new $holder<${method.flowElementType}>((${method.flowCallbackNames.joinToString(", ")}) =>")
   // ADR-114: the collect delegate runs per subscription, so the wire container is built inside it
   // and disposed the moment the native call returns. Kotlin has already copied it out.
   // ADR-123: a collection element adds its own materialiser after the delegate; every other
   // element passes nothing and keeps the shipped single-argument construction.
   val read: String? = method.flowElementRead
+  val replay: String? = method.sharedFlow
+    ?.let { shared -> reinvokedReplayArgument(method, shared.replayCache, "                ") }
+  val trailing: List<String> = listOfNotNull(replay, read?.let { "                $it" })
   appendScopedNativeCall(
-    method, "                ", "$nativeName(${method.body})", if (read == null) ");" else ",",
+    method, "                ", "$nativeName(${method.body})",
+    if (trailing.isEmpty()) ");" else ",",
   )
-  if (read != null) appendLine("                $read);")
+  if (trailing.isNotEmpty()) appendLine(trailing.joinToString(",\n") + ");")
+  appendLine("        }")
+  appendLine()
+}
+
+/**
+ * ADR-209: a writable `MutableSharedFlow<T>`-declared function return, HELD for ADR-071's reason
+ * (`renderHeldStateFlowMethod`): the acquire call runs once and its result IS the flow's own
+ * handle, which the wrapper owns. Every seam keys on it, and the collect and `EmitAsync` launch
+ * on the parent's scope captured here. A nullable return answers null for a null flow.
+ */
+private fun StringBuilder.renderHeldSharedFlowMethod(method: CirMethod, className: String) {
+  val paramStr: String = method.parameters.joinToString(", ") { it.declaration }
+  val element: String = method.flowElementType
+  val nullable: Boolean = method.isStateFlowNullableMember
+  val shared: CirSharedFlow = requireNotNull(method.sharedFlow)
+  appendLine(
+    "        ${method.memberHead("public ")}KotlinMutableSharedFlow<$element>" +
+        "${if (nullable) "?" else ""} ${method.explicitName}($paramStr)",
+  )
+  appendLine("        {")
+  appendLine("            if (_handle.IsInvalid)")
+  appendLine("                throw new ObjectDisposedException(nameof($className));")
+  val acquire: String = "${method.nativeName}(${method.body})"
+  val taken: MutableSet<String> = method.parameters.localScopeNames()
+  val flow: String = freshName("flow", taken).also { taken += it }
+  val owned: String = freshName("owned", taken).also { taken += it }
+  val collectScope: String = freshName("collectScope", taken).also { taken += it }
+  val scoped: List<String>? =
+    method.parameters.collectionScopedCall("            ", "$flow = $acquire", returns = false)
+  if (scoped == null) {
+    appendLine("            IntPtr $flow = $acquire;")
+  } else {
+    appendLine("            IntPtr $flow = IntPtr.Zero;")
+    scoped.forEach { appendLine(it) }
+  }
+  if (nullable) {
+    appendLine("            if ($flow == IntPtr.Zero)")
+    appendLine("                return null;")
+  }
+  appendLine("            var $owned = new NugetKotlinHandle($flow);")
+  appendLine("            NugetScopeHandle $collectScope = GetOrCreateScope();")
+  appendLine("            return new KotlinMutableSharedFlow<$element>(")
+  appendLine("                (onNext, onComplete, onError, userData) =>")
+  appendLine("                    ${method.acquiredFlowCollectNativeName}($owned, $collectScope, onNext, onComplete, onError, userData),")
+  val indent = "                "
+  val arguments: List<String> =
+    sharedFlowArguments(shared, owned, collectScope, indent, taken) +
+        listOfNotNull(method.flowElementRead?.let { "$indent$it" }) +
+        "${indent}ownedHandle: $owned"
+  appendLine(arguments.joinToString(",\n") + ");")
   appendLine("        }")
   appendLine()
 }

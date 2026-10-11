@@ -164,6 +164,10 @@ internal fun translateSuspendFunction(
     else -> "Task<$asyncReturnType>"
   }
 
+  // ADR-209: the class route's awaited shared-flow seams, under this route's extern spelling.
+  val shared: CirSharedFlow? =
+    stateFlowElement?.let { awaitedSharedFlow(it, returnType, "${nativeName}_") }
+
   val asyncMethod = CirMethod(
     name = func.csharpAsyncMemberName(),
     returnType = taskReturnType,
@@ -177,7 +181,9 @@ internal fun translateSuspendFunction(
     flowElementNullable = stateFlowElement?.elementNullable == true,
     acquiredFlowNullable = acquiredFlowNullable,
     acquiredFlowCollectNativeName =
-      if (asyncReturnType.startsWith("KotlinFlow<")) "${nativeName}_collect" else null,
+      if (stateFlowElement?.acquiredFlow == true) "${nativeName}_collect" else null,
+    isAwaitedStateFlow = stateFlowElement != null && !stateFlowElement.acquiredFlow,
+    sharedFlow = shared,
     awaitedStateFlowCollectNativeName =
       if (stateFlowElement?.collection != null) "${nativeName}_collect" else null,
     awaitedStateFlowValueNativeName =
@@ -226,7 +232,8 @@ internal fun translateSuspendFunction(
   } else {
     emptyList()
   }
-  return listOf(nativeImport, asyncMethod) + listOfNotNull(collector) + awaitedPair
+  return listOf(nativeImport, asyncMethod) + listOfNotNull(collector) + awaitedPair +
+    shared?.let { flowKeyedSharedFlowImports(libraryName, cname, "${nativeName}_", it) }.orEmpty()
 }
 
 internal fun translateGenericFunction(

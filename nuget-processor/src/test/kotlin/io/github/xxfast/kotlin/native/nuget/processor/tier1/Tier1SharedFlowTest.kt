@@ -5,12 +5,14 @@ import kotlin.test.assertContains
 import kotlin.test.assertTrue
 
 /**
- * ADR-205: a declared `SharedFlow<T>` (and a declared `MutableSharedFlow<T>`, as the read-only
- * view) binds as `KotlinFlow<T>` through the shipped per-member `_collect` export, at a property,
- * a method return and a `suspend` return, on every owner the plain `Flow<T>` route reaches.
+ * ADR-205: a declared `SharedFlow<T>` collects through the shipped per-member `_collect` export, at
+ * a property, a method return and a `suspend` return, on every owner the plain `Flow<T>` route
+ * reaches. ADR-209 respells it `KotlinSharedFlow<T>` (a `KotlinFlow<T>`), and a declared
+ * `MutableSharedFlow<T>` `KotlinMutableSharedFlow<T>`; `Tier1SharedFlowSurfaceTest` owns the
+ * members that adds.
  *
- * Replay is Kotlin-side (`SharedFlow.collect` replays the cache, then never completes), so there
- * is no new export shape: each cell asserts the same collect export a `Flow<T>` member gets.
+ * Replay is Kotlin-side (`SharedFlow.collect` replays the cache, then never completes), so the
+ * collect seam is the one a `Flow<T>` member gets: each cell asserts that same export.
  *
  * `libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore)` is load-bearing: without it every
  * member here is skipped as an unsupported type and the assertions pass vacuously.
@@ -66,14 +68,14 @@ class Tier1SharedFlowTest {
   }
 
   @Test
-  fun `class property, method and suspend return bind as KotlinFlow`() {
+  fun `class property, method and suspend return bind as KotlinSharedFlow`() {
     assertTrue(result.compiledClean, result.compileErrors.toString())
     val cs: String = result.generatedCSharp
-    assertContains(cs, "public KotlinFlow<string> Headlines")
-    assertContains(cs, "public KotlinFlow<int> Editions")
-    assertContains(cs, "public KotlinFlow<global::Interop.Cat> Cats")
-    assertContains(cs, "public KotlinFlow<int> EditionReport()")
-    assertContains(cs, "public Task<KotlinFlow<int>> LatestAsync(")
+    assertContains(cs, "public KotlinSharedFlow<string> Headlines")
+    assertContains(cs, "public KotlinSharedFlow<int> Editions")
+    assertContains(cs, "public KotlinSharedFlow<global::Interop.Cat> Cats")
+    assertContains(cs, "public KotlinSharedFlow<int> EditionReport()")
+    assertContains(cs, "public Task<KotlinSharedFlow<int>> LatestAsync(")
     val kt: String = result.generated
     assertContains(kt, "obj.headlines.collect")
     assertContains(kt, "obj.editionReport().collect")
@@ -81,25 +83,25 @@ class Tier1SharedFlowTest {
   }
 
   @Test
-  fun `a declared MutableSharedFlow binds as the read-only view`() {
+  fun `a declared MutableSharedFlow binds as KotlinMutableSharedFlow over the same collect`() {
     val cs: String = result.generatedCSharp
-    assertContains(cs, "public KotlinFlow<int> Extras")
+    assertContains(cs, "public KotlinMutableSharedFlow<int> Extras")
     assertContains(result.generated, "obj.extras.collect")
   }
 
   @Test
   fun `a nullable SharedFlow element follows the nullable Flow element widening`() {
-    assertContains(result.generatedCSharp, "public KotlinFlow<string?> Maybe")
+    assertContains(result.generatedCSharp, "public KotlinSharedFlow<string?> Maybe")
   }
 
   @Test
   fun `interface, sealed-arm and top-level suspend owners reach the shared route`() {
     val cs: String = result.generatedCSharp
-    assertContains(cs, "KotlinFlow<int> Pings")
-    assertContains(cs, "KotlinFlow<int> PingReport()")
-    assertContains(cs, "public KotlinFlow<int> Purrs")
-    assertContains(cs, "public KotlinFlow<int> PurrReport()")
-    assertContains(cs, "Task<KotlinFlow<int>> BulletinWireAsync(")
+    assertContains(cs, "KotlinSharedFlow<int> Pings")
+    assertContains(cs, "KotlinSharedFlow<int> PingReport()")
+    assertContains(cs, "public KotlinSharedFlow<int> Purrs")
+    assertContains(cs, "public KotlinSharedFlow<int> PurrReport()")
+    assertContains(cs, "Task<KotlinSharedFlow<int>> BulletinWireAsync(")
     val unnamed: List<String> = listOf(
       "headlines", "editions", "cats", "extras", "maybe", "editionReport", "latest", "pings",
       "pingReport", "purrs", "purrReport", "bulletinWire",

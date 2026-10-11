@@ -958,6 +958,14 @@ internal fun translate(
 
   if (tracker.needsFlow) tracker.needsAsync = true
 
+  // ADR-209: `ReplayCache` reads through `NugetMarshal.ReadList`, and `SubscriptionCount` is a
+  // `KotlinStateFlow<int>` over the runtime's handle-keyed `NugetStateFlowNative` pair.
+  if (tracker.needsSharedFlow) tracker.needsList = true
+  if (tracker.needsMutableSharedFlow) {
+    tracker.needsStateFlow = true
+    tracker.needsSuspendStateFlow = true
+  }
+
   // ADR-084 stage 1: every interface with a C# backing wrapper (i.e. reachable at a return or
   // parameter position) that plans cleanly gets a bridge factory, so a C# class implementing it can
   // be passed to Kotlin. An interface with an out-of-scope member plans to null and simply gets no
@@ -1033,6 +1041,8 @@ internal fun translate(
         context.libraryName,
         includesStateFlow = tracker.needsStateFlow,
         includesMutableStateFlow = tracker.needsMutableStateFlow,
+        includesSharedFlow = tracker.needsSharedFlow,
+        includesMutableSharedFlow = tracker.needsMutableSharedFlow,
       ),
     )
   }
