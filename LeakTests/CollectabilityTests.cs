@@ -3,6 +3,7 @@ using TestLibrary;
 using TestLibrary.Cat;
 using TestLibrary.Roster;
 using Treatprep = TestLibrary.Treatprep;
+using Trickle = TestLibrary.Trickle;
 
 namespace LeakTests;
 
@@ -423,5 +424,93 @@ public class CollectabilityTests
         Assert.True(
             MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
             "the lambda passed to GarnishAsync stayed reachable after the call completed and its owner was disposed");
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // ADR-210 slice (b): a `Flow<T>` PARAMETER. The same blind spot as the suspend lambda rows
+    // above, one type over: the C# `IAsyncEnumerable<T>` sits in the generated context table under
+    // a key a Kotlin cleaner releases, and nothing counts that table. The source captures a marker;
+    // once the collection is over, the wrapper disposed and every reference dropped, the marker
+    // must be collected. It also catches an enumeration handle that was never freed: the
+    // enumerator is the iterator's state machine, which holds the source and so the marker.
+    // ------------------------------------------------------------------------------------------
+
+    private sealed class MarkedDrops(TreatMarker marker, int count) : IAsyncEnumerable<int>
+    {
+        public async IAsyncEnumerator<int> GetAsyncEnumerator(CancellationToken cancellationToken = default)
+        {
+            for (int drop = 1; drop <= count; drop++)
+            {
+                await Task.Delay(1, cancellationToken);
+                Interlocked.Increment(ref marker.Touches);
+                yield return drop;
+            }
+        }
+    }
+
+    // Not `async`, and its own frame: the marker and the source over it exist here only.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (Task<int> Counting, WeakReference Marker) StartCounting(Trickle.WaterFountain fountain)
+    {
+        var marker = new TreatMarker();
+        Task<int> counting = fountain.TotalDropsAsync(new MarkedDrops(marker, 3));
+        return (counting, new WeakReference(marker));
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference> CountAndDispose()
+    {
+        using var fountain = new Trickle.WaterFountain("Oreo");
+        (Task<int> counting, WeakReference marker) = StartCounting(fountain);
+
+        Assert.Equal(6, await counting);
+        return marker;
+    }
+
+    // The suspend-fun host: the flow is collected during the call and never stored, so nothing on
+    // the Kotlin side reaches its holder once the coroutine has finished.
+    [Fact]
+    public async Task FlowParameter_AfterTheCallCompletes_ItsSourceIsCollected()
+    {
+        WeakReference marker = await CountAndDispose();
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the IAsyncEnumerable passed to TotalDropsAsync stayed reachable after the call completed and its owner was disposed: its C# context key, or an enumeration handle, was never released");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (Trickle.Dripper Dripper, WeakReference Marker) BuildDripper()
+    {
+        var marker = new TreatMarker();
+        var dripper = new Trickle.Dripper(new MarkedDrops(marker, 2));
+        return (dripper, new WeakReference(marker));
+    }
+
+    // The constructor (stored) host, with its negative control in the same row: a live owner must
+    // keep the stored source through both collectors and still be able to enumerate it; a disposed
+    // and dropped owner must let it go.
+    [Fact]
+    public async Task FlowParameter_StoredByAConstructor_IsReleasedWithItsOwner()
+    {
+        (Trickle.Dripper? dripper, WeakReference marker) = BuildDripper();
+        try
+        {
+            Assert.False(
+                MarkerCollectedWithin(marker, TimeSpan.FromSeconds(1)),
+                "a live Dripper must keep the flow its constructor stored");
+            Assert.Equal("1,2", await dripper.DrainAsync());
+
+            dripper.Dispose();
+            dripper = null;
+
+            Assert.True(
+                MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+                "the IAsyncEnumerable stored by Dripper's constructor stayed reachable after its owner's Dispose: its C# context key, or an enumeration handle, was never released");
+        }
+        finally
+        {
+            dripper?.Dispose();
+        }
     }
 }
