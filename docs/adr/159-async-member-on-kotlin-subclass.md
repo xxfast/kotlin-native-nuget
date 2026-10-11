@@ -348,6 +348,7 @@ no fixture. No production change was needed; each cell was verified red by break
   the scope, on both the suspend and the `Flow` route. The same holds for `Raft : Plank` with no
   kept base. This is the "stays the only carrier" outcome of the rule 4 amendment above.
 
-Not covered and not working: a kept **generic** base under a dropped middle class
-(`Barge : Keel : Crate<Int>`) fails generation with an internal error, because the base spelling
-reads only direct supertypes (verified; tracked in `ROADMAP.md`).
+A kept **generic** base under a dropped middle class (`Barge : Keel : Crate<Int>`) failed
+generation here (the base spelling read only direct supertypes). It generates now, and `Barge`
+projects its suspend and `Flow` overrides on itself; see the 2026-10-10 amendment to
+[ADR-101](101-unexported-supertype-skip.md).

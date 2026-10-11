@@ -524,12 +524,22 @@ private fun KSDeclaration.isFromInterfaceBeside(superClass: KSClassDeclaration):
  * bind on neither `Dinghy` nor `Vessel` and vanish from C# with no diagnostic at all. `Skiff` has
  * no generated class, so `Dinghy` is the only carrier there is, which is the same re-homing rule
  * the base-less case already applies to the whole chain.
+ *
+ * ADR-101 amendment (2026-10-10): the member must also be *declared* by that dropped base
+ * ([isDeclaredBy]), not merely parented to it. Under a kept generic base, KSP parents a base member
+ * that mentions `T` to the first class that closes `T`: for `Barge : Keel : Crate<Int>` with `Keel`
+ * dropped, `Crate<T>.item` and a non-open `describe(tag: T)` come back parented to `Keel`. The raw
+ * parent test re-homed them onto `Barge` as `public override int Item` (CS0506, `Crate<T>.Item` is
+ * not virtual) and a second `Describe(int)` (CS0108). This is the dropped-middle twin of the
+ * substitution [isDeclaredBy] already filters for a direct subclass; a real override the dropped
+ * base declares still answers true and re-homes.
  */
 private fun KSDeclaration.isFromDroppedBase(
   cls: KSClassDeclaration,
   superClass: KSClassDeclaration,
 ): Boolean {
   val owner: KSClassDeclaration = parentDeclaration as? KSClassDeclaration ?: return false
+  if (!isDeclaredBy(owner)) return false
   val qualified: String = owner.qualifiedName?.asString() ?: return false
   return cls.droppedBaseChain(superClass).any { it.qualifiedName?.asString() == qualified }
 }
@@ -584,9 +594,19 @@ internal fun KSDeclaration.baseClassOverridee(
   val onBaseClass: Boolean =
     (direct?.parentDeclaration as? KSClassDeclaration)?.classKind == ClassKind.CLASS
   if (onBaseClass) return direct
-  return when (this) {
-    is KSPropertyDeclaration ->
+  return counterpartOn(superClass)
+}
+
+/**
+ * The member of [superClass] (declared or inherited) this member would override by name for a
+ * property, by ADR-082 wildcard signature for a function; null when [superClass] has none.
+ */
+private fun KSDeclaration.counterpartOn(superClass: KSClassDeclaration): KSDeclaration? =
+  when (this) {
+    is KSPropertyDeclaration -> {
+      val name: String = simpleName.asString()
       superClass.getAllProperties().firstOrNull { it.simpleName.asString() == name }
+    }
 
     is KSFunctionDeclaration -> {
       val key: List<String> = forwardSignatureKey()
@@ -596,7 +616,6 @@ internal fun KSDeclaration.baseClassOverridee(
 
     else -> null
   }
-}
 
 /**
  * ADR-101 amendment (2026-09-27): whether a sealed arm's member overrides a member of the sealed
@@ -614,9 +633,33 @@ internal fun KSDeclaration.overridesKeptBaseOf(
       sealed.qualifiedName?.asString()
 }
 
-/** [baseClassOverridee] as the boolean the `override` / `virtual` pair is keyed on. */
+/**
+ * ADR-101 amendment (2026-10-10): the member of the kept [superClass] (declared or inherited) this
+ * member overrides *as C# sees it*, which is what the `override` / `virtual` pair and the
+ * read-only-base setter guard both have to key on.
+ *
+ * [baseClassOverridee] is not that on its own: an overridee on a class the C# base list does not
+ * carry (a *dropped* base, ADR-101) says nothing about the generated base class.
+ * `Dinghy : Skiff(dropped) : Vessel` overriding `Skiff.tack()` re-homes the member onto `Dinghy`,
+ * and `Vessel` has no `Tack`: `public override string Tack()` is CS0115, and a `var` overriding
+ * `Skiff`'s `val` has no get-only C# base property to lose its setter to. Such an overridee is
+ * replaced by the kept base's own member of that name or signature (`Skiff.steer()` itself
+ * overriding `Vessel.steer()`), and is null when the kept base has none.
+ *
+ * [baseClassOverridee] keeps answering with the dropped overridee, since the scope-ownership and
+ * lambda-property re-projection rules key on exactly that.
+ */
+internal fun KSDeclaration.keptBaseOverridee(superClass: KSClassDeclaration?): KSDeclaration? {
+  if (superClass == null) return null
+  val overridee: KSDeclaration = baseClassOverridee(superClass) ?: return null
+  val owner: String? = overridee.parentDeclaration?.qualifiedName?.asString()
+  if (owner in superClass.forwardSupertypeNames()) return overridee
+  return counterpartOn(superClass)
+}
+
+/** [keptBaseOverridee] as the boolean the `override` / `virtual` pair is keyed on. */
 internal fun KSDeclaration.overridesBaseClassMember(superClass: KSClassDeclaration?): Boolean =
-  baseClassOverridee(superClass) != null
+  keptBaseOverridee(superClass) != null
 
 /**
  * Whether this member is *declared* by [cls], as opposed to inherited into it.

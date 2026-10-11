@@ -334,6 +334,36 @@ re-declared alongside it, and C# overload resolution then picks between the two 
 does. Generic **subclasses** (`class Sub<T> : Base<T>(...)`) are not supported yet; declare the
 member directly on the closed subclass instead.
 
+An unexported class between the subclass and the generic base (even a generic `Keel<U> : Crate<U>`)
+changes nothing for the consumer: the exported subclass extends the generic base directly and
+declares only what it or the unexported class declares.
+
+```kotlin
+open class Crate<T>(val item: T) {
+  open suspend fun load(): String = "crate loaded $item"
+}
+
+open class Keel : Crate<Int>(7) { // outside the export set
+  open fun weigh(): String = "keel:$item"
+}
+
+class Barge : Keel() {
+  override fun weigh(): String = "barge:$item"
+  override suspend fun load(): String = "barge loaded $item"
+}
+```
+
+```C#
+await using var barge = new Barge();   // public class Barge : Crate<int>
+Crate<int> crate = barge;
+Assert.Equal(7, crate.Item);           // inherited, not restated on Barge
+Assert.Equal("barge:7", barge.Weigh());
+Assert.Equal("barge loaded 7", await barge.LoadAsync());
+```
+
+`Crate<T>` itself has no `LoadAsync`, since a generic class binds no `suspend` member, so the
+override on `Barge` is the only one C# sees.
+
 ## Returning an instantiated generic class
 
 A top-level function returning a generic class instantiated with a primitive, `String`, or an
