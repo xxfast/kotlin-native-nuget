@@ -12,6 +12,7 @@ import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Variance
 import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.MUTABLE_STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.SUSPEND_LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
@@ -80,6 +81,24 @@ internal class ForwardBridgeTypeClassifier(
    * erased read (`List<Outcome<Int>>`) finds its key.
    */
   internal val closedInstantiations: MutableMap<String, String> = sortedMapOf()
+
+  /**
+   * ADR-208 part E: every closed `Flow<E>` / `StateFlow<E>` classified as a type argument of an
+   * exported generic class, by its C# spelling (`global::Root.KotlinFlow<int>`). Each gets one
+   * generated handle-keyed collect export and one `NugetMarshal.Factories` line.
+   */
+  internal val closedFlowArguments: MutableMap<String, ForwardFlowArgument> = sortedMapOf()
+
+  /**
+   * ADR-208 part E: every declared `MutableStateFlow<E>` type argument, by its Kotlin spelling,
+   * with the generic class first seen holding it. It binds as a read-only `KotlinStateFlow<E>`
+   * (ADR-071's write seam is keyed on a member), so its dropped setter is named once.
+   */
+  internal val readOnlyMutableStateFlowArguments: MutableMap<String, KSClassDeclaration> =
+    sortedMapOf()
+
+  /** The root C# namespace, where the `KotlinFlow<T>` holders are declared; empty when none. */
+  internal val rootNamespace: String get() = context.rootNamespace
 
   /**
    * The C# namespace [declaration] is rendered into, by the same mapping [interfaceType] qualifies
@@ -724,6 +743,23 @@ internal class ForwardBridgeTypeClassifier(
               "$constraint`, the bound C# restates for `Nothing`")
         }
         return@map KOTLIN_NOTHING_CSHARP
+      }
+      // ADR-208 part E: a closed flow argument of a plain generic class materialises through its
+      // own generated collect export. A generic sealed reference keeps the refusal below.
+      if (!isSealed && parent == null && argument.isFlowTypeArgument()) {
+        return@map when (val reading = flowArgument(argument.makeNotNullable(), declaration)) {
+          is ForwardFlowArgumentReading.Refused -> return refused(reading.why)
+          is ForwardFlowArgumentReading.Bound -> {
+            val flow: ForwardFlowArgument = reading.argument
+            closedFlowArguments.getOrPut(flow.csharpType) { flow }
+            val flowName: String? = argument.expandAliases().declaration.qualifiedName?.asString()
+            if (flowName in MUTABLE_STATE_FLOW_TYPES) {
+              val spelling: String = argument.makeNotNullable().forwardKotlinArgumentSpelling()
+              readOnlyMutableStateFlowArguments.getOrPut(spelling) { declaration }
+            }
+            flow.csharpType + if (argument.isMarkedNullable) "?" else ""
+          }
+        }
       }
       val classified: BridgeType = classify(argument).sealedAsHandle()
       if (!classified.isErasedTypeArgument()) {

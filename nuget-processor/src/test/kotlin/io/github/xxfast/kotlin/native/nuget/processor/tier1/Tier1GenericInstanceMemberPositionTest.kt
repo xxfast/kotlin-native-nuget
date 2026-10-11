@@ -555,4 +555,44 @@ class Tier1GenericInstanceMemberPositionTest {
       "expected no Kotlin setter for a generic value class element",
     )
   }
+
+  /**
+   * An interface reached ONLY as the type argument of a member-position instantiation is spelled
+   * `ISighting` and read through `FromHandle<ISighting>`, so it needs the backing wrapper and
+   * `Factories` key a planned position gives it (ADR-173's erased-position walk, which covered a
+   * top-level return and a property only).
+   */
+  @Test
+  fun `an interface reached only inside a member-position instantiation is materialisable`() {
+    val reached: Tier1Result = Tier1Harness.run(
+      """
+      package tier1.reach
+
+      class Box<T>(val value: T)
+
+      interface Sighting { val name: String }
+
+      interface Nest { val size: Int }
+
+      interface Burrow { val depth: Int }
+
+      class Kennel {
+        fun seen(): Box<Sighting> = TODO()
+        fun put(box: Box<Nest>): Int = 0
+        fun deep(): Box<Box<Burrow>> = TODO()
+      }
+      """.trimIndent(),
+      processorOptions = mapOf("nuget.rootPackage" to "tier1"),
+    )
+    val cs: String = reached.generatedCSharp.withoutDocComments()
+    listOf("Sighting", "Nest", "Burrow").forEach { name ->
+      assertContains(cs, "public sealed class $name : I$name", message = "no wrapper for $name")
+      assertContains(
+        cs,
+        "[typeof(global::Interop.Reach.I$name)] = " +
+          "static handle => new global::Interop.Reach.$name(handle, out _)",
+        message = "no I$name factory key",
+      )
+    }
+  }
 }

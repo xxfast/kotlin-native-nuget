@@ -545,6 +545,14 @@ The [`SharedFlow` surface](coroutines-and-flow.md#shared-flow-emit) (`ReplayCach
 - Row 8s, `MutableSharedFlow_ValueClassElement_EmitsAndReplayCache_ReturnsToBaseline`: a value-class
   element emitted by its underlying and read back through `ReplayCache`.
 
+A `Flow` or `StateFlow` held as a generic type argument ([A flow inside a generic
+class](coroutines-and-flow.md#flow-type-argument)) mints a holder per `.Value` read that owns a flow
+handle and its own scope. `BoxedFlow_CollectAndDispose_ReturnsToBaseline` covers a collection run to
+completion, an enum element and an enumerator disposed mid-collection;
+`BoxedFlow_EachValueReadMintsAFreshHolder_ReturnsToBaseline` covers repeated reads;
+`BoxedFlow_OwnerOrHolderDisposedMidCollection_ReturnsToBaseline` disposes the producing owner and
+then the holder while a never-ending collection is parked.
+
 | Row | Test | Pins |
 |---|---|---|
 | 16 | `UndisposedClassWrapper_IsReleasedByTheGc` | a class wrapper |

@@ -187,6 +187,7 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("        };")
   appendLine()
   helper.enumBoxers.forEach { boxer -> renderDllImport(boxer.boxImport) }
+  helper.flowArgumentImports.forEach { import -> renderDllImport(import) }
   appendLine("        internal static T Materialize<T>(IntPtr handle)")
   appendLine("        {")
   // ADR-171: `T = V?` is `Nullable<V>`, which never equals the `typeof(V)` key.

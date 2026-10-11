@@ -412,6 +412,99 @@ public class LiveHandleTests
     }
 
     [Fact]
+    public async Task BoxedFlow_CollectAndDispose_ReturnsToBaseline()
+    {
+        // ADR-208 part E: `box.Value` over a `Flow` / `StateFlow` type argument is a holder that
+        // owns the flow's handle AND the scope its collections run on. A collection run to
+        // completion, a `StateFlow.Value` read, an enum element per emission, and an enumerator
+        // disposed mid-collection ahead of its holder must each come back to baseline.
+        await AssertNoLeakAsync(async () =>
+        {
+            using var radio = new BoxRadio();
+            using (Box<KotlinFlow<int>> box = radio.Ticks())
+            using (KotlinFlow<int> ticks = box.Value)
+            {
+                int sum = 0;
+                await foreach (int tick in ticks) sum += tick;
+                Assert.Equal(6, sum);
+            }
+            using (Box<KotlinFlow<Mood>> box = radio.Moods())
+            using (KotlinFlow<Mood> moods = box.Value)
+            {
+                var seen = new List<Mood>();
+                await foreach (Mood mood in moods) seen.Add(mood);
+                Assert.Equal(new[] { Mood.Sleepy, Mood.Grumpy }, seen);
+            }
+            using (Box<KotlinStateFlow<Mood>> box = radio.Mood())
+            using (KotlinStateFlow<Mood> mood = box.Value)
+            {
+                Assert.Equal(Mood.Sleepy, mood.Value);
+            }
+            using (Box<KotlinFlow<int>> box = radio.Endless())
+            using (KotlinFlow<int> endless = box.Value)
+            {
+                await using IAsyncEnumerator<int> listener = endless.GetAsyncEnumerator();
+                Assert.True(await listener.MoveNextAsync());
+            }
+        });
+    }
+
+    [Fact]
+    public void BoxedFlow_EachValueReadMintsAFreshHolder_ReturnsToBaseline()
+    {
+        // ADR-208 part E: every `box.Value` read mints a fresh holder (a fresh flow `StableRef`
+        // and a fresh scope), so N reads need N disposes and nothing is shared between them. No
+        // collection is started: the scope is created with the holder, not with the first collect.
+        AssertNoLeak(() =>
+        {
+            using var radio = new BoxRadio();
+            using Box<KotlinFlow<int>> ticks = radio.Ticks();
+            using Box<KotlinStateFlow<int>> volume = radio.Volume;
+            for (int read = 0; read < 8; read++)
+            {
+                using KotlinFlow<int> flow = ticks.Value;
+                using KotlinStateFlow<int> level = volume.Value;
+                Assert.Equal(3, level.Value);
+            }
+        });
+    }
+
+    [Fact]
+    public async Task BoxedFlow_OwnerOrHolderDisposedMidCollection_ReturnsToBaseline()
+    {
+        // ADR-208 part E: a never-completing boxed flow, abandoned two ways. First the PRODUCING
+        // owner is disposed mid-collection: the collection is no child of the owner's scope, so
+        // the owner's drain returns and the collection is ended by its enumerator. Then the
+        // HOLDER is disposed mid-collection: its own scope is cancelled, which ends the
+        // collection, and the enumerator is disposed last.
+        await AssertNoLeakAsync(async () =>
+        {
+            var radio = new BoxRadio();
+            Assert.Equal(3, await radio.WarmUpAsync());
+            using (Box<KotlinFlow<int>> box = radio.Endless())
+            using (KotlinFlow<int> endless = box.Value)
+            {
+                IAsyncEnumerator<int> listener = endless.GetAsyncEnumerator();
+                Assert.True(await listener.MoveNextAsync());
+                await radio.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+                await listener.DisposeAsync();
+            }
+
+            using var second = new BoxRadio();
+            using (Box<KotlinFlow<int>> box = second.Endless())
+            {
+                KotlinFlow<int> endless = box.Value;
+                IAsyncEnumerator<int> listener = endless.GetAsyncEnumerator();
+                Assert.True(await listener.MoveNextAsync());
+                endless.Dispose();
+                Task<bool> ended = listener.MoveNextAsync().AsTask();
+                Assert.False(await ended.WaitAsync(TimeSpan.FromSeconds(10)));
+                await listener.DisposeAsync();
+            }
+        });
+    }
+
+    [Fact]
     public void GenericSealed_CSharpBuiltArmsPassedBack_ReturnToBaseline()
     {
         // ADR-199: an arm the consumer constructs mints its handle in the C# constructor and lends

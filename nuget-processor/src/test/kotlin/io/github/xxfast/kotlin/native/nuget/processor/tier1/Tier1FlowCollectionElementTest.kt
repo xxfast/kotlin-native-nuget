@@ -445,7 +445,7 @@ class Tier1FlowCollectionElementTest {
       "internal static void ReleaseAbandoned(object? value)",
       "if (!_channel.Writer.TryWrite(value)) _release?.Invoke(value);",
       "while (_channel.Reader.TryRead(out T? abandoned)) _release(abandoned);",
-      ": base(startCollect, read, ownedHandle, release)",
+      ": base(startCollect, read, ownedHandle, release, ownedScope)",
     ).filterNot(csharp::contains)
     assertTrue(
       missing.isEmpty(),

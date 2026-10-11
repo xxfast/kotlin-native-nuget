@@ -29,7 +29,7 @@ Reverse-direction backlog items deferred by the 2026-10-07 triage (experimental 
 
 ### Deferred to 1.x
 
-Additive, so none of it forces a major; each stays in its phase below: `Flow` as a parameter or type argument, the wider `MutableStateFlow` surface, reverse exception fidelity, events, `ValueTask`, operators, indexers, arrays, generic interfaces, the crossing benchmark, the size gate, the leak-ladder rungs beyond what the disposal contract needs, `LibraryImport`, record classes.
+Additive, so none of it forces a major; each stays in its phase below: `Flow` as a parameter, the wider `MutableStateFlow` surface, reverse exception fidelity, events, `ValueTask`, operators, indexers, arrays, generic interfaces, the crossing benchmark, the size gate, the leak-ladder rungs beyond what the disposal contract needs, `LibraryImport`, record classes.
 
 ## Phase 1: Basic bridging
 
@@ -51,7 +51,8 @@ Complete.
 Complete.
 
 ## Phase 6: Async support
-- [ ] `Flow<T>` / `StateFlow<T>` as a generic type argument (`Box<Flow<String>>`) is a named skip: its prerequisite, a plain generic instantiation at a member position, shipped with ADR-208, and what remains is the `Flow`/`StateFlow` argument itself, which needs a handle-keyed collect export (ADR-194 Alternative 3 rejected a shared one) ([details](docs/backlog/flow-as-type-argument.md))
+
+Complete.
 
 ## Phase 7: Bidirectional support (C# → Kotlin)
 - [ ] `Flow<T>` / `StateFlow<T>` / suspend lambda (`suspend (T) -> R`) as a function parameter, including on sealed arms

@@ -87,10 +87,15 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   appendLine("        internal readonly Func<IntPtr, T> _read;")
   appendLine("        private readonly Action<T>? _release;")
   appendLine("        private NugetKotlinHandle _ownedHandle;")
+  // ADR-208 part E: a flow materialised from a type argument (`box.Value`) has no producing
+  // owner in hand, so it owns the scope its collections run on. A `NugetScopeHandle`, whose
+  // release cancels the scope first; every other construction passes none.
+  appendLine("        private NugetKotlinHandle _ownedScope;")
   appendLine()
-  appendLine("        internal KotlinFlow(NugetFlowCollectDelegate startCollect, Func<IntPtr, T>? read = null, NugetKotlinHandle? ownedHandle = null, Action<T>? release = null)")
+  appendLine("        internal KotlinFlow(NugetFlowCollectDelegate startCollect, Func<IntPtr, T>? read = null, NugetKotlinHandle? ownedHandle = null, Action<T>? release = null, NugetKotlinHandle? ownedScope = null)")
   appendLine("        {")
   appendLine("            _ownedHandle = ownedHandle ?? NugetKotlinHandle.Null;")
+  appendLine("            _ownedScope = ownedScope ?? NugetKotlinHandle.Null;")
   appendLine("            _startCollect = startCollect;")
   appendLine("            _read = read ?? NugetMarshal.FromHandle<T>;")
   appendLine("            _release = release;")
@@ -101,6 +106,9 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   appendLine()
   appendLine("        public void Dispose()")
   appendLine("        {")
+  // The scope first: its collections are cancelled before the flow they read is released.
+  appendLine("            NugetKotlinHandle scope = Interlocked.Exchange(ref _ownedScope, NugetKotlinHandle.Null);")
+  appendLine("            if (!scope.IsInvalid) scope.Dispose();")
   appendLine("            NugetKotlinHandle handle = Interlocked.Exchange(ref _ownedHandle, NugetKotlinHandle.Null);")
   appendLine("            if (!handle.IsInvalid) handle.Dispose();")
   appendLine("        }")
@@ -307,8 +315,8 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
     // ADR-187: the owned flow handle is the same `NugetKotlinHandle` the read and write lambdas
     // pass, so a dropped flow is released by the GC and a live one is kept alive by every call.
     appendLine()
-    appendLine("        internal KotlinStateFlow(NugetFlowCollectDelegate startCollect, Func<IntPtr> readValue, NugetKotlinHandle? ownedHandle = null, Func<IntPtr, T>? read = null, Action<T>? release = null)")
-    appendLine("            : base(startCollect, read, ownedHandle, release)")
+    appendLine("        internal KotlinStateFlow(NugetFlowCollectDelegate startCollect, Func<IntPtr> readValue, NugetKotlinHandle? ownedHandle = null, Func<IntPtr, T>? read = null, Action<T>? release = null, NugetKotlinHandle? ownedScope = null)")
+    appendLine("            : base(startCollect, read, ownedHandle, release, ownedScope)")
     appendLine("        {")
     appendLine("            _readValue = readValue;")
     appendLine("        }")

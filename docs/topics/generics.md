@@ -431,7 +431,8 @@ Kotlin object, as described in [An abstract class as a return type](interfaces-a
 These are skipped, named, instead of generating C# that fails to compile:
 
 - A type argument the bridge cannot read back: a collection (`Box<List<Int>>`), `Any`,
-  `ByteArray`, a lambda, an `object`, `Unit`, or a `Flow` or `StateFlow` (not supported yet).
+  `ByteArray`, a lambda, an `object` or `Unit`. A `Flow` or `StateFlow` argument binds; see
+  [A flow as a type argument](#a-flow-as-a-type-argument).
 - A projection (`Box<*>`, `Box<out Cat>`), since C# has none for a generic class.
 - A generic interface (`Shelf<String>`) and an inner class of a generic owner
   (`Tin<Int>.Latch`).
@@ -447,6 +448,15 @@ with `SKIPPED_UNIMPLEMENTABLE_INTERFACE`.
 
 A generic **sealed** hierarchy binds at the same positions; see
 [A generic sealed hierarchy](interfaces-abstract-sealed.md#generic-sealed-hierarchy).
+
+### A flow as a type argument {id="a-flow-as-a-type-argument"}
+
+`Box<Flow<Int>>` and `Box<StateFlow<Int>>` bind as `Box<KotlinFlow<int>>` and
+`Box<KotlinStateFlow<int>>`, including as a top-level function return. `box.Value` is a holder you
+`await foreach` and dispose, and every read of `.Value` returns a new one. The holder is read-only,
+and `Box<MutableStateFlow<T>>` binds as a read-only `KotlinStateFlow<T>`. See
+[A flow inside a generic class](coroutines-and-flow.md#flow-type-argument) for the example,
+disposal rules and what is skipped.
 
 ## Generic functions
 

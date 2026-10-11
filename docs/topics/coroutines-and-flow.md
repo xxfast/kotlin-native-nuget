@@ -889,6 +889,53 @@ A `null` element crossing `await foreach` is a genuine emission, not the end of 
 to a nullable `MutableStateFlow` are covered in [Settable `.Value`](#settable-value). A `suspend fun`
 returning a nullable `StateFlow` binds as described [above](#suspend-fun-returning-stateflow-t).
 
+## A flow inside a generic class {id="flow-type-argument"}
+
+A `Flow<E>` or `StateFlow<E>` can be the type argument of an exported generic class, at every
+position a generic class instantiation binds, including a top-level function return. `box.Value`
+is a `KotlinFlow<E>` or `KotlinStateFlow<E>` that you collect and dispose like any other flow
+holder:
+
+```kotlin
+class Box<T>(val value: T)
+
+class BoxRadio {
+  private val temper = MutableStateFlow(Mood.SLEEPY)
+
+  fun ticks(): Box<Flow<Int>> = Box(flowOf(1, 2, 3))
+  fun mood(): Box<StateFlow<Mood>> = Box(temper)
+}
+```
+
+```C#
+using var radio = new BoxRadio();
+using Box<KotlinFlow<int>> box = radio.Ticks();
+using KotlinFlow<int> ticks = box.Value;
+await foreach (int tick in ticks)
+    Console.WriteLine(tick);
+
+using Box<KotlinStateFlow<Mood>> moodBox = radio.Mood();
+using KotlinStateFlow<Mood> mood = moodBox.Value;
+Mood current = mood.Value;
+```
+
+Elements follow the same rules as a `Flow` member, so an enum, a value class, a collection, an
+interface, a nullable element and `ByteArray` all work. Three things differ from a `Flow` member:
+
+- **Each `.Value` read returns a new holder** over the same Kotlin flow. Dispose every one; each
+  `await foreach` still re-runs a cold flow from the start.
+- **The holder owns the scope its collections run on.** Disposing the holder cancels them.
+  Disposing the object that produced the box neither cancels them nor waits for them, so a
+  collection that never completes does not hang the owner's `DisposeAsync`. A holder you never
+  dispose keeps its collection running until it is finalized.
+- **It is read-only.** `Box<MutableStateFlow<T>>` binds as a read-only `KotlinStateFlow<T>` and the
+  build names the dropped setter. Handing a holder back into Kotlin
+  (`new Box<KotlinFlow<int>>(ticks)`) throws `NotSupportedException`.
+
+`Box<SharedFlow<E>>` binds as `KotlinFlow<E>`. A flow of a flow (`Box<Flow<Flow<Int>>>`), a lambda
+element, a star projection, an open `Box<Flow<T>>`, and a flow argument of a generic sealed type
+(`Outcome<Flow<Int>>`) are skipped with a diagnostic naming the member.
+
 ## Parameters on `Flow`, `StateFlow`, and `suspend` members {id="parameters-on-flow-stateflow-and-suspend-members"}
 
 A `List`/`Set`/`Map`, primitive, `String`, or class/object/sealed-type parameter on a `Flow`-,
@@ -1027,8 +1074,8 @@ members. A `Throwable`, `Exception` or `RuntimeException` parameter does bind, a
   `MutableStateFlow<T>` are not exposed (`CompareAndSet` and `Update` are; see [Atomic updates](#atomic-updates)).
 - A `suspend fun` returning `MutableStateFlow<T?>` or `MutableStateFlow<T>?`, and a top-level
   `suspend fun` returning `MutableStateFlow<T>`, bind a read-only holder.
-- `StateFlow<T>` or `Flow<T>` as a function parameter, or as a generic type argument, is not
-  supported.
+- `StateFlow<T>` or `Flow<T>` as a function parameter is not supported. As a generic type argument
+  it binds [read-only](#flow-type-argument).
 - A top-level non-`suspend` `fun f(): Flow<T>?` and an `object` or companion `Flow<T>?` member are
   skipped with a diagnostic, like their non-null forms.
 - A `Pair` or a nullable collection (`List<T>?`) as a `Flow`/`StateFlow` element is not supported.

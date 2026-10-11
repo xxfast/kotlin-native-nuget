@@ -24,6 +24,7 @@ import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Modifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardFlowArgumentKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.enumArmName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEnumArm
@@ -956,6 +957,17 @@ internal fun translate(
 
   if (tracker.suspendLambdaArities.isNotEmpty()) tracker.needsAsync = true
 
+  // ADR-208 part E: every closed flow type argument a position classified. Read here, after every
+  // member is translated, and ahead of the helper flags: a module can reach `KotlinFlow<T>` (and
+  // the scope its materialised holder owns) only through a box.
+  val flowArguments: List<CirFlowArgument> = classifier.closedFlowArguments.values.map { flow ->
+    tracker.needsFlow = true
+    if (flow.kind == ForwardFlowArgumentKind.STATE_FLOW) tracker.needsStateFlow = true
+    flow.collection?.let { collection -> tracker.trackCollection(collection) }
+    if (flow.bytes) tracker.needsBytes = true
+    flow.toCir(context.libraryName, context.symbols)
+  }
+
   if (tracker.needsFlow) tracker.needsAsync = true
 
   // ADR-209: `ReplayCache` reads through `NugetMarshal.ReadList`, and `SubscriptionCount` is a
@@ -1011,12 +1023,14 @@ internal fun translate(
       factories = factoryEntries(namespaces) +
           classifier.closedInstantiations.map { (type, construct) ->
             CirFactoryEntry(type, constructExpression = construct)
-          },
+          } +
+          flowArguments.map { flow -> flow.factory },
       includesFactorySlot = namespaces.any { namespace ->
         namespace.declarations.any { it is CirSealedClass && it.typeParameters.isNotEmpty() }
       },
       boxers = valueClassNames(namespaces),
       enumBoxers = enumBoxers(namespaces),
+      flowArgumentImports = flowArguments.flatMap { flow -> flow.imports },
     ),
   )
   if (bridgePlans.isNotEmpty()) helpers.add(CirBridgeHelper(context.libraryName, bridgePlans))

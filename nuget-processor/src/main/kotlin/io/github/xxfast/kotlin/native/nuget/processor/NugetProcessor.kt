@@ -30,6 +30,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirFile
 import io.github.xxfast.kotlin.native.nuget.processor.cir.KOTLIN_EXCEPTION_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.KotlinExceptionRow
 import io.github.xxfast.kotlin.native.nuget.processor.cir.withMethodTypeParameterConstraints
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addFlowArgumentExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.nugetMappedTypeFunction
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirRenderer
@@ -2370,16 +2371,27 @@ internal class NugetProcessor(
     // contributes each argument the classifier calls an interface -- the SAME classification
     // `csTypeArgument` spells `IFoo` with, so an interface is spelled at an erased position exactly
     // when this walk makes it reachable.
-    fun erasedInterfaceArguments(type: KSType?): List<String> {
+    // ADR-208: a generic class carrier is walked through, since its instantiation binds nested
+    // (`Box<Box<Squeaker>>`) and over a flow argument (`Box<Flow<Squeaker>>`, part E), whose
+    // element is read through the same backing wrapper. [lambdas] is off at the positions only a
+    // generic class reaches ([genericInstancePositionTypes]).
+    fun erasedInterfaceArguments(type: KSType?, lambdas: Boolean = true): List<String> {
       val expanded: KSType = type?.expandAliases() ?: return emptyList()
       val declaration: KSDeclaration = expanded.declaration
       val qualifiedName: String? = declaration.qualifiedName?.asString()
-      val erased: Boolean = qualifiedName in LAMBDA_TYPES ||
-          (declaration is KSClassDeclaration && declaration.typeParameters.isNotEmpty() &&
-              qualifiedName in exportedObjectHandles)
-      if (!erased) return emptyList()
-      return expanded.arguments.mapNotNull { argument ->
-        forwardClassifier.legacyFlowElementInterface(argument.type?.resolve())?.qualifiedName
+      val isLambda: Boolean = lambdas && qualifiedName in LAMBDA_TYPES
+      val isGenericClass: Boolean = declaration is KSClassDeclaration &&
+          declaration.typeParameters.isNotEmpty() && qualifiedName in exportedObjectHandles
+      if (!isLambda && !isGenericClass) return emptyList()
+      return expanded.arguments.flatMap { argument ->
+        val resolved: KSType? = argument.type?.resolve()
+        val direct: String? = forwardClassifier.legacyFlowElementInterface(resolved)?.qualifiedName
+        if (!isGenericClass) return@flatMap listOfNotNull(direct)
+        val flowElement: KSType? = legacyFlowElement(resolved)
+        listOfNotNull(
+          direct,
+          forwardClassifier.legacyFlowElementInterface(flowElement)?.qualifiedName,
+        ) + erasedInterfaceArguments(resolved, lambdas = false)
       }
     }
 
@@ -2398,6 +2410,27 @@ internal class NugetProcessor(
           .filter { property -> property.getVisibility() == Visibility.PUBLIC }
           .forEach { property -> yield(property.type.resolve()) }
       }
+    }
+
+    // ADR-208: a generic class instantiation binds at every member position, so an interface it
+    // carries (`fun seen(): Box<Sighting>`, `fun put(box: Box<Nest>)`) is spelled `ISighting` and
+    // read through `FromHandle<ISighting>` from positions [erasedPositionTypes] never walked: a
+    // function's parameters, and a member function's (and constructor's) whole signature. Walked
+    // for the generic-class carrier only, so a lambda there mints no wrapper it did not before.
+    fun genericInstancePositionTypes(): Sequence<KSType?> = sequence {
+      fun signatureOf(function: KSFunctionDeclaration): List<KSType?> =
+        listOf(function.returnType?.resolve()) +
+            function.parameters.map { parameter -> parameter.type.resolve() }
+
+      (allFunctions + extensionFunctions).forEach { function -> yieldAll(signatureOf(function)) }
+      val owners: List<KSClassDeclaration> = classes + objects + sealedClasses +
+          sealedClasses.flatMap { sealed -> sealed.getSealedSubclasses().toList() }
+      (owners + owners.flatMap { owner -> owner.nestedClassDeclarations().toList() })
+        .forEach { owner ->
+          owner.getDeclaredFunctions()
+            .filter { function -> function.getVisibility() == Visibility.PUBLIC }
+            .forEach { function -> yieldAll(signatureOf(function)) }
+        }
     }
 
     // ADR-176 (research Finding 7, verified by spike): the legacy suspend and Flow routes never
@@ -2462,12 +2495,15 @@ internal class NugetProcessor(
       }
       // ADR-173: an ERASED type-argument position reaches an interface too. A lambda return
       // (`(Squeaker) -> Squeaker`, plan-owned since the ADR-160 amendment but erased: its arguments
-      // are not a planned position) or a generic-class carrier (`Box<Squeaker>`, a legacy route)
+      // are not a planned position) or a generic-class carrier (`Box<Squeaker>`, ADR-208)
       // never names the interface as a plan position, yet C# spells the interface there and the
       // consumer hands its own implementation through `Wrap<T>` and reads it back through
       // `Materialize<T>`. So the interface needs its backing wrapper, its `Factories` entry and
       // its `NugetBridge` arm exactly as a planned position would give it.
       erasedPositionTypes().forEach { type -> erasedInterfaceArguments(type).forEach(::add) }
+      genericInstancePositionTypes().forEach { type ->
+        erasedInterfaceArguments(type, lambdas = false).forEach(::add)
+      }
     }
     // ADR-174 amendment: an async member inherited through a reachable `IDerived` is declared on
     // its super's `IBase`, as the sync route places it, so that super must carry it, i.e. be
@@ -3696,6 +3732,28 @@ internal class NugetProcessor(
     if (needsFlowSupport) builder.addImport("kotlinx.coroutines.flow", "collect")
 
     // ADR-127: `nuget_stateflow_collect` / `nuget_stateflow_value` moved to the runtime klib.
+
+    // ADR-208 part E: one handle-keyed collect export per closed flow type argument. Last, so
+    // every route above has classified its types; a sighting only the C# half makes fails the
+    // forward ABI contract (an import with no export) rather than a consumer's first collect.
+    builder.addFlowArgumentExports(forwardClassifier.closedFlowArguments.values, context.symbols)
+    ForwardDiagnosticSink.emit(
+      forwardClassifier.readOnlyMutableStateFlowArguments.map { (spelling, holder) ->
+        ForwardDiagnostic(
+          kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
+          symbol = holder.takeIf { declaration -> declaration.containingFile != null },
+          declaration = spelling,
+          reason = "its `.Value` setter is not generated because a MutableStateFlow held as a " +
+              "type argument of `${holder.simpleName.asString()}` has no write seam (the setter " +
+              "export is keyed on a member)",
+          hint = "the boxed flow is a read-only KotlinStateFlow; expose a function that writes " +
+              "the value instead",
+          // No owner: the holder class is declared whole, there is no C# hole to remark on.
+          owner = null,
+        )
+      },
+      logger,
+    )
 
     importReferencedRootPackageTypes(builder, rootPackageTypes)
     return builder.build()
