@@ -785,4 +785,293 @@ public class CollectabilityTests
             MarkerCollectedWithin(report.Hairball, TimeSpan.FromSeconds(5)),
             "the exception a suspend lambda threw on a Kotlin dispatcher thread stayed reachable after Kotlin caught it and RecoverAsync completed: NugetErrorNative._lastManagedFault still holds it on that thread, which never runs a C# export call site that would clear it");
     }
+
+    // ------------------------------------------------------------------------------------------
+    // The same stash, through the OTHER thunks that can fill it. The rows above throw inside a
+    // suspend lambda's Begin thunk. A fault can also arrive as a faulted `Task` (the End thunk
+    // rethrows it with `GetAwaiter().GetResult()` and stashes what it catches), and a `Flow<T>`
+    // parameter has a Begin and an End of its own (`NugetAsyncMoveNextBegin` / `...MoveNextEnd`).
+    //
+    // An End thunk never runs test code: the hairball is THROWN on a .NET pool thread, after a real
+    // `await`, and STASHED on whichever thread Kotlin resumed the coroutine on. So the stashing
+    // thread is observed through the one thing the catching thunk does with the exception besides
+    // stashing it, which is read its `Message` to build the Kotlin-side error. The first reader of
+    // `Message` is the stasher: nothing reads it between the `throw` and the thunk's `catch`.
+    //
+    // So these hairballs tattle on whoever picks them up first. Oreo and Mylo take turns coughing
+    // them up through one helper, so no lambda, iterator or state machine has a slot to hold one.
+    // ------------------------------------------------------------------------------------------
+
+    private sealed class StashReport
+    {
+        public WeakReference? Hairball;
+        public int CallerThread;
+        public int ThrowerThread;
+        public bool ThrowerIsPoolThread;
+        public int StashThread;
+        public bool StashIsPoolThread;
+        public bool CaughtWasOriginal;
+
+        public void NoteMessageRead()
+        {
+            int reader = Environment.CurrentManagedThreadId;
+            if (Interlocked.CompareExchange(ref StashThread, reader, 0) != 0) return;
+            StashIsPoolThread = Thread.CurrentThread.IsThreadPoolThread;
+        }
+    }
+
+    // Holds the report, never the other way round: the report's only reference back is weak.
+    private sealed class TattlingHairballException(string message, StashReport report) : Exception(message)
+    {
+        public override string Message
+        {
+            get
+            {
+                report.NoteMessageRead();
+                return base.Message;
+            }
+        }
+    }
+
+    // The hairball exists in this frame only, and this frame ends in the throw.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void CoughUp(StashReport report, string message)
+    {
+        var hairball = new TattlingHairballException(message, report);
+        report.Hairball = new WeakReference(hairball);
+        report.ThrowerThread = Environment.CurrentManagedThreadId;
+        report.ThrowerIsPoolThread = Thread.CurrentThread.IsThreadPoolThread;
+        throw hairball;
+    }
+
+    // What every End-route row has to show before its collectability means anything: the throw
+    // came after a real `await` (a pool thread, so it could only reach Kotlin as a faulted `Task`),
+    // and the thunk that caught and stashed it ran on a thread that is neither the thrower's, nor
+    // the caller's, nor the .NET pool's. That is a Kotlin dispatcher thread, the one the fix is for.
+    private static void AssertStashedByAnEndThunkOnADispatcherThread(StashReport report)
+    {
+        Assert.NotNull(report.Hairball);
+        Assert.True(report.ThrowerIsPoolThread, "the hairball was not thrown on a .NET pool thread, so it did not come after the await and did not travel as a faulted Task");
+        Assert.NotEqual(0, report.StashThread);
+        Assert.NotEqual(report.ThrowerThread, report.StashThread);
+        Assert.NotEqual(report.CallerThread, report.StashThread);
+        Assert.False(report.StashIsPoolThread, "the End thunk stashed the hairball on a .NET pool thread, not a Kotlin dispatcher thread");
+    }
+
+    // The Begin-route twin: the throw is synchronous, so the thrower IS the stasher, and it is a
+    // Kotlin dispatcher thread.
+    private static void AssertStashedByABeginThunkOnADispatcherThread(StashReport report)
+    {
+        Assert.NotNull(report.Hairball);
+        Assert.Equal(report.ThrowerThread, report.StashThread);
+        Assert.NotEqual(report.CallerThread, report.StashThread);
+        Assert.False(report.StashIsPoolThread, "the Begin thunk ran on a .NET pool thread, not a Kotlin dispatcher thread");
+    }
+
+    // The FAULTED TASK of a suspend lambda. `async`, and the throw is after a real `await`, so the
+    // Begin thunk returns normally and the fault reaches Kotlin through `NugetAsyncStringEnd`.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static Task<string> StartRecoveringAFaultedTask(Treatprep.TreatChef chef, StashReport report)
+    {
+        report.CallerThread = Environment.CurrentManagedThreadId;
+        return chef.RecoverAsync(async (treat, token) =>
+        {
+            await Task.Delay(1, token);
+            CoughUp(report, $"Mylo coughed up treat {treat}");
+            return "unreachable";
+        });
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<StashReport> RecoverAFaultedTask()
+    {
+        var report = new StashReport();
+        using var chef = new Treatprep.TreatChef("Mylo");
+
+        string recovered = await StartRecoveringAFaultedTask(chef, report);
+
+        Assert.StartsWith("recovered ", recovered);
+        Assert.Contains("Mylo coughed up treat 1", recovered);
+        return report;
+    }
+
+    [Fact]
+    public async Task ManagedFault_FromAFaultedTask_AndCaughtByKotlin_IsCollected()
+    {
+        StashReport report = await RecoverAFaultedTask();
+
+        AssertStashedByAnEndThunkOnADispatcherThread(report);
+        Assert.True(
+            MarkerCollectedWithin(report.Hairball!, TimeSpan.FromSeconds(5)),
+            "the exception a suspend lambda's Task faulted with stayed reachable after Kotlin caught it and RecoverAsync completed: the End thunk stashed it in NugetErrorNative._lastManagedFault on a Kotlin dispatcher thread and nothing cleared it there");
+    }
+
+    // The UNCAUGHT variant: Kotlin's `plate` lets the fault go, so the completion's fault arm takes
+    // the stashed original back (ADR-161) and the outer `Task` faults with that very object. This
+    // frame catches it, records only whether it WAS the original, and ends: its state machine is
+    // cleared once its last `MoveNext` has returned, so neither the faulted `Task` nor the caught
+    // exception outlives it. The row has to get off that `MoveNext`'s stack first; see its yield.
+    // `afterAwait` picks the thunk that stashes: End for a faulted `Task`, Begin for a lambda that
+    // throws before it has a `Task` to return.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static Task<string> StartPlatingAHairball(Treatprep.TreatChef chef, StashReport report, bool afterAwait)
+    {
+        report.CallerThread = Environment.CurrentManagedThreadId;
+        if (afterAwait)
+        {
+            return chef.PlateAsync(1, async (treat, token) =>
+            {
+                await Task.Delay(1, token);
+                CoughUp(report, $"Oreo coughed up treat {treat}");
+                return "unreachable";
+            });
+        }
+        return chef.PlateAsync(1, (treat, token) =>
+        {
+            CoughUp(report, $"Oreo coughed up treat {treat}");
+            return Task.FromResult("unreachable");
+        });
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<StashReport> PlateAHairball(bool afterAwait)
+    {
+        var report = new StashReport();
+        using var chef = new Treatprep.TreatChef("Oreo");
+
+        bool faulted = false;
+        try
+        {
+            await StartPlatingAHairball(chef, report, afterAwait);
+        }
+        catch (Exception caught)
+        {
+            faulted = true;
+            report.CaughtWasOriginal = ReferenceEquals(caught, report.Hairball?.Target);
+        }
+        Assert.True(faulted, "PlateAsync completed although its lambda faulted");
+        return report;
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ManagedFault_NotCaughtByKotlin_IsCollectedOnceTheFaultedTaskIsDropped(bool afterAwait)
+    {
+        StashReport report = await PlateAHairball(afterAwait);
+        // Load-bearing. Without a synchronization context (the NativeAOT runner has none) this
+        // continuation runs INLINE, inside the helper's last `MoveNext`, whose frame still has the
+        // slot its `catch` put the hairball in. The yield moves the rest of the row to a fresh
+        // stack, so that frame unwinds and the helper's state machine is cleared behind it.
+        await Task.Yield();
+
+        if (afterAwait) AssertStashedByAnEndThunkOnADispatcherThread(report);
+        else AssertStashedByABeginThunkOnADispatcherThread(report);
+        // The original came back, so the completion read the stash on the thread that filled it:
+        // a green row cannot be a row whose hairball is parked on some other thread's slot.
+        Assert.True(report.CaughtWasOriginal, "PlateAsync faulted with something other than the exception the lambda threw");
+        Assert.True(
+            MarkerCollectedWithin(report.Hairball!, TimeSpan.FromSeconds(5)),
+            "the exception a suspend lambda threw stayed reachable after PlateAsync faulted with it and the caller dropped both the Task and the exception");
+    }
+
+    // The `Flow<T>` PARAMETER route, End half. A compiler-written async iterator never throws out
+    // of `MoveNextAsync`: whatever its body throws, before or after an `await`, is captured into
+    // the `ValueTask<bool>` it returns. So the fault always crosses in `NugetAsyncMoveNextEnd`. The
+    // `await` before the throw is still there, so the thrower is provably not the stasher.
+    private static async IAsyncEnumerable<int> DripThenCoughUp(
+        StashReport report,
+        TaskCompletionSource closed,
+        [EnumeratorCancellation] CancellationToken token = default)
+    {
+        try
+        {
+            await Task.Delay(1, token);
+            yield return 1;
+            await Task.Delay(1, token);
+            CoughUp(report, "Mylo coughed into the fountain");
+        }
+        finally
+        {
+            closed.TrySetResult();
+        }
+    }
+
+    // The Begin half needs a hand-written enumerator, the only kind whose `MoveNextAsync` can throw
+    // on the thread that called it: the second pull throws inside `NugetAsyncMoveNextBegin` itself.
+    // A fresh enumerator per call, and no field anywhere that could hold the hairball.
+    private sealed class ChokedFountain(StashReport report, TaskCompletionSource closed) : IAsyncEnumerable<int>
+    {
+        public IAsyncEnumerator<int> GetAsyncEnumerator(CancellationToken cancellationToken = default) =>
+            new Spout(report, closed);
+
+        private sealed class Spout(StashReport report, TaskCompletionSource closed) : IAsyncEnumerator<int>
+        {
+            public int Current { get; private set; }
+
+            public ValueTask<bool> MoveNextAsync()
+            {
+                if (Current == 1) CoughUp(report, "Oreo coughed into the fountain");
+                Current++;
+                return new ValueTask<bool>(true);
+            }
+
+            public ValueTask DisposeAsync()
+            {
+                closed.TrySetResult();
+                return default;
+            }
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (Task<string> Recovering, Task Closed) StartRecoveringAFountain(
+        Trickle.WaterFountain fountain, StashReport report, bool synchronousThrow)
+    {
+        var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        report.CallerThread = Environment.CurrentManagedThreadId;
+        IAsyncEnumerable<int> drops = synchronousThrow
+            ? new ChokedFountain(report, closed)
+            : DripThenCoughUp(report, closed);
+        return (fountain.RecoverAsync(drops), closed.Task);
+    }
+
+    // Waits for the enumerator's own end as well as the call's: the queued dispose holds the
+    // enumeration, and with it the faulted step, until it has run. A bounded hold, not the stash.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<StashReport> RecoverAFountain(bool synchronousThrow, string hairball)
+    {
+        var report = new StashReport();
+        using var fountain = new Trickle.WaterFountain("Mylo");
+
+        (Task<string> recovering, Task closed) = StartRecoveringAFountain(fountain, report, synchronousThrow);
+        string recovered = await recovering;
+        await closed.WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.StartsWith("recovered after 1 ", recovered);
+        Assert.Contains(hairball, recovered);
+        return report;
+    }
+
+    [Fact]
+    public async Task ManagedFault_FromAFlowParameterIteratorThatThrowsMidStream_AndCaughtByKotlin_IsCollected()
+    {
+        StashReport report = await RecoverAFountain(synchronousThrow: false, "Mylo coughed into the fountain");
+
+        AssertStashedByAnEndThunkOnADispatcherThread(report);
+        Assert.True(
+            MarkerCollectedWithin(report.Hairball!, TimeSpan.FromSeconds(5)),
+            "the exception an IAsyncEnumerable iterator threw mid-stream stayed reachable after Kotlin caught it and RecoverAsync completed: NugetAsyncMoveNextEnd stashed it in NugetErrorNative._lastManagedFault on a Kotlin dispatcher thread and nothing cleared it there");
+    }
+
+    [Fact]
+    public async Task ManagedFault_FromAFlowParameterMoveNextThatThrowsSynchronously_AndCaughtByKotlin_IsCollected()
+    {
+        StashReport report = await RecoverAFountain(synchronousThrow: true, "Oreo coughed into the fountain");
+
+        AssertStashedByABeginThunkOnADispatcherThread(report);
+        Assert.True(
+            MarkerCollectedWithin(report.Hairball!, TimeSpan.FromSeconds(5)),
+            "the exception a hand-written MoveNextAsync threw stayed reachable after Kotlin caught it and RecoverAsync completed: NugetAsyncMoveNextBegin stashed it in NugetErrorNative._lastManagedFault on a Kotlin dispatcher thread and nothing cleared it there");
+    }
 }
