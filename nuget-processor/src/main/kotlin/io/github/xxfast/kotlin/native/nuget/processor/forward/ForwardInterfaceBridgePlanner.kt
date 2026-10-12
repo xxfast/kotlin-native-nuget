@@ -403,7 +403,7 @@ internal object ForwardInterfaceBridgePlanner {
     val result: ForwardBridgeType = bridgeType(returnType, classifier)
       ?: return refuse(
         "returns `${returnType.kotlinSpelling(keepProjections = true)}`, a type the bridge " +
-          "cannot carry",
+            "cannot carry",
         "return one of $CARRIED_TYPES",
       )
     val parameters: MutableList<ForwardBridgeParameter> = mutableListOf()
@@ -414,7 +414,7 @@ internal object ForwardInterfaceBridgePlanner {
         ?.takeIf { it.wire != ForwardBridgeWire.UNIT }
         ?: return refuse(
           "takes `$parameterName: ${declared.kotlinSpelling(keepProjections = true)}`, a type " +
-            "the bridge cannot carry",
+              "the bridge cannot carry",
           "take one of $CARRIED_TYPES",
         )
       parameters += ForwardBridgeParameter(parameterName, type)

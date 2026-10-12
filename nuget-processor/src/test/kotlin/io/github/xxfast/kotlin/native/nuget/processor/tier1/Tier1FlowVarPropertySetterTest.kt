@@ -256,10 +256,14 @@ class Tier1FlowVarPropertySetterTest {
   fun `every other hot flow var names its setter by its own type`() {
     assertSetterNamed("tier1.flowvar.Feeder.shared", hotReason("SharedFlow"), hotHint("Shared"))
     assertSetterNamed(
-      "tier1.flowvar.Feeder.level", hotReason("MutableStateFlow"), hotHint("Level"),
+      "tier1.flowvar.Feeder.level",
+      hotReason("MutableStateFlow"),
+      hotHint("Level"),
     )
     assertSetterNamed(
-      "tier1.flowvar.Feeder.calls", hotReason("MutableSharedFlow"), hotHint("Calls"),
+      "tier1.flowvar.Feeder.calls",
+      hotReason("MutableSharedFlow"),
+      hotHint("Calls"),
     )
     // ADR-071's write is the flow's `Value`, which is still there: only the property is get-only.
     assertEquals(

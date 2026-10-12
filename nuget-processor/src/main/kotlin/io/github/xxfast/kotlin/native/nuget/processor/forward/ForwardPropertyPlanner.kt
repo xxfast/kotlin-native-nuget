@@ -1434,9 +1434,11 @@ internal class ForwardPropertyPlanner(
       // its setter with nothing naming it: the silent partial skip ADR-075 rejects. Only where
       // the route binds the property: a refused element is named whole by its own walk, and a
       // generic class ([flowCarrier]) has no public C# property for "is read-only" to be true of.
-      val bound: Boolean = flowCarrier &&
-          classifier.legacyRefusedFlowElementShape(prop.type.resolve()) == null
-      if (bound && prop.isMutable && prop.hasPublicSetter()) {
+      val elementBound: Boolean =
+        classifier.legacyRefusedFlowElementShape(prop.type.resolve()) == null
+      val bound: Boolean = flowCarrier && elementBound
+      val hasPublicSetter: Boolean = prop.isMutable && prop.hasPublicSetter()
+      if (bound && hasPublicSetter) {
         droppedSetters.add(prop.droppedFlowSetter(symbol, type))
       }
       return

@@ -1718,12 +1718,16 @@ internal fun BridgeType.diagnosticTypeName(): String = when (this) {
   is BridgeType.Collection -> "Collection"
   // ADR-147 amendment: a bare `T` the bound alone made nullable reads as the author wrote it.
   // A nullable function type keeps its parentheses: `(Int) -> String?` is a nullable RESULT.
-  is BridgeType.Nullable -> when {
-    (type as? BridgeType.TypeParameter)?.nullableFromBound == true -> type.diagnosticTypeName()
-    type is BridgeType.Callback || type is BridgeType.AsyncCallback ||
-        type is BridgeType.ReturnedLambda -> "(${type.diagnosticTypeName()})?"
+  is BridgeType.Nullable -> {
+    val nullableFromBound: Boolean = (type as? BridgeType.TypeParameter)?.nullableFromBound == true
+    val isCallback: Boolean = type is BridgeType.Callback || type is BridgeType.AsyncCallback
+    val isLambda: Boolean = isCallback || type is BridgeType.ReturnedLambda
 
-    else -> "${type.diagnosticTypeName()}?"
+    when {
+      nullableFromBound -> type.diagnosticTypeName()
+      isLambda -> "(${type.diagnosticTypeName()})?"
+      else -> "${type.diagnosticTypeName()}?"
+    }
   }
   is BridgeType.SpecializedProtocol -> name
   // ADR-147: the parameter's own name, which is how the author spelled it -- the Kotlin one, not

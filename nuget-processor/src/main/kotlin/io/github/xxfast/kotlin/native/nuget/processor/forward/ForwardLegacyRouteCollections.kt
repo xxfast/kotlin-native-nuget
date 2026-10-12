@@ -1901,7 +1901,8 @@ private val SUSPEND_FUNCTION_TYPE_NAME = Regex("""kotlin\.coroutines\.SuspendFun
 /**
  * The keyword a function type's arrow spelling opens with: empty for a `kotlin.FunctionN`,
  * `suspend ` for a `kotlin.coroutines.SuspendFunctionN`, null for anything else. Spelling only, at
- * any arity: which function types a route BINDS is `LEGACY_CALLBACK_TYPES` / `SUSPEND_LAMBDA_TYPES`.
+ * any arity: which function types a route BINDS is `LEGACY_CALLBACK_TYPES` and
+ * `SUSPEND_LAMBDA_TYPES`.
  */
 private fun functionTypeKeyword(qualifiedName: String?): String? = when {
   qualifiedName == null -> null

@@ -100,7 +100,11 @@ class Tier1FunctionTypeDiagnosticSpellingTest {
     val lines: List<String> = result.kspWarnings.filter { line ->
       line.startsWith("[nuget:${kind.name}] ") && line.contains("$declaration: ")
     }
-    assertEquals(1, lines.size, "expected one ${kind.name} for $declaration; got ${result.kspWarnings}")
+    assertEquals(
+      1,
+      lines.size,
+      "expected one ${kind.name} for $declaration; got ${result.kspWarnings}",
+    )
     return lines.single()
   }
 
@@ -159,12 +163,14 @@ class Tier1FunctionTypeDiagnosticSpellingTest {
     val input: ForwardDiagnosticKind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT
 
     assertContains(
-      diagnostic(input, "Chef.maybe"), "but not prepare: (suspend (Int) -> String)?. ",
+      diagnostic(input, "Chef.maybe"),
+      "but not prepare: (suspend (Int) -> String)?. ",
     )
     assertContains(diagnostic(input, "Chef.initial"), "but not pick: suspend (Int) -> Char. ")
     // The spelling does not stop at the arity the route binds.
     assertContains(
-      diagnostic(input, "Chef.crowd"), "but not pick: suspend (Int, Int, Int, Int) -> Int. ",
+      diagnostic(input, "Chef.crowd"),
+      "but not pick: suspend (Int, Int, Int, Int) -> Int. ",
     )
   }
 
@@ -182,10 +188,12 @@ class Tier1FunctionTypeDiagnosticSpellingTest {
 
     val nullable: String = diagnostic(returned, "Chef.makeNullable")
     assertContains(
-      nullable, "its nullable return type `(suspend (Int) -> String)?` has no supported wire",
+      nullable,
+      "its nullable return type `(suspend (Int) -> String)?` has no supported wire",
     )
     assertContains(
-      nullable, "the nullable return type `(suspend (Int) -> String)?` has no wire at a return",
+      nullable,
+      "the nullable return type `(suspend (Int) -> String)?` has no wire at a return",
     )
     assertContains(
       diagnostic(returned, "Chef.pairOut"),
