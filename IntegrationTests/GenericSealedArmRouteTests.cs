@@ -3,14 +3,15 @@ using TestLibrary.Outcome;
 namespace IntegrationTests;
 
 /// <summary>
-/// ADR-124's flow route on the arms of a generic sealed hierarchy (ADR-199). A generic arm has no
-/// bare spelling on either half: the Kotlin export reads <c>Dish.Hot&lt;Any?&gt;</c>, and the C#
-/// disposed guard names <c>Dish.Hot&lt;T&gt;</c>. The generic base projects no flow member
-/// (ADR-147), so <c>Served</c> is each arm's.
+/// The legacy routes keyed to the arms of a generic sealed hierarchy (ADR-199): ADR-124's flow
+/// route and ADR-116's three callback routes. A generic arm has no bare spelling on either half:
+/// the Kotlin export reads <c>Dish.Hot&lt;Any?&gt;</c>, and the C# disposed guard names
+/// <c>Dish.Hot&lt;T&gt;</c>. The generic base projects no flow member (ADR-147), so <c>Served</c>
+/// is each arm's.
 ///
 /// Oreo's dinner is served hot. Mylo licked his plate bare.
 /// </summary>
-public class GenericSealedFlowTests
+public class GenericSealedArmRouteTests
 {
     [Fact]
     public async Task GenericArm_FlowDeclaredOnTheGenericBase_Collects()
@@ -102,5 +103,67 @@ public class GenericSealedFlowTests
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.DeclaredOnly));
         Assert.NotNull(typeof(Dish.Hot<int>).GetProperty("Served"));
         Assert.NotNull(typeof(Dish.Bare<int>).GetProperty("Served"));
+    }
+
+    // --- Callback routes --------------------------------------------------------------------
+
+    private sealed class Regular : IDiner
+    {
+        public List<int> Courses { get; } = [];
+        public void OnPlated(int course) => Courses.Add(course);
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public async Task GenericArm_PerCallLambda_InvokesTheCallbackPerElement()
+    {
+        await using var oreo = new Dish.Hot<string>("tuna");
+
+        var letters = new List<char>();
+        oreo.Spell(letters.Add);
+
+        Assert.Equal(['t', 'u', 'n', 'a'], letters);
+    }
+
+    [Fact]
+    public async Task GenericArm_StoredCallbackPair_FiresUntilTheSubscriptionIsDisposed()
+    {
+        await using var oreo = new Dish.Hot<string>("tuna");
+        var rung = new List<int>();
+
+        IDisposable bell = oreo.AddBell(rung.Add);
+        Assert.Equal(1, oreo.Plate(1));
+        bell.Dispose();
+        Assert.Equal(0, oreo.Plate(2));
+
+        Assert.Equal([1], rung);
+    }
+
+    [Fact]
+    public async Task GenericArm_InterfaceBridgePair_FiresUntilTheSubscriptionIsDisposed()
+    {
+        await using var oreo = new Dish.Hot<int>(7);
+        var mylo = new Regular();
+
+        IDisposable seat = oreo.AddDiner(mylo);
+        Assert.Equal(1, oreo.Plate(1));
+        seat.Dispose();
+        Assert.Equal(0, oreo.Plate(2));
+
+        Assert.Equal([1], mylo.Courses);
+    }
+
+    [Fact]
+    public async Task DisposedGenericArm_Subscribe_ThrowsObjectDisposedNamingTheArm()
+    {
+        var oreo = new Dish.Hot<string>("tuna");
+        await oreo.DisposeAsync();
+
+        ObjectDisposedException bell = Assert.Throws<ObjectDisposedException>(() => oreo.AddBell(_ => { }));
+        ObjectDisposedException seat =
+            Assert.Throws<ObjectDisposedException>(() => oreo.AddDiner(new Regular()));
+
+        Assert.Equal("Hot", bell.ObjectName);
+        Assert.Equal("Hot", seat.ObjectName);
     }
 }

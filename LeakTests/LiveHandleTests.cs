@@ -5611,4 +5611,60 @@ public class LiveHandleTests
             }
         });
     }
+
+    private sealed class ProbeDiner : Outcomes.IDiner
+    {
+        public int Courses { get; private set; }
+        public void OnPlated(int course) => Courses += course;
+        public void Dispose() { }
+    }
+
+    // ADR-116's per-call lambda route on a generic sealed arm (ADR-199): one `Char` crossing per
+    // invocation, nothing retained once the call returns.
+    [Fact]
+    public async Task GenericSealedArm_PerCallLambda_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await using var oreo = new Outcomes.Dish.Hot<string>("tuna");
+            int letters = 0;
+            oreo.Spell(_ => letters++);
+            Assert.Equal(4, letters);
+        });
+    }
+
+    // The stored-callback pair on the same arm: subscribe, fire, unsubscribe. The Kotlin bridge
+    // lambda the subscription holds must be released by `Dispose()`, and a fire after it must not
+    // reach the listener.
+    [Fact]
+    public async Task GenericSealedArm_StoredCallbackPair_SubscribeFireUnsubscribe_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await using var oreo = new Outcomes.Dish.Hot<string>("tuna");
+            int rung = 0;
+            IDisposable bell = oreo.AddBell(course => rung += course);
+            Assert.Equal(1, oreo.Plate(3));
+            bell.Dispose();
+            Assert.Equal(0, oreo.Plate(5));
+            Assert.Equal(3, rung);
+        });
+    }
+
+    // And the interface-bridge pair: the bridge object Kotlin holds for the C# listener goes with
+    // the subscription.
+    [Fact]
+    public async Task GenericSealedArm_InterfaceBridgePair_SubscribeFireUnsubscribe_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await using var oreo = new Outcomes.Dish.Hot<int>(7);
+            var mylo = new ProbeDiner();
+            IDisposable seat = oreo.AddDiner(mylo);
+            Assert.Equal(1, oreo.Plate(3));
+            seat.Dispose();
+            Assert.Equal(0, oreo.Plate(5));
+            Assert.Equal(3, mylo.Courses);
+        });
+    }
 }

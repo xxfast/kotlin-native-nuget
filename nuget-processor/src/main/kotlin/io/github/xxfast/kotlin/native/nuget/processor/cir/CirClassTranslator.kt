@@ -3388,8 +3388,8 @@ internal fun translateSealedClass(
       val storedCallbackMembers: List<CirMember> =
         subclass.forwardArmStoredCallbackPairs(classifier).mapNotNull { (addMethod, removeMethod) ->
           translateStoredCallbackMethod(
-            addMethod, removeMethod, libraryName, subPrefix, subName, exportedTypes, tracker,
-            context,
+            addMethod, removeMethod, libraryName, subPrefix,
+            subclass.armNameofSpelling(cls, subName), exportedTypes, tracker, context,
           )
         }
 
@@ -3398,10 +3398,11 @@ internal fun translateSealedClass(
           .mapNotNull { (addMethod, removeMethod) ->
             // The arm's own C# name, not the base's: it lands in the subscribe body's
             // `ObjectDisposedException(nameof(...))`, where the base's name compiles (the arm is
-            // nested inside it) and misnames the owner of the handle that was disposed.
+            // nested inside it) and misnames the owner of the handle that was disposed. ADR-199:
+            // with the arm's own type parameters, since `nameof(Hot)` is CS0305 inside `Hot<T>`.
             translateInterfaceBridgeMethod(
-              addMethod, removeMethod, libraryName, subPrefix, subName, tracker, classifier,
-              context,
+              addMethod, removeMethod, libraryName, subPrefix,
+              subclass.armNameofSpelling(cls, subName), tracker, classifier, context,
             )
           }
 

@@ -3807,8 +3807,10 @@ internal class NugetProcessor(
           val armLambdaMethods: List<KSFunctionDeclaration> =
             subclass.forwardArmLambdaMethods(forwardClassifier)
           if (armLambdaMethods.isEmpty()) return@guardDeclaration
+          // ADR-199: the erased receiver of a generic arm, as on the arm flow route above.
+          val armReceiver: String = subclass.forwardOwnerTypeName() ?: subQualifiedName
           armLambdaMethods.forEach { method ->
-            builder.addLambdaParamMethodExport(method, subQualifiedName, armPrefix)
+            builder.addLambdaParamMethodExport(method, armReceiver, armPrefix)
           }
         }
       }
@@ -3832,12 +3834,14 @@ internal class NugetProcessor(
           val bridgePairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
             subclass.forwardArmInterfaceBridgePairs(forwardClassifier)
           if (storedPairs.isEmpty() && bridgePairs.isEmpty()) return@guardDeclaration
+          // ADR-199: the erased receiver of a generic arm, as on the arm flow route above.
+          val armReceiver: String = subclass.forwardOwnerTypeName() ?: subQualifiedName
           storedPairs.forEach { (addMethod, removeMethod) ->
-            builder.addStoredCallbackExports(addMethod, removeMethod, subQualifiedName, armPrefix)
+            builder.addStoredCallbackExports(addMethod, removeMethod, armReceiver, armPrefix)
           }
           bridgePairs.forEach { (addMethod, removeMethod) ->
             builder.addInterfaceBridgeExports(
-              addMethod, removeMethod, subQualifiedName, armPrefix, forwardClassifier,
+              addMethod, removeMethod, armReceiver, armPrefix, forwardClassifier,
             )
           }
         }
