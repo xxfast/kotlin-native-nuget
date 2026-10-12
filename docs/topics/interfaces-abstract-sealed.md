@@ -1621,6 +1621,8 @@ member declared on a **generic** base binds on each arm, not on the base: `Dish<
 base (see [Async members on a sealed base and its arms](#sealed-method-suspend-generated-c)).
 
 ```kotlin
+interface Diner { fun onPlated(course: Int) }
+
 sealed class Dish<out T> {
   val served: Flow<Int> = flowOf(1, 2, 3)  // declared on the generic base
 

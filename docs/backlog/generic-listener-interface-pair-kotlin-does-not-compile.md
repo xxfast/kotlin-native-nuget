@@ -15,3 +15,4 @@ The same pair with `Ear<T>` on a generic arm (`Hot<T>`) fails the same way. The 
 
 - **Cause.** `exports/InterfaceBridgeExports.kt` spells the listener interface by its bare name, while the C# half drops the member, so the two halves disagree.
 
+- **Coverage gap.** The interface-bridge pair has no generic-listener fixture; the [ADR-147](../adr/147-generic-class-methods.md) 2026-10-03 amendment covers a non-generic listener on a generic class only.
