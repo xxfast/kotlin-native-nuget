@@ -1409,7 +1409,8 @@ arm and uses the base's scope, so `await using` on the base reference drains it 
 moves to the base. C# source keeps compiling, since `loaf.AreaAsync()` now resolves to the inherited
 `Shape.AreaAsync`. A consumer compiled against an earlier package must be rebuilt.
 
-A generic sealed base or arm skips its `suspend` members, like any generic class; see [A generic sealed hierarchy](#generic-sealed-hierarchy).
+A generic sealed base does not carry these members, and an arm with its own type parameter skips its
+`suspend` members; see [Members of a generic arm](#generic-sealed-arm-members).
 
 #### A `suspend fun` returning the sealed base {id="sealed-method-suspend-base-generated-c"}
 
@@ -1437,8 +1438,9 @@ Assert.Equal(7, Assert.IsType<Job.Running>(result).Progress);
 A `Flow<T>`/`StateFlow<T>` an arm declares, at a property or a method return, binds the same shape
 an ordinary class's flow member does, see [Coroutines and Flow](coroutines-and-flow.md), under the
 arm's own name. A flow member the sealed base itself declares binds on the base instead, see
-[above](#sealed-method-suspend-generated-c). Suspend and flow members share the base's one scope
-and `DisposeAsync`, not two.
+[above](#sealed-method-suspend-generated-c), unless the base is generic: then it binds on each arm
+([Members of a generic arm](#generic-sealed-arm-members)). Suspend and flow members share the base's
+one scope and `DisposeAsync`, not two.
 
 #### Lambda parameters on a sealed arm {id="sealed-lambda-generated-c"}
 
@@ -1609,8 +1611,79 @@ declared without it (`Outcome.Both<T>`), since C# cannot recover `U` from an `Ou
 constructor and every member that names `U` are skipped, so you receive a `Both` from Kotlin but
 cannot construct one.
 
-A `suspend`, `Flow`, or stored-callback member declared on a generic sealed base or arm is skipped,
-like the same member on any [generic class](generics.md#limitations).
+#### Members of a generic arm {id="generic-sealed-arm-members"}
+
+An arm that forwards the base's type parameter (`Hot<T> : Dish<T>`) binds its flow members, per-call
+lambda parameters, stored-callback pairs and interface-listener pairs. Each behaves as it does on an
+ordinary class, and the arm owns the scope its flow members collect on, so `await using` it. A flow
+member declared on a **generic** base binds on each arm, not on the base: `Dish<T>` carries no
+`Served`, so match to an arm before collecting. A non-generic sealed base puts the same member on the
+base (see [Async members on a sealed base and its arms](#sealed-method-suspend-generated-c)).
+
+```kotlin
+sealed class Dish<out T> {
+  val served: Flow<Int> = flowOf(1, 2, 3)  // declared on the generic base
+
+  class Hot<T>(val item: T) : Dish<T>() {
+    val portions: Flow<T> = flowOf(item, item)
+    val heat: MutableStateFlow<Int> = MutableStateFlow(60)
+    fun wafts(times: Int): Flow<Int> = flow { repeat(times) { index -> emit(index) } }
+    fun spell(cb: (Char) -> Unit) = item.toString().forEach(cb)
+    fun addBell(listener: (Int) -> Unit) { /* ... */ }
+    fun removeBell(listener: (Int) -> Unit) { /* ... */ }
+    fun addDiner(listener: Diner) { /* ... */ }
+    fun removeDiner(listener: Diner) { /* ... */ }
+  }
+
+  class Bare(val crumbs: Int) : Dish<Nothing>() {
+    val drips: StateFlow<Int> = MutableStateFlow(crumbs)
+    suspend fun wipe(): Int = crumbs
+  }
+}
+```
+
+```C#
+public static class Dish
+{
+    public sealed class Hot<T> : Dish<T>, IAsyncDisposable
+    {
+        public KotlinFlow<T> Portions { get; }
+        public KotlinMutableStateFlow<int> Heat { get; }
+        public KotlinFlow<int> Served { get; }
+        public KotlinFlow<int> Wafts(int times);
+        public void Spell(Action<char> cb);
+        public IDisposable AddBell(Action<int> listener);
+        public IDisposable AddDiner(IDiner listener);
+    }
+}
+```
+
+```C#
+await using var oreo = new Dish.Hot<string>("tuna");
+await foreach (int course in oreo.Served) { /* 1, 2, 3 */ }
+await foreach (string portion in oreo.Portions) { /* "tuna", "tuna" */ }
+oreo.Heat.Value = 45;
+
+IDisposable bell = oreo.AddBell(course => Console.WriteLine(course));
+bell.Dispose();  // stops the callback
+```
+
+`Bare` is not generic in Kotlin, but C# declares it as `Dish.Bare<T>` (like `Err` above), and every member of
+it binds, `suspend` ones included: `await mylo.WipeAsync()`.
+
+Two kinds of member on an arm with a Kotlin type parameter are skipped, named
+`SKIPPED_UNSUPPORTED_COMBINATION`, and the rest of the arm still binds:
+
+- **A `suspend` member.** Declaring `suspend fun cool()` on `Hot<T>`, taking a `suspend` lambda
+  (`suspend fun warm(cb: suspend (Int) -> Int)`), or overriding an abstract `suspend` member of the
+  generic base or of a generic sealed interface is reported as "it is a `suspend` member of a generic
+  class". Declare it on an arm that fixes the argument (`class Cold : Dish<Int>()` binds
+  `ThawAsync`), or on a non-generic class that wraps the hierarchy.
+- **A lambda whose parameter is the arm's `T`.** `fun withItem(cb: (T) -> Unit)` and an
+  `addTaste`/`removeTaste` pair over `(T) -> Unit` are reported as "it is a callback member of a
+  generic class". Kotlin hands the callback an erased `Any?`, which the generated code cannot turn
+  back into `T`. Use a payload that does not name `T` (`spell` takes a `Char`), or move the member to
+  a non-generic class. A lambda that returns `T` keeps its own `SKIPPED_UNSUPPORTED_RETURN`.
 
 ## Limitations {id="limitations"}
 
@@ -1649,7 +1722,9 @@ like the same member on any [generic class](generics.md#limitations).
   sees. See [A generic sealed hierarchy](#generic-sealed-hierarchy).
 - A generic method on an arm or a sealed base binds as a C# generic method; see
   [Generic methods on a class](generics.md#generic-methods). A `suspend` lambda parameter binds on
-  an arm as well, as does a `Flow<T>` parameter of a primitive or `String`, suspend or not; see
+  an arm as well (not on an arm with its own Kotlin type parameter, which skips any `suspend`
+  member, see [Members of a generic arm](#generic-sealed-arm-members)), as does a `Flow<T>`
+  parameter of a primitive or `String`, suspend or not; see
   [A `suspend` lambda as a parameter](coroutines-and-flow.md#suspend-lambda-parameter) and
   [A `Flow` as a parameter](coroutines-and-flow.md#flow-parameter).
 - A member whose C# name equals a type nested in the sealed base, or another arm's name
