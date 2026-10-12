@@ -148,9 +148,14 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   appendLine()
   appendLine("            NugetFlowOnNextCallback onNext = (itemPtr, isCancelled, userData) =>")
   appendLine("            {")
+  // The three TERMINAL arms (this cancelled one, `onComplete`, `onError`) clear the managed-fault
+  // stash, as the suspend completion closure does (`appendAsyncCompletionClosure`): a C# callback
+  // that threw on this Kotlin emitter thread and was caught by Kotlin (a `catch { }` operator)
+  // left its exception in the thread's `_lastManagedFault`, and no synchronous export returns
+  // here to clear it. Never the per-item arm, which is not the end of anything.
   appendLine(
     "                if (isCancelled != 0) { _channel.Writer.TryComplete(); " +
-        "callbacks.Release(); return; }"
+        "NugetErrorNative.ClearManagedFault(); callbacks.Release(); return; }"
   )
   // ADR-161: the read is a managed-to-native call plus a materialisation (`new T(handle)`, a
   // collection read, or `FromHandle<T>`, which has no branch for every element kind). It runs
@@ -180,6 +185,7 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   appendLine("            NugetFlowOnCompleteCallback onComplete = (userData) =>")
   appendLine("            {")
   appendLine("                _channel.Writer.TryComplete();")
+  appendLine("                NugetErrorNative.ClearManagedFault();")
   appendLine("                callbacks.Release();")
   appendLine("            };")
   appendLine()
@@ -198,6 +204,9 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   appendLine("                {")
   appendLine("                    _channel.Writer.TryComplete(ex);")
   appendLine("                }")
+  // After `BuildException`, which reads the stash to hand the original exception back (ADR-161);
+  // outside the `try`, so a failed materialisation clears it too.
+  appendLine("                NugetErrorNative.ClearManagedFault();")
   appendLine("                callbacks.Release();")
   appendLine("            };")
   appendLine()
