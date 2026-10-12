@@ -176,6 +176,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedFlowE
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameterShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParameterShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.asyncCallbackHolderType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.asyncKind
+import io.github.xxfast.kotlin.native.nuget.processor.forward.HOT_FLOW_INPUT_HINT
+import io.github.xxfast.kotlin.native.nuget.processor.forward.HOT_FLOW_INPUT_REASON
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardSkipPosition
 import io.github.xxfast.kotlin.native.nuget.processor.forward.skipReason
 import io.github.xxfast.kotlin.native.nuget.processor.forward.skipDetail
@@ -925,7 +928,11 @@ internal fun warnRefusedLegacyRouteMembers(
       add(
         shape.refusal?.let {
           refusedDependency(member, declaration, it, ForwardSkipPosition.INPUT, owner)
-        } ?: refusedParameter(member, declaration, "$name: ${shape.description}", owner),
+        } ?: refusedParameter(member, declaration, "$name: ${shape.description}", owner).let { named ->
+          // ADR-210: a hot flow at a parameter has its own sentence and remedy.
+          if (shape.hotFlow) named.copy(reason = HOT_FLOW_INPUT_REASON, hint = HOT_FLOW_INPUT_HINT)
+          else named
+        },
       )
       return
     }
@@ -2475,6 +2482,7 @@ internal class NugetProcessor(
       BridgeType.ByteArray,
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
+      is BridgeType.FlowSource,
       is BridgeType.ReturnedLambda,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,
@@ -3877,14 +3885,15 @@ internal class NugetProcessor(
     // its lambda and cleaner call. Last for the same reason as the line above: the legacy suspend
     // routes record their sightings on the classifier as they emit. Everything else the lambda
     // names is spelled fully qualified, so a module with no suspend lambda parameter gains nothing.
-    val legacyRoutesTakeAsyncCallbacks: Boolean = forwardClassifier.asyncCallbacks.isNotEmpty()
-    val plansTakeAsyncCallbacks: Boolean = callableCatalog.plans.any { plan ->
+    val legacyRoutesTakeAsyncParameters: Boolean =
+      forwardClassifier.asyncCallbacks.isNotEmpty() || forwardClassifier.flowSources.isNotEmpty()
+    val plansTakeAsyncParameters: Boolean = callableCatalog.plans.any { plan ->
       plan.publicSignature.parameters.any { parameter ->
-        parameter.type is BridgeType.AsyncCallback
+        parameter.type.asyncKind() != null
       }
     }
     val hasAsyncCallbackParameters: Boolean =
-      legacyRoutesTakeAsyncCallbacks || plansTakeAsyncCallbacks
+      legacyRoutesTakeAsyncParameters || plansTakeAsyncParameters
     if (hasAsyncCallbackParameters) {
       builder.addImport("kotlinx.cinterop", "reinterpret")
       builder.addImport("kotlinx.cinterop", "invoke")

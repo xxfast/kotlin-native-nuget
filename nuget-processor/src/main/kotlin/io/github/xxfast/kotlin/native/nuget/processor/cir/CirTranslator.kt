@@ -15,6 +15,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardGuardName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.guarded
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBoundInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncBegin
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncCurrent
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncEnd
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardCallbackDelegate
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
@@ -1074,7 +1075,15 @@ internal fun translate(
         .mapNotNull { parameter -> parameter.type as? BridgeType.AsyncCallback } +
         tracker.asyncCallbacks
       ).distinct()
-  if (tracker.callbackDelegates.isNotEmpty() || asyncCallbacks.isNotEmpty()) {
+  val flowSources: List<BridgeType.FlowSource> = (
+      callableCatalog.plans
+        .flatMap { plan -> plan.publicSignature.parameters }
+        .mapNotNull { parameter -> parameter.type as? BridgeType.FlowSource } +
+        tracker.flowSources
+      ).distinct()
+  if (tracker.callbackDelegates.isNotEmpty() || asyncCallbacks.isNotEmpty() ||
+    flowSources.isNotEmpty()
+  ) {
     helpers.add(
       CirCallbackDelegateHelper(
         tracker.callbackDelegates.distinctBy { it.name },
@@ -1082,6 +1091,8 @@ internal fun translate(
           .distinctBy { begin -> begin.name },
         asyncEnds = asyncCallbacks.map { callback -> callback.forwardAsyncEnd() }
           .distinctBy { end -> end.name },
+        asyncCurrents = flowSources.map { flow -> flow.forwardAsyncCurrent() }
+          .distinctBy { current -> current.name },
       ),
     )
   }

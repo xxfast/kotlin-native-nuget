@@ -471,7 +471,8 @@ internal fun ForwardCallableCatalogEntry.nameUnroutedPosition(
     symbol = symbol,
     reason = ForwardPlanSkipReason.UNROUTED_POSITION,
     node = node,
-    detail = reason.name,
+    // ADR-210: a hot flow at a parameter keeps the detail its own sentence is keyed on.
+    detail = if (detail == HOT_FLOW_INPUT_DETAIL) HOT_FLOW_INPUT_DETAIL else reason.name,
     position = position,
     parameter = parameter,
     // The structural producers (`method.typeParameters.isNotEmpty()`) are the only way a GENERIC
@@ -2043,6 +2044,10 @@ internal class ForwardCallablePlanner(
           (entry.node as? KSFunctionDeclaration)?.let { method ->
             method.modifiers.contains(Modifier.SUSPEND) || method.hasLegacyFlowReturn()
           } == true
+      val flowInputOffRoute: Boolean = entry.position == ForwardSkipPosition.INPUT &&
+          (entry.node as? KSFunctionDeclaration)?.let { method ->
+            !method.modifiers.contains(Modifier.SUSPEND) && !method.hasLegacyFlowReturn()
+          } == true
       val isUnrouted: Boolean =
         !entry.reason.droppedFromCSharp && !abstractOnAsyncRoute &&
             // ADR-118: the legacy suspend route is keyed to sealed arms now, so a SUSPEND skip on
@@ -2053,7 +2058,10 @@ internal class ForwardCallablePlanner(
             // emits it.
             entry.reason != ForwardPlanSkipReason.SUSPEND &&
             // ADR-124: and the same for the legacy Flow/StateFlow route, one issue later.
-            entry.reason != ForwardPlanSkipReason.FLOW_PROTOCOL &&
+            // ADR-210: except a Flow at a PARAMETER of a member no legacy route hosts (neither
+            // `suspend` nor Flow-returning). Nothing re-emits that one, so exempting it by reason
+            // dropped the member in silence (ADR-210 spike 1).
+            (entry.reason != ForwardPlanSkipReason.FLOW_PROTOCOL || flowInputOffRoute) &&
             // ADR-116 amendment (2026-09-11): the per-call lambda-parameter route (ADR-036) is
             // keyed to the arms too now, so its skip is a deferral again. The 2026-09-13 amendment
             // finished the reason off: the stored-callback (ADR-037) and interface-bridge
@@ -2899,9 +2907,7 @@ internal class ForwardCallablePlanner(
       )
     }
     val asyncSlots: List<ForwardAsyncSlots?> = mintAsyncSlots(
-      parameters.map { parameter ->
-        parameter.name to (parameter.type is BridgeType.AsyncCallback)
-      },
+      parameters.map { parameter -> parameter.name to parameter.type.asyncKind() },
     ) { base -> kotlin.mint(base) }
     val slotted: List<ForwardPublicParameter> = parameters.mapIndexed { index, parameter ->
       val callback: Boolean = parameter.type is BridgeType.Callback
@@ -3185,14 +3191,14 @@ internal class ForwardCallablePlanner(
     // data-class `copy`, an enum-arm box and the enum and value-class member routes keep today's
     // named skip.
     val misplacedAsync: Pair<String?, BridgeType>? = if (origin !in ASYNC_CALLBACK_ORIGINS) {
-      declared.firstOrNull { (_, type) -> type is BridgeType.AsyncCallback }
+      declared.firstOrNull { (_, type) -> type.asyncKind() != null }
         ?.let { (name, type) -> name to type }
     } else {
       null
     }
     if (misplacedAsync != null) {
       return ForwardCallableCatalogEntry.Skipped(
-        symbol, ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL, node = node,
+        symbol, requireNotNull(misplacedAsync.second.skipReason()), node = node,
         position = ForwardSkipPosition.INPUT,
         parameter = misplacedAsync.first,
       )
@@ -3229,7 +3235,9 @@ internal class ForwardCallablePlanner(
           ?: ineligibleType.collectionComponentDetail()
           ?: ineligibleType.unsupportedTypeDetail()
           // ADR-201: the declared throwable spelling, for THROWABLE's reason line.
-          ?: ineligibleType.throwableInputDetail(),
+          ?: ineligibleType.throwableInputDetail()
+          // ADR-210: a hot flow at a parameter, for its own sentence.
+          ?: ineligibleType.hotFlowInputDetail(),
         position = ForwardSkipPosition.INPUT,
         parameter = ineligible.first,
       )
@@ -3481,7 +3489,7 @@ internal class ForwardCallablePlanner(
     // ADR-210: Begin thunk, End thunk and key, then (on the export's first suspend lambda only)
     // the three parameter-independent release thunks. All BORROWED addresses: the C# context the
     // key names is released by the Kotlin holder's cleaner, not by a transfer rule.
-    is BridgeType.AsyncCallback -> asyncSlots.map { slot ->
+    is BridgeType.AsyncCallback, is BridgeType.FlowSource -> asyncSlots.map { slot ->
       ForwardAbiParameter(
         name = slot,
         wireType = ForwardAbiWireType.POINTER,
@@ -3895,6 +3903,7 @@ internal class ForwardCallablePlanner(
       is BridgeType.Nullable,
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
+      is BridgeType.FlowSource,
       is BridgeType.ReturnedLambda,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,
@@ -4041,6 +4050,7 @@ internal class ForwardCallablePlanner(
     is BridgeType.Nullable -> nullableResultShape(type)
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
     is BridgeType.Unsupported,
@@ -4179,6 +4189,7 @@ internal class ForwardCallablePlanner(
       is BridgeType.Nullable,
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
+      is BridgeType.FlowSource,
       is BridgeType.ReturnedLambda,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,
@@ -4351,6 +4362,7 @@ internal class ForwardCallablePlanner(
     is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -4410,6 +4422,7 @@ internal class ForwardCallablePlanner(
         is BridgeType.Nullable,
         is BridgeType.Callback,
         is BridgeType.AsyncCallback,
+        is BridgeType.FlowSource,
         is BridgeType.ReturnedLambda,
         is BridgeType.SpecializedProtocol,
         is BridgeType.RawKSType,
@@ -4585,6 +4598,8 @@ internal class ForwardCallablePlanner(
     // ADR-210: a suspend lambda binds wherever the plan reaches (the entry builder refuses the
     // origins that cannot carry it), stored or not: its lifetime is Kotlin-owned.
     is BridgeType.AsyncCallback -> null
+    // ADR-210: and a `Flow<T>` parameter, on the same terms.
+    is BridgeType.FlowSource -> null
 
     // ADR-106: Uuid is admissible at every input position, over the String wire.
     BridgeType.String, BridgeType.Char, BridgeType.Instant, BridgeType.Duration,
@@ -4696,6 +4711,7 @@ internal class ForwardCallablePlanner(
       // ADR-210: never minted nullable (`asyncCallbackOrNull` declines it), so this only answers
       // the default-widening probe: a defaulted suspend lambda stays required.
       is BridgeType.AsyncCallback -> ForwardPlanSkipReason.NULLABLE
+      is BridgeType.FlowSource -> ForwardPlanSkipReason.NULLABLE
 
       // ADR-088: `IFeedable?` is on this ADR's deferred list. The null-pointer ride is natural,
       // but it needs its own lowering in four emitter positions; until then the skip names the
@@ -4798,6 +4814,7 @@ internal class ForwardCallablePlanner(
     is BridgeType.Callback -> ForwardAbiWireType.POINTER
     // ADR-210: each of a suspend lambda's flat slots is an opaque address or key.
     is BridgeType.AsyncCallback -> ForwardAbiWireType.POINTER
+    is BridgeType.FlowSource -> ForwardAbiWireType.POINTER
     // ADR-160 amendment: the one OWNED handle a returned lambda crosses as.
     is BridgeType.ReturnedLambda -> ForwardAbiWireType.POINTER
     // ADR-107: the error-envelope pointer. Unreachable from a callable plan today (no shape and
@@ -4875,6 +4892,7 @@ internal class ForwardCallablePlanner(
     is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -4935,6 +4953,7 @@ internal fun BridgeType.sealedAsHandle(): BridgeType = when (this) {
   BridgeType.ByteArray,
   is BridgeType.Callback,
   is BridgeType.AsyncCallback,
+  is BridgeType.FlowSource,
   is BridgeType.ReturnedLambda,
   is BridgeType.RawKSType,
   is BridgeType.Unsupported,
@@ -4980,6 +4999,7 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
   // all, so the member skips named rather than half-binding.
   is BridgeType.Callback -> false
   is BridgeType.AsyncCallback -> false
+  is BridgeType.FlowSource -> false
 
   // ADR-160 amendment: a returned lambda binds at a top-level result only, never nested.
   is BridgeType.ReturnedLambda -> false
@@ -5064,6 +5084,7 @@ internal fun BridgeType.containsByteArray(): Boolean {
     is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -5297,6 +5318,7 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
   is BridgeType.BoundInterface,
   is BridgeType.Callback,
   is BridgeType.AsyncCallback,
+  is BridgeType.FlowSource,
   is BridgeType.ReturnedLambda,
   is BridgeType.SpecializedProtocol,
   is BridgeType.RawKSType,
@@ -5539,6 +5561,7 @@ internal fun BridgeType.unexportedDependencyDetail(): String? {
     is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -5612,6 +5635,7 @@ internal fun BridgeType.optInMarkerDetail(): String? {
     is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -5648,6 +5672,7 @@ internal fun BridgeType.undeclaredTypeDetail(): String? {
     is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -5716,6 +5741,7 @@ internal fun BridgeType.sealedTypeDetail(): String? {
     is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -5747,6 +5773,8 @@ internal fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
   // ADR-210: parameter position only, like [BridgeType.Callback]; anywhere else keeps the reason
   // the `suspend lambda` protocol carries.
   is BridgeType.AsyncCallback -> ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL
+  // ADR-210: likewise parameter position only; anywhere else keeps the `flow` protocol's reason.
+  is BridgeType.FlowSource -> ForwardPlanSkipReason.FLOW_PROTOCOL
   // ADR-160 amendment: a returned lambda has a shape exactly when every type argument has a C#
   // spelling, so reaching here means one does not (or it was nested somewhere it cannot bind).
   is BridgeType.ReturnedLambda -> ForwardPlanSkipReason.LAMBDA_TYPE_ARGUMENT
@@ -5921,6 +5949,13 @@ internal fun BridgeType.skipDetail(): String? = optInMarkerDetail()
  *  flagged refusal above it (opt-in marker, typealias target, scope, nesting) is more specific and
  *  keeps its own wording. `null` for every type that is not [BridgeType.Unsupported], which is
  *  every type whose refusal is about a position rather than the type itself. */
+/** ADR-210: [HOT_FLOW_INPUT_DETAIL] for a `StateFlow`, `SharedFlow` or `MutableStateFlow`. */
+internal fun BridgeType.hotFlowInputDetail(): String? =
+  (this as? BridgeType.SpecializedProtocol)?.takeIf { protocol ->
+    protocol.name.startsWith("state flow ") ||
+        (protocol.name.startsWith("flow ") && protocol.name.endsWith("SharedFlow"))
+  }?.let { HOT_FLOW_INPUT_DETAIL }
+
 internal fun BridgeType.unsupportedTypeDetail(): String? =
   (unwrapNullable() as? BridgeType.Unsupported)?.let { unsupported ->
     // ADR-208: a generic class refused at its use site carries the reason after the name, the

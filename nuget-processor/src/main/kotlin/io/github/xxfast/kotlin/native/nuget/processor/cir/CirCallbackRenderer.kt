@@ -302,7 +302,7 @@ internal fun StringBuilder.renderSubscriptionHelper(@Suppress("UNUSED_PARAMETER"
  *  - `ReleaseCancellation` frees the handle, then disposes, or queues `Cancel()` off-thread.
  */
 private fun StringBuilder.renderAsyncCallbackDeclarations(helper: CirCallbackDelegateHelper) {
-  if (helper.asyncBegins.isEmpty()) return
+  if (helper.asyncBegins.isEmpty() && helper.asyncCurrents.isEmpty()) return
   helper.asyncBegins.forEach { begin ->
     val parameters: String = (
         begin.payloadTypes.mapIndexed { index, type -> "$type a$index" } +
@@ -409,6 +409,7 @@ private fun StringBuilder.renderAsyncCallbackDeclarations(helper: CirCallbackDel
   appendLine("        }")
   appendLine("    }")
   appendLine()
+  if (helper.asyncCurrents.isNotEmpty()) appendAsyncEnumerationClasses()
 }
 
 /**
@@ -424,7 +425,8 @@ private fun StringBuilder.renderAsyncCallbackDeclarations(helper: CirCallbackDel
  * Every other thunk is keyless and acts on a handle Kotlin holds exactly once, so it has no miss.
  */
 private fun StringBuilder.appendAsyncCallbackThunks(helper: CirCallbackDelegateHelper) {
-  if (helper.asyncBegins.isEmpty()) return
+  if (helper.asyncBegins.isEmpty() && helper.asyncCurrents.isEmpty()) return
+  if (helper.asyncCurrents.isNotEmpty()) appendAsyncEnumerationThunks(helper)
   helper.asyncBegins.forEach { begin ->
     val payload: List<String> = begin.payloadTypes.indices.map { index -> "a$index" }
     val parameters: String = (
@@ -473,4 +475,171 @@ private fun StringBuilder.appendAsyncCallbackThunks(helper: CirCallbackDelegateH
     errOut = true,
   )
   appendThunkPointer("NugetAsyncReleaseContext", listOf("IntPtr", "IntPtr*"), "void")
+}
+
+/**
+ * ADR-210: the static members of `NugetAsyncEnumeration`, the reverse shim's enumeration thunk
+ * bodies moved into named methods (the thunks themselves cannot be generic). They sit on the
+ * enumeration class rather than on `NugetTasks` because that class is `unsafe`, and C# allows no
+ * `await` in an unsafe context (CS4004).
+ *
+ * `DisposeEnumeration` is the load-bearing one and its order is copied exactly: free the handle,
+ * then, QUEUED, cancel the source (only when the collector gave up), await the pending step, and
+ * only then `DisposeAsync`. `DisposeAsync` during a pending `MoveNextAsync` throws
+ * `NotSupportedException` and leaves the iterator running, which nothing would ever report. It is
+ * `Task.Run` with an outer catch-all, never an `async` work item: an exception escaping an
+ * `async void` shape terminates the .NET host.
+ */
+private fun StringBuilder.appendAsyncEnumerationMembers() {
+  val task = "global::System.Threading.Tasks.Task"
+  val source = "global::System.Threading.CancellationTokenSource"
+  val generic = "global::System.Collections.Generic"
+  appendLine()
+  appendLine("        internal static IntPtr Enumerate<T>($generic.IAsyncEnumerable<T> source)")
+  appendLine("        {")
+  appendLine("            $source cts = new $source();")
+  appendLine("            try")
+  appendLine("            {")
+  appendLine(
+    "                $generic.IAsyncEnumerator<T> enumerator = source.GetAsyncEnumerator(cts.Token);"
+  )
+  appendLine("                return GCHandle.ToIntPtr(GCHandle.Alloc(")
+  appendLine("                    new NugetAsyncEnumeration<T>(enumerator, cts)));")
+  appendLine("            }")
+  appendLine("            catch")
+  appendLine("            {")
+  appendLine("                cts.Dispose();")
+  appendLine("                throw;")
+  appendLine("            }")
+  appendLine("        }")
+  appendLine()
+  appendLine("        internal static T Current<T>(IntPtr enumeration) =>")
+  appendLine(
+    "            ((NugetAsyncEnumeration<T>)GCHandle.FromIntPtr(enumeration).Target!)" +
+        ".Enumerator.Current;"
+  )
+  appendLine()
+  appendLine("        internal static void MoveNextBegin(IntPtr enumeration, IntPtr callback, IntPtr ctx)")
+  appendLine("        {")
+  appendLine("            NugetAsyncEnumeration n =")
+  appendLine("                (NugetAsyncEnumeration)GCHandle.FromIntPtr(enumeration).Target!;")
+  appendLine("            $task<bool> pending = n.MoveNext().AsTask();")
+  appendLine("            n.Pending = pending;")
+  appendLine("            NugetTasks.Attach(pending, callback, ctx);")
+  appendLine("        }")
+  appendLine()
+  appendLine("        internal static void DisposeEnumeration(IntPtr enumeration, int cancelled)")
+  appendLine("        {")
+  appendLine("            GCHandle h = GCHandle.FromIntPtr(enumeration);")
+  appendLine("            NugetAsyncEnumeration n = (NugetAsyncEnumeration)h.Target!;")
+  appendLine("            h.Free();")
+  appendLine("            _ = $task.Run(async () =>")
+  appendLine("            {")
+  appendLine("                try")
+  appendLine("                {")
+  appendLine("                    if (cancelled != 0)")
+  appendLine("                    {")
+  appendLine("                        try { n.Cts.Cancel(); } catch (AggregateException) { }")
+  appendLine("                    }")
+  appendLine("                    try { await n.Pending; } catch (Exception) { }")
+  appendLine("                    try { await n.Dispose(); } catch (Exception) { }")
+  appendLine("                    n.Cts.Dispose();")
+  appendLine("                }")
+  appendLine("                catch (Exception)")
+  appendLine("                {")
+  appendLine("                    // Deliberately swallowed: nothing above may escape this lambda.")
+  appendLine("                }")
+  appendLine("            });")
+  appendLine("        }")
+}
+
+/**
+ * ADR-210: one live C# enumeration, the forward twin of the reverse shim's pair (which lives in
+ * `<root>.NugetReverse`): the enumerator, the source whose token it was started with, and the
+ * in-flight step. The non-generic base is what lets the three shared thunks step any element type.
+ */
+private fun StringBuilder.appendAsyncEnumerationClasses() {
+  val tasks = "global::System.Threading.Tasks"
+  val source = "global::System.Threading.CancellationTokenSource"
+  val enumerator = "global::System.Collections.Generic.IAsyncEnumerator<T>"
+  appendLine("    internal abstract class NugetAsyncEnumeration")
+  appendLine("    {")
+  appendLine("        internal $source Cts = null!;")
+  appendLine()
+  appendLine("        internal $tasks.Task Pending = $tasks.Task.CompletedTask;")
+  appendLine()
+  appendLine("        internal abstract $tasks.ValueTask<bool> MoveNext();")
+  appendLine()
+  appendLine("        internal abstract $tasks.ValueTask Dispose();")
+  appendAsyncEnumerationMembers()
+  appendLine("    }")
+  appendLine()
+  appendLine("    internal sealed class NugetAsyncEnumeration<T> : NugetAsyncEnumeration")
+  appendLine("    {")
+  appendLine("        internal NugetAsyncEnumeration($enumerator enumerator, $source cts)")
+  appendLine("        {")
+  appendLine("            Enumerator = enumerator;")
+  appendLine("            Cts = cts;")
+  appendLine("        }")
+  appendLine()
+  appendLine("        internal $enumerator Enumerator { get; }")
+  appendLine()
+  appendLine("        internal override $tasks.ValueTask<bool> MoveNext() => Enumerator.MoveNextAsync();")
+  appendLine()
+  appendLine("        internal override $tasks.ValueTask Dispose() => Enumerator.DisposeAsync();")
+  appendLine("    }")
+  appendLine()
+}
+
+/**
+ * ADR-210: the `[UnmanagedCallersOnly]` thunks of a `Flow<T>` parameter, with their own bodies like
+ * the Begin thunk's. Enumerate is the only keyed one, `(key, errOut) -> IntPtr enumeration`: on a
+ * key miss it mints no enumeration and no `CancellationTokenSource`, reports
+ * `ObjectDisposedException` through `errOut` and returns `IntPtr.Zero` (`flowForKotlin` calls it
+ * outside its `try`, so nothing is disposed that was never minted). Every other thunk acts on an
+ * enumeration or task handle Kotlin holds exactly once, so it has no miss. Current is per element
+ * type; the two step halves and the dispose are shared, and the dispose is plumbing with no error
+ * slot.
+ */
+private fun StringBuilder.appendAsyncEnumerationThunks(helper: CirCallbackDelegateHelper) {
+  appendThunkBody(
+    "NugetAsyncEnumerate",
+    "IntPtr key, IntPtr* errOut",
+    "IntPtr",
+    "((Func<IntPtr>)target)()",
+    errOut = true,
+    preamble = listOf(
+      "object? target = LookupCtx(key);",
+      "if (target is null)",
+      "{",
+      "    throw new ObjectDisposedException(\"NugetAsyncEnumerate\");",
+      "}",
+    ),
+  )
+  appendThunkPointer("NugetAsyncEnumerate", listOf("IntPtr", "IntPtr*"), "IntPtr")
+  helper.asyncCurrents.forEach { current ->
+    appendThunkBody(
+      current.name, "IntPtr a0, IntPtr* errOut", current.returnType, current.invocation,
+      errOut = true,
+    )
+    appendThunkPointer(current.name, listOf("IntPtr", "IntPtr*"), current.returnType)
+  }
+  appendThunkBody(
+    "NugetAsyncMoveNextBegin", "IntPtr a0, IntPtr a1, IntPtr a2, IntPtr* errOut", "void",
+    "NugetAsyncEnumeration.MoveNextBegin(a0, a1, a2)", errOut = true,
+  )
+  appendThunkPointer(
+    "NugetAsyncMoveNextBegin", listOf("IntPtr", "IntPtr", "IntPtr", "IntPtr*"), "void",
+  )
+  // `End<bool>` is `GetAwaiter().GetResult()` with the task handle freed in its `finally`.
+  appendThunkBody(
+    "NugetAsyncMoveNextEnd", "IntPtr a0, IntPtr* errOut", "int",
+    "NugetTasks.End<bool>(a0) ? 1 : 0", errOut = true,
+  )
+  appendThunkPointer("NugetAsyncMoveNextEnd", listOf("IntPtr", "IntPtr*"), "int")
+  appendThunkBody(
+    "NugetAsyncDisposeEnumeration", "IntPtr a0, int a1", "void",
+    "NugetAsyncEnumeration.DisposeEnumeration(a0, a1)",
+  )
+  appendThunkPointer("NugetAsyncDisposeEnumeration", listOf("IntPtr", "int"), "void")
 }

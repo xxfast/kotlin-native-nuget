@@ -13,6 +13,7 @@ import com.google.devtools.ksp.symbol.Variance
 import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.MUTABLE_STATE_FLOW_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.PLAIN_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.SUSPEND_LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
@@ -94,6 +95,9 @@ internal class ForwardBridgeTypeClassifier(
    * Kotlin file reads it to decide whether the holder class and its imports are needed.
    */
   internal val asyncCallbacks: MutableSet<BridgeType.AsyncCallback> = linkedSetOf()
+
+  /** ADR-210: every `Flow<T>` parameter shape [flowSourceOrNull] minted, read the same way. */
+  internal val flowSources: MutableSet<BridgeType.FlowSource> = linkedSetOf()
 
   /**
    * ADR-208 part E: every declared `MutableStateFlow<E>` type argument, by its Kotlin spelling,
@@ -1064,6 +1068,7 @@ internal class ForwardBridgeTypeClassifier(
           is BridgeType.Collection,
           is BridgeType.Callback,
           is BridgeType.AsyncCallback,
+          is BridgeType.FlowSource,
           is BridgeType.ReturnedLambda,
           is BridgeType.RawKSType,
           is BridgeType.Unsupported,
@@ -1109,7 +1114,26 @@ internal class ForwardBridgeTypeClassifier(
   }
 
   /** [classify] at a parameter position: ADR-210's suspend lambda first, then everything else. */
-  fun classifyParameter(type: KSType): BridgeType = asyncCallbackOrNull(type) ?: classify(type)
+  /**
+   * ADR-210: the [BridgeType.FlowSource] for a non-nullable plain `Flow<T>` whose element is a
+   * non-nullable primitive or `String`, or null for any other type. Position-specific like
+   * [asyncCallbackOrNull]: a `Flow` everywhere else stays the `flow` protocol. A `StateFlow`, a
+   * `SharedFlow` and a `MutableStateFlow` are never this: C# has nothing to make one from.
+   */
+  fun flowSourceOrNull(type: KSType): BridgeType.FlowSource? {
+    val expanded: KSType = type.expandAliases()
+    if (type.isMarkedNullable || expanded.isMarkedNullable) return null
+    val qualifiedName: String = expanded.declaration.qualifiedName?.asString() ?: return null
+    if (qualifiedName !in PLAIN_FLOW_TYPES) return null
+    val argument: KSType = expanded.arguments.singleOrNull()?.type?.resolve() ?: return null
+    val element: BridgeType = classify(argument)
+    if (element != BridgeType.String && element !is BridgeType.Primitive) return null
+    return BridgeType.FlowSource(element).also { minted -> flowSources += minted }
+  }
+
+  /** [classify] at a parameter position: ADR-210's two asynchronous shapes first. */
+  fun classifyParameter(type: KSType): BridgeType =
+    asyncCallbackOrNull(type) ?: flowSourceOrNull(type) ?: classify(type)
 
   /** The payload shapes both callback halves lower, in. See [callbackType]. */
   internal fun BridgeType.isCallbackPayload(): Boolean = when (this) {
@@ -1132,6 +1156,7 @@ internal class ForwardBridgeTypeClassifier(
     is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -1161,6 +1186,7 @@ internal class ForwardBridgeTypeClassifier(
     is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
