@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using TestLibrary;
 using TestLibrary.Cat;
 using TestLibrary.Roster;
+using Stamps = TestLibrary.Stamps;
 using Treatprep = TestLibrary.Treatprep;
 using Trickle = TestLibrary.Trickle;
 
@@ -512,5 +513,169 @@ public class CollectabilityTests
         {
             dripper?.Dispose();
         }
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // The COMPLETION CALLBACK of a suspend member that takes NO suspend lambda. Every `...Async`
+    // wrapper allocates a `GCHandle` on its completion closure before the P/Invoke, and only the
+    // completion callback frees it. A wrapper that throws between the allocation and the P/Invoke
+    // (a non-null `String` refused by its null guard, which is evaluated inline in the native
+    // call's argument list) never hands the handle to Kotlin, so no completion will ever arrive to
+    // free it: a permanent strong root on the closure. ADR-210 added the catch that frees it, but
+    // only to members that take a suspend lambda.
+    //
+    // The handle is a C# `GCHandle`, invisible to NugetMarshal.LiveHandles, so the proof is
+    // collectability again. There is no consumer lambda to capture a marker here, so the marker is
+    // what the completion closure itself captures: the `CancellationToken` the caller passed (the
+    // closure needs it for `TrySetCanceled`), which holds its `CancellationTokenSource`, and on an
+    // instance member the wrapper (`GC.KeepAlive(this)`).
+    //
+    // Mylo runs the stamp desk. The leash is how Oreo gets called back before the stamp dries.
+    // ------------------------------------------------------------------------------------------
+
+    // The controls first: a call that reaches Kotlin frees the handle in its completion callback,
+    // so the leash goes. If these do not collect, the marker is wrong, not the bridge. The leash is
+    // deliberately not disposed: its token has to stay usable until the call completes, and whether
+    // the source can be collected is the row's whole subject.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (Task<string> Stamping, WeakReference Leash) StartStamping(Stamps.StampDesk desk)
+    {
+        var leash = new CancellationTokenSource();
+        Task<string> stamping = desk.StampLaterAsync("Oreo's parcel", leash.Token);
+        return (stamping, new WeakReference(leash));
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference> StampAndDispose()
+    {
+        using var desk = new Stamps.StampDesk("Mylo");
+        (Task<string> stamping, WeakReference leash) = StartStamping(desk);
+
+        Assert.Equal("Mylo stamped Oreo's parcel later", await stamping);
+        return leash;
+    }
+
+    [Fact]
+    public async Task SuspendCompletion_MemberCallCompletes_ItsStateIsCollected()
+    {
+        WeakReference leash = await StampAndDispose();
+
+        Assert.True(
+            MarkerCollectedWithin(leash, TimeSpan.FromSeconds(5)),
+            "the CancellationTokenSource passed to StampLaterAsync stayed reachable after the call completed and its owner was disposed");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (Task<string> Greeting, WeakReference Leash) StartGreeting()
+    {
+        var leash = new CancellationTokenSource();
+        Task<string> greeting = AsyncFunctions.FetchGreetingAsync("Oreo", leash.Token);
+        return (greeting, new WeakReference(leash));
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference> GreetAndDrop()
+    {
+        (Task<string> greeting, WeakReference leash) = StartGreeting();
+
+        Assert.Equal("Hello, Oreo!", await greeting);
+        return leash;
+    }
+
+    [Fact]
+    public async Task SuspendCompletion_TopLevelCallCompletes_ItsStateIsCollected()
+    {
+        WeakReference leash = await GreetAndDrop();
+
+        Assert.True(
+            MarkerCollectedWithin(leash, TimeSpan.FromSeconds(5)),
+            "the CancellationTokenSource passed to FetchGreetingAsync stayed reachable after the call completed");
+    }
+
+    // The instance route: `StampDesk.stampLater(text: String)`. Both things the completion closure
+    // captures are watched, because either one staying alive is the same stranded handle.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (WeakReference Leash, WeakReference Desk) StampLaterWithANullText()
+    {
+        using var leash = new CancellationTokenSource();
+        using var desk = new Stamps.StampDesk("Mylo");
+
+        ArgumentNullException refused = Assert.Throws<ArgumentNullException>(() =>
+        {
+            _ = desk.StampLaterAsync(null!, leash.Token);
+        });
+
+        Assert.Equal("text", refused.ParamName);
+        return (new WeakReference(leash), new WeakReference(desk));
+    }
+
+    [Fact]
+    public void SuspendCompletion_MemberArgumentFailsItsNullGuard_ItsStateIsCollected()
+    {
+        (WeakReference leash, WeakReference desk) = StampLaterWithANullText();
+
+        Assert.True(
+            MarkerCollectedWithin(leash, TimeSpan.FromSeconds(5)),
+            "the CancellationTokenSource passed to StampLaterAsync stayed reachable after the call threw ArgumentNullException: the completion callback's GCHandle was allocated before the null guard and never freed");
+        Assert.True(
+            MarkerCollectedWithin(desk, TimeSpan.FromSeconds(5)),
+            "the disposed StampDesk stayed reachable after StampLaterAsync threw ArgumentNullException: the completion callback's GCHandle was allocated before the null guard and never freed");
+    }
+
+    // The static route: top-level `fetchGreeting(name: String)`. No wrapper and no scope, so the
+    // leash is the only thing to watch, and a fix made on the instance shape alone stays red here.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference FetchGreetingWithANullName()
+    {
+        using var leash = new CancellationTokenSource();
+
+        ArgumentNullException refused = Assert.Throws<ArgumentNullException>(() =>
+        {
+            _ = AsyncFunctions.FetchGreetingAsync(null!, leash.Token);
+        });
+
+        Assert.Equal("name", refused.ParamName);
+        return new WeakReference(leash);
+    }
+
+    [Fact]
+    public void SuspendCompletion_TopLevelArgumentFailsItsNullGuard_ItsStateIsCollected()
+    {
+        WeakReference leash = FetchGreetingWithANullName();
+
+        Assert.True(
+            MarkerCollectedWithin(leash, TimeSpan.FromSeconds(5)),
+            "the CancellationTokenSource passed to FetchGreetingAsync stayed reachable after the call threw ArgumentNullException: the completion callback's GCHandle was allocated before the null guard and never freed");
+    }
+
+    // The disposed wrapper. A guard, not a reproduction: on a member with no suspend lambda the
+    // disposed check is the wrapper's first statement, ahead of the allocation, so nothing is
+    // stranded today. It pins that ordering for whoever moves the allocation or the check.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (WeakReference Leash, WeakReference Desk) StampLaterOnADisposedDesk()
+    {
+        using var leash = new CancellationTokenSource();
+        var desk = new Stamps.StampDesk("Mylo");
+        desk.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() =>
+        {
+            _ = desk.StampLaterAsync("Oreo's parcel", leash.Token);
+        });
+
+        return (new WeakReference(leash), new WeakReference(desk));
+    }
+
+    [Fact]
+    public void SuspendCompletion_MemberCallOnADisposedWrapper_ItsStateIsCollected()
+    {
+        (WeakReference leash, WeakReference desk) = StampLaterOnADisposedDesk();
+
+        Assert.True(
+            MarkerCollectedWithin(leash, TimeSpan.FromSeconds(5)),
+            "the CancellationTokenSource passed to StampLaterAsync on a disposed StampDesk stayed reachable after the call threw ObjectDisposedException: the completion callback's GCHandle was allocated before the throw and never freed");
+        Assert.True(
+            MarkerCollectedWithin(desk, TimeSpan.FromSeconds(5)),
+            "the disposed StampDesk stayed reachable after StampLaterAsync threw ObjectDisposedException: the completion callback's GCHandle was allocated before the throw and never freed");
     }
 }
