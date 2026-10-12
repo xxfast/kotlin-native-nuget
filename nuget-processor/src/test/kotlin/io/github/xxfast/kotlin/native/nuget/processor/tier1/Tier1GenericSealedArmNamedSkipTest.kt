@@ -8,18 +8,21 @@ import kotlin.test.assertTrue
 
 /**
  * ADR-147 on an arm of a generic sealed hierarchy (ADR-199): what a generic arm cannot bind is
- * named, with the code and sentence a generic CLASS's member takes
- * (`Tier1GenericOwnerLegacyRouteTest`).
+ * named, under the code a generic CLASS's member takes (`Tier1GenericOwnerLegacyRouteTest`).
  *
  * Two member kinds are drops on an arm with a Kotlin type parameter in scope:
  *  - a `suspend` member. The suspend route refuses a generic owner on both halves, so `Hot<T>.cool`
  *    had no export, no `CoolAsync` and no diagnostic. An override of a base member is the same
  *    drop: the generic base projects nothing, and its own skip tells the author to declare the
- *    member on the arm.
+ *    member on the arm. It reads the generic class's sentence, which is true of it.
  *  - a callback member whose lambda carries the type parameter (`cb: (T) -> Unit`). The route has
- *    no marshalling for a `T` payload, so the generated Kotlin did not compile.
+ *    no marshalling for a `T` payload, so the generated Kotlin did not compile. It reads a sentence
+ *    of its own: the arm's receiver IS spelled, so "cannot spell a generic receiver" would be
+ *    false, and what stops it is the payload the erased receiver leaves as `Any?`.
  *
  * Everything else on the arm binds, and so does every member of an arm that is generic in C# only.
+ * The callback sentence's two remedies are cells here: a concrete payload on the generic arm
+ * (`Hot.withCount`) and the member on an arm that fixes the argument (`Cold.withChill`).
  */
 class Tier1GenericSealedArmNamedSkipTest {
 
@@ -45,6 +48,7 @@ class Tier1GenericSealedArmNamedSkipTest {
 
           // The controls: the same routes without a type parameter in the lambda bind.
           fun each(cb: (Char) -> Unit) = cb('a')
+          fun withCount(cb: (Int) -> Unit) = cb(1)
           fun wafts(): Flow<Int> = flowOf(1)
         }
 
@@ -52,6 +56,7 @@ class Tier1GenericSealedArmNamedSkipTest {
         class Cold : Dish<Int>() {
           suspend fun thaw(): Int = 7
           override suspend fun over(): Int = 3
+          fun withChill(cb: (Int) -> Unit) = cb(1)
         }
       }
 
@@ -78,6 +83,16 @@ class Tier1GenericSealedArmNamedSkipTest {
   private fun named(member: String): List<String> =
     result.kspWarnings.filter { warning -> "$member:" in warning }
 
+  private val erasedLambdaReason: String =
+    "one of its lambdas takes or returns a type parameter of its generic sealed arm, and the " +
+        "bridge calls the arm with that parameter erased: the lambda's payload crosses as " +
+        "`Any?`, which the callback route cannot marshal (ADR-199)"
+
+  private val erasedLambdaHint: String =
+    "give the lambda a concrete payload type (`(Int) -> Unit`), or declare the member on an arm " +
+        "that fixes the type argument (for example `class Whole : Base<Int>()`), where the " +
+        "lambda is concrete and the member binds"
+
   @Test
   fun `both halves compile`() {
     assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
@@ -97,8 +112,10 @@ class Tier1GenericSealedArmNamedSkipTest {
                   int seen = 0;
                   using var hot = new Dish.Hot<string>("tuna");
                   hot.Each(letter => seen += letter);
+                  hot.WithCount(count => seen += count);
                   await foreach (int waft in hot.Wafts()) seen += waft;
                   using var cold = new Dish.Cold();
+                  cold.WithChill(chill => seen += chill);
                   using var bare = new Plate.Bare<string>(3);
                   return seen + await cold.ThawAsync() + await cold.OverAsync()
                       + await bare.WipeAsync();
@@ -134,8 +151,13 @@ class Tier1GenericSealedArmNamedSkipTest {
       .forEach { member ->
         val warnings: List<String> = named(member)
         assertEquals(1, warnings.size, "expected `$member` named once; got: ${result.kspWarnings}")
-        assertContains(warnings.single(), "SKIPPED_UNSUPPORTED_COMBINATION")
-        assertContains(warnings.single(), "it is a callback member of a generic class")
+        assertEquals(
+          "[nuget:SKIPPED_UNSUPPORTED_COMBINATION] Skipping tier1.larder.$member: " +
+              "$erasedLambdaReason. $erasedLambdaHint",
+          warnings.single().lines().first(),
+        )
+        // The generic class's reason is false here: this arm's receiver is spelled.
+        assertFalse("cannot spell a generic receiver" in warnings.single())
       }
     // A type-parameter RESULT is one of the shapes the route already refuses by name, so it keeps
     // that refusal and is not named a second time.
@@ -155,6 +177,8 @@ class Tier1GenericSealedArmNamedSkipTest {
   fun `every other member binds and is not named`() {
     listOf(
       "Dish.Hot.each", "Dish.Hot.wafts", "Dish.Cold.thaw", "Dish.Cold.over", "Plate.Bare.wipe",
+      // The two remedies the type-parameter lambda's hint names.
+      "Dish.Hot.withCount", "Dish.Cold.withChill",
     ).forEach { member ->
       assertTrue(named(member).isEmpty(), "`$member` binds; got: ${named(member)}")
     }
@@ -162,6 +186,7 @@ class Tier1GenericSealedArmNamedSkipTest {
     listOf(
       "public void Each(Action<char> cb)", "public KotlinFlow<int> Wafts()",
       "public Task<int> ThawAsync(", "public Task<int> OverAsync(", "public Task<int> WipeAsync(",
+      "public void WithCount(Action<int> cb)", "public void WithChill(Action<int> cb)",
     ).forEach { member -> assertContains(cs, member) }
     // `over` binds on the one arm that can carry it, and nowhere else.
     assertEquals(1, cs.lines().count { "public Task<int> OverAsync(" in it })

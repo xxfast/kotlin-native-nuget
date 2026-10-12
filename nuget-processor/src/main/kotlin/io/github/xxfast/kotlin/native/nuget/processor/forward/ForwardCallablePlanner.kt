@@ -487,6 +487,14 @@ internal fun ForwardCallableCatalogEntry.nameUnroutedPosition(
 /** The [ForwardPlanSkipReason.COMPANION_NO_CARRIER] detail that selects the interface sentence. */
 internal const val COMPANION_OWNER_INTERFACE: String = "interface"
 
+/**
+ * ADR-199: the [ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE] detail of a callback member a
+ * generic sealed ARM drops. The arm's receiver is spelled, so the generic class's sentence ("cannot
+ * spell a generic receiver") would be false of it: what stops the member is the lambda's erased
+ * payload, and this detail selects the sentence that says so.
+ */
+internal const val GENERIC_ARM_ERASED_LAMBDA: String = "ERASED_LAMBDA_PAYLOAD"
+
 /** What [carrierlessCompanionDrops] names: the companion's functions and its properties. */
 internal class ForwardCarrierlessCompanion(
   val callables: List<ForwardCallableCatalogEntry>,
@@ -2093,7 +2101,9 @@ internal class ForwardCallablePlanner(
    *  - a callback member whose lambda carries a type parameter ([carriesTypeParameterLambda]).
    * Each is relabelled [ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE], the name a generic
    * class's member takes, unless `warnRefusedLegacyRouteMembers` already names it with its own
-   * refusal or an exported interface carries it (ADR-174).
+   * refusal or an exported interface carries it (ADR-174). The suspend member keeps that class's
+   * sentence, which is true of it; the callback member takes [GENERIC_ARM_ERASED_LAMBDA], because
+   * its receiver IS spelled here and the lambda's erased payload is what stops it.
    */
   private fun List<ForwardCallableCatalogEntry>.nameGenericArmLegacyDrops(
     arm: KSClassDeclaration,
@@ -2117,9 +2127,9 @@ internal class ForwardCallablePlanner(
               entry.reason == ForwardPlanSkipReason.ABSTRACT)
       val deferredCallback: Boolean = entry.reason == ForwardPlanSkipReason.CALLBACK_PROTOCOL &&
           method.carriesTypeParameterLambda()
-      val droppedAs: ForwardPlanSkipReason = when {
-        deferredSuspend -> ForwardPlanSkipReason.SUSPEND
-        deferredCallback -> ForwardPlanSkipReason.CALLBACK_PROTOCOL
+      val droppedAs: String = when {
+        deferredSuspend -> ForwardPlanSkipReason.SUSPEND.name
+        deferredCallback -> GENERIC_ARM_ERASED_LAMBDA
         else -> return@map entry
       }
       val namedByWalk: Boolean = if (isSuspend) {
@@ -2131,7 +2141,7 @@ internal class ForwardCallablePlanner(
       if (namedByWalk) return@map entry
       entry.copy(
         reason = ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE,
-        detail = droppedAs.name,
+        detail = droppedAs,
       )
     }
   }
