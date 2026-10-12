@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
 import kotlin.test.Test
 import kotlin.test.assertContains
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -33,13 +34,15 @@ class Tier1GenericSealedFlowPropertyTest {
       import kotlinx.coroutines.flow.flowOf
 
       sealed class Dish<T> {
-        // Declared on the generic base: bound on every arm, generic or not.
-        val served: Flow<Int> = flowOf(1)
+        // Declared on the generic base: bound on every arm, generic or not. `served` is a `var` on
+        // purpose: its dropped setter is named once, for the base, and never once per arm.
+        var served: Flow<Int> = flowOf(1)
         val heat: StateFlow<Int> = MutableStateFlow(2)
 
         class Hot<T>(val item: T) : Dish<T>() {
           val steam: Flow<Int> = flowOf(3)
           val gauge: StateFlow<Int> = MutableStateFlow(4)
+          // A `var` on purpose: the arm binds the getter and names the setter it drops.
           var dial: MutableStateFlow<Int> = MutableStateFlow(5)
           val bell: MutableSharedFlow<Int> = MutableSharedFlow()
           val items: Flow<T> = flowOf(item)
@@ -82,7 +85,8 @@ class Tier1GenericSealedFlowPropertyTest {
 
         // Not generic in Kotlin, `Bare<T>` in C#: the fixed variant argument is a phantom.
         class Bare(val id: Int) : Plate<Nothing>() {
-          val crumbs: Flow<Int> = flowOf(id)
+          // A `var` on purpose: the phantom arm names its own dropped setter, once.
+          var crumbs: Flow<Int> = flowOf(id)
           fun drips(): Flow<Int> = flowOf(id)
           suspend fun wipe(): Int = id
         }
@@ -229,7 +233,7 @@ class Tier1GenericSealedFlowPropertyTest {
   }
 
   @Test
-  fun `the generic base carries none of them and nothing is skipped`() {
+  fun `the generic base carries none of them`() {
     // ADR-147, kept: the generic base has no flow route, so `Served` is each arm's, not
     // `Dish<T>`'s.
     val lines: List<String> = result.generatedCSharp.lines()
@@ -241,10 +245,64 @@ class Tier1GenericSealedFlowPropertyTest {
     listOf("Served", "Heat").forEach { member ->
       assertFalse("> $member" in base, "expected no $member on Dish<T>; got:\n$base")
     }
-    assertTrue(
-      result.kspWarnings.none { "SKIPPED" in it },
-      "every member here binds; kspWarnings=${result.kspWarnings}",
-    )
     assertTrue(result.kspErrors.isEmpty(), "kspErrors=${result.kspErrors}")
+  }
+
+  /**
+   * The flow property route meets the named setter skip of a public `var`
+   * (`Tier1FlowVarPropertySetterTest`): the getter binds on the arm exactly as a `val`'s does, and
+   * the setter the route cannot bind is named once, for the declaration that owns the `var`. The
+   * whole list is compared, so a second line for the same property (one per arm of an inherited
+   * base member, or one for the erased and one for the declared arm) fails here, and so does any
+   * other skip: every member of the fixture binds.
+   */
+  @Test
+  fun `a var flow property keeps its getter and names its dropped setter once`() {
+    val coldReason: String =
+      "its setter is not generated because a Flow property binds read-only: its getter hands " +
+          "out the Kotlin flow, and no setter route turns a C# stream back into one"
+    val hotReason: String =
+      "its setter is not generated because a MutableStateFlow property binds read-only: its " +
+          "getter hands out the Kotlin flow, and C# has no source for a synchronous current " +
+          "value or a replay cache to set it from"
+    fun coldHint(publicName: String): String =
+      "the C# property $publicName is read-only; to let C# replace the flow, expose a function " +
+          "taking a `Flow<T>` parameter instead, which binds as `IAsyncEnumerable<T>` for a " +
+          "primitive or String element"
+    val hotHint: String =
+      "the C# property Dial is read-only; to let C# replace the flow, expose a function " +
+          "instead: declare the parameter as `Flow<T>` and call `stateIn(scope)` (or `shareIn`) " +
+          "on it in Kotlin"
+    val code: String = "[nuget:SKIPPED_UNSUPPORTED_INPUT]"
+    // Each diagnostic's own line: the `at <file>:<line>` location KSP appends is dropped.
+    val skips: List<String> = result.kspWarnings
+      .flatMap { warning -> warning.lines() }
+      .filter { line -> line.startsWith("[nuget:SKIPPED") }
+
+    assertEquals(
+      listOf(
+        // The generic arm: named as the arm, never as the erased `Hot<Any?>` or the base.
+        "$code Skipping tier1.menu.Dish.Hot.dial: $hotReason. $hotHint",
+        // The generic base: one line for the declaration, though every arm binds the getter.
+        "$code Skipping tier1.menu.Dish.served: $coldReason. ${coldHint("Served")}",
+        // The phantom arm: generic in C# only, and named once like any other arm.
+        "$code Skipping tier1.menu.Plate.Bare.crumbs: $coldReason. ${coldHint("Crumbs")}",
+      ),
+      skips.sorted(),
+      "kspWarnings=${result.kspWarnings}",
+    )
+
+    // The getter half is untouched: the exports a `val` has, and no setter export beside them.
+    listOf(
+      "dish_hot_get_dial_collect", "dish_hot_get_dial_value", "dish_hot_get_served_collect",
+      "dish_cold_get_served_collect", "plate_bare_get_crumbs_collect",
+    ).forEach { name -> export("library_menu__$name") }
+    val setterExports: List<String> = result.generated.lines().filter { line ->
+      val isExport: Boolean = line.startsWith("@CName(")
+      val isPropertySetter: Boolean =
+        listOf("_set_dial\")", "_set_served\")", "_set_crumbs\")").any { suffix -> suffix in line }
+      isExport && isPropertySetter
+    }
+    assertEquals(emptyList(), setterExports)
   }
 }
