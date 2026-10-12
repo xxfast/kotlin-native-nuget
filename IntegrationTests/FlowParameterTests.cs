@@ -42,6 +42,24 @@ public class FlowParameterTests
             return new Enumerator(this);
         }
 
+        /// <summary>
+        /// The disposal count once it has reached <paramref name="expected"/>. The bridge disposes
+        /// an enumerator on a queued work item (ADR-210: cancel, await the pending step, then
+        /// <c>DisposeAsync</c>, inside <c>Task.Run</c>), so the count settles shortly after the
+        /// Kotlin call completes, not before it. The short pause after the count is reached is
+        /// what lets a second, wrong disposal show up in the number.
+        /// </summary>
+        public async Task<int> SettledDisposalsAsync(int expected)
+        {
+            DateTime deadline = DateTime.UtcNow + Patience;
+            while (Volatile.Read(ref Disposals) < expected && DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(5);
+            }
+            await Task.Delay(25);
+            return Volatile.Read(ref Disposals);
+        }
+
         private sealed class Enumerator(CountedDrops owner) : IAsyncEnumerator<int>
         {
             private int _index = -1;
@@ -201,7 +219,7 @@ public class FlowParameterTests
         Assert.Equal(500 * 501 / 2, await fountain.TotalDropsAsync(drops));
         Assert.Equal(1, drops.Enumerations);
         Assert.Equal(501, drops.Pulls);
-        Assert.Equal(1, drops.Disposals);
+        Assert.Equal(1, await drops.SettledDisposalsAsync(1));
     }
 
     /// <summary>An empty stream: one enumeration, one pull that says no, one disposal.</summary>
@@ -214,7 +232,7 @@ public class FlowParameterTests
         Assert.Equal(0, await fountain.TotalDropsAsync(dry));
         Assert.Equal(1, dry.Enumerations);
         Assert.Equal(1, dry.Pulls);
-        Assert.Equal(1, dry.Disposals);
+        Assert.Equal(1, await dry.SettledDisposalsAsync(1));
     }
 
     /// <summary>
@@ -230,7 +248,7 @@ public class FlowParameterTests
 
         Assert.Equal("3,1,2|3,1,2", await fountain.MeasuredTwiceAsync(drops));
         Assert.Equal(2, drops.Enumerations);
-        Assert.Equal(2, drops.Disposals);
+        Assert.Equal(2, await drops.SettledDisposalsAsync(2));
     }
 
     /// <summary>
@@ -262,7 +280,7 @@ public class FlowParameterTests
         Assert.Equal("7,8", await fountain.FirstTwoAsync(drops));
         Assert.Equal(1, drops.Enumerations);
         Assert.Equal(2, drops.Pulls);
-        Assert.Equal(1, drops.Disposals);
+        Assert.Equal(1, await drops.SettledDisposalsAsync(1));
     }
 
     /// <summary>
@@ -322,7 +340,7 @@ public class FlowParameterTests
 
         Assert.Equal(new List<int> { 2, 4, 6 }, seen);
         Assert.Equal(1, drops.Enumerations);
-        Assert.Equal(1, drops.Disposals);
+        Assert.Equal(1, await drops.SettledDisposalsAsync(1));
     }
 
     /// <summary>A <c>suspend fun</c> on a sealed arm.</summary>
@@ -355,11 +373,11 @@ public class FlowParameterTests
 
         Assert.Equal("4+5/5", await bowl.FillFromAttachedAsync());
         Assert.Equal(1, drops.Enumerations);
-        Assert.Equal(1, drops.Disposals);
+        Assert.Equal(1, await drops.SettledDisposalsAsync(1));
 
         Assert.Equal("4+5/5", await bowl.FillFromAttachedAsync());
         Assert.Equal(2, drops.Enumerations);
-        Assert.Equal(2, drops.Disposals);
+        Assert.Equal(2, await drops.SettledDisposalsAsync(2));
     }
 
     /// <summary>
@@ -381,7 +399,7 @@ public class FlowParameterTests
         Assert.Equal("6,7,8", await dripper.DrainAsync());
         Assert.Equal("6,7,8", await dripper.DrainAsync());
         Assert.Equal(2, drops.Enumerations);
-        Assert.Equal(2, drops.Disposals);
+        Assert.Equal(2, await drops.SettledDisposalsAsync(2));
     }
 
     /// <summary>The top-level suspend route, on the ADR-007 static class.</summary>
