@@ -678,4 +678,111 @@ public class CollectabilityTests
             MarkerCollectedWithin(desk, TimeSpan.FromSeconds(5)),
             "the disposed StampDesk stayed reachable after StampLaterAsync threw ObjectDisposedException: the completion callback's GCHandle was allocated before the throw and never freed");
     }
+
+    // ------------------------------------------------------------------------------------------
+    // The MANAGED-FAULT STASH on a Kotlin dispatcher thread. A callback thunk that catches a C#
+    // throw stashes the exception in the `[ThreadStatic]` `NugetErrorNative._lastManagedFault` of
+    // the thread it ran on, so the C# caller can get the original object back. Every synchronous
+    // export clears that slot when it returns, on the thread that called it. The synchronous
+    // prefix of a suspend lambda runs on a Kotlin dispatcher thread instead, and no C# export call
+    // site ever runs there, so when Kotlin catches the throw and the call succeeds, nothing is left
+    // that will clear the slot: the exception stays rooted for the life of that thread.
+    //
+    // A thread-static of a thread the test does not own cannot be read, so the proof is
+    // collectability. The exception is built INSIDE the lambda, which captures only the report it
+    // fills in, so the closure (released by the context key's cleaner) never holds it. Kotlin's
+    // `recover` catches and returns a string, so no mapped exception, faulted `Task` or Kotlin
+    // holder carries the object either. The stash is the only root there can be.
+    //
+    // Oreo throws the hairball. Mylo, as ever, just watches.
+    // ------------------------------------------------------------------------------------------
+
+    private sealed class HairballException(string message) : Exception(message);
+
+    private sealed class HairballReport
+    {
+        public WeakReference? Hairball;
+        public int CallerThread;
+        public int ThrowerThread;
+        public bool ThrowerIsPoolThread;
+    }
+
+    // The control: the same throw on the CALLING thread, through a synchronous export whose success
+    // arm clears the stash (`CallbackFaults.recoverWith` catches too). Proves a caught hairball can
+    // be collected at all, so the row below cannot be red only because the marker is wrong.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static HairballReport RecoverOnTheCallingThread()
+    {
+        var report = new HairballReport { CallerThread = Environment.CurrentManagedThreadId };
+        using var faults = new CallbackFaults();
+
+        string recovered = faults.RecoverWith(name =>
+        {
+            var hairball = new HairballException($"{name} coughed up a hairball");
+            report.Hairball = new WeakReference(hairball);
+            report.ThrowerThread = Environment.CurrentManagedThreadId;
+            throw hairball;
+        });
+
+        Assert.StartsWith("recovered ", recovered);
+        Assert.Contains("Oreo coughed up a hairball", recovered);
+        return report;
+    }
+
+    [Fact]
+    public void ManagedFault_ThrownOnTheCallingThread_AndCaughtByKotlin_IsCollected()
+    {
+        HairballReport report = RecoverOnTheCallingThread();
+
+        Assert.NotNull(report.Hairball);
+        Assert.Equal(report.CallerThread, report.ThrowerThread);
+        Assert.True(
+            MarkerCollectedWithin(report.Hairball, TimeSpan.FromSeconds(5)),
+            "the exception a callback threw on the calling thread stayed reachable after Kotlin caught it and RecoverWith returned");
+    }
+
+    // Not `async`, and it throws before its first `await` would be: the throw happens inside the
+    // Begin thunk, on whichever thread Kotlin invoked the lambda from.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static Task<string> StartRecovering(Treatprep.TreatChef chef, HairballReport report)
+    {
+        report.CallerThread = Environment.CurrentManagedThreadId;
+        return chef.RecoverAsync((treat, token) =>
+        {
+            var hairball = new HairballException($"Oreo coughed up treat {treat}");
+            report.Hairball = new WeakReference(hairball);
+            report.ThrowerThread = Environment.CurrentManagedThreadId;
+            report.ThrowerIsPoolThread = Thread.CurrentThread.IsThreadPoolThread;
+            throw hairball;
+        });
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<HairballReport> RecoverOnADispatcherThread()
+    {
+        var report = new HairballReport();
+        using var chef = new Treatprep.TreatChef("Oreo");
+
+        string recovered = await StartRecovering(chef, report);
+
+        Assert.StartsWith("recovered ", recovered);
+        Assert.Contains("Oreo coughed up treat 1", recovered);
+        return report;
+    }
+
+    [Fact]
+    public async Task ManagedFault_ThrownOnAKotlinDispatcherThread_AndCaughtByKotlin_IsCollected()
+    {
+        HairballReport report = await RecoverOnADispatcherThread();
+
+        // The precondition, asserted so a green row cannot be a row that never left the caller's
+        // thread: the lambda threw on a thread that is neither the caller's nor the .NET pool's.
+        Assert.NotNull(report.Hairball);
+        Assert.NotEqual(report.CallerThread, report.ThrowerThread);
+        Assert.False(report.ThrowerIsPoolThread, "the lambda's synchronous prefix ran on a .NET pool thread, not a Kotlin dispatcher thread");
+
+        Assert.True(
+            MarkerCollectedWithin(report.Hairball, TimeSpan.FromSeconds(5)),
+            "the exception a suspend lambda threw on a Kotlin dispatcher thread stayed reachable after Kotlin caught it and RecoverAsync completed: NugetErrorNative._lastManagedFault still holds it on that thread, which never runs a C# export call site that would clear it");
+    }
 }
