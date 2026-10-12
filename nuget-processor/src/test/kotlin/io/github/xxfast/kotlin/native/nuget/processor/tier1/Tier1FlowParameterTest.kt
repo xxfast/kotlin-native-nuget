@@ -50,6 +50,8 @@ class Tier1FlowParameterTest {
       suspend fun levelLater(gauge: StateFlow<Int>): Int = gauge.value
       suspend fun maybe(drops: Flow<Int>?): Int = 0
       suspend fun letters(drops: Flow<Char>): Int = 0
+      suspend fun mishaps(faults: Flow<Throwable>): Int = 0
+      fun mishapsNow(faults: Flow<Throwable>): Int = 0
     }
 
     sealed class Bowl {
@@ -57,6 +59,7 @@ class Tier1FlowParameterTest {
         suspend fun fill(drops: Flow<Int>): Int = drops.count()
         fun attach(drops: Flow<Int>): Int = capacity
         fun gauge(level: StateFlow<Int>): Int = level.value
+        fun spill(faults: Flow<Throwable>): Int = capacity
       }
 
       data object Upturned : Bowl()
@@ -466,6 +469,49 @@ class Tier1FlowParameterTest {
     listOf("MaybeAsync(", "LettersAsync(").forEach { member ->
       assertFalse(result.generatedCSharp.contains(member), "$member must not be declared")
     }
+  }
+
+  /**
+   * ADR-210 leaves a `Throwable` element open ("v1 may refuse it by name"). v1 refuses it: the
+   * Current thunk casts the element type it names, and nothing proves a `Throwable` rides the
+   * `String` thunk. Named once at every position, the sealed arm's non-suspend one included.
+   */
+  @Test
+  fun `a Throwable element is refused by name at every position`() {
+    val result: Tier1Result = run()
+
+    // Each route words its own refusal: the legacy suspend gate spells the parameter, the plan
+    // names the element set a `Flow` parameter admits, the arm names the missing route.
+    val refusals: Map<String, Pair<ForwardDiagnosticKind, String>> = mapOf(
+      "WaterFountain.mishaps:" to
+          (ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT to "but not faults: Flow<Throwable>"),
+      "WaterFountain.mishapsNow:" to
+          (ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT to
+              "a `Flow<T>` of a primitive or String at a parameter"),
+      "Bowl.Ceramic.spill:" to
+          (ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_COMBINATION to
+              "a FLOW_PROTOCOL member of a sealed subclass"),
+    )
+    refusals.forEach { (member, expected) ->
+      val (kind, sentence) = expected
+      val named: List<String> = result.kspWarnings.filter { warning -> warning.contains(member) }
+      assertEquals(1, named.size, "$member must be named once; kspWarnings=${result.kspWarnings}")
+      val warning: String = named.single()
+      assertTrue(warning.contains("[nuget:${kind.name}]"), warning)
+      assertTrue(warning.contains(sentence), warning)
+    }
+    listOf("MishapsAsync(", " MishapsNow(", " Spill(").forEach { member ->
+      assertFalse(result.generatedCSharp.contains(member), "$member must not be declared")
+    }
+    listOf("mishaps", "mishapsNow", "spill").forEach { member ->
+      assertFalse(result.generated.contains("_$member"), "$member must not be exported")
+    }
+    // No Current thunk was minted for it: the three the fixture's bound members need, no more.
+    val currents: Set<String> = Regex("""NugetAsync(\w+)CurrentThunk\(""")
+      .findAll(result.generatedCSharp)
+      .map { match -> match.groupValues[1] }
+      .toSet()
+    assertEquals(setOf("Int", "String", "Bool"), currents)
   }
 
   @Test
