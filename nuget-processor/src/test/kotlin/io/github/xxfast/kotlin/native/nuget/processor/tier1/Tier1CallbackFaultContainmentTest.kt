@@ -171,15 +171,15 @@ class Tier1CallbackFaultContainmentTest {
    */
   @Test
   fun `every suspend completion closure clears the managed-fault stash on all three arms`() {
-    val result = run()
-
-    val closures: List<String> = result.generatedCSharp
-      .split("job.CompleteFromCallback();").drop(1)
+    val faultArm = "BuildException(errorPtr)"
+    val closures: List<String> = run().generatedCSharp
+      .split("job.CompleteFromCallback();")
+      .drop(1)
       .map { tail -> tail.substringBefore("            };") }
     assertTrue(closures.size >= 2, "expected the fixture to reach the async and drain closures")
     // The fixture reaches a closure with the fault arm and one (the drain) without it.
-    assertTrue(closures.any { closure -> closure.contains("BuildException(errorPtr)") })
-    assertTrue(closures.any { closure -> !closure.contains("BuildException(errorPtr)") })
+    assertTrue(closures.any { closure -> closure.contains(faultArm) })
+    assertTrue(closures.any { closure -> !closure.contains(faultArm) })
 
     closures.forEach { closure ->
       val lines: List<String> = closure.lines().map(String::trim)
@@ -188,9 +188,9 @@ class Tier1CallbackFaultContainmentTest {
       assertEquals(listOf("}", "finally", "{"), lines.subList(cleared - 3, cleared), closure)
       // One `finally` on the one `try` every arm sits in, so after each of them.
       assertEquals(1, lines.count { line -> line == "try" }, closure)
-      listOf("t.TrySetCanceled(", "BuildException(errorPtr)", "t.SetResult(", "t.TrySetException(ex);")
+      listOf("t.TrySetCanceled(", faultArm, "t.SetResult(", "t.TrySetException(ex);")
         .map { arm -> lines.indexOfFirst { line -> line.contains(arm) } }
-        .forEach { arm -> assertTrue(arm < cleared, closure) }
+        .forEach { armIndex -> assertTrue(armIndex < cleared, closure) }
       assertTrue(lines.any { line -> line.contains("t.TrySetCanceled(") }, closure)
       assertTrue(lines.any { line -> line.contains("t.SetResult(") }, closure)
     }
@@ -205,17 +205,22 @@ class Tier1CallbackFaultContainmentTest {
     val csharp: String = run().generatedCSharp
     val clear = "NugetErrorNative.ClearManagedFault();"
 
-    val onNext: String = csharp.substringAfter("NugetFlowOnNextCallback onNext = ")
+    val onNext: String = csharp
+      .substringAfter("NugetFlowOnNextCallback onNext = ")
       .substringBefore("NugetFlowOnCompleteCallback onComplete = ")
     val cancelled: String = onNext.lines().single { line -> line.contains("isCancelled != 0") }
-    assertTrue(cancelled.contains(clear) && cancelled.trim().endsWith("return; }"), cancelled)
+    val clearsOnCancel: Boolean = cancelled.contains(clear)
+    val returnsAfterClear: Boolean = cancelled.trim().endsWith("return; }")
+    assertTrue(clearsOnCancel && returnsAfterClear, cancelled)
     assertEquals(1, occurrences(onNext, clear), onNext)
 
-    val onComplete: String = csharp.substringAfter("NugetFlowOnCompleteCallback onComplete = ")
+    val onComplete: String = csharp
+      .substringAfter("NugetFlowOnCompleteCallback onComplete = ")
       .substringBefore("NugetFlowOnErrorCallback onError = ")
     assertEquals(1, occurrences(onComplete, clear), onComplete)
 
-    val onError: String = csharp.substringAfter("NugetFlowOnErrorCallback onError = ")
+    val onError: String = csharp
+      .substringAfter("NugetFlowOnErrorCallback onError = ")
       .substringBefore("callbacks.OnNext = onNext;")
     assertEquals(1, occurrences(onError, clear), onError)
     assertTrue(
