@@ -5579,4 +5579,36 @@ public class LiveHandleTests
             await closed.Task.WaitAsync(FlowPatience);
         });
     }
+
+    // ADR-124 on a generic sealed arm (ADR-199): the arm owns the scope its flow members collect
+    // on, and each collected element is one owned crossing. A flow the generic base declares, one
+    // whose element is the arm's type parameter (a boxed `String` per emission), a StateFlow read
+    // and write, the method half, and the phantom arm's StateFlow and suspend member must each
+    // come back to baseline once the arm is drained.
+    [Fact]
+    public async Task GenericSealedArm_FlowMembers_ReturnToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await using (var oreo = new Outcomes.Dish.Hot<string>("tuna"))
+            {
+                int courses = 0;
+                await foreach (int course in oreo.Served) courses += course;
+                Assert.Equal(6, courses);
+                var portions = new List<string>();
+                await foreach (string portion in oreo.Portions) portions.Add(portion);
+                Assert.Equal(new[] { "tuna", "tuna" }, portions);
+                oreo.Heat.Value = 45;
+                Assert.Equal(45, oreo.Heat.Value);
+                int wafts = 0;
+                await foreach (int waft in oreo.Wafts(3)) wafts += waft;
+                Assert.Equal(3, wafts);
+            }
+            await using (var mylo = new Outcomes.Dish.Bare<string>(4))
+            {
+                Assert.Equal(4, mylo.Drips.Value);
+                Assert.Equal(4, await mylo.WipeAsync());
+            }
+        });
+    }
 }

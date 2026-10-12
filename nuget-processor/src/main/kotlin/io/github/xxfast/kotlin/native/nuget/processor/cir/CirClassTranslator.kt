@@ -133,6 +133,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isOpenForOverride
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOpenForOverrideOn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardExtensible
 import io.github.xxfast.kotlin.native.nuget.processor.forward.admits
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardSealedArmParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardSealedArmShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardSealedBaseArgument
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSealedArmShape
@@ -3261,7 +3262,9 @@ internal fun translateSealedClass(
             // ADR-175: a flow property the sealed base projects is the base's; the arm inherits
             // it (the `forwardArmFlowProperties` rule the Kotlin half applies).
             if (subclass.forwardArmMemberProjectedByBase(prop, classifier)) return@mapNotNull null
-            return@mapNotNull flowProperty(prop, subName, context, classifier, tracker)
+            return@mapNotNull flowProperty(
+              prop, subclass.armNameofSpelling(cls, subName), context, classifier, tracker,
+            )
           }
 
           // Residual legacy route: a lambda-typed property, whose Kotlin half is still
@@ -5912,6 +5915,21 @@ private fun CirSealedSubclass.genericArmOf(
     fromHandle = fromHandle,
     selfFactory = "new $ownConstructed(handle, out _)".takeIf { parameters.isNotEmpty() },
   )
+}
+
+/**
+ * ADR-199: [name], the arm's C# class name, as `nameof(...)` can take it inside that class. A C#
+ * arm with type parameters of its own (a listed Kotlin parameter, or a phantom for a fixed variant
+ * argument, so a non-generic Kotlin arm too) has no bare spelling: `nameof(Hot)` is CS0305 inside
+ * `Hot<T>`. `nameof(Hot<T>)` binds and still evaluates to `"Hot"`. The names are the ones
+ * [armCirTypeParameters] declares; unchanged for an arm off the generic sealed route.
+ */
+private fun KSClassDeclaration.armNameofSpelling(base: KSClassDeclaration, name: String): String {
+  val parameters: List<ForwardSealedArmParameter> = forwardSealedArmShape(base)?.parameters.orEmpty()
+  if (parameters.isEmpty()) return name
+  return parameters.joinToString(", ", "$name<", ">") { slot ->
+    slot.own?.let { own -> forwardCsharpTypeParameterName(own) } ?: slot.csharpName
+  }
 }
 
 /**
