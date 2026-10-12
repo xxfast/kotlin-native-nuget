@@ -587,7 +587,8 @@ internal fun warnDroppedForwardPropertySetters(
       reason = "its setter is not generated because " +
           (dropped.reason ?: "the ${dropped.componentDescription} cannot be written into a " +
           "Kotlin collection"),
-      hint = "the C# property ${dropped.publicName} is read-only",
+      hint = "the C# property ${dropped.publicName} is read-only" +
+          (dropped.remedy?.let { remedy -> "; $remedy" } ?: ""),
       // Issue #249: the property SURVIVES read-only, so the remark belongs on the generated C#
       // property and never on its type -- a type-level "not available" paragraph would report a
       // member as absent that a consumer can call.

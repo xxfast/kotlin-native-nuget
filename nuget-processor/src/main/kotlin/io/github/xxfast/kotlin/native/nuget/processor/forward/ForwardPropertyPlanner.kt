@@ -45,6 +45,11 @@ internal data class ForwardDroppedPropertySetter(
    * type -- the member still exists, get-only.
    */
   val owner: ForwardDiagnosticOwner? = null,
+  /**
+   * What the author can do instead, appended to the hint's "the C# property X is read-only" when
+   * there is something to do: a flow `var` has a parameter route a collection `var` has not.
+   */
+  val remedy: String? = null,
 ) {
   val memberName: String? get() = (node as? KSDeclaration)?.simpleName?.asString()
 }
@@ -505,6 +510,7 @@ internal class ForwardPropertyPlanner(
           superClass = superClass,
           implementer = cls,
           lambdaCarrier = cls.classLambdaPropertyCarrier(),
+          flowCarrier = cls.typeParameters.isEmpty(),
         )
       }
       .toList()
@@ -1047,6 +1053,10 @@ internal class ForwardPropertyPlanner(
     // Which legacy lambda-property route re-emits this owner's lambda property, if any. NONE for
     // every owner without one (a sealed base, an interface, every static owner).
     lambdaCarrier: ForwardLambdaPropertyCarrier = ForwardLambdaPropertyCarrier.NONE,
+    // Whether the legacy flow route renders this owner's flow property as a public C# property.
+    // False for a generic class, which binds one only as an explicit interface member (ADR-174)
+    // and renders none of its own, so no setter skip can say its C# property is read-only.
+    flowCarrier: Boolean = true,
   ): ForwardPropertyPlan? {
     // ADR-115: the author's own signal, ahead of any type question -- nothing about the property
     // is unsupported. `@set:Marker` on a `var` skips the whole property rather than exporting it
@@ -1078,7 +1088,7 @@ internal class ForwardPropertyPlanner(
     // (`isReadable`; `isPlannable` already recurses through `Nullable`). Whether a *setter* can
     // also be built is a wholly separate question, decided below, independent of the getter.
     if (!isPlannable(type)) {
-      recordDropped(symbol, position, prop, type, lambdaCarrier)
+      recordDropped(symbol, position, prop, type, lambdaCarrier, flowCarrier)
       return null
     }
     val name: String = prop.simpleName.asString()
@@ -1312,6 +1322,43 @@ internal class ForwardPropertyPlanner(
   }
 
   /**
+   * The named setter skip of a public `var` whose flow type the legacy flow route binds get-only.
+   * A cold `Flow<T>` has a way in, as an ADR-210 parameter; a hot one (`StateFlow`, `SharedFlow`
+   * and their mutable forms) has none, so its remedy is the hot-flow parameter's own.
+   */
+  private fun KSPropertyDeclaration.droppedFlowSetter(
+    symbol: String,
+    type: BridgeType,
+  ): ForwardDroppedPropertySetter {
+    val flowName: String = this.type.resolve().expandAliases().declaration.simpleName.asString()
+    val cold: Boolean = flowName == "Flow"
+    val reason: String =
+      if (cold) {
+        "a Flow property binds read-only: its getter hands out the Kotlin flow, and no setter " +
+            "route turns a C# stream back into one"
+      } else {
+        "a $flowName property binds read-only: its getter hands out the Kotlin flow, and C# " +
+            "has no source for a synchronous current value or a replay cache to set it from"
+      }
+    val remedy: String =
+      if (cold) {
+        "to let C# replace the flow, expose a function taking a `Flow<T>` parameter instead, " +
+            "which binds as `IAsyncEnumerable<T>` for a primitive or String element"
+      } else {
+        "to let C# replace the flow, expose a function instead: $HOT_FLOW_INPUT_HINT"
+      }
+    return ForwardDroppedPropertySetter(
+      symbol = symbol,
+      node = this,
+      publicName = csharpMemberName(),
+      owner = ownerScope,
+      componentDescription = type.diagnosticTypeName(),
+      reason = reason,
+      remedy = remedy,
+    )
+  }
+
+  /**
    * Records one unplannable property for the `SKIPPED_UNSUPPORTED_PROPERTY` diagnostic, unless a
    * legacy route still re-emits it. The specialized callback/flow protocols are unplannable *by
    * design*: `CirClassTranslator`'s lambda and flow adapters bind them, so warning that they were
@@ -1347,6 +1394,7 @@ internal class ForwardPropertyPlanner(
     prop: KSPropertyDeclaration,
     type: BridgeType,
     lambdaCarrier: ForwardLambdaPropertyCarrier,
+    flowCarrier: Boolean,
   ) {
     if (prop.carriesLegacyLambdaProperty(lambdaCarrier)) {
       if (prop.isMutable && prop.hasPublicSetter()) {
@@ -1381,7 +1429,18 @@ internal class ForwardPropertyPlanner(
         protocol != null && LEGACY_ROUTED_PROTOCOLS.any { prefix ->
       protocol.name.startsWith(prefix)
     }
-    if (isLegacyRouted) return
+    if (isLegacyRouted) {
+      // The flow route binds the getter alone and never read `isMutable`, so a public `var` lost
+      // its setter with nothing naming it: the silent partial skip ADR-075 rejects. Only where
+      // the route binds the property: a refused element is named whole by its own walk, and a
+      // generic class ([flowCarrier]) has no public C# property for "is read-only" to be true of.
+      val bound: Boolean = flowCarrier &&
+          classifier.legacyRefusedFlowElementShape(prop.type.resolve()) == null
+      if (bound && prop.isMutable && prop.hasPublicSetter()) {
+        droppedSetters.add(prop.droppedFlowSetter(symbol, type))
+      }
+      return
+    }
     // Issue #52: a collection only lands here because a component failed `isReadable`, and
     // "Collection" alone would send the author after the wrong declaration, so name the slot.
     val collection: BridgeType.Collection? = type.unwrapNullable() as? BridgeType.Collection
