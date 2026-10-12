@@ -19,6 +19,7 @@ import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
+import io.github.xxfast.kotlin.native.nuget.processor.exports.carriesTypeParameterLambda
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmInterfaceBridgePairs
@@ -2038,7 +2039,7 @@ internal class ForwardCallablePlanner(
     // route declares no abstract member on the arm except through the arm suspend and Flow routes
     // (measured: `abstract suspend fun` and `abstract fun f(): Flow<Int>` are declared), which read
     // the declaration themselves, so those two stay exempt.
-    return entries.map { entry ->
+    return entries.nameGenericArmLegacyDrops(subclass).map { entry ->
       if (entry !is ForwardCallableCatalogEntry.Skipped) return@map entry
       val abstractOnAsyncRoute: Boolean = entry.reason == ForwardPlanSkipReason.ABSTRACT &&
           (entry.node as? KSFunctionDeclaration)?.let { method ->
@@ -2078,6 +2079,53 @@ internal class ForwardCallablePlanner(
         ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED,
         node = entry.node,
         detail = entry.reason.name,
+      )
+    }
+  }
+
+  /**
+   * ADR-199: the arm twin of [nameGenericOwnerLegacyRoutes]. An arm with a Kotlin type parameter
+   * in scope (`Hot<T>`; not `Bare : Plate<Nothing>`, generic in C# only) keeps its Flow and
+   * callback routes, which read the erased receiver, so only two deferrals are drops there:
+   *  - a `suspend` member, an `abstract` one and an override of the base's included: the suspend
+   *    route refuses a generic owner (`forwardSuspendRouteMethods`, ADR-147), and the generic base
+   *    projects nothing the arm could inherit;
+   *  - a callback member whose lambda carries a type parameter ([carriesTypeParameterLambda]).
+   * Each is relabelled [ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE], the name a generic
+   * class's member takes, unless `warnRefusedLegacyRouteMembers` already names it with its own
+   * refusal or an exported interface carries it (ADR-174).
+   */
+  private fun List<ForwardCallableCatalogEntry>.nameGenericArmLegacyDrops(
+    arm: KSClassDeclaration,
+  ): List<ForwardCallableCatalogEntry> {
+    if (arm.forwardTypeParametersInScope().isEmpty()) return this
+    return map { entry ->
+      if (entry !is ForwardCallableCatalogEntry.Skipped) return@map entry
+      val method: KSFunctionDeclaration = entry.node as? KSFunctionDeclaration ?: return@map entry
+      // The arm's own sealed interface is no carrier: it is the generic base, which projects nothing.
+      val overridden: KSClassDeclaration? =
+        method.findOverridee()?.parentDeclaration as? KSClassDeclaration
+      val carriedByInterface: Boolean = overridden?.modifiers?.contains(Modifier.SEALED) != true &&
+          method.overridesExportedInterfaceMember(classifier.exportedObjectHandles)
+      if (carriedByInterface) return@map entry
+      val isSuspend: Boolean = method.modifiers.contains(Modifier.SUSPEND)
+      val droppedAs: ForwardPlanSkipReason = when {
+        isSuspend && (entry.reason == ForwardPlanSkipReason.SUSPEND ||
+            entry.reason == ForwardPlanSkipReason.ABSTRACT) -> ForwardPlanSkipReason.SUSPEND
+        entry.reason == ForwardPlanSkipReason.CALLBACK_PROTOCOL &&
+            method.carriesTypeParameterLambda() -> ForwardPlanSkipReason.CALLBACK_PROTOCOL
+        else -> return@map entry
+      }
+      val namedByWalk: Boolean = if (isSuspend) {
+        classifier.legacyRefusedParameter(method.parameters) != null ||
+            classifier.legacyRefusedReturn(method) != null
+      } else {
+        method.refusedLegacyLambdaShape(classifier) != null
+      }
+      if (namedByWalk) return@map entry
+      entry.copy(
+        reason = ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE,
+        detail = droppedAs.name,
       )
     }
   }
