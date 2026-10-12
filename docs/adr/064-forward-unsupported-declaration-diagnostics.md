@@ -2182,3 +2182,15 @@ fixtures: IntegrationTests 3040, LeakTests 165, seven AOT shapes.
 **Inferred, not covered.** A lambda declared on a sealed base works at runtime on an arm: its getter
 has the same shape as an arm-declared one, but no fixture calls it. No `LeakTests` row, because no
 new handle route is added.
+
+## Amendment (2026-10-12): a diagnostic spells a function type as Kotlin source does
+
+A diagnostic named a function type by its class (`SuspendFunction1<Int, String>`,
+`Function1<Int, String>`), from raw `KSType` interpolation at several sites and from a shared
+speller (`KSType.kotlinSpelling()`) that knew the arrow form for arities 0 to 3 only. Every
+`kotlin.FunctionN` and `kotlin.coroutines.SuspendFunctionN` now prints as an arrow at any arity
+(`suspend (Int) -> String`, `(Int) -> String`), and a nullable one is parenthesised
+(`(suspend (Int) -> String)?`). Only message text changed: no code, no `NugetDiagnostics.json`
+schema change. Pinned by `Tier1FunctionTypeDiagnosticSpellingTest`. Not covered: an extension
+function type still prints `(Int) -> String` rather than `Int.() -> String`, and four diagnostics
+still print a bare `kotlin.coroutines.SuspendFunction1` with no type arguments (ROADMAP).
