@@ -958,9 +958,17 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
       }
 
     // ADR-147: names the owner, not a type: the member binds unchanged on a non-generic class.
+    // ADR-199: a generic sealed arm's callback member has its receiver spelled, so it names what
+    // does stop it, the lambda's erased payload.
     ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE ->
-      "it is a ${genericOwnerMemberKind(detail)} member of a generic class, and the route that " +
-          "binds that member kind cannot spell a generic receiver yet (ADR-147)"
+      if (detail == GENERIC_ARM_ERASED_LAMBDA) {
+        "one of its lambdas takes or returns a type parameter of its generic sealed arm, and " +
+            "the bridge calls the arm with that parameter erased: the lambda's payload crosses " +
+            "as `Any?`, which the callback route cannot marshal (ADR-199)"
+      } else {
+        "it is a ${genericOwnerMemberKind(detail)} member of a generic class, and the route " +
+            "that binds that member kind cannot spell a generic receiver yet (ADR-147)"
+      }
 
     // ADR-064's 2026-09-11 amendment: scope, position and nesting drops. None of these is about
     // an unsupported type combination, and each contradicted the hint printed beside it. The
@@ -1450,8 +1458,14 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
         "class"
 
   ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE ->
-    "move the member onto a non-generic class (for example a wrapper that holds this one), " +
-        "which keeps the route this member kind needs"
+    if (detail == GENERIC_ARM_ERASED_LAMBDA) {
+      "give the lambda a concrete payload type (`(Int) -> Unit`), or declare the member on an " +
+          "arm that fixes the type argument (for example `class Whole : Base<Int>()`), where " +
+          "the lambda is concrete and the member binds"
+    } else {
+      "move the member onto a non-generic class (for example a wrapper that holds this one), " +
+          "which keeps the route this member kind needs"
+    }
 
   // Issue #57: the old hint ("declare the member directly on the value class") was already true
   // of an explicit `override`, which skips by the same rule (ADR-082: an override *is* the

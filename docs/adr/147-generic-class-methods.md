@@ -774,7 +774,7 @@ Evidence, verified: `Tier1MemberGenericMethodTest` and `MemberGenericMethodTests
 
 ## Amendment (2026-10-05): a closed generic sealed reference binds at member positions
 
-[ADR-199](199-generic-sealed-hierarchies.md) lets a closed instantiation of a generic sealed hierarchy (`Outcome<Int>`) bind at member positions that were `SpecializedProtocol("generic declaration")` here; `suspend`, `Flow` and stored-callback members declared on a generic sealed base or arm keep this ADR's generic-owner skip.
+[ADR-199](199-generic-sealed-hierarchies.md) lets a closed instantiation of a generic sealed hierarchy (`Outcome<Int>`) bind at member positions that were `SpecializedProtocol("generic declaration")` here; `suspend`, `Flow` and stored-callback members declared on a generic sealed base or arm keep this ADR's generic-owner skip. *(Amended 2026-10-12: for an arm with a Kotlin type parameter, flow and callback members now bind and `suspend` ones are named; see the amendment below.)*
 
 ## Amendment (2026-10-10): a closed generic class reference binds at every position (ADR-208)
 
@@ -792,3 +792,68 @@ generic owner keep the named skip. The legacy top-level generic-return route thi
 
 Evidence, verified: `IntegrationTests/GenericInstanceMemberTests.cs` and
 `Tier1GenericInstanceMemberPositionTest`.
+
+## Amendment (2026-10-12): a generic sealed arm spells its receiver, and what it cannot bind is named
+
+The 2026-10-05 amendment above said `suspend`, `Flow` and stored-callback members of a generic sealed
+base or arm keep this ADR's generic-owner skip. That held for the base. For an arm it was incomplete in
+two ways: the flow and the three callback routes keyed to a sealed arm ([ADR-124](124-flow-route-sealed-arm-owners.md),
+[ADR-116](116-sealed-subclass-methods-on-the-callable-plan.md)) were not skipped but generated code
+that broke the consumer's build, and the members that were skipped were not all named. Both defects are
+spelling defects, on `main` as well as here (the defect lines are identical, by inspection).
+
+**Two spelling rules.**
+
+- *Kotlin receiver.* The arm export read `handle.asStableRef<Dish.Hot>()`, which Kotlin rejects ("One
+  type argument expected for 'class Hot<T> : Dish<T>'"). The flow, per-call lambda, stored-callback and
+  interface-bridge emitters now take the arm's `forwardOwnerTypeName()`, the same erased spelling the
+  arm's planned getters already used: `Dish.Hot<Any?>`, the bound for `T : Pet` (`Bowl.Full<tier1.menu.Pet>`),
+  and a star only for a multi-bound parameter, which has no single erased argument. A bare star is not
+  the default, because a star types every `T` position as `Nothing`, so a member that takes or returns
+  `T` would not compile.
+- *C# disposed guard.* The guard wrote `nameof(Hot)` inside `Hot<T>` (CS0305). It now names the arm with
+  its own C# type parameters through `armNameofSpelling`: `nameof(Hot<T>)`, still the string `"Hot"`. It
+  keys on the C# arm, so it also repairs an arm that is not generic in Kotlin but gains a phantom
+  parameter (`Bare : Plate<Nothing>` renders `Bare<T>`), whose flow and `suspend` members failed the same
+  way with Kotlin that compiled.
+
+**What binds on a generic arm.** `Flow`, `StateFlow`, `MutableStateFlow` and `SharedFlow` properties;
+`Flow`/`StateFlow`-returning methods; a `Flow<T>` over the arm's own parameter (`KotlinFlow<T>`); a
+per-call lambda parameter; a stored-callback `add`/`remove` pair; an interface-bridge `add`/`remove`
+pair; and every member of a phantom arm, `suspend` included. A flow property the generic *base* declares
+binds on each arm, because this ADR keeps the generic base off the flow route. A non-generic sealed base
+puts the same member on the base ([ADR-175](175-sealed-base-async-members.md)).
+
+**What is named instead.** Each is `SKIPPED_UNSUPPORTED_COMBINATION` with the reason
+`GENERIC_OWNER_LEGACY_ROUTE`. The `suspend` drops read the sentence the 2026-10-03 amendment gave a generic class's member; the `T`-lambda has its own:
+
+- a `suspend fun` on an arm with a Kotlin type parameter (silent before), one taking a `suspend`
+  lambda, an override of the generic base's abstract `suspend` member, and an override of a generic
+  sealed interface's `suspend` member. The generic base projects nothing, and its own skip tells the
+  author to declare the member on the arm, which is this same drop.
+- a lambda or stored pair whose lambda carries the arm's `T` (`fun withItem(cb: (T) -> Unit)`), a build
+  break before. With the receiver erased the payload reaches the export as `Any?`, and the hand-written
+  routes marshal a payload by its declared type, so they have no way to produce the `T` the C# callback
+  expects. `isArmCallbackRoutable` now refuses it on every arm-keyed callback route, on both halves.
+  It has its own sentence, because the generic class's "cannot spell a generic receiver" would be
+  false here (the receiver is spelled; the payload is the cause). Same code and reason constant, with
+  the detail `GENERIC_ARM_ERASED_LAMBDA`: "one of its lambdas takes or returns a type parameter of its
+  generic sealed arm, and the bridge calls the arm with that parameter erased: the lambda's payload
+  crosses as `Any?`, which the callback route cannot marshal ([ADR-199](199-generic-sealed-hierarchies.md))".
+  The hint names both remedies: give the lambda a concrete payload (`(Int) -> Unit`), or declare the
+  member on an arm that fixes the argument (`class Whole : Base<Int>()`). A member whose own refusal
+  already names it (a member that returns `T` is `SKIPPED_UNSUPPORTED_RETURN`) keeps that message and
+  is named once.
+
+**A `var` flow property.** On a generic arm, a generic base or a phantom arm it keeps its getter and
+names its dropped setter once (`SKIPPED_UNSUPPORTED_INPUT`); the base's is named once under the base,
+not once per arm. Pinned by `a var flow property keeps its getter and names its dropped setter once`.
+
+**Known wording gap, no fixture.** "Crosses as `Any?`" is exact for an unbounded parameter. On a
+bounded arm (`Full<T : Pet>`) the erased payload is the bound, and the same skip fires with the same
+sentence. No fixture cell exercises that case.
+
+Evidence, verified: `Tier1GenericSealedFlowPropertyTest`, `Tier1GenericSealedArmCallbackTest` and
+`Tier1GenericSealedArmNamedSkipTest` (which pins both remedies as binding cells, `Hot.withCount` and
+`Cold.withChill`); `IntegrationTests/GenericSealedArmRouteTests.cs` against
+`Dish<out T>` in `outcome/DishSample.kt`; four `GenericSealedArm_*` rows in `LeakTests/LiveHandleTests.cs`.

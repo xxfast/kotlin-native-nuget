@@ -5579,4 +5579,92 @@ public class LiveHandleTests
             await closed.Task.WaitAsync(FlowPatience);
         });
     }
+
+    // ADR-124 on a generic sealed arm (ADR-199): the arm owns the scope its flow members collect
+    // on, and each collected element is one owned crossing. A flow the generic base declares, one
+    // whose element is the arm's type parameter (a boxed `String` per emission), a StateFlow read
+    // and write, the method half, and the phantom arm's StateFlow and suspend member must each
+    // come back to baseline once the arm is drained.
+    [Fact]
+    public async Task GenericSealedArm_FlowMembers_ReturnToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await using (var oreo = new Outcomes.Dish.Hot<string>("tuna"))
+            {
+                int courses = 0;
+                await foreach (int course in oreo.Served) courses += course;
+                Assert.Equal(6, courses);
+                var portions = new List<string>();
+                await foreach (string portion in oreo.Portions) portions.Add(portion);
+                Assert.Equal(new[] { "tuna", "tuna" }, portions);
+                oreo.Heat.Value = 45;
+                Assert.Equal(45, oreo.Heat.Value);
+                int wafts = 0;
+                await foreach (int waft in oreo.Wafts(3)) wafts += waft;
+                Assert.Equal(3, wafts);
+            }
+            await using (var mylo = new Outcomes.Dish.Bare<string>(4))
+            {
+                Assert.Equal(4, mylo.Drips.Value);
+                Assert.Equal(4, await mylo.WipeAsync());
+            }
+        });
+    }
+
+    private sealed class ProbeDiner : Outcomes.IDiner
+    {
+        public int Courses { get; private set; }
+        public void OnPlated(int course) => Courses += course;
+        public void Dispose() { }
+    }
+
+    // ADR-116's per-call lambda route on a generic sealed arm (ADR-199): one `Char` crossing per
+    // invocation, nothing retained once the call returns.
+    [Fact]
+    public async Task GenericSealedArm_PerCallLambda_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await using var oreo = new Outcomes.Dish.Hot<string>("tuna");
+            int letters = 0;
+            oreo.Spell(_ => letters++);
+            Assert.Equal(4, letters);
+        });
+    }
+
+    // The stored-callback pair on the same arm: subscribe, fire, unsubscribe. The Kotlin bridge
+    // lambda the subscription holds must be released by `Dispose()`, and a fire after it must not
+    // reach the listener.
+    [Fact]
+    public async Task GenericSealedArm_StoredCallbackPair_SubscribeFireUnsubscribe_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await using var oreo = new Outcomes.Dish.Hot<string>("tuna");
+            int rung = 0;
+            IDisposable bell = oreo.AddBell(course => rung += course);
+            Assert.Equal(1, oreo.Plate(3));
+            bell.Dispose();
+            Assert.Equal(0, oreo.Plate(5));
+            Assert.Equal(3, rung);
+        });
+    }
+
+    // And the interface-bridge pair: the bridge object Kotlin holds for the C# listener goes with
+    // the subscription.
+    [Fact]
+    public async Task GenericSealedArm_InterfaceBridgePair_SubscribeFireUnsubscribe_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await using var oreo = new Outcomes.Dish.Hot<int>(7);
+            var mylo = new ProbeDiner();
+            IDisposable seat = oreo.AddDiner(mylo);
+            Assert.Equal(1, oreo.Plate(3));
+            seat.Dispose();
+            Assert.Equal(0, oreo.Plate(5));
+            Assert.Equal(3, mylo.Courses);
+        });
+    }
 }

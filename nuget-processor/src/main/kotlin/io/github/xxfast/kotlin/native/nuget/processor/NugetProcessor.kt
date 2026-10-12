@@ -121,6 +121,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticHint
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardGuardName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMemberGenericRefusal
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardOwnerTypeName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.guarded
 import io.github.xxfast.kotlin.native.nuget.processor.forward.internalFailureDetail
 import io.github.xxfast.kotlin.native.nuget.processor.forward.wholeRoundFailureDiagnostic
@@ -3775,12 +3776,16 @@ internal class NugetProcessor(
           val armFlowMethods: List<KSFunctionDeclaration> =
             subclass.forwardArmFlowMethods(forwardClassifier)
           if (armFlowProperties.isEmpty() && armFlowMethods.isEmpty()) return@guardDeclaration
+          // ADR-199: a generic arm (`Hot<T>`) has no bare spelling, so the receiver read takes the
+          // erased one the arm's planned getters already read (`asStableRef<Dish.Hot<Any?>>()`).
+          // The flow emitters use the name as receiver-cast text only.
+          val armReceiver: String = subclass.forwardOwnerTypeName() ?: subQualifiedName
           armFlowProperties.forEach { prop ->
-            builder.addFlowPropertyExports(prop, subQualifiedName, armPrefix, forwardClassifier)
+            builder.addFlowPropertyExports(prop, armReceiver, armPrefix, forwardClassifier)
           }
           armFlowMethods.forEach { method ->
             builder.addFlowMethodExports(
-              method, subQualifiedName, armPrefix, forwardClassifier, callableCatalog,
+              method, armReceiver, armPrefix, forwardClassifier, callableCatalog,
             )
           }
         }
@@ -3802,8 +3807,10 @@ internal class NugetProcessor(
           val armLambdaMethods: List<KSFunctionDeclaration> =
             subclass.forwardArmLambdaMethods(forwardClassifier)
           if (armLambdaMethods.isEmpty()) return@guardDeclaration
+          // ADR-199: the erased receiver of a generic arm, as on the arm flow route above.
+          val armReceiver: String = subclass.forwardOwnerTypeName() ?: subQualifiedName
           armLambdaMethods.forEach { method ->
-            builder.addLambdaParamMethodExport(method, subQualifiedName, armPrefix)
+            builder.addLambdaParamMethodExport(method, armReceiver, armPrefix)
           }
         }
       }
@@ -3827,12 +3834,14 @@ internal class NugetProcessor(
           val bridgePairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
             subclass.forwardArmInterfaceBridgePairs(forwardClassifier)
           if (storedPairs.isEmpty() && bridgePairs.isEmpty()) return@guardDeclaration
+          // ADR-199: the erased receiver of a generic arm, as on the arm flow route above.
+          val armReceiver: String = subclass.forwardOwnerTypeName() ?: subQualifiedName
           storedPairs.forEach { (addMethod, removeMethod) ->
-            builder.addStoredCallbackExports(addMethod, removeMethod, subQualifiedName, armPrefix)
+            builder.addStoredCallbackExports(addMethod, removeMethod, armReceiver, armPrefix)
           }
           bridgePairs.forEach { (addMethod, removeMethod) ->
             builder.addInterfaceBridgeExports(
-              addMethod, removeMethod, subQualifiedName, armPrefix, forwardClassifier,
+              addMethod, removeMethod, armReceiver, armPrefix, forwardClassifier,
             )
           }
         }

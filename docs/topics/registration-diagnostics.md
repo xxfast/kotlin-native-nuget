@@ -204,6 +204,16 @@ lends it to Kotlin at a parameter. `LeakTests/LiveHandleTests.cs`'s
 names (`Hamper<Outcome<long>>`), read back through a second handle to the same Kotlin object that you
 dispose as well.
 
+The [members of a generic arm](interfaces-abstract-sealed.md#generic-sealed-arm-members) add no new
+handle kind either. Each element a flow collects from `Dish.Hot<string>.Portions` mints one owned
+crossing, and the count returns to baseline once you `DisposeAsync` the arm. A stored-callback or
+interface-listener subscription holds a Kotlin bridge that its `Dispose()` releases, and a call after
+that reaches no listener. `LeakTests/LiveHandleTests.cs`'s `GenericSealedArm_FlowMembers_ReturnToBaseline`
+covers the flow members and a phantom arm's `StateFlow` and `suspend` member,
+`GenericSealedArm_PerCallLambda_ReturnsToBaseline` the per-call lambda,
+`GenericSealedArm_StoredCallbackPair_SubscribeFireUnsubscribe_ReturnsToBaseline` and
+`GenericSealedArm_InterfaceBridgePair_SubscribeFireUnsubscribe_ReturnsToBaseline` the two pairs.
+
 A [closed generic class at a member position](generics.md#returning-an-instantiated-generic-class)
 (`Box<String>`, `Box<Box<Int>>`) follows the same rule: every `Box<T>` Kotlin hands back, from a
 property read, a member, companion, object or top-level return, a nullable return, a list element,
