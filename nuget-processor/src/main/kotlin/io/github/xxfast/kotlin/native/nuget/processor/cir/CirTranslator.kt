@@ -1081,9 +1081,9 @@ internal fun translate(
         .mapNotNull { parameter -> parameter.type as? BridgeType.FlowSource } +
         tracker.flowSources
       ).distinct()
-  if (tracker.callbackDelegates.isNotEmpty() || asyncCallbacks.isNotEmpty() ||
-    flowSources.isNotEmpty()
-  ) {
+  val hasCallbackDelegates: Boolean = tracker.callbackDelegates.isNotEmpty()
+  val hasAsyncParameters: Boolean = asyncCallbacks.isNotEmpty() || flowSources.isNotEmpty()
+  if (hasCallbackDelegates || hasAsyncParameters) {
     helpers.add(
       CirCallbackDelegateHelper(
         tracker.callbackDelegates.distinctBy { it.name },

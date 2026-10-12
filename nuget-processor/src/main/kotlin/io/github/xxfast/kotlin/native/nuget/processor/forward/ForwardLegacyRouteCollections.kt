@@ -15,8 +15,8 @@ import com.google.devtools.ksp.symbol.Modifier
 import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.MUTABLE_STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.PLAIN_FLOW_TYPES
-import io.github.xxfast.kotlin.native.nuget.processor.cir.SHARED_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.READ_ONLY_STATE_FLOW_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.SHARED_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 
@@ -271,7 +271,9 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
   if (host != null) {
     val suspends: Boolean = Modifier.SUSPEND in host.modifiers
     if (suspends) {
-      asyncCallbackOrNull(type)?.let { callback -> return ForwardLegacyParameterShape.Async(callback) }
+      asyncCallbackOrNull(type)?.let { callback ->
+        return ForwardLegacyParameterShape.Async(callback)
+      }
     }
     // A `Flow<T>` binds on a `suspend` member and on a member that itself returns a plain `Flow`,
     // whose collect export lowers it once per C# collect.

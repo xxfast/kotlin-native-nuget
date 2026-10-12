@@ -1113,7 +1113,6 @@ internal class ForwardBridgeTypeClassifier(
     return BridgeType.AsyncCallback(parameters, result).also { minted -> asyncCallbacks += minted }
   }
 
-  /** [classify] at a parameter position: ADR-210's suspend lambda first, then everything else. */
   /**
    * ADR-210: the [BridgeType.FlowSource] for a non-nullable plain `Flow<T>` whose element is a
    * non-nullable primitive or `String`, or null for any other type. Position-specific like

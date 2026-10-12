@@ -20,7 +20,8 @@ import kotlinx.coroutines.flow.toList
  *
  * ### Hosts
  *  - **class `suspend fun`** (legacy suspend route): everything `suspend` on [WaterFountain].
- *  - **`Flow`-returning member taking a `Flow`** (legacy Flow-return route): [WaterFountain.doubled].
+ *  - **`Flow`-returning member taking a `Flow`** (legacy Flow-return route):
+ *    [WaterFountain.doubled].
  *  - **`suspend fun` on a sealed arm**: [Bowl.Ceramic.fill].
  *  - **non-suspend member on a sealed arm that stores the flow**: [Bowl.Ceramic.attach], collected
  *    later by [Bowl.Ceramic.fillFromAttached]. Today this one is not skipped but *silently dropped*

@@ -1657,16 +1657,9 @@ private const val genericSkipHint: String =
       "instead"
 
 /**
- * A short, human-readable name for a diagnostic message; never used to drive marshalling.
- *
- * Lifted from a `ForwardPropertyPlanner` private member to file-level `internal` (the body touches
- * no planner state) so the callable planner can name a skipped collection's offending component in
- * exactly the wording the property setter diagnostic already uses.
- */
-/**
- * ADR-210: the detail a `StateFlow<T>`, `SharedFlow<T>` or `MutableStateFlow<T>` PARAMETER carries
- * under [ForwardPlanSkipReason.UNROUTED_POSITION], and its sentence and hint. A cold `Flow<T>` binds
- * as `IAsyncEnumerable<T>`; a hot one has nothing on the C# side to be made from.
+ * ADR-210: the detail a `StateFlow<T>`, `SharedFlow<T>` or `MutableStateFlow<T>` PARAMETER
+ * carries under [ForwardPlanSkipReason.UNROUTED_POSITION], and its sentence and hint. A cold
+ * `Flow<T>` binds as `IAsyncEnumerable<T>`; a hot one has nothing on the C# side to be made from.
  */
 internal const val HOT_FLOW_INPUT_DETAIL: String = "HOT_FLOW_INPUT"
 
@@ -1678,6 +1671,13 @@ internal const val HOT_FLOW_INPUT_REASON: String =
 internal const val HOT_FLOW_INPUT_HINT: String =
   "declare the parameter as `Flow<T>` and call `stateIn(scope)` (or `shareIn`) on it in Kotlin"
 
+/**
+ * A short, human-readable name for a diagnostic message; never used to drive marshalling.
+ *
+ * Lifted from a `ForwardPropertyPlanner` private member to file-level `internal` (the body touches
+ * no planner state) so the callable planner can name a skipped collection's offending component in
+ * exactly the wording the property setter diagnostic already uses.
+ */
 internal fun BridgeType.diagnosticTypeName(): String = when (this) {
   // ADR-160: spelled as the Kotlin function type the author wrote, so a refused nesting reads
   // `(Int) -> Unit` rather than a model constant.

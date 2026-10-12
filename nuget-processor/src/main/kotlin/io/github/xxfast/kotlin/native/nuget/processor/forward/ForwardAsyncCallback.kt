@@ -135,8 +135,9 @@ internal fun mintAsyncSlots(
   val shared: MutableMap<ForwardAsyncShared, String> = mutableMapOf()
   return parameters.map { (name, kind) ->
     if (kind == null) return@map null
-    val begin: String = mint(if (kind == ForwardAsyncKind.FLOW) "${name}Enumerate" else "${name}Begin")
-    val end: String = mint(if (kind == ForwardAsyncKind.FLOW) "${name}Current" else "${name}End")
+    val isFlow: Boolean = kind == ForwardAsyncKind.FLOW
+    val begin: String = mint(if (isFlow) "${name}Enumerate" else "${name}Begin")
+    val end: String = mint(if (isFlow) "${name}Current" else "${name}End")
     val key: String = mint("${name}Key")
     val carried: List<ForwardAsyncShared> = kind.sharedSlots().filter { slot -> slot !in shared }
     carried.forEach { slot -> shared[slot] = mint("$name${slot.stem()}") }
@@ -420,8 +421,8 @@ internal fun BridgeType.FlowSource.kotlinFlowType(): String =
  * ADR-210: the Kotlin `Flow<T>` over the C# caller's `IAsyncEnumerable<T>`, as one self-contained
  * expression of type [kotlinFlowType].
  *
- * The whole shape is the runtime's `flowForKotlin` (ADR-156): cold, so the Enumerate thunk (and with
- * it `GetAsyncEnumerator`) runs once per `collect`; one `awaitForKotlin` per element; the
+ * The whole shape is the runtime's `flowForKotlin` (ADR-156): cold, so the Enumerate thunk (and
+ * with it `GetAsyncEnumerator`) runs once per `collect`; one `awaitForKotlin` per element; the
  * enumeration disposed exactly once from its `finally`. Enumerate, both halves of a step and
  * Current run user C#, so each goes through `nugetCallbackCall`; the dispose and the task release
  * are plumbing and carry no error slot. `enumerate` reads the key off the holder, which is what
@@ -434,7 +435,8 @@ internal fun flowSourceExpression(
   // See [asyncCallbackExpression].
   holderBuilt: Boolean = false,
 ): String {
-  val taken: MutableSet<String> = (slots.declared + slots.shared.values + name + slots.holder).toMutableSet()
+  val taken: MutableSet<String> = (slots.declared + slots.shared.values + name + slots.holder)
+    .toMutableSet()
   fun mint(base: String): String = freshName(base, taken).also { taken += it }
   val holder: String = slots.holder
   val flow: String = mint("${name}Flow")
@@ -533,7 +535,9 @@ internal fun asyncParameterExpression(
   ForwardAsyncKind.LAMBDA ->
     asyncCallbackExpression(name, type as BridgeType.AsyncCallback, slots, holderBuilt)
 
-  ForwardAsyncKind.FLOW -> flowSourceExpression(name, type as BridgeType.FlowSource, slots, holderBuilt)
+  ForwardAsyncKind.FLOW ->
+    flowSourceExpression(name, type as BridgeType.FlowSource, slots, holderBuilt)
+
   null -> error("ADR-210 has no asynchronous parameter lowering for $type")
 }
 

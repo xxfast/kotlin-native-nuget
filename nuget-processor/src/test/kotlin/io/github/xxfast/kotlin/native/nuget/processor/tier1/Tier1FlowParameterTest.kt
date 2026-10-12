@@ -141,7 +141,8 @@ class Tier1FlowParameterTest {
           "CancellationToken cancellationToken = default)",
       "public Task<string> DescribeAsync($flow<string> sips, " +
           "CancellationToken cancellationToken = default)",
-      "public Task<int> FlagsAsync($flow<bool> bits, CancellationToken cancellationToken = default)",
+      "public Task<int> FlagsAsync($flow<bool> bits, " +
+          "CancellationToken cancellationToken = default)",
       // The legacy Flow-return route as host.
       "public KotlinFlow<int> Doubled($flow<int> source)",
       // The plan: a non-suspend class member, the arm member that was a silent drop, a constructor.
@@ -209,9 +210,10 @@ class Tier1FlowParameterTest {
     assertTrue(
       result.generatedCSharp.contains(
         "Native_TotalDropsAsync(NugetKotlinHandle handle, NugetKotlinHandle scopeHandle, " +
-            "IntPtr dropsEnumerate, IntPtr dropsCurrent, IntPtr dropsKey, IntPtr dropsReleaseTask, " +
-            "IntPtr dropsMoveNextBegin, IntPtr dropsMoveNextEnd, IntPtr dropsDisposeEnumeration, " +
-            "IntPtr dropsReleaseContext, IntPtr callback, IntPtr userData);"
+            "IntPtr dropsEnumerate, IntPtr dropsCurrent, IntPtr dropsKey, " +
+            "IntPtr dropsReleaseTask, IntPtr dropsMoveNextBegin, IntPtr dropsMoveNextEnd, " +
+            "IntPtr dropsDisposeEnumeration, IntPtr dropsReleaseContext, " +
+            "IntPtr callback, IntPtr userData);"
       ),
       "got=" + result.generatedCSharp.lines().filter { it.contains("Native_TotalDropsAsync(") },
     )
@@ -245,7 +247,10 @@ class Tier1FlowParameterTest {
     val csharp: String = result.generatedCSharp
     val enumerate: String = result.thunk("NugetAsyncEnumerate")
 
-    assertTrue(enumerate.contains("NugetAsyncEnumerateThunk(IntPtr key, IntPtr* errOut)"), enumerate)
+    assertTrue(
+      enumerate.contains("NugetAsyncEnumerateThunk(IntPtr key, IntPtr* errOut)"),
+      enumerate,
+    )
     assertInOrder(
       enumerate,
       "object? target = LookupCtx(key);",
@@ -301,8 +306,10 @@ class Tier1FlowParameterTest {
       "throw;",
     )
     // MoveNextBegin: the pending step is remembered BEFORE it is attached, for Dispose to await.
+    val moveNextBegin: String = enumeration.substringAfter("static void MoveNextBegin(")
+      .substringBefore("DisposeEnumeration")
     assertInOrder(
-      enumeration.substringAfter("static void MoveNextBegin(").substringBefore("DisposeEnumeration"),
+      moveNextBegin,
       "pending = n.MoveNext().AsTask();",
       "n.Pending = pending;",
       "NugetTasks.Attach(pending, callback, ctx);",

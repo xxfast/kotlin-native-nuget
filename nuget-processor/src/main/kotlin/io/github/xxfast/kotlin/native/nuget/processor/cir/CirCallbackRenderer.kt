@@ -501,7 +501,8 @@ private fun StringBuilder.appendAsyncEnumerationMembers() {
   appendLine("            try")
   appendLine("            {")
   appendLine(
-    "                $generic.IAsyncEnumerator<T> enumerator = source.GetAsyncEnumerator(cts.Token);"
+    "                $generic.IAsyncEnumerator<T> enumerator = " +
+        "source.GetAsyncEnumerator(cts.Token);"
   )
   appendLine("                return GCHandle.ToIntPtr(GCHandle.Alloc(")
   appendLine("                    new NugetAsyncEnumeration<T>(enumerator, cts)));")
@@ -519,7 +520,9 @@ private fun StringBuilder.appendAsyncEnumerationMembers() {
         ".Enumerator.Current;"
   )
   appendLine()
-  appendLine("        internal static void MoveNextBegin(IntPtr enumeration, IntPtr callback, IntPtr ctx)")
+  appendLine(
+    "        internal static void MoveNextBegin(IntPtr enumeration, IntPtr callback, IntPtr ctx)"
+  )
   appendLine("        {")
   appendLine("            NugetAsyncEnumeration n =")
   appendLine("                (NugetAsyncEnumeration)GCHandle.FromIntPtr(enumeration).Target!;")
@@ -584,7 +587,9 @@ private fun StringBuilder.appendAsyncEnumerationClasses() {
   appendLine()
   appendLine("        internal $enumerator Enumerator { get; }")
   appendLine()
-  appendLine("        internal override $tasks.ValueTask<bool> MoveNext() => Enumerator.MoveNextAsync();")
+  appendLine(
+    "        internal override $tasks.ValueTask<bool> MoveNext() => Enumerator.MoveNextAsync();"
+  )
   appendLine()
   appendLine("        internal override $tasks.ValueTask Dispose() => Enumerator.DisposeAsync();")
   appendLine("    }")

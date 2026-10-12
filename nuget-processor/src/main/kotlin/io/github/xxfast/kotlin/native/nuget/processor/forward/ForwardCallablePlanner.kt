@@ -5943,12 +5943,6 @@ internal fun BridgeType.skipDetail(): String? = optInMarkerDetail()
   ?: sealedTypeDetail()
   ?: unsupportedTypeDetail()
 
-/** The rendered name of whatever the classifier refused, so [ForwardPlanSkipReason.UNSUPPORTED]'s
- *  sentence can name the type the author wrote instead of the reason constant (and, ADR-151, so
- *  its hint can recognise an unmapped `kotlin.*`/`kotlinx.*` type). Last in the chain: every
- *  flagged refusal above it (opt-in marker, typealias target, scope, nesting) is more specific and
- *  keeps its own wording. `null` for every type that is not [BridgeType.Unsupported], which is
- *  every type whose refusal is about a position rather than the type itself. */
 /** ADR-210: [HOT_FLOW_INPUT_DETAIL] for a `StateFlow`, `SharedFlow` or `MutableStateFlow`. */
 internal fun BridgeType.hotFlowInputDetail(): String? =
   (this as? BridgeType.SpecializedProtocol)?.takeIf { protocol ->
@@ -5956,6 +5950,12 @@ internal fun BridgeType.hotFlowInputDetail(): String? =
         (protocol.name.startsWith("flow ") && protocol.name.endsWith("SharedFlow"))
   }?.let { HOT_FLOW_INPUT_DETAIL }
 
+/** The rendered name of whatever the classifier refused, so [ForwardPlanSkipReason.UNSUPPORTED]'s
+ *  sentence can name the type the author wrote instead of the reason constant (and, ADR-151, so
+ *  its hint can recognise an unmapped `kotlin.*`/`kotlinx.*` type). Last in the chain: every
+ *  flagged refusal above it (opt-in marker, typealias target, scope, nesting) is more specific and
+ *  keeps its own wording. `null` for every type that is not [BridgeType.Unsupported], which is
+ *  every type whose refusal is about a position rather than the type itself. */
 internal fun BridgeType.unsupportedTypeDetail(): String? =
   (unwrapNullable() as? BridgeType.Unsupported)?.let { unsupported ->
     // ADR-208: a generic class refused at its use site carries the reason after the name, the

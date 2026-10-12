@@ -928,11 +928,15 @@ internal fun warnRefusedLegacyRouteMembers(
       add(
         shape.refusal?.let {
           refusedDependency(member, declaration, it, ForwardSkipPosition.INPUT, owner)
-        } ?: refusedParameter(member, declaration, "$name: ${shape.description}", owner).let { named ->
-          // ADR-210: a hot flow at a parameter has its own sentence and remedy.
-          if (shape.hotFlow) named.copy(reason = HOT_FLOW_INPUT_REASON, hint = HOT_FLOW_INPUT_HINT)
-          else named
-        },
+        } ?: refusedParameter(member, declaration, "$name: ${shape.description}", owner)
+          .let { named ->
+            // ADR-210: a hot flow at a parameter has its own sentence and remedy.
+            if (shape.hotFlow) {
+              named.copy(reason = HOT_FLOW_INPUT_REASON, hint = HOT_FLOW_INPUT_HINT)
+            } else {
+              named
+            }
+          },
       )
       return
     }

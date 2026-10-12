@@ -321,7 +321,9 @@ private fun legacyRouteParameter(
     // local `collectionScopedCall` guards: C# owns it until the native call returns, the Kotlin
     // holder's cleaner from then on. Tracked so `Interop.cs` renders this shape's thunks.
     is ForwardLegacyParameterShape.Async -> {
-      (shape.type as? BridgeType.AsyncCallback)?.let { callback -> tracker.asyncCallbacks += callback }
+      (shape.type as? BridgeType.AsyncCallback)?.let { callback ->
+        tracker.asyncCallbacks += callback
+      }
       (shape.type as? BridgeType.FlowSource)?.let { flow -> tracker.flowSources += flow }
       val slots: ForwardAsyncSlots = requireNotNull(names.asyncSlots[index])
       CirParameter(

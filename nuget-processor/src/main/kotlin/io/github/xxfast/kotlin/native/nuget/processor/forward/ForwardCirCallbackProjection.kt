@@ -377,7 +377,6 @@ internal fun forwardAsyncCallbackHandOver(keyLocal: String): String = "$keyLocal
 internal fun forwardAsyncCallbackCleanup(keyLocal: String): String =
   "NugetThunks.UnregisterCtx($keyLocal);"
 
-
 // ------------------------------------------------------------------------------------------------
 // ADR-210: a `Flow<T>` parameter, as `IAsyncEnumerable<T>`, and the helpers both kinds share.
 // ------------------------------------------------------------------------------------------------
@@ -394,8 +393,11 @@ internal fun BridgeType.FlowSource.forwardAsyncCurrent(): CirAsyncEnd {
   val name: String = forwardAsyncCurrentName()
   val public: String = element.forwardPublicCsharpType()
   return when {
-    element == BridgeType.String ->
-      CirAsyncEnd(name, "IntPtr", "NugetMarshal.WrapString(NugetAsyncEnumeration.Current<string>(a0))")
+    element == BridgeType.String -> CirAsyncEnd(
+      name,
+      "IntPtr",
+      "NugetMarshal.WrapString(NugetAsyncEnumeration.Current<string>(a0))",
+    )
 
     element is BridgeType.Primitive && element.kind == PrimitiveKind.BOOLEAN ->
       CirAsyncEnd(name, "byte", "NugetAsyncEnumeration.Current<bool>(a0) ? (byte)1 : (byte)0")
@@ -414,8 +416,8 @@ internal fun forwardAsyncRegistration(name: String, type: BridgeType): String =
     ForwardAsyncKind.LAMBDA ->
       forwardAsyncCallbackRegistration(name, type as BridgeType.AsyncCallback)
 
-    ForwardAsyncKind.FLOW ->
-      "NugetTasks.Register($name, nameof($name), (Func<IntPtr>)(() => NugetAsyncEnumeration.Enumerate($name)))"
+    ForwardAsyncKind.FLOW -> "NugetTasks.Register($name, nameof($name), " +
+        "(Func<IntPtr>)(() => NugetAsyncEnumeration.Enumerate($name)))"
 
     null -> error("Forward CIR projection has no asynchronous registration for $type")
   }
@@ -459,7 +461,11 @@ internal fun forwardAsyncArguments(
 }
 
 /** The plan route's guarded span for either asynchronous parameter. See the registration above. */
-internal fun forwardAsyncPrelude(name: String, type: BridgeType, keyLocal: String): ForwardCirHandleStep {
+internal fun forwardAsyncPrelude(
+  name: String,
+  type: BridgeType,
+  keyLocal: String,
+): ForwardCirHandleStep {
   val register: String = "$keyLocal = ${forwardAsyncRegistration(name, type)};"
   return ForwardCirHandleStep(
     flat = "IntPtr $register",
