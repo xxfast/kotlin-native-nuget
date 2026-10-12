@@ -227,7 +227,8 @@ moment ago. That is ordinary late delivery, not a wrong-listener bug and not a u
 4. Fixed, see the 2026-10-07 cancelled-callback amendment: a cancelled C# callback that escaped
    Kotlin uncaught re-crossed typed as Kotlin's `CancellationException`, not the original type.
 5. `NugetErrorNative._lastManagedFault` ([ThreadStatic]) kept one exception rooted per thread until
-   the next fault overwrote it or read it back. Mostly fixed, see the 2026-10-07 amendment.
+   the next fault overwrote it or read it back. Mostly fixed, see the 2026-10-07 amendment; the
+   dispatcher-thread case is fixed by the 2026-10-12 amendment.
 6. `NugetManagedException` carries no `@NugetRuntimeApi`, unlike every other public runtime export;
    left for a human decision (above).
 
@@ -306,11 +307,13 @@ Two cases are knowingly left:
   late-delivery rule above: the original is rethrown only when nothing intervened.
 
 A callback that throws on a Kotlin dispatcher thread (suspend or `Flow` routes) is not covered: that
-thread never runs a C# export call site, so its stash is never cleared. Tracked in ROADMAP Phase 7.
+thread never runs a C# export call site, so its stash is never cleared. Closed by the 2026-10-12
+amendment below.
 
 Verified: `Tier1ManagedFaultStashTest` (emitted shape, and the wrapped-throw case pinned by
 `WrappedThrow_ManagedFaultStashIsClearedByTheNextSuccessfulCrossing`) and two cells in
-`CallbackFaultTests.cs`. Inferred, not reproduced: the dispatcher-thread gap.
+`CallbackFaultTests.cs`.
+The dispatcher-thread gap was inferred here; the 2026-10-12 amendment reproduces and fixes it.
 
 ## Amendment (2026-10-07): a cancelled callback re-crosses as the original .NET type
 
@@ -333,8 +336,11 @@ messages). It then resolves the original type as follows:
 
 Verified: `Tier1CancelledCallbackOriginalTest` and the six `CancelledCallback_*` cells in
 `CallbackFaultTests.cs`. Inferred, not tested: suspend and `Flow` exports share `BuildException`, so
-a cancelled callback there hits the same detection, but only the rebuild path can fire because the
-stash lives on another thread.
+a cancelled callback there hits the same detection. Whether the original object is recovered there
+depends on the thread: the stash is written on a Kotlin worker thread, and the completion runs on
+possibly another thread. With no dispatch between the throw and the coroutine completing it runs on
+the thread that stashed, so the original would be recovered; that is inferred for a cancelled
+callback. The 2026-10-12 amendment verifies the same-thread recovery only for a plain uncaught fault.
 
 ## Amendment (2026-10-10): a null returned for a non-null `String` takes this path
 
@@ -345,3 +351,56 @@ uncaught `kotlin.NullPointerException`. The C# caller of the Kotlin function rec
 `ArgumentNullException` for a lambda (verified); for an interface member the test asserts only an
 exception whose message contains `value`. See the 2026-10-10 amendment to
 [ADR-003](003-memory-management-across-bridge.md).
+
+## Amendment (2026-10-12): the stash is cleared where an async completion consumes it
+
+The dispatcher-thread case left open by the 2026-10-07 stash amendment is reproduced and fixed. A
+suspend, `Flow`, or (ADR-210) suspend-lambda or `Flow`-parameter callback can throw on a Kotlin
+dispatcher thread that never runs a synchronous C# export call site. When Kotlin caught the fault
+there, the exception stayed rooted in that thread's `_lastManagedFault` for the thread's life.
+
+The clear goes where the stash is consumed, never where the thunk catches. Clearing in the thunk
+catch would remove the stash before `BuildException` could read it and break the same-thread
+original-object recovery this ADR decided (`CallbackFaultTests`, unchanged). The sites:
+
+- `appendAsyncCompletionClosure` (`cir/CirConcurrencyRenderer.kt`) puts one
+  `finally { NugetErrorNative.ClearManagedFault(); }` on the completion closure's existing
+  `try`/`catch`. It runs after `BuildException` on the fault arm and also covers the cancelled arm,
+  the success arm and the containment catch. The one closure body serves the `Task` wrappers, the
+  `KotlinSuspendFunc` and `KotlinSuspendAction` invokers, the `DisposeAsync` drain and
+  `MutableSharedFlow.EmitAsync`.
+- `cir/CirFlowRenderer.kt`: the flow enumerator's three terminal callbacks clear: the cancelled arm
+  of `onNext`, `onComplete`, and `onError` after `BuildException`. The per-item arm does not clear;
+  it ends nothing.
+
+Verified:
+
+- Tier 1: `Tier1CallbackFaultContainmentTest` pins the emitted shape of both sites (a clear in a
+  `finally` that follows every arm of the completion closure; the three flow terminals, `onError`
+  clearing after `BuildException`).
+- `LeakTests/CollectabilityTests.cs`, `ManagedFault_*`. The first row failed before the fix; the
+  others were added to cover the remaining stash sites and are not recorded as red beforehand.
+  - `ManagedFault_ThrownOnAKotlinDispatcherThread_AndCaughtByKotlin_IsCollected`.
+  - `ManagedFault_ThrownOnTheCallingThread_AndCaughtByKotlin_IsCollected`: the control; a
+    synchronous export already cleared.
+  - `ManagedFault_FromAFlowParameterIteratorThatThrowsMidStream_AndCaughtByKotlin_IsCollected`
+    (stashed in `NugetAsyncMoveNextEnd`) and
+    `ManagedFault_FromAFlowParameterMoveNextThatThrowsSynchronously_AndCaughtByKotlin_IsCollected`
+    (`NugetAsyncMoveNextBegin`).
+  - `ManagedFault_FromAFaultedTask_AndCaughtByKotlin_IsCollected` (`NugetAsyncStringEnd`).
+  - `ManagedFault_NotCaughtByKotlin_IsCollectedOnceTheFaultedTaskIsDropped`, a theory with a throw
+    before and after an `await`. It pins the fault arm and would also pass without the fix, because
+    `TakeOriginalManagedFault` empties the slot when it hands the original back. It asserts the
+    outer `Task` faults with the very exception the lambda threw (`CaughtWasOriginal`) on both arms.
+
+For a plain fault, that last assertion corrects the 2026-10-07 inference that an async completion builds the exception
+on another thread. With no dispatch between the throw and the coroutine completing, the completion
+runs on the thread that stashed and the original object is recovered. "Possibly another thread" is
+what the code supports; the same-thread case is now verified, the hopping case is not.
+
+Known limit, a bounded hold and not a leak: the clear runs on the thread the completion callback
+runs on. A coroutine that hops threads between the fault and its completion leaves one exception in
+the stashing thread's slot until that thread's next completion or fault. No fixture exercises the
+hop: `TreatChef.recover` and `plate` have no suspension between the fault and the completion.
+Tracked in ROADMAP Performance & Resource Hygiene, with the synchronous-arm case where a
+non-matching Kotlin error leaves the stash until the next successful crossing.

@@ -602,6 +602,31 @@ to the call, and to the wrapper where there is one, and asserts they are collect
   `SuspendCompletion_TopLevelCallCompletes_ItsStateIsCollected`: the controls, with a valid
   argument and a call that completes.
 
+### A callback that throws on a Kotlin thread
+
+When a C# callback throws, the bridge keeps the exception in a per-thread slot so the original object
+can come back if the fault reaches your C# caller uncaught. Once Kotlin catches the throw and the
+call or `Task` that carried it completes, the slot is cleared and the exception can be collected,
+including a throw on a Kotlin dispatcher thread from a suspend lambda, a `Flow` parameter or a
+faulted `Task` a lambda returns. `LeakTests/CollectabilityTests.cs` holds a `WeakReference` to the
+thrown exception and asserts it is collected:
+
+- `ManagedFault_ThrownOnAKotlinDispatcherThread_AndCaughtByKotlin_IsCollected`: a suspend lambda that
+  throws before its first suspension.
+- `ManagedFault_ThrownOnTheCallingThread_AndCaughtByKotlin_IsCollected`: the control, a throw on the
+  calling thread.
+- `ManagedFault_FromAFlowParameterIteratorThatThrowsMidStream_AndCaughtByKotlin_IsCollected` and
+  `ManagedFault_FromAFlowParameterMoveNextThatThrowsSynchronously_AndCaughtByKotlin_IsCollected`: a
+  `Flow` parameter whose iterator throws mid-stream, and one whose `MoveNextAsync` throws synchronously.
+- `ManagedFault_FromAFaultedTask_AndCaughtByKotlin_IsCollected`: a suspend lambda whose returned `Task` faults.
+- `ManagedFault_NotCaughtByKotlin_IsCollectedOnceTheFaultedTaskIsDropped`: Kotlin does not catch, so
+  the outer `Task` faults with the original exception, before and after an `await`.
+
+Two bounded holds remain, held and not leaked. A coroutine that suspends on another thread after
+Kotlin catches the throw keeps that one exception until the stashing thread's next completion or
+fault. On a synchronous call, if Kotlin catches the throw and then escapes with a different error
+(its own wrapper, or an unrelated one), the exception stays until that thread's next successful call.
+
 ### Dropped wrappers are released by the GC
 
 A wrapper dropped without `Dispose()` returns `LiveHandles` to baseline once the .NET GC finalizes it
