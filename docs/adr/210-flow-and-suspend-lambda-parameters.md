@@ -2,21 +2,27 @@
 
 ## Status
 
-Proposed. Amended 2026-10-12 after an independent review ("accept with named changes"): the thunk
+Accepted. Slice (a), the suspend lambda parameter, and slice (b), the `Flow<T>` parameter, have both
+shipped and the full verify ran green on JIT and NativeAOT (IntegrationTests 3518 passed; AOT 3514
+passed, 4 skipped; LeakTests 260 and AOT LeakTests 260).
+
+History: amended 2026-10-12 after an independent review ("accept with named changes"): the thunk
 shell, the admitted v1 types, the slot layout, the thread wording, the lifetime note and the price
 below are the amended text. Each amended point was re-read in source before it was written.
 Amended again the same day with the human's gate decisions (memo questions 1 to 7, all decided as
-recommended) and two spike results, recorded under "Spike results" below. Slice (a) has shipped and
-the ADR stays Proposed until slice (b) lands; the shipped slice corrected the price and the
-`Throwable` result, and added the key-ownership rule, below.
+recommended) and two spike results, recorded under "Spike results" below. Slice (a) corrected the
+price and the `Throwable` result, and added the key-ownership rule. Slice (b) resolved the
+`Throwable` flow element (refused by name), corrected the `Flow` element set to the classifier's
+own, and settled the claims marked below as no longer inferred; an independent review of the
+shipped slice supplied those corrections, each re-read in source.
 
 ## Context
 
 A Kotlin declaration may take a `Flow<T>`, a `StateFlow<T>` or a `suspend (T) -> R` as a parameter.
 Today they are named skips at most positions, not all (`SKIPPED_UNSUPPORTED_INPUT`; on a sealed
 arm a suspend lambda parameter is `SKIPPED_UNSUPPORTED_COMBINATION`, reason
-`SEALED_SUBCLASS_UNROUTED`); the research memo
-`docs/research/roadmap/flow-and-suspend-lambda-parameters.md` cites each site. One position is
+`SEALED_SUBCLASS_UNROUTED`); the research memo that cited each site was deleted when slice (b)
+closed the item, and the decisions below are what it fed. One position is
 worse than a skip: a `Flow<T>` parameter on a sealed-arm method that does not return a `Flow` is
 SILENTLY DROPPED, absent from both halves with no diagnostic (**verified by a run**, spike 1
 below; memo finding 9). The `Flow<T>` slice fixes that by binding the position. ROADMAP lists "`Flow` as a parameter" under "Deferred
@@ -135,14 +141,23 @@ The data here flows C# to Kotlin, so the legacy Flow element vocabulary
 thunks are per result type and can only cast what they name (`Task<int>`, `Task<string>`,
 `NugetAsyncEnumeration<int>`). The v1 set is ADR-160's own, read from source:
 
-- **Suspend lambda result** and **`Flow` element** (C# to Kotlin): exactly `isCallbackResult`
-  (**verified by reading** `ForwardBridgeTypeClassifier.kt:1107-1132`): `Unit` (lambda result
-  only), `Boolean`, `Byte`, `UByte`, `Short`, `UShort`, `Int`, `UInt`, `Long`, `ULong`, `Float`,
-  `Double` (the eleven `PrimitiveKind`s, `ForwardMarshallingModel.kt:425-437`) and `String`.
-  `Throwable` is in `isCallbackResult` only where the declaration accepts a
-  `NugetManagedException`, but a `Throwable` suspend lambda result is **refused by name in v1**
-  (slice (a) as shipped): the End thunk casts the `Task<R>` it names, and nothing proved a
-  `Throwable` rides the `String` thunk unchanged. A `Throwable` flow element is slice (b)'s question.
+- **Suspend lambda result** (C# to Kotlin): `isCallbackResult`
+  (**verified by reading** `ForwardBridgeTypeClassifier.kt:1107-1132`): `Unit`, `Boolean`, `Byte`,
+  `UByte`, `Short`, `UShort`, `Int`, `UInt`, `Long`, `ULong`, `Float`, `Double` (the eleven
+  `PrimitiveKind`s, `ForwardMarshallingModel.kt:425-437`) and `String`. `Throwable` is in
+  `isCallbackResult` only where the declaration accepts a `NugetManagedException`, but a
+  `Throwable` suspend lambda result is **refused by name in v1** (slice (a) as shipped): the End
+  thunk casts the `Task<R>` it names, and nothing proved a `Throwable` rides the `String` thunk
+  unchanged.
+- **`Flow` element** (C# to Kotlin): the eleven primitives and `String`, which is
+  `isCallbackResult` minus `Unit` and minus `Throwable`. This is what `flowSourceOrNull`
+  (`forward/ForwardBridgeTypeClassifier.kt`, **verified by reading**) admits; an earlier draft of
+  this ADR said the set was exactly `isCallbackResult`, which is wrong for `Flow`. A `Throwable`
+  flow element is **refused by name in v1**, at every position. A `Throwable` callback result is
+  not the `String` thunk unchanged but a per-site adapter (`ForwardCirCallbackProjection.kt`
+  renders `NugetMarshal.WrapString(managedExceptionTextCs(...))`), and a `Current` thunk, which
+  casts the one element type it names, has no such adapter. Pinned by the Tier 1 test "a
+  Throwable element is refused by name at every position".
 - **Suspend lambda payload** (Kotlin to C#, one per invocation, arity 0 to 3): exactly
   `isCallbackPayload` (**verified by reading** `ForwardBridgeTypeClassifier.kt:1078-1085`): a
   primitive by value, `String`, an exported enum by ordinal, an exported object or interface over a
@@ -261,6 +276,9 @@ helpers render in `<root>` (`CirRenderer.kt:148-152`). Rules copied from the rev
 - Dispose queues cancel, await pending, then `DisposeAsync`, inside `Task.Run` with an outer
   catch-all. `DisposeAsync` during a pending `MoveNextAsync` throws `NotSupportedException`
   (**verified by spike** in ADR-156, not re-run here).
+  `NugetAsyncEnumeration.Pending` defaulting to `Task.CompletedTask` is load-bearing: when the
+  synchronous prefix of `MoveNextAsync` throws inside MoveNextBegin, `Pending` is never assigned,
+  and Dispose then awaits the completed default before `DisposeAsync`.
 - User-code thunks (Begin, End, Enumerate, Current, MoveNextBegin, MoveNextEnd) carry ADR-161's
   trailing `IntPtr* errOut`; the context is ADR-161 part C's never-reused key.
 
@@ -276,6 +294,11 @@ So the feature also needs a new `ForwardLegacyParameterShape` arm, threaded thro
 (`CirFunctionTranslator.kt`, `CirClassTranslator.kt`) and the C# call site `renderAsyncMethod`
 builds (`CirConcurrencyRenderer.kt:284-541`). It lands on both dialects; neither alone satisfies
 the item.
+
+Slice (b) needed no change to `CirConcurrencyRenderer.kt`. Slice (a)'s `guardsKey` check
+(`method.parameters.any { parameter -> parameter.asyncKeyLocal != null }`) is kind-agnostic, and
+`FlowSource` rides the same `ForwardLegacyParameterShape.Async` path as `AsyncCallback`, so the
+registered-key guard around the native call covers a `Flow` parameter unchanged.
 
 ### Lifetime
 
@@ -303,8 +326,12 @@ with no Kotlin holder ever built to release it.
   cleaner owns the key.
 - A member that takes a suspend lambda also frees the completion callback's `GCHandle` when the call
   throws before the P/Invoke (a later argument refused by its null guard, or a disposed wrapper). The
-  catch around the call does it. A suspend member that takes no suspend lambda is inferred not to have this
-  catch yet, from the shape of the fix and with no test (ROADMAP, Performance & Resource Hygiene).
+  catch around the call does it. A suspend member that takes no suspend lambda does not have this
+  catch yet. That is now **verified by a failing test on another branch, for the null-guard case
+  only**: a later argument failing its null guard leaks the callback's `GCHandle`. The "or a disposed
+  wrapper" case does **not** leak on a member without a suspend lambda, because the
+  `_handle.IsInvalid` check runs before the callback is allocated. The fix itself lands in a later
+  PR and is not part of this ADR's work (ROADMAP, Performance & Resource Hygiene).
 - Pinned by `LeakTests/CollectabilityTests.cs`: `SuspendLambdaParameter_CallOnADisposedWrapper_ItsClosureIsCollected`,
   `SuspendLambdaParameter_LaterArgumentFailsItsNullGuard_ItsClosureIsCollected` and its control
   `SuspendLambdaParameter_LambdaBeforeAString_AfterTheCallCompletes_ItsClosureIsCollected`. They are
@@ -330,11 +357,15 @@ with no Kotlin holder ever built to release it.
 ### Inferred claims, listed
 
 1. No longer inferred: the Kotlin composition above compiles and behaves as its parts do
-   (**verified by spike**, spike 2 below). What the spike did not cover: real C# thunks, and the
-   `Flow` composition over `flowForKotlin`, which stays **inferred**.
-2. The forward copies of the C# rules behave as the reverse originals. Not run. If the Dispose
-   order is copied wrongly the failure is SILENT: a leaked running iterator. The `LeakTests` early
-   abort row and the iterator-`finally` integration test are the guard.
+   (**verified by spike**, spike 2 below). The spike did not cover real C# thunks or the `Flow`
+   composition over `flowForKotlin`; both are now **verified by the shipped slices' tests** (the
+   full verify ran green on JIT and NativeAOT, figures under Status).
+2. The forward copies of the C# rules behave as the reverse originals. No longer wholly inferred:
+   the full verify ran green on JIT and NativeAOT. If the Dispose order is copied wrongly the
+   failure is SILENT: a leaked running iterator. The row that guards it is
+   `FlowParameter_OuterTokenCancelledMidStep_ReturnsToBaseline`, whose iterator ignores its token.
+   The early-abort row does **not** discriminate: no `MoveNextAsync` is pending when dispose runs
+   there, so a wrong order passes it.
 3. The key-miss branch is unreachable under the cleaner-owned lifetime. Half of this is no longer
    inferred: the holder stays reachable for the length of a flight (**verified by spike**, spike 2
    below, debug test binary only; an optimised release binary was not tried). Unreachability on
@@ -347,7 +378,9 @@ with no Kotlin holder ever built to release it.
    asserts collectability through a `WeakReference`. This ADR requires one of the two.
 5. NativeAOT accepts the new thunks. ADR-102's lane proves the pattern, not these thunks.
 6. Which exception object the C# caller of the outer `Task` sees when a C# lambda's fault escapes
-   Kotlin uncaught. The `_lastManagedFault` stash is written on a Kotlin worker thread, so the
+   Kotlin uncaught. The `_lastManagedFault` stash is written on a Kotlin worker thread and the
+   completion arrives on possibly another thread (with no dispatch between the throw and the
+   coroutine completing, it runs on the thread that stashed; inferred, not run), so the
    caller may get the mapped exception rather than the original object; the rebuild path covers
    `OperationCanceledException` only (ADR-161's 2026-10-07 amendment records the same inference for
    the suspend and `Flow` exports, `161-...md:336-338`). Not run.
@@ -403,8 +436,8 @@ the human raised no objection.
   `Flow<T>` plus `stateIn` remedy. Handle passthrough is deferred to 1.x.
 - Nothing in `nuget-runtime` changes; no runtime version bump is required by this ADR.
 - Price: slice (a), as shipped, changed 25 processor files and added one, `forward/ForwardAsyncCallback.kt`
-  (not the "about 17" first estimated). For the `Flow` slice about 3 new files plus a second pass
-  over about 10 of the first slice's. The memo lists them.
+  (not the "about 17" first estimated). Slice (b) changed 24 processor files and added none, since
+  it extends slice (a)'s leaf, thunk and slot machinery; `nuget-runtime` is untouched.
 - A C# closure passed for one of these parameters is released by a Kotlin cleaner, not at the end
   of the call. Leak rows for the route settle through the existing cleaner round.
 - For the implementer: the `createCleaner` import is emitted only when the module has bridge
@@ -412,8 +445,10 @@ the human raised no objection.
   export that builds a holder needs `@OptIn(ExperimentalNativeApi::class)`, as the bridge factory
   export carries (`InterfaceBridgeFactoryExports.kt:83`).
 - The new thunks run user C# on Kotlin dispatcher threads, which widens the reach of the open
-  `_lastManagedFault` stash residual (ROADMAP Phase 7).
+  `_lastManagedFault` stash residual (ROADMAP Phase 7). The completion that reads the stash may
+  arrive on another thread, but need not: with no dispatch between the throw and
+  the coroutine completing, it runs on the thread that stashed (inferred, not run).
 - Deferred: every result, element and payload type outside the v1 list, a `Throwable` suspend lambda
-  result included; nullable `Flow<T>?` and
+  result and a `Throwable` flow element included; nullable `Flow<T>?` and
   nullable suspend lambda parameters; arity above 3; batch pull; a plain `(T) -> R` parameter on a
   `suspend fun` (refused today by the same legacy gate).

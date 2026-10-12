@@ -152,6 +152,7 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | `suspend fun` returning an interface type, top-level or nested | ⇄ | `Task<IFoo>` | → completes with the interface itself, nullable included · ← a value stored through a C# implementation comes back as the caller's own instance, not a fresh wrapper | [Coroutines and Flow](coroutines-and-flow.md) · [Interfaces, abstract and sealed](interfaces-abstract-sealed.md) |
 | `suspend () -> R` lambda | → | `KotlinSuspendFunc<R>` / `Task<R>` | The same mechanism as a `suspend fun`. | [Coroutines and Flow](coroutines-and-flow.md) |
 | `suspend (T) -> R` parameter (C# → Kotlin) | → | `Func<T, CancellationToken, Task<R>>` | Arity 0-3, constructors included. Kotlin owns the delegate and its captures until a GC round, not the call's end. A nullable lambda or `Throwable` result refuses by name. | [Coroutines and Flow](coroutines-and-flow.md) |
+| `Flow<T>` parameter (C# → Kotlin) | → | `IAsyncEnumerable<T>` | Primitive or `String` elements, constructors included. One enumerator per collect, disposed shortly after the call returns. A `StateFlow` parameter refuses by name. | [Coroutines and Flow](coroutines-and-flow.md) |
 | structured concurrency | → | honoured |  | [Coroutines and Flow](coroutines-and-flow.md) |
 | coroutine cancellation | → | `CancellationToken` | Suspend lambdas included. | [Coroutines and Flow](coroutines-and-flow.md) |
 | in-flight async drain | → | `IAsyncDisposable` | Graceful drain, owned by the first class in the chain, sealed base, or reachable interface that declares a `suspend` or `Flow` member. A refused-only owner gets neither scope nor interface. | [Coroutines and Flow](coroutines-and-flow.md) |
@@ -176,10 +177,6 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | `List`/`Set`/`Map` element on a `Flow`/`StateFlow` property or method return | → | `KotlinFlow<IReadOnlyList<T>>` / `KotlinStateFlow<IReadOnlyList<T>>` / `IReadOnlySet<T>` / `IReadOnlyDictionary<K, V>` | Spelled and read as every other route spells the same Kotlin type. A sealed-base component binds on `Flow`; a nullable collection element and every other generic element skip, named. | [Coroutines and Flow](coroutines-and-flow.md) |
 | `suspend fun` returning `Unit`/`T` | ← | `Task`/`Task<T>`, instance or static | A faulted task is a catchable `NugetManagedException` carrying the original .NET type. A trailing `Async` is stripped unless a sibling owns that name; a single `CancellationToken` parameter elides. | [Instance members](instance-members.md) |
 | `IAsyncEnumerable<T>` method return, instance or static | ← | `Flow<T>` | Pull-based and cold: the C# method runs at `collect`, not at the call that returned the `Flow`. A mid-stream throw arrives as `NugetManagedException`. | [Instance members](instance-members.md) |
-
-<note>
-<p><code>Flow</code> parameters are not yet supported. See <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a> Phase 7.</p>
-</note>
 
 ## Documentation comments
 

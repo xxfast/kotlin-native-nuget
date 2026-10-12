@@ -377,7 +377,8 @@ returning `Unit`, a primitive, `Boolean`, an enum, or `String`/`String?`. A `Thr
 `Exception` or `RuntimeException` parameter or result crosses too, as a `System.Exception` (see
 [Throwable values](exceptions.md#throwable-values)); a result declared narrower than
 `RuntimeException` is named on a build warning. An interface with a `var`
-property, an object- or collection-typed member, a `suspend` or `Flow` member, a generic member, or
+property, an object- or collection-typed member, a `suspend` member, a member that returns or takes
+a `Flow`, a generic member, or
 a member with more than two parameters has **no bridge at all**. The build warns once with
 `SKIPPED_UNIMPLEMENTABLE_INTERFACE`, naming every such member and how to fix it, and passing an
 implementation of it throws `NotSupportedException` the first time it crosses:
@@ -1648,7 +1649,9 @@ like the same member on any [generic class](generics.md#limitations).
   sees. See [A generic sealed hierarchy](#generic-sealed-hierarchy).
 - A generic method on an arm or a sealed base binds as a C# generic method; see
   [Generic methods on a class](generics.md#generic-methods). A `suspend` lambda parameter binds on
-  an arm as well; see [A `suspend` lambda as a parameter](coroutines-and-flow.md#suspend-lambda-parameter).
+  an arm as well, as does a `Flow<T>` parameter of a primitive or `String`, suspend or not; see
+  [A `suspend` lambda as a parameter](coroutines-and-flow.md#suspend-lambda-parameter) and
+  [A `Flow` as a parameter](coroutines-and-flow.md#flow-parameter).
 - A member whose C# name equals a type nested in the sealed base, or another arm's name
   (`backing()` beside a nested `class Backing`), is a named `ERROR_CSHARP_NAME_COLLISION` at the
   arm. So is a member named like its own type (`OnTap.OnTap`, `Cat.cat`) on a class, a sealed base
