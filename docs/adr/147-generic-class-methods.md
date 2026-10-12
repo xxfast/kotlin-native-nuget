@@ -825,7 +825,7 @@ binds on each arm, because this ADR keeps the generic base off the flow route. A
 puts the same member on the base ([ADR-175](175-sealed-base-async-members.md)).
 
 **What is named instead.** Each is `SKIPPED_UNSUPPORTED_COMBINATION` with the reason
-`GENERIC_OWNER_LEGACY_ROUTE`, the sentence the 2026-10-03 amendment gave a generic class's member:
+`GENERIC_OWNER_LEGACY_ROUTE`. The `suspend` drops read the sentence the 2026-10-03 amendment gave a generic class's member; the `T`-lambda has its own:
 
 - a `suspend fun` on an arm with a Kotlin type parameter (silent before), one taking a `suspend`
   lambda, an override of the generic base's abstract `suspend` member, and an override of a generic
@@ -834,12 +834,26 @@ puts the same member on the base ([ADR-175](175-sealed-base-async-members.md)).
 - a lambda or stored pair whose lambda carries the arm's `T` (`fun withItem(cb: (T) -> Unit)`), a build
   break before. With the receiver erased the payload reaches the export as `Any?`, and the hand-written
   routes marshal a payload by its declared type, so they have no way to produce the `T` the C# callback
-  expects. `isArmCallbackRoutable` now refuses it on every arm-keyed callback route, on both halves. A
-  member whose own refusal already names it (a lambda that returns `T` is `SKIPPED_UNSUPPORTED_RETURN`)
-  keeps that message and is named once. The printed sentence says the route "cannot spell a generic
-  receiver yet", which fits the `suspend` case; for the `T`-lambda the receiver is spelled and the
-  payload is the cause.
+  expects. `isArmCallbackRoutable` now refuses it on every arm-keyed callback route, on both halves.
+  It has its own sentence, because the generic class's "cannot spell a generic receiver" would be
+  false here (the receiver is spelled; the payload is the cause). Same code and reason constant, with
+  the detail `GENERIC_ARM_ERASED_LAMBDA`: "one of its lambdas takes or returns a type parameter of its
+  generic sealed arm, and the bridge calls the arm with that parameter erased: the lambda's payload
+  crosses as `Any?`, which the callback route cannot marshal ([ADR-199](199-generic-sealed-hierarchies.md))".
+  The hint names both remedies: give the lambda a concrete payload (`(Int) -> Unit`), or declare the
+  member on an arm that fixes the argument (`class Whole : Base<Int>()`). A member whose own refusal
+  already names it (a member that returns `T` is `SKIPPED_UNSUPPORTED_RETURN`) keeps that message and
+  is named once.
+
+**A `var` flow property.** On a generic arm, a generic base or a phantom arm it keeps its getter and
+names its dropped setter once (`SKIPPED_UNSUPPORTED_INPUT`); the base's is named once under the base,
+not once per arm. Pinned by `a var flow property keeps its getter and names its dropped setter once`.
+
+**Known wording gap, no fixture.** "Crosses as `Any?`" is exact for an unbounded parameter. On a
+bounded arm (`Full<T : Pet>`) the erased payload is the bound, and the same skip fires with the same
+sentence. No fixture cell exercises that case.
 
 Evidence, verified: `Tier1GenericSealedFlowPropertyTest`, `Tier1GenericSealedArmCallbackTest` and
-`Tier1GenericSealedArmNamedSkipTest`; `IntegrationTests/GenericSealedArmRouteTests.cs` against
+`Tier1GenericSealedArmNamedSkipTest` (which pins both remedies as binding cells, `Hot.withCount` and
+`Cold.withChill`); `IntegrationTests/GenericSealedArmRouteTests.cs` against
 `Dish<out T>` in `outcome/DishSample.kt`; four `GenericSealedArm_*` rows in `LeakTests/LiveHandleTests.cs`.

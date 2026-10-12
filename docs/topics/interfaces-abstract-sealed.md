@@ -1682,10 +1682,16 @@ Two kinds of member on an arm with a Kotlin type parameter are skipped, named
   class". Declare it on an arm that fixes the argument (`class Cold : Dish<Int>()` binds
   `ThawAsync`), or on a non-generic class that wraps the hierarchy.
 - **A lambda whose parameter is the arm's `T`.** `fun withItem(cb: (T) -> Unit)` and an
-  `addTaste`/`removeTaste` pair over `(T) -> Unit` are reported as "it is a callback member of a
-  generic class". Kotlin hands the callback an erased `Any?`, which the generated code cannot turn
-  back into `T`. Use a payload that does not name `T` (`spell` takes a `Char`), or move the member to
-  a non-generic class. A lambda that returns `T` keeps its own `SKIPPED_UNSUPPORTED_RETURN`.
+  `addTaste`/`removeTaste` pair over `(T) -> Unit` are reported with the sentence "one of its lambdas
+  takes or returns a type parameter of its generic sealed arm, and the bridge calls the arm with that
+  parameter erased: the lambda's payload crosses as `Any?`, which the callback route cannot marshal".
+  Give the lambda a payload that does not name `T` (`withCount(cb: (Int) -> Unit)` and `spell` take
+  an `Int` and a `Char`), or declare the member on an arm that fixes the argument
+  (`class Cold : Dish<Int>()`), where the lambda is concrete. A member that itself returns `T`
+  keeps its own `SKIPPED_UNSUPPORTED_RETURN`.
+
+A `var` flow property on a generic arm keeps its getter and names its dropped setter once, as it does
+on an ordinary class; see [A `var` flow property is read-only](coroutines-and-flow.md#flow-var-property).
 
 ## Limitations {id="limitations"}
 

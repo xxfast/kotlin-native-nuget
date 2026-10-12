@@ -384,3 +384,12 @@ not the sealed position's wording.
 
 Evidence, verified: `Tier1GenericInstanceMemberPositionTest` and
 `IntegrationTests/GenericInstanceMemberTests.cs`; the ADR-199 sealed cells are unchanged.
+
+## Amendment (2026-10-12): members of a generic arm
+
+The skip sentence for a lambda that takes or returns the arm's type parameter cites this ADR: the
+bridge calls a generic arm with the parameter erased, so the lambda's payload crosses as `Any?`, which
+the callback route cannot marshal. What binds and what is named on an arm with a Kotlin type
+parameter, and where a base-declared flow property lands (on each arm, because the generic base
+carries none), is recorded in [ADR-147](147-generic-class-methods.md)'s 2026-10-12 amendment. The
+cells above are unchanged.
