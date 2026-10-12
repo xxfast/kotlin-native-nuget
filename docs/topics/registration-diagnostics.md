@@ -584,6 +584,24 @@ captured:
 - `FlowParameter_StoredByAConstructor_IsReleasedWithItsOwner`: alive and still enumerable while
   the owner is alive, collected after the owner is disposed and dropped.
 
+### A suspend call that throws before reaching Kotlin
+
+Every `...Async` wrapper roots the closure that completes its `Task` until Kotlin's completion
+callback fires. A call that throws first, such as a `null` for a non-null `string` argument, must
+free that root itself. The root is a plain .NET `GCHandle`, so `nuget_live_handles` cannot see it.
+`LeakTests/CollectabilityTests.cs` holds a `WeakReference` to the `CancellationTokenSource` passed
+to the call, and to the wrapper where there is one, and asserts they are collected:
+
+- `SuspendCompletion_MemberArgumentFailsItsNullGuard_ItsStateIsCollected`: an instance member
+  refuses a `null` `string` argument.
+- `SuspendCompletion_TopLevelArgumentFailsItsNullGuard_ItsStateIsCollected`: the same for a
+  top-level function.
+- `SuspendCompletion_MemberCallOnADisposedWrapper_ItsStateIsCollected`: a call on a disposed
+  wrapper, which throws before the root exists.
+- `SuspendCompletion_MemberCallCompletes_ItsStateIsCollected` and
+  `SuspendCompletion_TopLevelCallCompletes_ItsStateIsCollected`: the controls, with a valid
+  argument and a call that completes.
+
 ### Dropped wrappers are released by the GC
 
 A wrapper dropped without `Dispose()` returns `LiveHandles` to baseline once the .NET GC finalizes it
