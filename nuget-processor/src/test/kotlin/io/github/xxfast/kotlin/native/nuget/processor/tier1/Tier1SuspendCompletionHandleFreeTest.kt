@@ -103,7 +103,8 @@ class Tier1SuspendCompletionHandleFreeTest {
       assertEquals(1, lines.count { line -> line == free }, site)
       // The native call, which hands the handle over, is inside the block that catch closes. Its
       // `try` opens after the allocation, or before it where the boxes come first (ADR-171).
-      val call: Int = lines.indexOfFirst { line -> line.contains("GCHandle.ToIntPtr(callbackHandle)") }
+      val call: Int = lines
+        .indexOfFirst { line -> line.contains("GCHandle.ToIntPtr(callbackHandle)") }
       assertTrue(call in 0 until freed - 3, site)
       val opened: Int = lines.subList(0, call).count { line -> line == "{" }
       val closed: Int = lines.subList(0, call).count { line -> line == "}" }
@@ -121,25 +122,37 @@ class Tier1SuspendCompletionHandleFreeTest {
     // Instance, StateFlow-returning, Flow-returning, sealed arm, interface (the bridge proxy and
     // the implementing class), top-level.
     val natives: List<String> = guarded.map { site ->
-      site.lines().first { line -> line.contains("?? throw new ArgumentNullException") }
-        .trim().substringAfter("= ").substringBefore("(")
+      site
+        .lines()
+        .first { line -> line.contains("?? throw new ArgumentNullException") }
+        .trim()
+        .substringAfter("= ")
+        .substringBefore("(")
     }
-    listOf("StampLaterAsync", "WatchAsync", "TrailAsync", "LabelAsync", "DeliverAsync", "FetchGreetingAsync")
-      .forEach { member ->
-        assertTrue(natives.any { native -> native.contains(member) }, "$member missing from $natives")
-      }
+    listOf(
+      "StampLaterAsync", "WatchAsync", "TrailAsync", "LabelAsync", "DeliverAsync",
+      "FetchGreetingAsync",
+    ).forEach { member ->
+      assertTrue(
+        natives.any { native -> native.contains(member) },
+        "$member missing from $natives",
+      )
+    }
 
     guarded.forEach { site ->
       val lines: List<String> = site.lines().map { line -> line.trim() }
-      val guard: Int = lines.indexOfFirst { line -> line.contains("?? throw new ArgumentNullException") }
+      val guard: Int = lines
+        .indexOfFirst { line -> line.contains("?? throw new ArgumentNullException") }
       // The guard is the native call's own argument, inside the `try`.
-      assertEquals("try", lines.subList(0, guard).last { line -> line == "try" || line == "}" }, site)
+      val opener: String = lines.subList(0, guard).last { line -> line == "try" || line == "}" }
+      assertEquals("try", opener, site)
       val freed: Int = lines.indexOf(free)
       assertTrue(freed > guard, site)
       assertEquals(listOf("}", "catch", "{"), lines.subList(freed - 3, freed), site)
       assertEquals("throw;", lines[freed + 1], site)
       // ...and the handle is freed before the wrapper would have published the job.
-      val registration: Int = lines.indexOfFirst { line -> line.startsWith("CancellationTokenRegistration ") }
+      val registration: Int = lines
+        .indexOfFirst { line -> line.startsWith("CancellationTokenRegistration ") }
       assertTrue(registration > freed, site)
     }
   }

@@ -258,7 +258,9 @@ class Tier1DerivedNamesTest {
   fun `the legacy suspend wrapper and body locals move off the user's`() {
     assertCsharp("var tcs_ = new TaskCompletionSource<string>")
     assertCsharp("IntPtr jobHandle_ = IntPtr.Zero;")
-    assertCsharp(" jobHandle_ = BrewAsync_native(tcs, callback, callbackHandle, job, jobHandle, reg,")
+    assertCsharp(
+      " jobHandle_ = BrewAsync_native(tcs, callback, callbackHandle, job, jobHandle, reg,"
+    )
     assertCsharp("IntPtr tagsHandle_ = ")
     val stir: String = exportEndingWith("__kettle_stir_async")
     assertTrue(stir.contains("callbackPtr_: COpaquePointer,"), stir)
