@@ -403,7 +403,9 @@ freeing catches. The decision above is unchanged.
    coroutine completing, it runs on the thread that stashed; inferred, not run), so the
    caller may get the mapped exception rather than the original object; the rebuild path covers
    `OperationCanceledException` only (ADR-161's 2026-10-07 amendment records the same inference for
-   the suspend and `Flow` exports, `161-...md:336-338`). Not run.
+   the suspend and `Flow` exports, `161-...md:336-338`). Not run. Update: ADR-161's 2026-10-12
+   amendment verifies the no-dispatch case (the original object comes back) and clears the stash at
+   the completion; the thread-hopping case stays unexercised.
 
 ### Gate decisions (2026-10-12, by the human)
 
@@ -464,10 +466,11 @@ the human raised no objection.
   factories (**verified by reading** `NugetProcessor.kt:3620-3623`) and must be widened; each
   export that builds a holder needs `@OptIn(ExperimentalNativeApi::class)`, as the bridge factory
   export carries (`InterfaceBridgeFactoryExports.kt:83`).
-- The new thunks run user C# on Kotlin dispatcher threads, which widens the reach of the open
-  `_lastManagedFault` stash residual (ROADMAP Phase 7). The completion that reads the stash may
+- The new thunks run user C# on Kotlin dispatcher threads, which widens the reach of the
+  `_lastManagedFault` stash residual, since closed by the ADR-161 2026-10-12 amendment (the
+  completion now clears the stash). The completion that reads the stash may
   arrive on another thread, but need not: with no dispatch between the throw and
-  the coroutine completing, it runs on the thread that stashed (inferred, not run).
+  the coroutine completing, it runs on the thread that stashed (verified there for an uncaught fault).
 - Deferred: every result, element and payload type outside the v1 list, a `Throwable` suspend lambda
   result and a `Throwable` flow element included; nullable `Flow<T>?` and
   nullable suspend lambda parameters; arity above 3; batch pull; a plain `(T) -> R` parameter on a
