@@ -115,19 +115,21 @@ internal fun ForwardBridgeTypeClassifier.flowArgument(
   val kind: ForwardFlowArgumentKind = requireNotNull(ForwardFlowArgumentKind.of(qualifiedName)) {
     "flowArgument was handed $argument, which is not a flow"
   }
+  // Spelled, never the raw `KSType`, which prints a function-type element by its class name.
+  val spelled: String = argument.kotlinSpelling(keepProjections = true)
   if (expanded.mentionsAnyTypeParameter()) {
     return ForwardFlowArgumentReading.Refused(
-      "its type argument `$argument` is an open flow, and a flow argument is materialised by an " +
+      "its type argument `$spelled` is an open flow, and a flow argument is materialised by an " +
           "export generated for one closed element type",
     )
   }
   val element: KSType = expanded.arguments.firstOrNull()?.type?.resolve()?.expandAliases()
     ?: return ForwardFlowArgumentReading.Refused(
-      "its type argument `$argument` is a star-projected flow, which has no element to read",
+      "its type argument `$spelled` is a star-projected flow, which has no element to read",
     )
   val nullable: Boolean = element.isMarkedNullable
   val refused = ForwardFlowArgumentReading.Refused(
-    "the erased wire cannot read its type argument `$argument`: the flow's element has no " +
+    "the erased wire cannot read its type argument `$spelled`: the flow's element has no " +
         "bridge shape",
   )
   val shape: ForwardLegacyFlowElementShape = legacyFlowElementShape(element)
