@@ -6,6 +6,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 
+/** A diner waiting on a [Dish]: the listener of [Dish.Hot]'s interface-bridge pair (ADR-039). */
+interface Diner {
+  fun onPlated(course: Int)
+}
+
 /**
  * ADR-124's flow route on the arms of a generic sealed hierarchy (ADR-199). The generic base
  * projects no flow member (ADR-147), so [served] binds on every arm.
@@ -19,11 +24,6 @@ import kotlinx.coroutines.flow.flowOf
  *
  * Oreo's dinner is served hot. Mylo licked his plate bare.
  */
-/** A diner waiting on a dish: the interface-bridge listener. */
-interface Diner {
-  fun onPlated(course: Int)
-}
-
 sealed class Dish<out T> {
   /** Declared on the generic base, bound on each arm. */
   val served: Flow<Int> = flowOf(1, 2, 3)
