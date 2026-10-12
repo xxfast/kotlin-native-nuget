@@ -538,4 +538,44 @@ class Tier1FlowParameterTest {
     assertFalse(result.generatedCSharp.contains("NugetAsyncMoveNextBegin"))
     assertFalse(result.generated.contains("flowForKotlin"))
   }
+
+  /**
+   * The same binding and the same key guard on every other owner, mirroring slice (a)'s cell: each
+   * renders its body through its own call shape, and a registration whose key local was never
+   * declared would not compile for a consumer.
+   */
+  @Test
+  fun `the flow binds and its key is guarded on the top-level object and extension owners`() {
+    val result: Tier1Result = Tier1Harness.run(
+      """
+      package tier1.trickleowners
+
+      import kotlinx.coroutines.flow.Flow
+
+      class Fountain(val cat: String)
+
+      object Cistern {
+        fun shelve(drops: Flow<Int>, topping: String): Int = topping.length
+      }
+
+      fun topStash(drops: Flow<Int>, topping: String): Int = topping.length
+
+      fun Fountain.extStash(drops: Flow<Int>, topping: String): Int = topping.length
+      """.trimIndent(),
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    assertTrue(result.kspErrors.isEmpty(), "kspErrors=${result.kspErrors}")
+    assertTrue(result.compileErrors.isEmpty(), "compileErrors=${result.compileErrors}")
+    assertEquals(emptyList(), result.kspWarnings.filter { it.contains("[nuget:SKIPPED") })
+    listOf("int Shelve(", "int TopStash(", "int ExtStash(").forEach { signature ->
+      assertInOrder(
+        result.member(signature),
+        "IntPtr dropsAsyncKey = IntPtr.Zero;",
+        "dropsAsyncKey = NugetTasks.Register(drops, nameof(drops), ",
+        "dropsAsyncKey = IntPtr.Zero;",
+        "NugetThunks.UnregisterCtx(dropsAsyncKey);",
+      )
+    }
+  }
 }
