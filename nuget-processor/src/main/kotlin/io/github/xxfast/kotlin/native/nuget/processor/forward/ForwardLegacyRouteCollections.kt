@@ -14,7 +14,9 @@ import com.google.devtools.ksp.symbol.KSValueParameter
 import com.google.devtools.ksp.symbol.Modifier
 import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.MUTABLE_STATE_FLOW_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.PLAIN_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.READ_ONLY_STATE_FLOW_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.SHARED_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 
@@ -130,7 +132,7 @@ internal sealed interface ForwardLegacyParameterShape {
    * Kotlin `suspend` lambda whose captured holder owns the C# context key; its ABI slots are
    * [ForwardLegacyNames.asyncSlots], the plan route's own fan-out.
    */
-  data class AsyncCallback(val type: BridgeType.AsyncCallback) : ForwardLegacyParameterShape
+  data class Async(val type: BridgeType) : ForwardLegacyParameterShape
 
   /**
    * Any other parameter, named so the skip diagnostic can quote it.
@@ -142,6 +144,8 @@ internal sealed interface ForwardLegacyParameterShape {
   data class Refused(
     val description: String,
     val refusal: BridgeType.Unsupported? = null,
+    /** ADR-210: a `StateFlow`, `SharedFlow` or `MutableStateFlow`, which has its own sentence. */
+    val hotFlow: Boolean = false,
   ) : ForwardLegacyParameterShape
 }
 
@@ -256,7 +260,7 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
 
 /**
  * [legacyParameterShape] for a declared parameter. ADR-210: on a `suspend` member a suspend lambda
- * is [ForwardLegacyParameterShape.AsyncCallback]; on a Flow-returning member it stays refused, the
+ * is [ForwardLegacyParameterShape.Async]; on a Flow-returning member it stays refused, the
  * suspend route being the only legacy host that lowers it.
  */
 internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
@@ -264,10 +268,25 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
 ): ForwardLegacyParameterShape {
   val type: KSType = parameter.type.resolve()
   val host: KSFunctionDeclaration? = parameter.parent as? KSFunctionDeclaration
-  if (host != null && Modifier.SUSPEND in host.modifiers) {
-    asyncCallbackOrNull(type)?.let { callback ->
-      return ForwardLegacyParameterShape.AsyncCallback(callback)
+  if (host != null) {
+    val suspends: Boolean = Modifier.SUSPEND in host.modifiers
+    if (suspends) {
+      asyncCallbackOrNull(type)?.let { callback ->
+        return ForwardLegacyParameterShape.Async(callback)
+      }
     }
+    // A `Flow<T>` binds on a `suspend` member and on a member that itself returns a plain `Flow`,
+    // whose collect export lowers it once per C# collect.
+    val returnsPlainFlow: Boolean =
+      host.returnType?.resolve()?.expandAliases()?.declaration?.qualifiedName?.asString() in
+          PLAIN_FLOW_TYPES
+    if (suspends || returnsPlainFlow) {
+      flowSourceOrNull(type)?.let { flow -> return ForwardLegacyParameterShape.Async(flow) }
+    }
+  }
+  val expanded: KSType = type.expandAliases()
+  if (expanded.declaration.qualifiedName?.asString() in STATE_FLOW_TYPES + SHARED_FLOW_TYPES) {
+    return ForwardLegacyParameterShape.Refused(expanded.legacyDescription(), hotFlow = true)
   }
   return legacyParameterShape(type)
 }
@@ -410,7 +429,7 @@ private fun legacyWidenedIndices(
     // Only a nullable one: the `IsSet` slot rides the nullable pointer slot.
     is ForwardLegacyParameterShape.Marshalled -> shape.nullable
     is ForwardLegacyParameterShape.ManagedException,
-    is ForwardLegacyParameterShape.AsyncCallback,
+    is ForwardLegacyParameterShape.Async,
     is ForwardLegacyParameterShape.Refused -> false
   }
 }
@@ -469,7 +488,7 @@ internal val ForwardLegacyParameterShape.isLegacyDefaulted: Boolean
     ForwardLegacyParameterShape.Plain,
     is ForwardLegacyParameterShape.Enum,
     is ForwardLegacyParameterShape.ManagedException,
-    is ForwardLegacyParameterShape.AsyncCallback,
+    is ForwardLegacyParameterShape.Async,
     is ForwardLegacyParameterShape.Refused -> false
   }
 
@@ -1317,7 +1336,7 @@ internal class ForwardLegacyNames(
    */
   val asyncSlots: List<ForwardAsyncSlots?> = mintAsyncSlots(
     parameters.mapIndexed { index, name ->
-      name to (shapes[index] is ForwardLegacyParameterShape.AsyncCallback)
+      name to (shapes[index] as? ForwardLegacyParameterShape.Async)?.type?.asyncKind()
     },
   ) { base -> mint(base) }
 
@@ -1434,7 +1453,7 @@ internal val ForwardLegacyParameterShape.isLegacyNullableSlot: Boolean
  */
 internal fun ForwardLegacyParameterShape.isLegacyLowered(): Boolean = when (this) {
   is ForwardLegacyParameterShape.Marshalled, is ForwardLegacyParameterShape.Handle,
-  is ForwardLegacyParameterShape.AsyncCallback -> true
+  is ForwardLegacyParameterShape.Async -> true
   ForwardLegacyParameterShape.Plain,
   is ForwardLegacyParameterShape.Enum,
   is ForwardLegacyParameterShape.NullableScalar,
@@ -1563,10 +1582,10 @@ internal fun ForwardLegacyParameterShape.legacyPrelude(
   async: ForwardAsyncSlots? = null,
 ): String? = when (this) {
   // ADR-210: built on the calling thread, so Kotlin owns the C# key before the coroutine launches.
-  is ForwardLegacyParameterShape.AsyncCallback -> {
+  is ForwardLegacyParameterShape.Async -> {
     val expression: String =
-      asyncCallbackExpression(parameter.trim('`'), type, requireNotNull(async))
-    "val ${requireNotNull(local)}: ${type.kotlinFunctionType()} = $expression"
+      asyncParameterExpression(parameter.trim('`'), type, requireNotNull(async))
+    "val ${requireNotNull(local)}: ${asyncParameterKotlinType(type)} = $expression"
   }
   is ForwardLegacyParameterShape.Marshalled ->
     legacyLoweringStatement(parameter, requireNotNull(local), type, nullable)
@@ -1934,6 +1953,7 @@ internal fun BridgeType.interfaceBridgeWire(): InterfaceBridgeWire = when (this)
   is BridgeType.Nullable,
   is BridgeType.Callback,
   is BridgeType.AsyncCallback,
+  is BridgeType.FlowSource,
   is BridgeType.ReturnedLambda,
   is BridgeType.SpecializedProtocol,
   is BridgeType.RawKSType,

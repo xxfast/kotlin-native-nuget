@@ -7,11 +7,10 @@ import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAsyncSlots
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParameterShape
-import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncCallbackArguments
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncArguments
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncRegistration
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncCallbackCleanup
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncCallbackHandOver
-import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncCallbackRegistration
-import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncCallbackCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.managedExceptionTextCs
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyNullableScalarArgument
@@ -107,10 +106,13 @@ internal fun List<CirParameter>.collectionScopedCall(
   // Kotlin all release every key registered so far.
   val keys: List<CirParameter> = filter { it.asyncKeyLocal != null }
   if (handles.isEmpty() && keys.isEmpty()) return null
-  require(keys.isEmpty() || !returns) {
-    "A suspend lambda key is handed over by the statement after the native call"
+  // A returning call holds its result across the hand-over (the Flow-return route's shape).
+  val handsOver: Boolean = returns && keys.isNotEmpty()
+  val body: String = when {
+    handsOver -> "var nugetResult = $call;"
+    returns -> "return $call;"
+    else -> "$call;"
   }
-  val body: String = if (returns) "return $call;" else "$call;"
   return buildList {
     add("$indent{")
     handles.forEach { parameter ->
@@ -127,6 +129,7 @@ internal fun List<CirParameter>.collectionScopedCall(
     keys.forEach { parameter ->
       add("$indent        ${forwardAsyncCallbackHandOver(requireNotNull(parameter.asyncKeyLocal))}")
     }
+    if (handsOver) add("$indent        return nugetResult;")
     add("$indent    }")
     add("$indent    finally")
     add("$indent    {")
@@ -317,20 +320,22 @@ private fun legacyRouteParameter(
     // ADR-210: the consumer's `Func<T, CancellationToken, Task<R>>`. The key is registered into a
     // local `collectionScopedCall` guards: C# owns it until the native call returns, the Kotlin
     // holder's cleaner from then on. Tracked so `Interop.cs` renders this shape's thunks.
-    is ForwardLegacyParameterShape.AsyncCallback -> {
-      tracker.asyncCallbacks += shape.type
+    is ForwardLegacyParameterShape.Async -> {
+      (shape.type as? BridgeType.AsyncCallback)?.let { callback ->
+        tracker.asyncCallbacks += callback
+      }
+      (shape.type as? BridgeType.FlowSource)?.let { flow -> tracker.flowSources += flow }
       val slots: ForwardAsyncSlots = requireNotNull(names.asyncSlots[index])
       CirParameter(
         name,
-        type = shape.type.forwardAsyncCallbackCsharpType(),
+        type = shape.type.forwardPublicCsharpType(),
         nativeType = "IntPtr",
         isReferenceType = true,
         nativeArgumentExpression =
-          forwardAsyncCallbackArguments(shape.type, slots.csharpKey, slots.carriesShared)
-            .joinToString(", "),
+          forwardAsyncArguments(shape.type, slots.csharpKey, slots).joinToString(", "),
         nativeSlots = slots.declared,
         asyncKeyLocal = slots.csharpKey,
-        asyncKeyRegister = forwardAsyncCallbackRegistration(name, shape.type),
+        asyncKeyRegister = forwardAsyncRegistration(name, shape.type),
       )
     }
 

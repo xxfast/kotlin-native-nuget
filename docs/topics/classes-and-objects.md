@@ -268,8 +268,8 @@ An exported Kotlin interface's defaulted member widens the same way, so the inte
 implementer's C# signature agree; there is no separate rule for members reached through an
 interface.
 
-A defaulted parameter the bridge cannot route to any non-null C# form at all (a `Flow`, a sealed
-type, or a bound interface) is dropped from the C# signature entirely when it is part of the
+A defaulted parameter the bridge cannot route to any non-null C# form at all (a nullable
+`Flow<T>?`, a sealed type, or a bound interface) is dropped from the C# signature entirely when it is part of the
 trailing all-defaulted run, and Kotlin always evaluates its default; call the shorter C#
 signature. One that sits before a required parameter leaves the whole callable unroutable, same
 as an unsupported required parameter would.

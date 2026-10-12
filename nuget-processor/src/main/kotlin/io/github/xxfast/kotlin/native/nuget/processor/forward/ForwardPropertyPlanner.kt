@@ -946,7 +946,8 @@ internal class ForwardPropertyPlanner(
   private fun BridgeType.isSupportedReceiver(): Boolean = when (this) {
     // ADR-160: a callback binds at a parameter position; an extension ON a function type is not a
     // shape either half spells.
-    is BridgeType.Callback, is BridgeType.AsyncCallback, is BridgeType.ReturnedLambda -> false
+    is BridgeType.Callback, is BridgeType.AsyncCallback, is BridgeType.FlowSource,
+    is BridgeType.ReturnedLambda -> false
 
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Primitive,
     BridgeType.String -> true
@@ -992,6 +993,7 @@ internal class ForwardPropertyPlanner(
       is BridgeType.Nullable,
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
+      is BridgeType.FlowSource,
       is BridgeType.ReturnedLambda,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,
@@ -1543,6 +1545,7 @@ internal class ForwardPropertyPlanner(
       is BridgeType.Nullable,
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
+      is BridgeType.FlowSource,
       is BridgeType.ReturnedLambda,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,
@@ -1561,6 +1564,7 @@ internal class ForwardPropertyPlanner(
     is BridgeType.BoundInterface,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -1602,7 +1606,8 @@ internal class ForwardPropertyPlanner(
    *  must decide here rather than fall into an `else`. */
   private fun BridgeType.isReadableComponent(): Boolean = when (this) {
     // ADR-160: not readable at a property position; a function-typed property keeps its own skip.
-    is BridgeType.Callback, is BridgeType.AsyncCallback, is BridgeType.ReturnedLambda -> false
+    is BridgeType.Callback, is BridgeType.AsyncCallback, is BridgeType.FlowSource,
+    is BridgeType.ReturnedLambda -> false
 
     // ADR-176: `Interface` was admitted here before the method gates lifted it, so a collection
     // property getter bound with no reachable backing wrapper and threw at the first element; the
@@ -1683,6 +1688,7 @@ internal class ForwardPropertyPlanner(
     is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -1710,6 +1716,7 @@ internal class ForwardPropertyPlanner(
     is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -1862,6 +1869,7 @@ internal fun BridgeType.conversion(flow: ForwardFlow): ForwardConversion? = when
   is BridgeType.Nullable,
   is BridgeType.Callback,
   is BridgeType.AsyncCallback,
+  is BridgeType.FlowSource,
   is BridgeType.ReturnedLambda,
   is BridgeType.SpecializedProtocol,
   is BridgeType.RawKSType,

@@ -31,12 +31,12 @@ class Tier1UnexportedSupertypeOutcomeTest {
       interface Mixed {
         fun okMixed(): Int = 1
         fun <T> tally(item: T): Int = 1
-        fun feedMixed(ticks: Flow<Int>): Int = 0
+        fun feedMixed(ticks: Flow<Char>): Int = 0
       }
 
       interface Lost {
         fun <T> pick(item: T): Int = 1
-        fun drain(ticks: Flow<Int>): Int = 0
+        fun drain(ticks: Flow<Char>): Int = 0
       }
 
       open class MixedBase {

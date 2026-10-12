@@ -873,6 +873,9 @@ internal data class CirCallbackDelegateHelper(
   // ADR-210: empty unless a bound member takes a suspend lambda parameter.
   val asyncBegins: List<CirAsyncBegin> = emptyList(),
   val asyncEnds: List<CirAsyncEnd> = emptyList(),
+  // ADR-210: one Current thunk per `Flow<T>` parameter element type; empty when no bound member
+  // takes one, which also keeps the shared enumeration thunks and classes out.
+  val asyncCurrents: List<CirAsyncEnd> = emptyList(),
 ) : CirDeclaration
 
 internal data class CirEnumEntry(

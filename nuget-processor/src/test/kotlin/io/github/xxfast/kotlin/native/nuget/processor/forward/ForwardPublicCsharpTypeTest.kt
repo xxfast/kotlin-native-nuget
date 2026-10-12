@@ -64,6 +64,7 @@ class ForwardPublicCsharpTypeTest {
     is BridgeType.Nullable -> BridgeType.Nullable::class
     is BridgeType.Callback -> BridgeType.Callback::class
     is BridgeType.AsyncCallback -> BridgeType.AsyncCallback::class
+    is BridgeType.FlowSource -> BridgeType.FlowSource::class
     is BridgeType.ReturnedLambda -> BridgeType.ReturnedLambda::class
     is BridgeType.SpecializedProtocol -> BridgeType.SpecializedProtocol::class
     is BridgeType.RawKSType -> BridgeType.RawKSType::class

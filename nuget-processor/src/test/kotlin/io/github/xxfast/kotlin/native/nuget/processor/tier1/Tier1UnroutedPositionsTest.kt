@@ -62,17 +62,18 @@ class Tier1UnroutedPositionsTest {
     Cell(member, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_COMBINATION)
 
   /**
-   * The 23 individually-named silent cells (ADR-210 took the `suspend` lambda parameter out;
-   * ADR-160 took three of the original 29 out: the object,
+   * The 18 individually-named silent cells (ADR-210 took the `suspend` lambda parameter and the
+   * five `Flow<Int>` parameters out; ADR-160 took three of the original 29 out: the object,
    * top-level and extension per-call lambda parameters all bind off the plan now, and ADR-197 two
-   * more: the class and object structural own-`<T>` members). The three
-   * `Dock` secondary constructors are the 30th to 32nd: they all render the one symbol
-   * `Dock.<init>`, so they are counted rather than matched one by one ([constructorCells]).
+   * more: the class and object structural own-`<T>` members). The `Dock` secondary constructors
+   * are the 30th to 32nd: they all render the one symbol `Dock.<init>`, so they are counted
+   * rather than matched one by one ([constructorCells]).
    */
   private val cells: List<Cell> = listOf(
     // --- ordinary class owner (`Depot`) -------------------------------------------------------
     // row 2: a Flow binds at a class-method RETURN (pinned routed below) but not at a parameter.
-    input("tier1.unrouted.Depot.flowParamOnClass"),
+    // (a `Flow<Int>` PARAMETER binds since ADR-210, here and on every owner below: asserted in
+    // `the Flow parameters bind off the plan`.)
     // row 10: the mirror image of the routed lambda parameter — no route returns a lambda from a
     // class method.
     returns("tier1.unrouted.Depot.callbackReturnOnClass"),
@@ -95,7 +96,6 @@ class Tier1UnroutedPositionsTest {
     // no longer one of them: it is on the ADR-062 plan since ADR-160, which is keyed to the
     // position rather than to the owner kind.
     returns("tier1.unrouted.DepotRegistry.flowReturnOnObject"),
-    input("tier1.unrouted.DepotRegistry.flowParamOnObject"),
     returns("tier1.unrouted.DepotRegistry.callbackReturnOnObject"),
     returns("tier1.unrouted.DepotRegistry.genericReturnOnObject"),
     input("tier1.unrouted.DepotRegistry.genericParamOnObject"),
@@ -106,7 +106,6 @@ class Tier1UnroutedPositionsTest {
     // members bound anywhere were `flowReturnOnInterface` / `callbackParamOnInterface` (the PART
     // pair, now declared on `IManifest` itself). So a Flow *parameter* on an interface default is
     // silent, like everywhere else a Flow sits at a parameter.
-    input("tier1.unrouted.Manifest.flowParamOnInterface"),
     returns("tier1.unrouted.Manifest.genericReturnOnInterface"),
     structural("tier1.unrouted.Manifest.structuralOnInterface"),
 
@@ -114,7 +113,6 @@ class Tier1UnroutedPositionsTest {
     // The extension planner's symbol carries no receiver: `{package}.{function}` (verified in
     // `ForwardCallablePlanner.extensionEntry`), so these names have no `Depot.` segment.
     returns("tier1.unrouted.flowReturnOnExtension"),
-    input("tier1.unrouted.flowParamOnExtension"),
     returns("tier1.unrouted.genericReturnOnExtension"),
     structural("tier1.unrouted.structuralOnExtension"),
 
@@ -124,7 +122,6 @@ class Tier1UnroutedPositionsTest {
     // -> `CS0246` in `GeneratedBindingsCheck`. There is no top-level Flow route, so the fix is to
     // name it as a skip and stop emitting, not to invent one.
     returns("tier1.unrouted.flowReturnOnTopLevel"),
-    input("tier1.unrouted.flowParamOnTopLevel"),
     input("tier1.unrouted.genericParamOnTopLevel"),
     // row 16: `fun <T> f(): List<T>` — the structural top-level route refuses it internally
     // (`paramIndex == -1 -> return`), and that refusal is total for the declaration, so the
@@ -133,7 +130,7 @@ class Tier1UnroutedPositionsTest {
   )
 
   /** Row 24: three secondary constructors, one per reason, beside a good primary. */
-  private val constructorCells: Int = 3
+  private val constructorCells: Int = 2
 
   /**
    * The two interface-default cells that bind: ADR-160 declares the lambda one on `IManifest`, and
@@ -352,7 +349,6 @@ class Tier1UnroutedPositionsTest {
     // Public C# names of the silent cells, per owner. The trailing `(` also catches the private
     // `Native_*` DllImport, which is exactly the stronger absence claim: no half of the member.
     listOf(
-      "FlowParamOnClass(",
       "CallbackReturnOnClass(",
       "GenericReturnOnClass(",
       "GenericParamOnClass(",
@@ -360,19 +356,15 @@ class Tier1UnroutedPositionsTest {
       "CallbackElementOnClass(",
       "GenericElementOnClass(",
       "FlowReturnOnObject(",
-      "FlowParamOnObject(",
       "CallbackReturnOnObject(",
       "GenericReturnOnObject(",
       "GenericParamOnObject(",
-      "FlowParamOnInterface(",
       "GenericReturnOnInterface(",
       "StructuralOnInterface(",
       "FlowReturnOnExtension(",
-      "FlowParamOnExtension(",
       "GenericReturnOnExtension(",
       "StructuralOnExtension(",
       "FlowReturnOnTopLevel(",
-      "FlowParamOnTopLevel(",
       "GenericParamOnTopLevel(",
       "StructuralRefusedOnTopLevel(",
     ).forEach { member ->
@@ -398,6 +390,36 @@ class Tier1UnroutedPositionsTest {
       result.kspWarnings.any { it.contains("Depot.flowReturnOnClass") },
       "warning about a member the consumer can still call is a false positive; " +
           "kspWarnings=${result.kspWarnings}",
+    )
+  }
+
+  /**
+   * ADR-210: the cells this matrix lost when a `Flow<T>` parameter became `IAsyncEnumerable<T>`.
+   * The plan is keyed to the position, so every owner binds it, a constructor included: the
+   * Kotlin-owned lifetime is what lets a non-suspend member or a constructor store the flow.
+   */
+  @Test
+  fun `the Flow parameters bind off the plan`() {
+    val result: Tier1Result = run()
+    val flow = "global::System.Collections.Generic.IAsyncEnumerable<int>"
+
+    listOf(
+      "public int FlowParamOnClass($flow events)",
+      "public static int FlowParamOnObject($flow events)",
+      "int FlowParamOnInterface($flow events);",
+      "public static int FlowParamOnTopLevel($flow events)",
+      "int FlowParamOnExtension(",
+      "public Dock(int id, $flow flowParamOnConstructor)",
+    ).forEach { member ->
+      assertTrue(
+        result.generatedCSharp.contains(member),
+        "ADR-210 binds this position now; expected `$member`",
+      )
+    }
+    val bridgeCode: String = ForwardDiagnosticKind.SKIPPED_UNIMPLEMENTABLE_INTERFACE.name
+    assertFalse(
+      result.kspWarnings.filterNot { it.contains(bridgeCode) }.any { it.contains("flowParamOn") },
+      "a bound member must not be named as a skip; kspWarnings=${result.kspWarnings}",
     )
   }
 
@@ -646,12 +668,9 @@ class Tier1UnroutedPositionsTest {
   private val residualCells: List<Cell> = listOf(
     // (a) inherited from an unexported interface, once per inheriting class.
     structural("tier1.residuals.Shelf.tally"),
-    input("tier1.residuals.Shelf.feedHidden"),
     structural("tier1.residuals.Rack.tally"),
-    input("tier1.residuals.Rack.feedHidden"),
     // (a) inherited from an unexported base class. Its `fun <T> weigh` binds since ADR-197 (a class
     // member re-homed onto the exported subclass), asserted in the control test.
-    input("tier1.residuals.Ledge.drainBase"),
     // (a) on a generic owner: an override of an unexported interface's `suspend` member.
     structural("tier1.residuals.Crate.pace"),
     // (b) value-class members no route binds. A lambda parameter is one too: the ADR-160 plan
@@ -663,7 +682,6 @@ class Tier1UnroutedPositionsTest {
     input("tier1.residuals.Tag.tagOn"),
     // (c) class companion members (already named before this cell existed; coverage only). Its
     // `fun <T> denPick` binds since ADR-197, asserted in the control test.
-    input("tier1.residuals.Den.Companion.denFeed"),
     returns("tier1.residuals.Den.Companion.denTicker"),
     // (d) interface companion members, a function, a `val` and a `const val`.
     structural("tier1.residuals.Keeper.Companion.summon"),
@@ -747,8 +765,8 @@ class Tier1UnroutedPositionsTest {
     val declarations: List<String> = result.csharpDeclarations()
 
     listOf(
-      "Tally", "FeedHidden", "DrainBase", "TagPick", "TagFeed", "TagTicker",
-      "TagSettle", "TagOn", "DenFeed", "DenTicker", "Summon", "TagBlank", "Hire",
+      "Tally", "TagPick", "TagFeed", "TagTicker",
+      "TagSettle", "TagOn", "DenTicker", "Summon", "TagBlank", "Hire",
       "HireCook",
     ).forEach { member ->
       val leaks: List<String> = declarations.filter { line ->

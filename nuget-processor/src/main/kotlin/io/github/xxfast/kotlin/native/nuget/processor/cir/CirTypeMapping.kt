@@ -236,6 +236,9 @@ internal class CollectionHelperTracker {
   /** ADR-210: every suspend lambda parameter shape a translated legacy-route member takes. */
   val asyncCallbacks: MutableSet<BridgeType.AsyncCallback> = linkedSetOf()
 
+  /** ADR-210: every `Flow<T>` parameter shape a translated legacy-route member takes. */
+  val flowSources: MutableSet<BridgeType.FlowSource> = linkedSetOf()
+
   /** Marks List/Map/Set helper needs from a planned [BridgeType] (result, parameter, or property). */
   fun trackCollection(type: BridgeType) {
     val unwrapped: BridgeType = if (type is BridgeType.Nullable) type.type else type

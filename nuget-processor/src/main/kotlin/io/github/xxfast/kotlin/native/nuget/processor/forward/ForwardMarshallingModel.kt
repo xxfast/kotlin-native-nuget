@@ -257,6 +257,18 @@ internal sealed interface BridgeType {
   ) : BridgeType
 
   /**
+   * ADR-210: a Kotlin `Flow<T>` at a **parameter** position, the C# caller's own
+   * `IAsyncEnumerable<T>`. Kotlin wraps it with the runtime's `flowForKotlin`: cold, one
+   * `GetAsyncEnumerator` per `collect`, one await per element. Like [AsyncCallback] it may be
+   * stored (the generated flow captures the holder whose cleaner releases the C# key), fans out to
+   * three POINTER slots of its own (Enumerate thunk, Current thunk, key), and shares the
+   * parameter-independent thunks once per export.
+   *
+   * [element] is a primitive or `String`, the v1 set a suspend lambda's result admits.
+   */
+  data class FlowSource(val element: BridgeType) : BridgeType
+
+  /**
    * ADR-160 amendment: a Kotlin function type (`() -> Pet`, `(Int) -> Int`) handed OUT of Kotlin
    * as a top-level function's RESULT, the other mechanism [Callback] names. Never produced by
    * [ForwardBridgeTypeClassifier.classify], which is position-agnostic; the planner builds it for
@@ -1231,6 +1243,9 @@ internal object ForwardCallablePlanValidator {
         validateType(type.result, "$position suspend lambda result")
       }
 
+      // ADR-210: valid at a parameter position only, like the suspend lambda above.
+      is BridgeType.FlowSource -> validateType(type.element, "$position flow element")
+
       // ADR-160 amendment: valid at a top-level result only, the one place the planner mints it.
       is BridgeType.ReturnedLambda -> type.typeArguments.forEach { argument ->
         validateType(argument, "$position returned lambda type argument")
@@ -1347,6 +1362,7 @@ internal object ForwardCallablePlanValidator {
     is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
     is BridgeType.Unsupported,

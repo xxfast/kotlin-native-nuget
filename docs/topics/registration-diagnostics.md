@@ -555,6 +555,35 @@ object the lambda captured and asserting it is collected:
 - `SuspendLambdaParameter_LambdaBeforeAString_AfterTheCallCompletes_ItsClosureIsCollected`: the
   control for the row above, with a valid later argument.
 
+### A `Flow` parameter
+
+Each pull of a [`Flow` parameter](coroutines-and-flow.md#flow-parameter) mints a counted
+enumeration handle and a task handle, and a `String` element is boxed once per element, so these
+`LeakTests/LiveHandleTests.cs` rows pin the count after a call settles. Each awaits the iterator's
+own `finally` first, because the enumerator is disposed on a queued work item after the call
+completes.
+
+| Row | Test | Pins |
+|---|---|---|
+| 18a | `FlowParameter_FullCollect_ReturnsToBaseline` | a full collect of an `Int` flow and of a `String` flow |
+| 18b | `FlowParameter_EarlyAbort_ReturnsToBaseline` | Kotlin stops after two of five, so the iterator is disposed parked at a `yield` |
+| 18c | `FlowParameter_IteratorThrowsMidStream_ReturnsToBaseline` | an iterator that throws mid-stream, once caught in Kotlin and once propagated |
+| 18d | `FlowParameter_OuterTokenCancelledMidStep_ReturnsToBaseline` | the outer token cancelled while a pull is pending and the iterator ignores its token |
+| 18e | `FlowParameter_SourceThatNeverSuspends_TightLoop_ReturnsToBaseline` | thousands of already-completed pulls in one collect, where completion can land before the start thunk returns |
+| 18f | `FlowParameter_StoredByAConstructor_ReturnsToBaseline` | a flow a constructor stores and a later call enumerates twice |
+| 18g | `FlowParameter_CollectorThrows_ReturnsToBaseline` | a throw from Kotlin's own collector, with no pull pending |
+
+Row 18d holds its handles until the iterator really finishes, which is a bounded hold and not a
+leak, so it releases the iterator and awaits its `finally` before asserting the baseline.
+
+As for a suspend lambda, the C# half is invisible to `nuget_live_handles`.
+`LeakTests/CollectabilityTests.cs` asserts through a `WeakReference` to an object the source
+captured:
+
+- `FlowParameter_AfterTheCallCompletes_ItsSourceIsCollected`: a `suspend fun` host.
+- `FlowParameter_StoredByAConstructor_IsReleasedWithItsOwner`: alive and still enumerable while
+  the owner is alive, collected after the owner is disposed and dropped.
+
 ### Dropped wrappers are released by the GC
 
 A wrapper dropped without `Dispose()` returns `LiveHandles` to baseline once the .NET GC finalizes it
