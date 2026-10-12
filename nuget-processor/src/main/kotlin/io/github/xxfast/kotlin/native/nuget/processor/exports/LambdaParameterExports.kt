@@ -332,6 +332,9 @@ internal fun KSFunctionDeclaration.isArmCallbackRoutable(
  */
 internal fun KSFunctionDeclaration.carriesTypeParameterLambda(): Boolean = parameters.any { param ->
   val expanded: KSType = param.type.resolve().expandAliases()
-  expanded.declaration.qualifiedName?.asString() in LAMBDA_TYPES &&
-      expanded.arguments.any { argument -> argument.type?.resolve()?.declaration is KSTypeParameter }
+  val isLambda: Boolean = expanded.declaration.qualifiedName?.asString() in LAMBDA_TYPES
+  val namesTypeParameter: Boolean = expanded.arguments.any { argument ->
+    argument.type?.resolve()?.declaration is KSTypeParameter
+  }
+  isLambda && namesTypeParameter
 }

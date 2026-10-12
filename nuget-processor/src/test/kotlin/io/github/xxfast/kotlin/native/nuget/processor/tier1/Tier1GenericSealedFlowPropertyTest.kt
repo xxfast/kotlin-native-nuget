@@ -110,7 +110,9 @@ class Tier1GenericSealedFlowPropertyTest {
     val generated: String = result.generated
     val start: Int = generated.indexOf("@CName(\"$entryPoint\")")
     assertTrue(start >= 0, "expected an export named $entryPoint; got: $generated")
-    val end: Int = generated.indexOf("@CName(", start + 1).let { if (it < 0) generated.length else it }
+    val end: Int = generated
+      .indexOf("@CName(", start + 1)
+      .let { next -> if (next < 0) generated.length else next }
     return generated.substring(start, end)
   }
 
@@ -228,7 +230,8 @@ class Tier1GenericSealedFlowPropertyTest {
 
   @Test
   fun `the generic base carries none of them and nothing is skipped`() {
-    // ADR-147, kept: the generic base has no flow route, so `Served` is each arm's, not `Dish<T>`'s.
+    // ADR-147, kept: the generic base has no flow route, so `Served` is each arm's, not
+    // `Dish<T>`'s.
     val lines: List<String> = result.generatedCSharp.lines()
     val start: Int = lines.indexOfFirst { "public abstract class Dish<T>" in it }
     assertTrue(start >= 0, "expected the generic sealed base; got: ${result.generatedCSharp}")

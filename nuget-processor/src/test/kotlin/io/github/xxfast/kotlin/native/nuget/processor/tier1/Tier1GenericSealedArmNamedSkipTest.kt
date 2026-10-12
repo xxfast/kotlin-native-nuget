@@ -100,7 +100,8 @@ class Tier1GenericSealedArmNamedSkipTest {
                   await foreach (int waft in hot.Wafts()) seen += waft;
                   using var cold = new Dish.Cold();
                   using var bare = new Plate.Bare<string>(3);
-                  return seen + await cold.ThawAsync() + await cold.OverAsync() + await bare.WipeAsync();
+                  return seen + await cold.ThawAsync() + await cold.OverAsync()
+                      + await bare.WipeAsync();
               }
           }
       }
@@ -111,13 +112,14 @@ class Tier1GenericSealedArmNamedSkipTest {
 
   @Test
   fun `a suspend member of a generic arm is named like a generic class's`() {
-    listOf("Dish.Hot.cool", "Dish.Hot.warm", "Dish.Hot.over", "Reply.Trill.hush").forEach { member ->
-      val warnings: List<String> = named(member)
-      assertEquals(1, warnings.size, "expected `$member` named once; got: ${result.kspWarnings}")
-      assertContains(warnings.single(), "SKIPPED_UNSUPPORTED_COMBINATION")
-      assertContains(warnings.single(), "it is a `suspend` member of a generic class")
-      assertContains(warnings.single(), "(ADR-147)")
-    }
+    listOf("Dish.Hot.cool", "Dish.Hot.warm", "Dish.Hot.over", "Reply.Trill.hush")
+      .forEach { member ->
+        val warnings: List<String> = named(member)
+        assertEquals(1, warnings.size, "expected `$member` named once; got: ${result.kspWarnings}")
+        assertContains(warnings.single(), "SKIPPED_UNSUPPORTED_COMBINATION")
+        assertContains(warnings.single(), "it is a `suspend` member of a generic class")
+        assertContains(warnings.single(), "(ADR-147)")
+      }
     listOf("hot_cool", "hot_warm", "hot_over", "trill_hush").forEach { export ->
       assertFalse(export in result.generated, "expected no Kotlin export for $export")
     }

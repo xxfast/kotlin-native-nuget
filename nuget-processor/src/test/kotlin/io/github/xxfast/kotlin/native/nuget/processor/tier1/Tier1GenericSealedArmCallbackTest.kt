@@ -68,7 +68,9 @@ class Tier1GenericSealedArmCallbackTest {
     val generated: String = result.generated
     val start: Int = generated.indexOf("@CName(\"library_pantry__$entryPoint\")")
     assertTrue(start >= 0, "expected an export named $entryPoint; got: $generated")
-    val end: Int = generated.indexOf("@CName(", start + 1).let { if (it < 0) generated.length else it }
+    val end: Int = generated
+      .indexOf("@CName(", start + 1)
+      .let { next -> if (next < 0) generated.length else next }
     return generated.substring(start, end)
   }
 

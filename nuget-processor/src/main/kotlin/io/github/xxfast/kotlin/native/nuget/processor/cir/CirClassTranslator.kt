@@ -5926,7 +5926,8 @@ private fun CirSealedSubclass.genericArmOf(
  * [armCirTypeParameters] declares; unchanged for an arm off the generic sealed route.
  */
 private fun KSClassDeclaration.armNameofSpelling(base: KSClassDeclaration, name: String): String {
-  val parameters: List<ForwardSealedArmParameter> = forwardSealedArmShape(base)?.parameters.orEmpty()
+  val parameters: List<ForwardSealedArmParameter> =
+    forwardSealedArmShape(base)?.parameters.orEmpty()
   if (parameters.isEmpty()) return name
   return parameters.joinToString(", ", "$name<", ">") { slot ->
     slot.own?.let { own -> forwardCsharpTypeParameterName(own) } ?: slot.csharpName

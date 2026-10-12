@@ -2102,18 +2102,24 @@ internal class ForwardCallablePlanner(
     return map { entry ->
       if (entry !is ForwardCallableCatalogEntry.Skipped) return@map entry
       val method: KSFunctionDeclaration = entry.node as? KSFunctionDeclaration ?: return@map entry
-      // The arm's own sealed interface is no carrier: it is the generic base, which projects nothing.
+      // The arm's own sealed interface is no carrier: it is the generic base, which projects
+      // nothing.
       val overridden: KSClassDeclaration? =
         method.findOverridee()?.parentDeclaration as? KSClassDeclaration
-      val carriedByInterface: Boolean = overridden?.modifiers?.contains(Modifier.SEALED) != true &&
-          method.overridesExportedInterfaceMember(classifier.exportedObjectHandles)
+      val overrideIsOnSealedBase: Boolean = overridden?.modifiers?.contains(Modifier.SEALED) == true
+      val overridesExportedInterface: Boolean =
+        method.overridesExportedInterfaceMember(classifier.exportedObjectHandles)
+      val carriedByInterface: Boolean = !overrideIsOnSealedBase && overridesExportedInterface
       if (carriedByInterface) return@map entry
       val isSuspend: Boolean = method.modifiers.contains(Modifier.SUSPEND)
+      val deferredSuspend: Boolean = isSuspend &&
+          (entry.reason == ForwardPlanSkipReason.SUSPEND ||
+              entry.reason == ForwardPlanSkipReason.ABSTRACT)
+      val deferredCallback: Boolean = entry.reason == ForwardPlanSkipReason.CALLBACK_PROTOCOL &&
+          method.carriesTypeParameterLambda()
       val droppedAs: ForwardPlanSkipReason = when {
-        isSuspend && (entry.reason == ForwardPlanSkipReason.SUSPEND ||
-            entry.reason == ForwardPlanSkipReason.ABSTRACT) -> ForwardPlanSkipReason.SUSPEND
-        entry.reason == ForwardPlanSkipReason.CALLBACK_PROTOCOL &&
-            method.carriesTypeParameterLambda() -> ForwardPlanSkipReason.CALLBACK_PROTOCOL
+        deferredSuspend -> ForwardPlanSkipReason.SUSPEND
+        deferredCallback -> ForwardPlanSkipReason.CALLBACK_PROTOCOL
         else -> return@map entry
       }
       val namedByWalk: Boolean = if (isSuspend) {
