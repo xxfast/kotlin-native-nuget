@@ -12,6 +12,7 @@ import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSValueParameter
 import com.google.devtools.ksp.symbol.Modifier
+import com.google.devtools.ksp.symbol.Variance
 import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.MUTABLE_STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.PLAIN_FLOW_TYPES
@@ -1857,25 +1858,57 @@ private fun ForwardBridgeTypeClassifier.refusedListenerMember(
  * A Kotlin source spelling for a diagnostic: simple names, type arguments and every `?` kept, head
  * and arguments alike. Aliases are expanded at every level (ADR-018 amendment), so `Names?` reads
  * `List<String>?` and `Map<Name?, Int>` reads `Map<String?, Int>`: the shape being refused, not the
- * alias hiding it. A `kotlin.FunctionN` is spelled in arrow syntax (`(Int) -> Unit`).
+ * alias hiding it. A function type is spelled in arrow syntax at every arity, a `kotlin.FunctionN`
+ * as `(Int) -> Unit` and a `kotlin.coroutines.SuspendFunctionN` as `suspend (Int) -> Unit`, and a
+ * nullable one keeps its parentheses (`(suspend (Int) -> Unit)?`): the class name a
+ * `KSType.toString()` prints (`SuspendFunction1<Int, Unit>`) is not something the author wrote.
+ *
+ * [keepProjections] keeps a use-site `in`/`out`, for a message about the projection itself and for
+ * a site that printed the raw `KSType` before; the default drops it, as this always has.
  */
-internal fun KSType.kotlinSpelling(): String {
+internal fun KSType.kotlinSpelling(keepProjections: Boolean = false): String {
   val type: KSType = expandAliases()
-  val qualifiedName: String? = type.declaration.qualifiedName?.asString()
-  if (qualifiedName in LEGACY_CALLBACK_TYPES && type.arguments.isNotEmpty()) {
+  val keyword: String? = functionTypeKeyword(type.declaration.qualifiedName?.asString())
+  if (keyword != null && type.arguments.isNotEmpty()) {
     val spelled: List<String> = type.arguments.map { argument ->
-      argument.type?.resolve()?.kotlinSpelling() ?: "*"
+      argument.type?.resolve()?.kotlinSpelling(keepProjections) ?: "*"
     }
-    val lambda: String = "(${spelled.dropLast(1).joinToString(", ")}) -> ${spelled.last()}"
+    val lambda: String =
+      "$keyword(${spelled.dropLast(1).joinToString(", ")}) -> ${spelled.last()}"
     return if (type.isMarkedNullable) "($lambda)?" else lambda
   }
   val arguments: String =
     if (type.arguments.isEmpty()) ""
     else type.arguments.joinToString(", ", "<", ">") { argument ->
-      argument.type?.resolve()?.kotlinSpelling() ?: "*"
+      val spelled: String =
+        argument.type?.resolve()?.kotlinSpelling(keepProjections) ?: return@joinToString "*"
+      when {
+        !keepProjections -> spelled
+        argument.variance == Variance.STAR -> "*"
+        argument.variance == Variance.COVARIANT -> "out $spelled"
+        argument.variance == Variance.CONTRAVARIANT -> "in $spelled"
+        else -> spelled
+      }
     }
   val nullable: String = if (type.isMarkedNullable) "?" else ""
   return "${type.declaration.simpleName.asString()}$arguments$nullable"
+}
+
+private val FUNCTION_TYPE_NAME = Regex("""kotlin\.Function\d+""")
+
+private val SUSPEND_FUNCTION_TYPE_NAME = Regex("""kotlin\.coroutines\.SuspendFunction\d+""")
+
+/**
+ * The keyword a function type's arrow spelling opens with: empty for a `kotlin.FunctionN`,
+ * `suspend ` for a `kotlin.coroutines.SuspendFunctionN`, null for anything else. Spelling only, at
+ * any arity: which function types a route BINDS is `LEGACY_CALLBACK_TYPES` and
+ * `SUSPEND_LAMBDA_TYPES`.
+ */
+private fun functionTypeKeyword(qualifiedName: String?): String? = when {
+  qualifiedName == null -> null
+  FUNCTION_TYPE_NAME.matches(qualifiedName) -> ""
+  SUSPEND_FUNCTION_TYPE_NAME.matches(qualifiedName) -> "suspend "
+  else -> null
 }
 
 /**

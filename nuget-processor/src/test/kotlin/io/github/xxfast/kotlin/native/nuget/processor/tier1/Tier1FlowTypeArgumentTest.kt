@@ -209,7 +209,7 @@ class Tier1FlowTypeArgumentTest {
     val cs: String = result.generatedCSharp.withoutDocComments()
     mapOf(
       "flowOfFlow" to "Flow<Flow<Int>>",
-      "flowOfLambda" to "Flow<Function1<Int, Int>>",
+      "flowOfLambda" to "Flow<(Int) -> Int>",
       "streamed" to "Flow<T>",
     ).forEach { (member, argument) ->
       val csName: String = member.replaceFirstChar { it.uppercase() }

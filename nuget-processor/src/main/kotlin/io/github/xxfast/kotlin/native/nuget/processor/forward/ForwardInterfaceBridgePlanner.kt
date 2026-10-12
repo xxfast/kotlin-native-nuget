@@ -331,7 +331,10 @@ internal object ForwardInterfaceBridgePlanner {
   ): ForwardBridgeSlotOutcome {
     val name: String = property.simpleName.asString()
     val type: KSType = property.type.resolve().expandAliases()
-    val member: String = "${if (property.isMutable) "var" else "val"} $name: $type"
+    // Spelled, never the raw `KSType`: that prints a function type by its class name
+    // (`SuspendFunction1<Int, String>`), which is not what the author wrote.
+    val spelled: String = type.kotlinSpelling(keepProjections = true)
+    val member: String = "${if (property.isMutable) "var" else "val"} $name: $spelled"
     fun refuse(reason: String, hint: String): ForwardBridgeSlotOutcome =
       ForwardBridgeSlotOutcome.Refused(ForwardBridgeRefusal(member, reason, hint, name))
     // `var` properties would need a second (setter) slot each: deferred by the ADR's scope.
@@ -399,7 +402,8 @@ internal object ForwardInterfaceBridgePlanner {
     }
     val result: ForwardBridgeType = bridgeType(returnType, classifier)
       ?: return refuse(
-        "returns `$returnType`, a type the bridge cannot carry",
+        "returns `${returnType.kotlinSpelling(keepProjections = true)}`, a type the bridge " +
+            "cannot carry",
         "return one of $CARRIED_TYPES",
       )
     val parameters: MutableList<ForwardBridgeParameter> = mutableListOf()
@@ -409,7 +413,8 @@ internal object ForwardInterfaceBridgePlanner {
       val type: ForwardBridgeType = bridgeType(declared, classifier)
         ?.takeIf { it.wire != ForwardBridgeWire.UNIT }
         ?: return refuse(
-          "takes `$parameterName: $declared`, a type the bridge cannot carry",
+          "takes `$parameterName: ${declared.kotlinSpelling(keepProjections = true)}`, a type " +
+              "the bridge cannot carry",
           "take one of $CARRIED_TYPES",
         )
       parameters += ForwardBridgeParameter(parameterName, type)

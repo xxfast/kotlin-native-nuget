@@ -16,6 +16,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.CollectionKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardKotlinArgumentSpelling
+import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinSpelling
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyGenericSealedElement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
@@ -849,8 +850,10 @@ internal fun cirBoundConstraint(
   val arguments: List<String> = bound.arguments.map { argument ->
     argument.boundArgumentCsName(context, typeParameterName)
       ?: return dropped(
-        "bound '${bound.forwardDiagnosticSpelling()}' on this type parameter has a type " +
-            "argument with no C# spelling and is dropped from the where clause",
+        // As the author wrote it, through the one diagnostic spelling: a function-type argument
+        // reads `suspend (Int) -> String`, never the class name a `KSType` prints.
+        "bound '${bound.kotlinSpelling(keepProjections = true)}' on this type parameter has a " +
+            "type argument with no C# spelling and is dropped from the where clause",
       )
   }
   val applied: String = if (arguments.isEmpty()) "" else "<${arguments.joinToString(", ")}>"
@@ -895,16 +898,6 @@ private fun KSTypeArgument.boundArgumentCsName(
     legacyBoundClassCsName(type.makeNotNullable(), context)
   }
   return name + applied + nullable
-}
-
-/** A bound as the author wrote it, for a diagnostic: simple names, arguments kept. */
-private fun KSType.forwardDiagnosticSpelling(): String {
-  val name: String = declaration.simpleName.asString()
-  if (arguments.isEmpty()) return name
-  val spelled: String = arguments.joinToString(", ") { argument ->
-    argument.type?.resolve()?.forwardDiagnosticSpelling() ?: "*"
-  }
-  return "$name<$spelled>"
 }
 
 /**
