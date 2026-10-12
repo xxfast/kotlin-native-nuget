@@ -281,8 +281,9 @@ public class UnroutedPositionsTests
     /// <summary>
     /// Row 24: one secondary constructor carries an unroutable parameter (a lambda) and is dropped,
     /// but the good primary keeps the class constructible -- the class-level "no public
-    /// constructor" fallback must not have swallowed it. The secondary over a `Box<Int>` binds
-    /// since ADR-208, and the one over a `Flow<Int>` since ADR-210 (as `IAsyncEnumerable<int>`).
+    /// constructor" fallback must not have swallowed it. The secondary over a
+    /// <c>Box&lt;Int&gt;</c> binds since ADR-208, and the one over a <c>Flow&lt;Int&gt;</c> since
+    /// ADR-210 (as <c>IAsyncEnumerable&lt;int&gt;</c>).
     /// </summary>
     [Fact]
     public void DockIsStillConstructibleViaItsPrimaryConstructor()
