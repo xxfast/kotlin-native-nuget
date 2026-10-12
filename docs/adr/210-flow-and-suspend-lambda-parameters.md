@@ -326,16 +326,36 @@ with no Kotlin holder ever built to release it.
   cleaner owns the key.
 - A member that takes a suspend lambda also frees the completion callback's `GCHandle` when the call
   throws before the P/Invoke (a later argument refused by its null guard, or a disposed wrapper). The
-  catch around the call does it. A suspend member that takes no suspend lambda does not have this
-  catch yet. That is now **verified by a failing test on another branch, for the null-guard case
-  only**: a later argument failing its null guard leaks the callback's `GCHandle`. The "or a disposed
-  wrapper" case does **not** leak on a member without a suspend lambda, because the
-  `_handle.IsInvalid` check runs before the callback is allocated. The fix itself lands in a later
-  PR and is not part of this ADR's work (ROADMAP, Performance & Resource Hygiene).
+  catch around the call does it. A suspend member that takes no suspend lambda leaked that handle
+  when a later argument failed its null guard (**verified by a failing test**); the amendment below
+  extends the same catch to it. The "or a disposed wrapper" case never leaked on a member without a
+  suspend lambda, because the `_handle.IsInvalid` check runs before the callback is allocated.
 - Pinned by `LeakTests/CollectabilityTests.cs`: `SuspendLambdaParameter_CallOnADisposedWrapper_ItsClosureIsCollected`,
   `SuspendLambdaParameter_LaterArgumentFailsItsNullGuard_ItsClosureIsCollected` and its control
   `SuspendLambdaParameter_LambdaBeforeAString_AfterTheCallCompletes_ItsClosureIsCollected`. They are
   collectability rows, because the context table is invisible to `nuget_live_handles`.
+
+**Amendment (2026-10-12): the completion-handle rule holds at every suspend call site.** The catch
+that frees the completion callback's `GCHandle` is no longer specific to members that take a suspend
+lambda. One shared helper, `appendCompletionHandleCatch` in `cir/CirConcurrencyRenderer.kt`, emits
+`catch { if (callbackHandle.IsAllocated) callbackHandle.Free(); throw; }` around the native call at
+every site that allocates a completion handle: `renderAsyncMethod` (instance, static and top-level,
+sealed arm, interface, and `Flow`- or `StateFlow`-returning members), the four
+`KotlinSuspendFunc`/`KotlinSuspendAction` holder invokes in `cir/CirFunctionRenderer.kt`,
+`DrainAndDisposeAsync` in `cir/CirClassRenderer.kt`, and `EmitAsync` in `cir/CirSharedFlowRenderer.kt`,
+which already had it. The invariant is that C# owns the completion `GCHandle` from allocation until
+the native call returns, and frees it on any earlier exit; after the call returns, only the
+completion callback frees it. A scan of the regenerated `Interop.cs` found 395 allocations and 395
+freeing catches. The decision above is unchanged.
+
+- Pinned by `LeakTests/CollectabilityTests.cs`: `SuspendCompletion_MemberArgumentFailsItsNullGuard_ItsStateIsCollected`
+  and `SuspendCompletion_TopLevelArgumentFailsItsNullGuard_ItsStateIsCollected` (the two that were red),
+  `SuspendCompletion_MemberCallOnADisposedWrapper_ItsStateIsCollected` (a guard on the disposed-check
+  ordering, not a reproduction), and the controls `SuspendCompletion_MemberCallCompletes_ItsStateIsCollected`
+  and `SuspendCompletion_TopLevelCallCompletes_ItsStateIsCollected`.
+- Pinned at Tier 1 by `Tier1SuspendCompletionHandleFreeTest`, which asserts the catch text on the
+  routes a running test does not reach (sealed arm, interface, `Flow`- and `StateFlow`-returning
+  members, the suspend lambda holders and `EmitAsync`).
 
 ### Semantics a consumer can rely on
 
