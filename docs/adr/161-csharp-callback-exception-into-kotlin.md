@@ -378,8 +378,11 @@ Verified:
 - Tier 1: `Tier1CallbackFaultContainmentTest` pins the emitted shape of both sites (a clear in a
   `finally` that follows every arm of the completion closure; the three flow terminals, `onError`
   clearing after `BuildException`).
-- `LeakTests/CollectabilityTests.cs`, `ManagedFault_*`. The first row failed before the fix; the
-  others were added to cover the remaining stash sites and are not recorded as red beforehand.
+- `LeakTests/CollectabilityTests.cs`, `ManagedFault_*`. With the stash clear reverted in the two
+  renderer files and the fixture repacked (run twice, same result), four rows fail on their
+  collectability assertion and three pass; with the fix restored all seven pass. The four red rows
+  are the dispatcher-thread row, the faulted-`Task` row and the two `Flow`-parameter rows. The
+  control and both arms of the uncaught theory are green either way.
   - `ManagedFault_ThrownOnAKotlinDispatcherThread_AndCaughtByKotlin_IsCollected`.
   - `ManagedFault_ThrownOnTheCallingThread_AndCaughtByKotlin_IsCollected`: the control; a
     synchronous export already cleared.
@@ -389,7 +392,7 @@ Verified:
     (`NugetAsyncMoveNextBegin`).
   - `ManagedFault_FromAFaultedTask_AndCaughtByKotlin_IsCollected` (`NugetAsyncStringEnd`).
   - `ManagedFault_NotCaughtByKotlin_IsCollectedOnceTheFaultedTaskIsDropped`, a theory with a throw
-    before and after an `await`. It pins the fault arm and would also pass without the fix, because
+    before and after an `await`. It pins the fault arm and passes without the fix too, because
     `TakeOriginalManagedFault` empties the slot when it hands the original back. It asserts the
     outer `Task` faults with the very exception the lambda threw (`CaughtWasOriginal`) on both arms.
 
