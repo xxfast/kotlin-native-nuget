@@ -223,6 +223,35 @@ internal fun StringBuilder.appendAsyncCompletionClosure(
 }
 
 /**
+ * The ONE `catch` that closes the `try` around a suspend call site's native call, shared by every
+ * site that allocates a completion `GCHandle` ([renderAsyncMethod], `CirFunctionRenderer`'s four
+ * `KotlinSuspendFunc`/`KotlinSuspendAction` invokers, `CirClassRenderer`'s drain and
+ * `CirSharedFlowRenderer`'s `EmitAsync`).
+ *
+ * The invariant: C# owns the completion handle from its allocation until the native call returns,
+ * and frees it on any earlier exit. Only the completion callback frees it otherwise, and no
+ * completion arrives for a call that never reached Kotlin, so a stranded handle roots the closure
+ * and everything it captures (the caller's token, the wrapper, and, since C# hoists every lambda of
+ * a method into one closure object, a consumer's lambda) for the life of the process. What can
+ * exit early is an argument's inline null guard (`text ?? throw ...`), a wire container's create, a
+ * suspend lambda's registration (ADR-210), `GetOrCreateScope()` on a wrapper disposed mid-call, a
+ * closed `SafeHandle` refused by the marshaller, or the P/Invoke itself.
+ *
+ * `IsAllocated`, not a bare `Free()`: the allocation may sit inside the `try` after a step that
+ * threw (ADR-171's boxes), and a callback that already ran has already freed it.
+ */
+internal fun StringBuilder.appendCompletionHandleCatch(
+  callbackHandle: String = "callbackHandle",
+  indent: String = "            ",
+) {
+  appendLine("${indent}catch")
+  appendLine("$indent{")
+  appendLine("$indent    if ($callbackHandle.IsAllocated) $callbackHandle.Free();")
+  appendLine("$indent    throw;")
+  appendLine("$indent}")
+}
+
+/**
  * A multi-line result extraction was written against the shipped 20-space body indent; the
  * containment `try` moves the body four columns right, so every continuation line moves with it and
  * keeps its relative nesting.
@@ -511,30 +540,17 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
       "$jobHandle = $nativeName($nativeCallArgs)",
       returns = false,
     )
-  // ADR-210: a member taking a suspend lambda frees the completion callback's GCHandle when the
-  // native call statement throws (a later argument's guard, a registration, the P/Invoke). C#
-  // hoists every lambda of this method into one closure object, so the leaked handle would root
-  // the consumer's lambda through the completion delegate even after its own key is unregistered.
-  val guardsKey: Boolean = method.parameters.any { parameter -> parameter.asyncKeyLocal != null }
-  if (acquiredFlow || guardsKey) {
-    appendLine("            IntPtr $jobHandle = IntPtr.Zero;")
-    appendLine("            try")
-    appendLine("            {")
-    if (scoped == null) appendLine("                $jobHandle = $nativeName($nativeCallArgs);")
-    else scoped.forEach { appendLine("    $it") }
-    appendLine("            }")
-    appendLine("            catch")
-    appendLine("            {")
-    appendLine("                if ($callbackHandle.IsAllocated) $callbackHandle.Free();")
-    appendLine("                throw;")
-    appendLine("            }")
-  } else if (scoped == null) {
-    appendLine("            IntPtr $jobHandle = $nativeName($nativeCallArgs);")
-  } else {
-    // The scoped call assigns from inside its own block, so the local is declared outside it.
-    appendLine("            IntPtr $jobHandle = IntPtr.Zero;")
-    scoped.forEach { appendLine(it) }
-  }
+  // Every suspend call site, not only one taking a suspend lambda (ADR-210): the whole native call
+  // statement, with its inline argument guards and its scoped creates and registrations, sits in
+  // the `try` that [appendCompletionHandleCatch] closes. The local is declared outside it: the
+  // registration below reads it.
+  appendLine("            IntPtr $jobHandle = IntPtr.Zero;")
+  appendLine("            try")
+  appendLine("            {")
+  if (scoped == null) appendLine("                $jobHandle = $nativeName($nativeCallArgs);")
+  else scoped.forEach { appendLine("    $it") }
+  appendLine("            }")
+  appendCompletionHandleCatch(callbackHandle)
   appendLine("            CancellationTokenRegistration $reg = $token.CanBeCanceled")
   appendLine("                ? $token.Register(() => NugetJobNative.Cancel($jobHandle))")
   appendLine("                : default;")

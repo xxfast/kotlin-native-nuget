@@ -958,10 +958,18 @@ internal fun StringBuilder.renderDispose(
         includesErrorBranch = false,
       )
       appendLine("            callbackHandle = GCHandle.Alloc(callback);")
+      // The closure captures both handle objects, so a completion handle stranded by a `Drain`
+      // that threw (the marshaller refusing a closed `scopeHandle`, the P/Invoke itself) would
+      // root them past their own finalizers, not only leak the closure.
+      appendLine("            IntPtr drainJobHandle;")
+      appendLine("            try")
+      appendLine("            {")
       appendLine(
-        "            IntPtr drainJobHandle = NugetScopeNative.Drain(scopeHandle, " +
+        "                drainJobHandle = NugetScopeNative.Drain(scopeHandle, " +
             "NugetThunks.NugetAsyncCallbackPtr, GCHandle.ToIntPtr(callbackHandle));"
       )
+      appendLine("            }")
+      appendCompletionHandleCatch()
       appendLine("            job.PublishFromCaller(drainJobHandle, default);")
       appendLine("            return tcs.Task;")
       appendLine("        }")
