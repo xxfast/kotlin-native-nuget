@@ -156,12 +156,16 @@ the `PLAN_OWNED_NAMES` shift and the plan-owned name is `value`, else `name`. Th
 `handle`, `receiver`, `outer`, `errorOut`, `valueOut` and `resultFailedOut` keep the shift on
 both names, since the C# wrapper body does declare those.
 
-**Inferred (not spiked)**: the only C# body identifier spelled `value` on a planned callable is
-ADR-195's Try twin out slot, and `CirTryNames.of(leading names, ...)`
-(`ForwardCirPlanProjection.kt:642`) already moves that slot off a colliding user name
-(`Tier1BacktickedNameRoutesTest.kt:409` shows a user `failure` next to the twin's out slots). If
-that inference is wrong, `TryX(T value, out T value, ...)` is a CS0100 on a Result-returning
-callable with a `value` parameter; the implementing agent must compile that shape in Tier 1 first.
+**Verified**: the only C# body identifier spelled `value` on a planned callable is ADR-195's Try
+twin out slot, and `CirTryNames` moves it off a colliding user name. `TryWrap<T>(T value, ..., out T
+value_, ...)` compiles with a named `Wrap(value: "mylo")` (`Tier1TopLevelGenericMethodTest.kt`).
+
+Two points differ from the design above. (1) `csharpName` on `ForwardPublicParameter` is a computed
+property that turns `value_` back into `value` (and `value__` into `value_`), not a stored field,
+because a stored field went stale through `optionalValue()`'s `copy(name = ...)`. (2) `CirParameter`
+gained an `abiName`: four extern fallbacks in `cir/CirNativeImports.kt` (class method, constructor,
+value-class method, value-class constructor) build the extern from the public parameters and
+produced `(int value, int value)` (CS0100) without it.
 
 Consumer impact: a source break for named arguments only (`Describe(value_: x)` becomes
 `Describe(value: x)`); positional calls, the extern, the Kotlin export and the ADR-055 contract are

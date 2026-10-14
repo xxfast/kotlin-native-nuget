@@ -94,8 +94,8 @@ public Task<string> ReadCollar(string prefix, CancellationToken cancellationToke
   as `x.@event`.
 - A Kotlin name written in backticks needs no annotation when it is a keyword:
   `` fun `in`(`object`: Int) `` binds as `In(int @object)`, on every route, including a listener
-  interface and a `Result` `Try` twin (an authored `value` or `failure` parameter becomes `value_`
-  or `failure_`). A name with a space or symbol (`` fun `tug hard`() ``) has no C# spelling, so it
+  interface and a `Result` `Try` twin (an authored `failure` parameter becomes `failure_`;
+  `value` keeps its name). A name with a space or symbol (`` fun `tug hard`() ``) has no C# spelling, so it
   is skipped with a `SKIPPED_UNSUPPORTED_COMBINATION` warning (a property:
   `SKIPPED_UNSUPPORTED_PROPERTY`) that names it. `@CSharpName("TugHard")` makes it bind; the native
   entry point replaces each run of other characters with `_` (`tug_hard`). Two names that clean to

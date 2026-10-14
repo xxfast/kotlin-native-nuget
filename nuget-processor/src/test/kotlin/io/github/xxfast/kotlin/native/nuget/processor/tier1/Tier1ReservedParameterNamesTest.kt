@@ -121,8 +121,9 @@ class Tier1ReservedParameterNamesTest {
   /**
    * Three names on one ordinary instance method. `handle` duplicates the receiver slot on both
    * sides, `nativeResult` rebinds the C# body local the `string` return declares (CS0136), and
-   * `value` collides with nothing on this route and still moves, which is what pins the rule as
-   * uniform rather than a per-callable collision test.
+   * `value` collides with nothing on this route and still moves in the ABI slot, which is what
+   * pins the rule as uniform rather than a per-callable collision test. ADR-211 (#557): the public
+   * C# parameter keeps `value`, since no C# wrapper body declares it.
    *
    * `nativeResult` is the C#-only half: it shifts in the extern and the public signature, and the
    * Kotlin export keeps the user's own spelling, because the Kotlin emitter declares no such name.
@@ -137,12 +138,12 @@ class Tier1ReservedParameterNamesTest {
     )
     assertContains(
       result.generatedCSharp,
-      "public string Describe(int handle_, string value_, int nativeResult_)",
+      "public string Describe(int handle_, string value, int nativeResult_)",
     )
     assertContains(
       result.generatedCSharp,
       "IntPtr nativeResult = Native_Describe(_handle, handle_, " +
-          "${nonNullStringOrThrow("value_")}, nativeResult_, " +
+          "${nonNullStringOrThrow("value")}, nativeResult_, " +
           "out IntPtr error);",
     )
     assertContains(
@@ -209,7 +210,8 @@ class Tier1ReservedParameterNamesTest {
   /**
    * The `value` receiver slot, and the cell the uniform `value` rule exists for: a value class
    * over a non-reference underlying passes its receiver in a slot the planner names `value`, so a
-   * member parameter of the same name is CS0100 at that position. ADR-014 means a value-class
+   * member parameter of the same name is CS0100 at that position of the extern. The public C#
+   * parameter keeps `value` (ADR-211, #557): the wrapper reads the receiver as `Numerator`. ADR-014 means a value-class
    * member carries no exception slot, so this extern has no trailing `out IntPtr error` at all.
    */
   @Test
@@ -220,7 +222,7 @@ class Tier1ReservedParameterNamesTest {
     )
     assertContains(
       result.generatedCSharp,
-      "public int Scale(int value_) => Native_Scale(Numerator, value_);",
+      "public int Scale(int value) => Native_Scale(Numerator, value);",
     )
     assertContains(
       result.generated,
@@ -251,7 +253,7 @@ class Tier1ReservedParameterNamesTest {
   /**
    * The control. `value` on a property renders `Value` (properties are PascalCased, so they never
    * meet a generator identifier) and must not move; the same word on the constructor parameter
-   * does. A fix that renamed the identifier everywhere instead of only at parameter positions
+   * moves in its ABI slot only, and keeps `value` in the public C# signature (ADR-211, #557). A fix that renamed the identifier everywhere instead of only at parameter positions
    * fails here.
    */
   @Test
@@ -262,10 +264,10 @@ class Tier1ReservedParameterNamesTest {
       "private static extern IntPtr Native_Create([MarshalAs(UnmanagedType.LPUTF8Str)] " +
           "string value_, out IntPtr error);",
     )
-    assertContains(result.generatedCSharp, "public Meter(string value_)")
+    assertContains(result.generatedCSharp, "public Meter(string value)")
     assertContains(
       result.generatedCSharp,
-      "IntPtr handle = Native_Create(${nonNullStringOrThrow("value_")}, out IntPtr error);",
+      "IntPtr handle = Native_Create(${nonNullStringOrThrow("value")}, out IntPtr error);",
     )
     assertContains(
       result.generated,

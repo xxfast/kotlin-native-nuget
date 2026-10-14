@@ -406,7 +406,7 @@ class Tier1BacktickedNameRoutesTest {
     val csharp: String = result.generatedCSharp
     listOf(
       "public bool TryIn(int @object, out int value",
-      "public bool TryReload(int value_, string failure, int @in, out int value",
+      "public bool TryReload(int value, string failure, int @in, out int value_,",
       "public abstract int In(int @object);",
       "public override int In(int @object)",
       "public T In(T @object)",

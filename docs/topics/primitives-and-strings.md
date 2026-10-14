@@ -200,8 +200,8 @@ type (`IntArray`, `Array<T>`), nor as an extension receiver.
 
 Function and property names use PascalCase: `string()` becomes `String()`.
 For named arguments, use the generated parameter name. C# keywords are escaped, such as
-`@abstract`; reserved names such as `error`, `value`, and `handle` gain a trailing underscore
-(`error_`, `value_`, `handle_`). Positional calls are unaffected.
+`@abstract`; reserved names such as `error` and `handle` gain a trailing underscore
+(`error_`, `handle_`). `value` keeps its name on a parameter. Positional calls are unaffected.
 
 The same applies to `errorOut` and `valueOut`, on plain and generic functions alike:
 

@@ -380,8 +380,8 @@ class Tier1EnumSelfBoundInteractionTest {
     assertTrue(result.compiledClean, "generated Kotlin: ${result.compileErrors}")
     val declared: List<String> = result.generatedCSharp.lines().map { it.trim() }
       .filter { it.startsWith("public static") }
-    assertTrue(declared.any { it.contains(" Describe<T>(T value_)") }, "$declared")
-    assertTrue(declared.any { it.contains("void Touch<T>(T value_)") }, "$declared")
+    assertTrue(declared.any { it.contains(" Describe<T>(T value)") }, "$declared")
+    assertTrue(declared.any { it.contains("void Touch<T>(T value)") }, "$declared")
     assertTrue(declared.any { it.contains(" Keep<") }, "$declared")
     assertFalse(
       result.kspWarnings.any { it.contains("tier1.genericreturn") },

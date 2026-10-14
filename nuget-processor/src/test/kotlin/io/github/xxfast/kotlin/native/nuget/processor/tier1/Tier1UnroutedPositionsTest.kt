@@ -793,8 +793,8 @@ class Tier1UnroutedPositionsTest {
     val result: Tier1Result = run()
 
     listOf(
-      "public T StructuralOnClass<T>(T value_)",
-      "public static T StructuralOnObject<T>(T value_)",
+      "public T StructuralOnClass<T>(T value)",
+      "public static T StructuralOnObject<T>(T value)",
     ).forEach { member ->
       assertTrue(
         result.generatedCSharp.contains(member),

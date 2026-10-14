@@ -42,8 +42,8 @@ class Tier1TopLevelGenericMethodTest {
 
     val cs: String = result.generatedCSharp
     assertContains(cs, "public static partial class Descriptions")
-    assertContains(cs, "public static string Describe<T>(T value_) where T : notnull")
-    assertContains(cs, "public static string Label<T>(T value_)")
+    assertContains(cs, "public static string Describe<T>(T value) where T : notnull")
+    assertContains(cs, "public static string Label<T>(T value)")
     assertContains(result.generated, ".describe<Any>(")
     assertContains(result.generated, ".label<Any?>(")
     val warnings: List<String> = result.kspWarnings.filter { it.contains("tier1.") }
@@ -102,7 +102,7 @@ class Tier1TopLevelGenericMethodTest {
     assertContains(result.generated, "map { it as kotlin.Any? }")
   }
 
-  /** ADR-211 open question: the Try twin's `out value` beside a `value_` parameter. */
+  /** ADR-211 open question: #557: the Try twin's `out` slot moves off a `value` parameter that keeps its name, no CS0100. */
   @Test
   fun `a Result-returning top-level generic compiles on both halves`() {
     val result: Tier1Result = Tier1Harness.run(
@@ -117,6 +117,8 @@ class Tier1TopLevelGenericMethodTest {
     assertKotlinCompiles(result)
     val warnings: List<String> = result.kspWarnings.filter { it.contains("tier1.") }
     assertTrue(warnings.isEmpty(), "expected wrap to bind; got: $warnings")
+    assertContains(result.generatedCSharp, "public static T Wrap<T>(T value)")
+    assertContains(result.generatedCSharp, "TryWrap<T>(T value, [global::System.Diagnostics.CodeAnalysis.MaybeNullWhen(false)] out T value_,")
 
     Tier1CSharpCompile.assertCompiles(
       result,
@@ -129,7 +131,7 @@ class Tier1TopLevelGenericMethodTest {
           {
               public static string Run()
               {
-                  string wrapped = Wraps.Wrap("mylo");
+                  string wrapped = Wraps.Wrap(value: "mylo");
                   return Wraps.TryWrap("oreo", out string? value, out System.Exception? _) ? value! : wrapped;
               }
           }
