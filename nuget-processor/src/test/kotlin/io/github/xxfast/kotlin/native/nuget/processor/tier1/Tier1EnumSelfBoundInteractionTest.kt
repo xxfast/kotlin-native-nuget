@@ -358,12 +358,11 @@ class Tier1EnumSelfBoundInteractionTest {
 
   /**
    * The legacy generic-function route dispatches on a `T` parameter and emits a return of either
-   * `T` or a generic class over `T`. A return that is neither (`String`, `Unit`) is refused on both
-   * halves and named; it used to bind as a `T` return on the C# half and as a generic-class handle
-   * on the Kotlin half.
+   * `T` or a generic class over `T`. A return that is neither (`String`, `Unit`) is refused by that
+   * route; ADR-211 plans it instead, as a static generic method on the boxed wire.
    */
   @Test
-  fun `a generic function returning neither T nor a generic class is a named skip`() {
+  fun `a generic function returning neither T nor a generic class binds on the plan`() {
     val result: Tier1Result = Tier1Harness.run(
       """
       package tier1.genericreturn
@@ -381,15 +380,11 @@ class Tier1EnumSelfBoundInteractionTest {
     assertTrue(result.compiledClean, "generated Kotlin: ${result.compileErrors}")
     val declared: List<String> = result.generatedCSharp.lines().map { it.trim() }
       .filter { it.startsWith("public static") }
-    assertFalse(declared.any { it.contains(" Describe<") }, "$declared")
-    assertFalse(declared.any { it.contains(" Touch<") }, "$declared")
+    assertTrue(declared.any { it.contains(" Describe<T>(T value_)") }, "$declared")
+    assertTrue(declared.any { it.contains("void Touch<T>(T value_)") }, "$declared")
     assertTrue(declared.any { it.contains(" Keep<") }, "$declared")
-    assertTrue(
-      result.kspWarnings.any { it.contains("describe") && it.contains("SKIPPED_") },
-      "${result.kspWarnings}",
-    )
-    assertTrue(
-      result.kspWarnings.any { it.contains("touch") && it.contains("SKIPPED_") },
+    assertFalse(
+      result.kspWarnings.any { it.contains("tier1.genericreturn") },
       "${result.kspWarnings}",
     )
     Tier1CSharpCompile.assertCompiles(
@@ -399,7 +394,7 @@ class Tier1EnumSelfBoundInteractionTest {
 
       public static class Probe
       {
-          public static int Run() => Fixture.Keep(4);
+          public static int Run() => Fixture.Keep(4) + Fixture.Describe("rex").Length;
       }
       """.trimIndent(),
     )

@@ -531,6 +531,9 @@ private fun cappedDefaultDiagnostics(catalog: ForwardCallablePlanCatalog): List<
  * diagnostic and the two emitters cannot drift. The position is the RETURN: a refused declaration
  * always has a `T` somewhere other than a direct parameter, which for every measured cell is the
  * return type.
+ *
+ * ADR-211: a non-suspend gate-refused `fun <T>` is planned now, and the plan names its refusal, so
+ * this sees only the ADR-198 reified case and a gate-refused `suspend fun <T>`.
  */
 internal fun warnUnroutedGenericFunctions(
   genericFunctions: List<KSFunctionDeclaration>,
@@ -1871,13 +1874,16 @@ internal class NugetProcessor(
       .filter { it.extensionReceiver != null }
       .filter { !it.hasCNameAnnotation() }
 
+    // ADR-211: a non-suspend top-level `fun <T>` the legacy width-variant gate refuses is planned
+    // like any other top-level function, as a static generic method; the gate keeps the rest.
     val (suspendFunctions, regularFunctions) = allFunctions
-      .filter { it.typeParameters.isEmpty() }
+      .filter { it.isPlannedTopLevelFunction() }
       .partition { it.modifiers.contains(Modifier.SUSPEND) }
 
     val functions: List<KSFunctionDeclaration> = regularFunctions
     val genericFunctions: List<KSFunctionDeclaration> = allFunctions
       .filter { it.typeParameters.isNotEmpty() }
+      .filterNot { it.isPlannedTopLevelFunction() }
 
     val allProperties: List<KSPropertyDeclaration> = allDeclarations
       .filterIsInstance<KSPropertyDeclaration>()
@@ -2433,7 +2439,7 @@ internal class NugetProcessor(
     // and the suspend route reads that number back. `functions` itself stays non-suspend: it also
     // feeds the synchronous translate loop.
     val topLevelCatalogFunctions: List<KSFunctionDeclaration> =
-      allFunctions.filter { it.typeParameters.isEmpty() }
+      allFunctions.filter { it.isPlannedTopLevelFunction() }
     val ordinaryCatalog: ForwardCallablePlanCatalog = forwardPlanner.catalog(
       classes, topLevelCatalogFunctions, extensionFunctions, objects, properties,
       extensionProperties, valueClasses, sealedClasses, enums,
@@ -3937,3 +3943,13 @@ internal class NugetProcessor(
   }
 
 }
+
+/**
+ * ADR-211: whether this top-level function goes through the ADR-062 catalog. A non-generic one
+ * always does; a non-suspend `fun <T>` does when the legacy width-variant gate refuses it, unless
+ * that refusal is ADR-198's reified unspellable bound, which [warnUnroutedGenericFunctions] names.
+ */
+private fun KSFunctionDeclaration.isPlannedTopLevelFunction(): Boolean =
+  typeParameters.isEmpty() ||
+    (!modifiers.contains(Modifier.SUSPEND) && !hasLegacyGenericFunctionRoute() &&
+      !isReifiedWithUnspellableBound())

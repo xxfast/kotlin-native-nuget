@@ -123,10 +123,9 @@ class Tier1UnroutedPositionsTest {
     // name it as a skip and stop emitting, not to invent one.
     returns("tier1.unrouted.flowReturnOnTopLevel"),
     input("tier1.unrouted.genericParamOnTopLevel"),
-    // row 16: `fun <T> f(): List<T>` — the structural top-level route refuses it internally
-    // (`paramIndex == -1 -> return`), and that refusal is total for the declaration, so the
-    // declaration is unrouted at its return.
-    returns("tier1.unrouted.structuralRefusedOnTopLevel"),
+    // row 16: `fun <T> f(): List<T>`: the legacy gate refuses it, so (ADR-211) the plan names it as
+    // a structural own-`<T>` refusal, its `T` nested in `List<T>`.
+    structural("tier1.unrouted.structuralRefusedOnTopLevel"),
   )
 
   /** Row 24: three secondary constructors, one per reason, beside a good primary. */

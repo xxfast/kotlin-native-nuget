@@ -920,8 +920,8 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
       // function's own type parameter out of place.
       ForwardPlanSkipReason.GENERIC.name ->
         "an exported generic class binds at every position, and a function's own type " +
-            "parameter at a top-level function with a parameter of it and on a class, object, " +
-            "companion or sealed-class member as a bare `T` or `T?` parameter or return; a " +
+            "parameter on a top-level function and on a class, object, companion or " +
+            "sealed-class member as a bare `T` or `T?` parameter or return; a " +
             "generic interface or an inner class of a generic owner does not bind, nor does a " +
             "type parameter at this position"
 
