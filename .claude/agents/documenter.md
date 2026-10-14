@@ -109,6 +109,12 @@ A topic-only editorial rewrite does not need feature closeout changes.
 
 - `ROADMAP.md`: delete the completed item's line and its `docs/backlog/` file, never tick it.
   Narrow or split partially completed items so remaining work survives.
+- Every deferral in the feature's ADR (its Declined, Deferred, Out of scope and "not designed
+  here" entries) gets a one-line ROADMAP item in the phase the ADR names, with a
+  `docs/backlog/<slug>.md` file when one line is not enough. Grep the ADR for those headings
+  and diff against the ROADMAP before reporting; a deferral that only lives in a diagnostic
+  name, a Limitations line or the ADR text is lost (ADR-147 and ADR-197 both declined `T` in a
+  collection without a line, and it came back as an issue).
 - Record discovered-but-unfixed bugs from the task brief and implementing reports in the relevant
   roadmap phase. Avoid duplicates and distinguish verified findings from unverified reports.
   Keep each item to one line; put details longer than two sentences in `docs/backlog/<slug>.md`.
