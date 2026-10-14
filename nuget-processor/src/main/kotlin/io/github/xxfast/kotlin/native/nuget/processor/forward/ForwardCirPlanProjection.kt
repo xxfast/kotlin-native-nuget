@@ -2141,11 +2141,15 @@ internal object ForwardCirPlanProjection {
     nullable: Boolean,
     exit: CirBodyExit,
   ): String {
-    val handle: String = when (type.kind) {
+    val kindHandle: String = when (type.kind) {
       CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> "listHandle"
       CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> "mapHandle"
       CollectionKind.SET, CollectionKind.MUTABLE_SET -> "setHandle"
     }
+    // A collection parameter named `list` already declares `listHandle` (CS0136), so the result
+    // handle shifts past every name the arguments use.
+    var handle: String = kindHandle
+    while (Regex("\\b$handle\\b").containsMatchIn(arguments)) handle = "${handle}_"
     return buildString {
       appendLine("            IntPtr $handle = $nativeName($arguments);")
       appendErrorCheck(exit)

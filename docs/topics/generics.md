@@ -297,10 +297,11 @@ inherent to erasure. The same identity rule applies to a lambda argument
 (see [Lambdas and callbacks](lambdas-and-callbacks.md)) and to the legacy [generic
 functions](#generic-functions) below.
 
-`T` is admitted only at a top-level position: a parameter, a return, a constructor parameter, or a
-property getter, optionally nullable. It is refused, named, everywhere else: nested in a
-collection or lambda (`List<T>`, `(T) -> Unit`, `Flow<T>`), a `var` property's setter
-(`var item: T` renders a get-only `T Item`), a `suspend fun`, a `Flow`/`StateFlow` member, a
+`T` is admitted at a parameter, a return, a constructor parameter, or a property getter, optionally
+nullable, and as the element of a `List`, `Set` or `Map` at those positions (`List<T>` binds as
+`IReadOnlyList<T>`; see [A type parameter as an element](#a-type-parameter-as-an-element)). It is refused, named,
+everywhere else: nested in a lambda or `Flow` (`(T) -> Unit`, `Flow<T>`), a `var` property's setter
+(`var item: T` and `var items: List<T>` render get-only), a `suspend fun`, a `Flow`/`StateFlow` member, a
 stored-callback member, and a method's own type parameter when its signature carries a lambda
 (`fun <R> map(f: (T) -> R): R`; a plain `fun <U> swap(next: U): U` [binds](#generic-methods)). A
 type parameter declared on an `interface` rather than a `class` is unaffected by this and keeps
@@ -591,7 +592,7 @@ What differs from a generic class:
 
 These stay a named skip, with the specific reason in the warning: a generic method on an interface,
 an `enum class`, a value class, or an extension function; a `reified` type parameter; a bound that
-is itself a type parameter; a `T` nested in another type (`List<T>`, `Result<List<T>>`);
+is itself a type parameter; a `T` nested in a type other than a `List`, `Set` or `Map` (`Box<T>`, `Result<List<T>>`);
 a lambda or `Flow` anywhere in the signature; a multi-bound `T` that no parameter mentions; and a
 `T` that shadows a type parameter in scope (the owner's, or one an `inner` class captures). A
 generic method on an `inner` class or a type nested in a generic owner binds like any other.
@@ -602,6 +603,45 @@ ends its reason with the shape it refused:
 ... but not at this position (here, its type parameter `T` is reified). expose a non-generic
     wrapper (`fun f(value: Int)` beside `fun <T> f(value: T)`), or declare it as a class, object, ...
 ```
+
+### A type parameter as an element {id="a-type-parameter-as-an-element"}
+
+A method's own `T`, or a generic class's `T`, can be the element of a `List`, `Set` or `Map`, in a
+parameter, a return or a getter. It binds on a class, object, companion, generic class member and
+top-level function. `T` is inferred from the argument.
+
+```kotlin
+class Deck {
+  fun <T> shuffle(list: List<T>): List<T> = list.reversed()
+  fun <T> pad(list: List<T?>): List<T?> = list + null
+  fun <T : Furry> groom(pets: List<T>): List<T> = pets
+}
+
+fun <T> shuffle(list: List<T>): List<T> = list.reversed()   // top level
+```
+
+```C#
+IReadOnlyList<T> Shuffle<T>(IReadOnlyList<T> list)
+IReadOnlyList<T?> Pad<T>(IReadOnlyList<T?> list)
+IReadOnlyList<T> Groom<T>(IReadOnlyList<T> pets) where T : IFurry
+```
+
+```C#
+using var deck = new Deck();
+IReadOnlyList<int> ints = deck.Shuffle(new[] { 1, 2, 3 });                   // 3, 2, 1
+IReadOnlyList<int?> padded = deck.Pad(new int?[] { 1, null });               // 1, null, null
+IReadOnlyList<string> names = Descriptions.Shuffle(new List<string> { "Oreo", "Mylo" });
+
+using var oreo = new Tabby("Oreo", 3);
+foreach (Tabby cat in deck.Shuffle(new[] { oreo })) cat.Dispose();           // returned elements are yours
+```
+
+A passed wrapper element is borrowed, and each wrapper element Kotlin returns is yours to dispose.
+`List<List<T>>` works, and a bounded `T` keeps its `where` clause. A `Map` key must be non-null:
+`fun <K : Any, V> tally(map: Map<K, V>)` binds, while an unconstrained `K` is skipped as
+`NULLABLE_MAP_KEY`. Declare `K : Any`. A `T` inside `Box<T>`, `Result<List<T>>`, a lambda or a
+`Flow` is still skipped, as is a `T` with an unspellable bound
+([An enum bound](#an-enum-bound)) in a collection.
 
 ## Type aliases
 

@@ -108,11 +108,14 @@ class Tier1GenericBaseOverloadTest {
     )
 
     val cs: String = result.generatedCSharp
+    // ADR-212: two now. `Crate<T>` carries its own `Describe(IReadOnlyList<T> tags)` on the generic
+    // carrier, and `LabelledCrate` still declares exactly its own `IReadOnlyList<int>` one.
     val describes: Int = cs.split("public string Describe(IReadOnlyList<").size - 1
     assertEquals(
-      1, describes,
-      "the subclass declares exactly one list-taking Describe; got: $cs",
+      2, describes,
+      "the base declares Describe(IReadOnlyList<T>) and the subclass its int one; got: $cs",
     )
+    assertContains(cs, "public string Describe(IReadOnlyList<T> tags)")
     assertContains(cs, "public string Describe(IReadOnlyList<int> tags)")
     assertFalse(
       "Describe(IReadOnlyList<string>" in cs,

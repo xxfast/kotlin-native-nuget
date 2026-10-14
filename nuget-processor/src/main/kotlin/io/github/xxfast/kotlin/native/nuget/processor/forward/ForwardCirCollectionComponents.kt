@@ -105,6 +105,12 @@ internal fun collectionComponentRead(
   if (component !is BridgeType.Nullable) {
     return CirComponentRead(null, componentReadExpression(handle, component, csharpType, depth))
   }
+  // ADR-212: `FromHandle<T>` already returns `default!` on `IntPtr.Zero`, which is `null` for every
+  // instantiation a null element can reach; `(T)null` would not compile for an unconstrained `T`.
+  if (component.type is BridgeType.TypeParameter) {
+    val read: String = componentReadExpression(handle, component.type, csharpType, depth)
+    return CirComponentRead(null, read)
+  }
   // ADR-083: the null pointer *is* the null component. The cast on the null arm is what gives the
   // conditional a common type when the present arm is a value type (`int`, a record struct).
   val nullArm: String = "(${csharpType(component)})null"

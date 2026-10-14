@@ -35,8 +35,9 @@ class Tier1SealedArmResidualSkipTest {
         // The former generic residual: ADR-197 routes it on the plan.
         fun <T> pick(x: T): T = x
 
-        // A generic shape the member route refuses on every owner: a `T` nested in a collection.
-        fun <T> sort(values: List<T>): Int = values.size
+        // A generic shape the member route refuses on every owner: a `T` nested in an `Array`
+        // (ADR-212 routes a collection).
+        fun <T> sort(values: Array<T>): Int = values.size
 
         // The suspend-lambda residual: SUSPEND_CALLBACK_PROTOCOL from the parameter.
         // A `Char` result: ADR-210 binds a suspend lambda parameter on an arm for a Unit, primitive

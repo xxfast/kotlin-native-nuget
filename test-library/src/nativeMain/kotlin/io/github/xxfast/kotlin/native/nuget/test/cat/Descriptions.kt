@@ -20,3 +20,6 @@ fun <T> pick(first: T, second: T): T = second
 
 /** Issue #556: a bare `T` beside a non-`T` parameter. Oreo counts his treats. */
 fun <T : Any> tally(x: T, n: Int): String = "$x x$n"
+
+/** ADR-212: a `T` as a list element, at top level. Reversed, so C# sees the list was rebuilt. */
+fun <T> shuffle(list: List<T>): List<T> = list.reversed()

@@ -103,3 +103,32 @@ sealed class Chore {
 
   data object Rest : Chore()
 }
+
+/**
+ * ADR-212: a member's own `T` as the element of a `List`, `Set` or `Map`, in and out. Each element
+ * crosses on the same boxed-handle wire a bare `T` uses, so builtins and wrappers both round-trip.
+ *
+ * Oreo and Mylo get dealt in reverse, so the order proves the list really went through Kotlin.
+ */
+class Deck {
+  /** Reversed, so C# can tell the list was rebuilt on the Kotlin side. */
+  fun <T> shuffle(list: List<T>): List<T> = list.reversed()
+
+  /** A nullable element: one extra empty seat at the end. */
+  fun <T> pad(list: List<T?>): List<T?> = list + null
+
+  /** A bounded element: C# says `where T : IFurry`. */
+  fun <T : Furry> groom(pets: List<T>): List<T> = pets
+
+  /** A set of `T`, in and out. */
+  fun <T> dedupe(items: Set<T>): Set<T> = items
+
+  /** A non-null key `K`, so it binds. */
+  fun <K : Any, V> tally(map: Map<K, V>): Int = map.size
+
+  /** A map of `K` to `V` on the return side. */
+  fun <K : Any, V> keep(map: Map<K, V>): Map<K, V> = map
+
+  /** An unconstrained `K` may be null, so this stays a named `NULLABLE_MAP_KEY` refusal. */
+  fun <K, V> loose(map: Map<K, V>): Int = map.size
+}
