@@ -196,7 +196,7 @@ class Tier1SealedArmFlowTest {
         data class Live(val id: String) : Node() {
           fun ticks(): Flow<String> = flow { emit(id) }
           // ADR-197: a bare `T` binds on an arm now; a nested `T` is still unrouted.
-          fun <T> pick(values: List<T>): Int = values.size
+          fun <T> pick(values: Array<T>): Int = values.size
         }
       }
       """.trimIndent(),

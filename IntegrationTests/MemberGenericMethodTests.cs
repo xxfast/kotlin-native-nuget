@@ -179,4 +179,75 @@ public class MemberGenericMethodTests
             typeof(Groomer).GetMethod("Echo")!.GetGenericArguments()[0]
                 .GetGenericParameterConstraints());
     }
+
+    // ADR-212: a member's own T as a collection element. `Shuffle` reverses, so the order proves
+    // the list was rebuilt on the Kotlin side and every element came back through its box.
+    [Fact]
+    public void CollectionElement_BuiltinList_RoundTrips()
+    {
+        using var deck = new Deck();
+
+        Assert.Equal(new[] { 3, 2, 1 }, deck.Shuffle(new[] { 1, 2, 3 }));
+        Assert.Equal(new[] { "Mylo", "Oreo" }, deck.Shuffle(new[] { "Oreo", "Mylo" }));
+        Assert.Empty(deck.Shuffle(Array.Empty<int>()));
+    }
+
+    [Fact]
+    public void CollectionElement_WrapperList_ComesBackAsTheSameKotlinObjects()
+    {
+        using var deck = new Deck();
+        using var oreo = new Tabby("Oreo", 3);
+        using var mylo = new Tabby("Mylo", 5);
+
+        IReadOnlyList<Tabby> dealt = deck.Shuffle(new[] { oreo, mylo });
+        Assert.Equal(2, dealt.Count);
+        using (Tabby first = dealt[0]) Assert.Equal("Mylo", first.Name);
+        using (Tabby second = dealt[1]) Assert.Equal("Oreo", second.Name);
+
+        foreach (Tabby cat in deck.Groom(new[] { oreo }))
+        {
+            using (cat) Assert.Equal(3, cat.Tricks);
+        }
+    }
+
+    [Fact]
+    public void CollectionElement_NullableElement_PadsWithNull()
+    {
+        using var deck = new Deck();
+
+        Assert.Equal(new int?[] { 1, null, null }, deck.Pad(new int?[] { 1, null }));
+        Assert.Equal(new string?[] { "Oreo", null }, deck.Pad(new string?[] { "Oreo" }));
+    }
+
+    [Fact]
+    public void CollectionElement_SetAndMap_RoundTrip()
+    {
+        using var deck = new Deck();
+
+        IReadOnlySet<string> naps = deck.Dedupe(new HashSet<string> { "Oreo", "Mylo" });
+        Assert.True(naps.SetEquals(new[] { "Mylo", "Oreo" }));
+
+        var treats = new Dictionary<string, int> { ["Oreo"] = 2, ["Mylo"] = 3 };
+        Assert.Equal(2, deck.Tally(treats));
+        IReadOnlyDictionary<string, int> kept = deck.Keep(treats);
+        Assert.Equal(3, kept["Mylo"]);
+        Assert.Equal(2, kept["Oreo"]);
+
+        var ages = new Dictionary<int, string?> { [2] = "Oreo", [5] = null };
+        IReadOnlyDictionary<int, string?> keptAges = deck.Keep(ages);
+        Assert.Equal("Oreo", keptAges[2]);
+        Assert.Null(keptAges[5]);
+    }
+
+    [Fact]
+    public void CollectionElement_BoundedAndUnconstrainedKey_SpellTheKotlinShape()
+    {
+        MethodInfo groom = typeof(Deck).GetMethod("Groom")!;
+        Assert.Equal(
+            new[] { typeof(IFurry) },
+            groom.GetGenericArguments()[0].GetGenericParameterConstraints());
+
+        // `fun <K, V> loose(map: Map<K, V>)`: K may be null, so it stays a NULLABLE_MAP_KEY refusal.
+        Assert.Null(typeof(Deck).GetMethod("Loose"));
+    }
 }

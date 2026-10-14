@@ -1692,8 +1692,8 @@ internal class ForwardPropertyPlanner(
     // `NugetMarshal.ReadBytes(h)` -- the per-element box IS the bytes handle -- so the property
     // projection can spell it (`byte[]`), matching `isBridgeableComponent`.
     BridgeType.ByteArray -> true
-    // ADR-147 v1: `List<T>` is deferred, the same nesting rule `isBridgeableComponent` applies.
-    is BridgeType.TypeParameter -> false
+    // ADR-212: a `T` element reads back through `FromHandle<T>`, as `isBridgeableComponent` admits.
+    is BridgeType.TypeParameter -> !trampolined
     BridgeType.Unit, is BridgeType.BoundInterface, is BridgeType.SpecializedProtocol,
     is BridgeType.RawCollection, is BridgeType.RawKSType, is BridgeType.Unsupported -> false
   }

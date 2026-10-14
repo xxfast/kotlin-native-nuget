@@ -68,4 +68,33 @@ public class TopLevelGenericMethodTests
         // Oreo, four years old, two treats.
         Assert.Equal("4 x2", Descriptions.Tally(4, 2));
     }
+
+    // ADR-212: a `T` as a list element at top level. Kotlin reverses the list, so the order shows
+    // it was rebuilt on the other side.
+    [Fact]
+    public void Shuffle_IntElements_ReturnsReversed()
+    {
+        Assert.Equal(new[] { 3, 2, 1 }, Descriptions.Shuffle(new[] { 1, 2, 3 }));
+    }
+
+    [Fact]
+    public void Shuffle_StringElements_ReturnsReversed()
+    {
+        Assert.Equal(new[] { "Mylo", "Oreo" }, Descriptions.Shuffle(new List<string> { "Oreo", "Mylo" }));
+    }
+
+    [Fact]
+    public void Shuffle_WrapperElements_ReturnsTheSameObjectsReversed()
+    {
+        using var oreoToy = new Toy("Oreo's Biscuit Ball", "Black");
+        using var myloToy = new Toy("Mylo's Milo Mouse", "Brown");
+
+        IReadOnlyList<Toy> shuffled = Descriptions.Shuffle(new[] { oreoToy, myloToy });
+
+        Assert.Equal(2, shuffled.Count);
+        using var first = shuffled[0];
+        using var second = shuffled[1];
+        Assert.Equal("Mylo's Milo Mouse", first.Name);
+        Assert.Equal("Oreo's Biscuit Ball", second.Name);
+    }
 }

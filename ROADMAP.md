@@ -46,6 +46,10 @@ Complete.
 
 - [ ] Migrate the top-level `fun <T>` width variants (`Identity<T>`, 13 exports each) onto the ADR-062 plan: a breaking change that replaces every shipped `..._{string,int,...,object}` entry point with one boxed export. Breaking, so it lands before 1.0.0 or waits for 2.0; 0.9.0 is closed ([ADR-211](docs/adr/211-top-level-generic-functions-on-the-plan.md))
 - [ ] A top-level `suspend fun <T>` is not bound; the suspend route has its own owner rules ([ADR-211](docs/adr/211-top-level-generic-functions-on-the-plan.md))
+- [ ] A method or class `T` inside a lambda or `Flow` is still skipped, named ([ADR-212](docs/adr/212-type-parameter-as-collection-element.md))
+- [ ] `Result<List<T>>` and a `T` inside `Box<T>` or a value class are still skipped, named ([ADR-212](docs/adr/212-type-parameter-as-collection-element.md))
+- [ ] A trampolined `T` (a bound with no closed spelling, such as `Enum<T>`) in a collection is still skipped, named ([ADR-212](docs/adr/212-type-parameter-as-collection-element.md))
+- [ ] A `var` property of `List<T>` renders get-only, its setter dropped as a bare `T` setter is ([ADR-212](docs/adr/212-type-parameter-as-collection-element.md))
 
 ## Phase 5: Exception handling
 

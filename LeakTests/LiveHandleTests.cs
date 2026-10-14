@@ -3579,6 +3579,28 @@ public class LiveHandleTests
         });
     }
 
+    // ADR-212: a member's own T as a list element. Each element crosses in as a box and comes back
+    // as a freshly retained wrapper, and the list handle itself is released after the read.
+    // Ledger per iteration: deck, oreo, mylo +1/-1 each, each returned element +1/-1. Net zero.
+    [Fact]
+    public void MemberGeneric_CollectionElements_ReturnToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var deck = new Membergeneric.Deck();
+            using var oreo = new Membergeneric.Tabby("Oreo", 3);
+            using var mylo = new Membergeneric.Tabby("Mylo", 5);
+            for (int i = 0; i < 5; i++)
+            {
+                foreach (Membergeneric.Tabby cat in deck.Shuffle(new[] { oreo, mylo }))
+                {
+                    using (cat) Assert.NotEmpty(cat.Name);
+                }
+            }
+            Assert.Equal(new[] { 3, 2, 1 }, deck.Shuffle(new[] { 1, 2, 3 }));
+        });
+    }
+
     // Row 10c. ADR-197 fault injection: Mylo refuses to be brushed after the `T` box crossed, so
     // the Kotlin export throws with the argument live and no result minted. The C# `finally`
     // still disposes the box, and the error handle is released when the exception is built.
@@ -3612,6 +3634,11 @@ public class LiveHandleTests
             using var oreoToy = new Toy("Oreo's Biscuit Ball", "Black");
             using var picked = Descriptions.Pick(oreoToy, toy);
             Assert.Equal("Mylo's Milo Mouse", picked.Name);
+            // ADR-212: the passed toys are borrowed; each returned element is minted and disposed here.
+            foreach (Toy shuffled in Descriptions.Shuffle(new[] { oreoToy, toy }))
+            {
+                using (shuffled) Assert.NotNull(shuffled.Name);
+            }
         });
     }
 

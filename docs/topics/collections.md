@@ -139,7 +139,7 @@ bare enum via its `int` ordinal (see [Enums](enums.md#as-a-collection-component)
 any of the above underlyings (see [Value classes](value-classes.md#as-a-collection-component)); a
 sealed base, which boxes as an object handle the same way a concrete class does (see
 [Interfaces, abstract classes, and sealed classes](interfaces-abstract-sealed.md#a-sealed-type-at-a-parameter-position));
-a `ByteArray`, as `byte[]` (see below); an interface (see [Interfaces as collection components](#interfaces-as-collection-components)); and a `List`/`Map`/`Set` itself, nested at arbitrary depth.
+a `ByteArray`, as `byte[]` (see below); an interface (see [Interfaces as collection components](#interfaces-as-collection-components)); and a `List`/`Map`/`Set` itself, nested at arbitrary depth; and a function or generic class's own type parameter `T` (see [A type parameter as an element](generics.md#a-type-parameter-as-an-element)).
 This applies uniformly to parameters, method and property returns, and
 [collection property setters](#mutable-collection-properties).
 
