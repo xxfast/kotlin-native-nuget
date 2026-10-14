@@ -56,11 +56,11 @@ public class ReservedNamesTests
     public void Describe_HandleValueAndNativeResultParameters_AllReachNative()
     {
         // Three collisions in one signature: `handle` duplicates the receiver slot on both sides,
-        // `nativeResult` rebinds the C# body local the string return declares, and `value` collides
-        // with nothing here and pins the uniform rule.
+        // `nativeResult` rebinds the C# body local the string return declares, and `value` keeps its
+        // name in C#: only its ABI slot shifts.
         using var gadget = new Gadget();
 
-        Assert.Equal("1/Oreo/2", gadget.Describe(handle_: 1, value_: "Oreo", nativeResult_: 2));
+        Assert.Equal("1/Oreo/2", gadget.Describe(handle_: 1, value: "Oreo", nativeResult_: 2));
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public class ReservedNamesTests
         using var gadget = new Gadget();
 
         // Distinct numbers on either side of the string: a swapped pair reads back "9/Mylo/7".
-        Assert.Equal("7/Mylo/9", gadget.Describe(handle_: 7, value_: "Mylo", nativeResult_: 9));
+        Assert.Equal("7/Mylo/9", gadget.Describe(handle_: 7, value: "Mylo", nativeResult_: 9));
     }
 
     [Fact]
@@ -127,17 +127,18 @@ public class ReservedNamesTests
     public void Scale_ValueClassReceiverSlot_MultipliesThroughTheStruct()
     {
         // The one place `value` really collides: a value class passes its receiver in a slot named
-        // `value`, so `Native_Scale(int value, int value)` is CS0100. 3 * 4, so a swapped or dropped
-        // argument reads as the wrong number.
-        Assert.Equal(12, new Ratio(3).Scale(value_: 4));
+        // `value`, so `Native_Scale(int value, int value)` would be CS0100.
+        // The extern slot shifts; the public parameter keeps `value`.
+        // 3 * 4, so a swapped or dropped argument reads as the wrong number.
+        Assert.Equal(12, new Ratio(3).Scale(value: 4));
     }
 
     [Fact]
-    public void Meter_PropertyKeepsItsPascalCaseName_AndTheConstructorParameterMoves()
+    public void Meter_PropertyKeepsItsPascalCaseName_AndTheConstructorParameterKeepsItsName()
     {
         // The control. `value` as a property renders `Value` and must not move; the same word as a
-        // constructor parameter does move under the uniform rule.
-        using var meter = new Meter(value_: "Mylo");
+        // constructor parameter keeps its name too, only its ABI slot moves.
+        using var meter = new Meter(value: "Mylo");
 
         Assert.Equal("Mylo", meter.Value);
     }

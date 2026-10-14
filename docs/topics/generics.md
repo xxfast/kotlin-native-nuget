@@ -31,7 +31,7 @@ a catchable `KotlinException` at the call.
 | `<T : Bound>` | `where T : Bound` |
 | `out T` / `in T` on an interface | `out T` / `in T` |
 | `fun <T> f(value: T): T` (top-level) | a generic method |
-| `fun <T : Any> describe(value: T): String` (top-level) | `static string Describe<T>(T value_) where T : notnull` |
+| `fun <T : Any> describe(value: T): String` (top-level) | `static string Describe<T>(T value) where T : notnull` |
 | `fun <T> pick(first: T, second: T): T` (top-level) | `static T Pick<T>(T first, T second)` |
 | `inline fun` | an ordinary method |
 | `inline fun <reified T>` | an ordinary generic method |
@@ -517,13 +517,12 @@ Assert.Equal("4: Int", Descriptions.Describe(4));
 Assert.Equal("bowl of Mylo", Descriptions.Label("Mylo"));
 Assert.Equal(9, Descriptions.Pick(7, 9));
 Assert.Equal("4 x2", Descriptions.Tally(4, 2));
-// public static string Describe<T>(T value_) where T : notnull
-// public static string Label<T>(T value_)
+// public static string Describe<T>(T value) where T : notnull
+// public static string Label<T>(T value)
 // public static T Pick<T>(T first, T second)
 // public static string Tally<T>(T x, int n) where T : notnull
 ```
 
-The C# parameter is named `value_` here, not `value`, so a named argument must spell it that way.
 A top-level `fun <T>` with `T` nested in a collection (`fun <T> f(): List<T>`), a `reified` `T`, a
 lambda or `Flow` in the signature, or an extension receiver is not generated, and the warning names
 which one.
