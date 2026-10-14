@@ -14,6 +14,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardGuardName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.guarded
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBoundInterface
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncBegin
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncCurrent
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncEnd
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardCallbackDelegate
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeContext
@@ -1063,8 +1066,35 @@ internal fun translate(
   if (tracker.needsSuspendStateFlow) {
     helpers.add(CirStateFlowHandleHelper(context.libraryName))
   }
-  if (tracker.callbackDelegates.isNotEmpty()) {
-    helpers.add(CirCallbackDelegateHelper(tracker.callbackDelegates.distinctBy { it.name }))
+  // ADR-210: the suspend lambda parameters the plan owns, plus the ones the legacy suspend routes
+  // registered as they translated. Their thunks share the ADR-161 key table, so the helper is
+  // emitted for them even when the module declares no other callback delegate.
+  val asyncCallbacks: List<BridgeType.AsyncCallback> = (
+      callableCatalog.plans
+        .flatMap { plan -> plan.publicSignature.parameters }
+        .mapNotNull { parameter -> parameter.type as? BridgeType.AsyncCallback } +
+        tracker.asyncCallbacks
+      ).distinct()
+  val flowSources: List<BridgeType.FlowSource> = (
+      callableCatalog.plans
+        .flatMap { plan -> plan.publicSignature.parameters }
+        .mapNotNull { parameter -> parameter.type as? BridgeType.FlowSource } +
+        tracker.flowSources
+      ).distinct()
+  val hasCallbackDelegates: Boolean = tracker.callbackDelegates.isNotEmpty()
+  val hasAsyncParameters: Boolean = asyncCallbacks.isNotEmpty() || flowSources.isNotEmpty()
+  if (hasCallbackDelegates || hasAsyncParameters) {
+    helpers.add(
+      CirCallbackDelegateHelper(
+        tracker.callbackDelegates.distinctBy { it.name },
+        asyncBegins = asyncCallbacks.map { callback -> callback.forwardAsyncBegin() }
+          .distinctBy { begin -> begin.name },
+        asyncEnds = asyncCallbacks.map { callback -> callback.forwardAsyncEnd() }
+          .distinctBy { end -> end.name },
+        asyncCurrents = flowSources.map { flow -> flow.forwardAsyncCurrent() }
+          .distinctBy { current -> current.name },
+      ),
+    )
   }
   if (tracker.needsSubscription) {
     helpers.add(CirSubscriptionHelper(context.libraryName))

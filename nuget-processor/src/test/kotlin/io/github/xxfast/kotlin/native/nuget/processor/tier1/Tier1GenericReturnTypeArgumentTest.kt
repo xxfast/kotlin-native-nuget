@@ -119,7 +119,7 @@ class Tier1GenericReturnTypeArgumentTest {
     "crateOfList" to "List<Int>",
     "crateOfNullableList" to "List<Int>?",
     "crateOfMap" to "Map<String, Int>",
-    "crateOfLambda" to "Function1<Int, Int>",
+    "crateOfLambda" to "(Int) -> Int",
     "crateOfAny" to "Any",
     "crateOfBytes" to "ByteArray",
     "duoOfIntList" to "List<Int>",
@@ -335,7 +335,7 @@ class Tier1GenericReturnTypeArgumentTest {
    * a parameter of its own type parameter it binds, spelling the return by ADR-147's bare-`T` rule
    * as `Crate<T>`: the `?` written on `T?` is not carried into C#, the instantiation says whether
    * the item holds null (`CrateOfMaybe<int?>` does, `CrateOfMaybe<int>` reads `0`). Without one it
-   * is that route's existing named skip. Both are pinned as they stand.
+   * is the plan's structural own-`<T>` skip (ADR-211). Both are pinned as they stand.
    */
   @Test
   fun `a nullable type-parameter argument keeps the generic-function route's spelling`() {
@@ -354,10 +354,10 @@ class Tier1GenericReturnTypeArgumentTest {
     )
     assertTrue(
       result.kspWarnings.any {
-        it.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN.name}]") &&
+        it.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_COMBINATION.name}]") &&
           it.contains("emptyCrateOfMaybe: ")
       },
-      "expected a SKIPPED_UNSUPPORTED_RETURN naming emptyCrateOfMaybe; " +
+      "expected a SKIPPED_UNSUPPORTED_COMBINATION naming emptyCrateOfMaybe; " +
         "kspWarnings=${result.kspWarnings}",
     )
   }

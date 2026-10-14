@@ -36,6 +36,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardInterfaceFl
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardInterfaceSuspendMethods
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardKdoc
 import io.github.xxfast.kotlin.native.nuget.processor.forward.toCirDoc
+import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinSpelling
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedCallbackMember
 import io.github.xxfast.kotlin.native.nuget.processor.forward.optInMarker
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedInterfaceBridgePair
@@ -132,6 +133,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isOpenForOverride
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOpenForOverrideOn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardExtensible
 import io.github.xxfast.kotlin.native.nuget.processor.forward.admits
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardSealedArmParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardSealedArmShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardSealedBaseArgument
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSealedArmShape
@@ -338,13 +340,15 @@ private fun emitUnspellableSuperInterface(
   logger: KSPLogger,
 ) {
   val simpleName: String = type.declaration.simpleName.asString()
+  // Spelled, never the raw `KSType`, which prints a function-type argument by its class name.
+  val spelled: String = type.kotlinSpelling(keepProjections = true)
   ForwardDiagnosticSink.emit(
     listOf(
       ForwardDiagnostic(
         kind = ForwardDiagnosticKind.SKIPPED_UNEXPORTED_SUPERTYPE,
         symbol = owner,
-        declaration = "$name : $type",
-        reason = "super-interface '$type' has a type argument with no public C# spelling, so " +
+        declaration = "$name : $spelled",
+        reason = "super-interface '$spelled' has a type argument with no public C# spelling, so " +
             "the generated C# base list cannot close I$simpleName over it; $name is generated " +
             "without it and its members still bind on $name directly",
         hint = "C# sees no relation between $name and I$simpleName, so `is`/`as` against it is " +
@@ -3258,7 +3262,9 @@ internal fun translateSealedClass(
             // ADR-175: a flow property the sealed base projects is the base's; the arm inherits
             // it (the `forwardArmFlowProperties` rule the Kotlin half applies).
             if (subclass.forwardArmMemberProjectedByBase(prop, classifier)) return@mapNotNull null
-            return@mapNotNull flowProperty(prop, subName, context, classifier, tracker)
+            return@mapNotNull flowProperty(
+              prop, subclass.armNameofSpelling(cls, subName), context, classifier, tracker,
+            )
           }
 
           // Residual legacy route: a lambda-typed property, whose Kotlin half is still
@@ -3382,8 +3388,8 @@ internal fun translateSealedClass(
       val storedCallbackMembers: List<CirMember> =
         subclass.forwardArmStoredCallbackPairs(classifier).mapNotNull { (addMethod, removeMethod) ->
           translateStoredCallbackMethod(
-            addMethod, removeMethod, libraryName, subPrefix, subName, exportedTypes, tracker,
-            context,
+            addMethod, removeMethod, libraryName, subPrefix,
+            subclass.armNameofSpelling(cls, subName), exportedTypes, tracker, context,
           )
         }
 
@@ -3392,10 +3398,11 @@ internal fun translateSealedClass(
           .mapNotNull { (addMethod, removeMethod) ->
             // The arm's own C# name, not the base's: it lands in the subscribe body's
             // `ObjectDisposedException(nameof(...))`, where the base's name compiles (the arm is
-            // nested inside it) and misnames the owner of the handle that was disposed.
+            // nested inside it) and misnames the owner of the handle that was disposed. ADR-199:
+            // with the arm's own type parameters, since `nameof(Hot)` is CS0305 inside `Hot<T>`.
             translateInterfaceBridgeMethod(
-              addMethod, removeMethod, libraryName, subPrefix, subName, tracker, classifier,
-              context,
+              addMethod, removeMethod, libraryName, subPrefix,
+              subclass.armNameofSpelling(cls, subName), tracker, classifier, context,
             )
           }
 
@@ -5909,6 +5916,22 @@ private fun CirSealedSubclass.genericArmOf(
     fromHandle = fromHandle,
     selfFactory = "new $ownConstructed(handle, out _)".takeIf { parameters.isNotEmpty() },
   )
+}
+
+/**
+ * ADR-199: [name], the arm's C# class name, as `nameof(...)` can take it inside that class. A C#
+ * arm with type parameters of its own (a listed Kotlin parameter, or a phantom for a fixed variant
+ * argument, so a non-generic Kotlin arm too) has no bare spelling: `nameof(Hot)` is CS0305 inside
+ * `Hot<T>`. `nameof(Hot<T>)` binds and still evaluates to `"Hot"`. The names are the ones
+ * [armCirTypeParameters] declares; unchanged for an arm off the generic sealed route.
+ */
+private fun KSClassDeclaration.armNameofSpelling(base: KSClassDeclaration, name: String): String {
+  val parameters: List<ForwardSealedArmParameter> =
+    forwardSealedArmShape(base)?.parameters.orEmpty()
+  if (parameters.isEmpty()) return name
+  return parameters.joinToString(", ", "$name<", ">") { slot ->
+    slot.own?.let { own -> forwardCsharpTypeParameterName(own) } ?: slot.csharpName
+  }
 }
 
 /**

@@ -204,6 +204,16 @@ lends it to Kotlin at a parameter. `LeakTests/LiveHandleTests.cs`'s
 names (`Hamper<Outcome<long>>`), read back through a second handle to the same Kotlin object that you
 dispose as well.
 
+The [members of a generic arm](interfaces-abstract-sealed.md#generic-sealed-arm-members) add no new
+handle kind either. Each element a flow collects from `Dish.Hot<string>.Portions` mints one owned
+crossing, and the count returns to baseline once you `DisposeAsync` the arm. A stored-callback or
+interface-listener subscription holds a Kotlin bridge that its `Dispose()` releases, and a call after
+that reaches no listener. `LeakTests/LiveHandleTests.cs`'s `GenericSealedArm_FlowMembers_ReturnToBaseline`
+covers the flow members and a phantom arm's `StateFlow` and `suspend` member,
+`GenericSealedArm_PerCallLambda_ReturnsToBaseline` the per-call lambda,
+`GenericSealedArm_StoredCallbackPair_SubscribeFireUnsubscribe_ReturnsToBaseline` and
+`GenericSealedArm_InterfaceBridgePair_SubscribeFireUnsubscribe_ReturnsToBaseline` the two pairs.
+
 A [closed generic class at a member position](generics.md#returning-an-instantiated-generic-class)
 (`Box<String>`, `Box<Box<Int>>`) follows the same rule: every `Box<T>` Kotlin hands back, from a
 property read, a member, companion, object or top-level return, a nullable return, a list element,
@@ -418,14 +428,16 @@ argument box. `LeakTests/LiveHandleTests.cs`'s
 `BuiltinGenericFunction_BoxedPrimitiveAndString_ReturnsToBaseline` and
 `BuiltinGenericFunction_BoundCastFails_ReturnsToBaseline` cover the success and failure paths.
 
-A [generic method on a class](generics.md#generic-methods) mints the same boxes: one per builtin
+A [generic method on a class](generics.md#generic-methods) or a top-level `fun <T>` that is not a
+single `T` parameter to `T` mints the same boxes: one per builtin
 argument, which the call releases, and one per `T` result, which the read releases as it unwraps
 it. A member that throws, or a `T` that fails its bound's check, after the argument box crossed
 still releases the box. `LeakTests/LiveHandleTests.cs`'s
 `MemberGenericMethod_BoxedTypeParameter_ReturnsToBaseline`,
 `MemberGenericMethod_ThrowingMember_ReturnsToBaseline` and
 `MemberGenericMethod_BoundCastFails_ReturnsToBaseline` cover the success, throwing and bound-failure
-paths.
+paths, and `TopLevelGenericMethod_BoxedTypeParameter_ReturnsToBaseline` covers the top-level success
+path.
 
 A [bound with no closed Kotlin spelling](generics.md#an-enum-bound) (`T : Enum<T>`, an invariant
 `T : Node<T>`) mints the handles of any other generic crossing: an enum argument is boxed per
@@ -524,6 +536,108 @@ A [value class's own member](value-classes.md#nullable) that returns an object, 
 `ValueClassMemberListResult_NullAndNonNull_ReturnsToBaseline` and
 `ValueClassMemberThrowableResult_NullAndNonNull_ReturnsToBaseline` pin it. There is no throw-path
 row, because these members have no error slot.
+
+### A `suspend` lambda parameter
+
+Each time Kotlin invokes a [`suspend` lambda parameter](coroutines-and-flow.md#suspend-lambda-parameter)
+it mints a counted pending-continuation handle and a task handle, so these
+`LeakTests/LiveHandleTests.cs` rows pin the count after a call settles:
+
+| Row | Test | Pins |
+|---|---|---|
+| 17a | `SuspendLambdaParameter_SuspendingLambda_ReturnsToBaseline` | a lambda that really suspends, invoked three times |
+| 17b | `SuspendLambdaParameter_AlreadyCompletedTask_TightLoop_ReturnsToBaseline` | thousands of already-completed tasks in one call, where completion can land before the start thunk returns |
+| 17c | `SuspendLambdaParameter_SynchronousThrow_ReturnsToBaseline` | a throw before any `Task` exists, caught in Kotlin |
+| 17d | `SuspendLambdaParameter_FaultedTask_ReturnsToBaseline` | a faulted `Task` that propagates and faults the outer call |
+| 17e | `SuspendLambdaParameter_OuterTokenCancelledWhilePending_ReturnsToBaseline` | the outer token cancelled while a lambda that ignores its token is pending |
+| 17f | `SuspendLambdaParameter_StoredByAConstructor_ReturnsToBaseline` | a lambda a constructor stores, released after its owner is disposed |
+
+These rows cannot see the C# half. The table that holds the delegate until Kotlin releases it is
+not counted by `nuget_live_handles`, so a delegate that is never released leaves the count
+unchanged. `LeakTests/CollectabilityTests.cs` covers that half by holding a `WeakReference` to an
+object the lambda captured and asserting it is collected:
+
+- `SuspendLambdaParameter_AfterTheCallCompletes_ItsClosureIsCollected`: a `suspend fun` host.
+- `SuspendLambdaParameter_StoredByAConstructor_IsReleasedWithItsOwner`: alive while the owner is
+  alive and still callable, collected after the owner is disposed and dropped.
+- `SuspendLambdaParameter_CallOnADisposedWrapper_ItsClosureIsCollected`: the call throws before
+  reaching Kotlin.
+- `SuspendLambdaParameter_LaterArgumentFailsItsNullGuard_ItsClosureIsCollected`: a later argument
+  is refused after the lambda was prepared.
+- `SuspendLambdaParameter_LambdaBeforeAString_AfterTheCallCompletes_ItsClosureIsCollected`: the
+  control for the row above, with a valid later argument.
+
+### A `Flow` parameter
+
+Each pull of a [`Flow` parameter](coroutines-and-flow.md#flow-parameter) mints a counted
+enumeration handle and a task handle, and a `String` element is boxed once per element, so these
+`LeakTests/LiveHandleTests.cs` rows pin the count after a call settles. Each awaits the iterator's
+own `finally` first, because the enumerator is disposed on a queued work item after the call
+completes.
+
+| Row | Test | Pins |
+|---|---|---|
+| 18a | `FlowParameter_FullCollect_ReturnsToBaseline` | a full collect of an `Int` flow and of a `String` flow |
+| 18b | `FlowParameter_EarlyAbort_ReturnsToBaseline` | Kotlin stops after two of five, so the iterator is disposed parked at a `yield` |
+| 18c | `FlowParameter_IteratorThrowsMidStream_ReturnsToBaseline` | an iterator that throws mid-stream, once caught in Kotlin and once propagated |
+| 18d | `FlowParameter_OuterTokenCancelledMidStep_ReturnsToBaseline` | the outer token cancelled while a pull is pending and the iterator ignores its token |
+| 18e | `FlowParameter_SourceThatNeverSuspends_TightLoop_ReturnsToBaseline` | thousands of already-completed pulls in one collect, where completion can land before the start thunk returns |
+| 18f | `FlowParameter_StoredByAConstructor_ReturnsToBaseline` | a flow a constructor stores and a later call enumerates twice |
+| 18g | `FlowParameter_CollectorThrows_ReturnsToBaseline` | a throw from Kotlin's own collector, with no pull pending |
+
+Row 18d holds its handles until the iterator really finishes, which is a bounded hold and not a
+leak, so it releases the iterator and awaits its `finally` before asserting the baseline.
+
+As for a suspend lambda, the C# half is invisible to `nuget_live_handles`.
+`LeakTests/CollectabilityTests.cs` asserts through a `WeakReference` to an object the source
+captured:
+
+- `FlowParameter_AfterTheCallCompletes_ItsSourceIsCollected`: a `suspend fun` host.
+- `FlowParameter_StoredByAConstructor_IsReleasedWithItsOwner`: alive and still enumerable while
+  the owner is alive, collected after the owner is disposed and dropped.
+
+### A suspend call that throws before reaching Kotlin
+
+Every `...Async` wrapper roots the closure that completes its `Task` until Kotlin's completion
+callback fires. A call that throws first, such as a `null` for a non-null `string` argument, must
+free that root itself. The root is a plain .NET `GCHandle`, so `nuget_live_handles` cannot see it.
+`LeakTests/CollectabilityTests.cs` holds a `WeakReference` to the `CancellationTokenSource` passed
+to the call, and to the wrapper where there is one, and asserts they are collected:
+
+- `SuspendCompletion_MemberArgumentFailsItsNullGuard_ItsStateIsCollected`: an instance member
+  refuses a `null` `string` argument.
+- `SuspendCompletion_TopLevelArgumentFailsItsNullGuard_ItsStateIsCollected`: the same for a
+  top-level function.
+- `SuspendCompletion_MemberCallOnADisposedWrapper_ItsStateIsCollected`: a call on a disposed
+  wrapper, which throws before the root exists.
+- `SuspendCompletion_MemberCallCompletes_ItsStateIsCollected` and
+  `SuspendCompletion_TopLevelCallCompletes_ItsStateIsCollected`: the controls, with a valid
+  argument and a call that completes.
+
+### A callback that throws on a Kotlin thread
+
+When a C# callback throws, the bridge keeps the exception in a per-thread slot so the original object
+can come back if the fault reaches your C# caller uncaught. Once Kotlin catches the throw and the
+call or `Task` that carried it completes, the slot is cleared and the exception can be collected,
+including a throw on a Kotlin dispatcher thread from a suspend lambda, a `Flow` parameter or a
+faulted `Task` a lambda returns. `LeakTests/CollectabilityTests.cs` holds a `WeakReference` to the
+thrown exception and asserts it is collected:
+
+- `ManagedFault_ThrownOnAKotlinDispatcherThread_AndCaughtByKotlin_IsCollected`: a suspend lambda that
+  throws before its first suspension.
+- `ManagedFault_ThrownOnTheCallingThread_AndCaughtByKotlin_IsCollected`: the control, a throw on the
+  calling thread.
+- `ManagedFault_FromAFlowParameterIteratorThatThrowsMidStream_AndCaughtByKotlin_IsCollected` and
+  `ManagedFault_FromAFlowParameterMoveNextThatThrowsSynchronously_AndCaughtByKotlin_IsCollected`: a
+  `Flow` parameter whose iterator throws mid-stream, and one whose `MoveNextAsync` throws synchronously.
+- `ManagedFault_FromAFaultedTask_AndCaughtByKotlin_IsCollected`: a suspend lambda whose returned `Task` faults.
+- `ManagedFault_NotCaughtByKotlin_IsCollectedOnceTheFaultedTaskIsDropped`: Kotlin does not catch, so
+  the outer `Task` faults with the original exception, before and after an `await`.
+
+Two bounded holds remain, held and not leaked. A coroutine that suspends on another thread after
+Kotlin catches the throw keeps that one exception until the stashing thread's next completion or
+fault. On a synchronous call, if Kotlin catches the throw and then escapes with a different error
+(its own wrapper, or an unrelated one), the exception stays until that thread's next successful call.
 
 ### Dropped wrappers are released by the GC
 

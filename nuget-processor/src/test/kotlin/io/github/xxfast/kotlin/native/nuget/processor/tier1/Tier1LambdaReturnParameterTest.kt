@@ -255,11 +255,12 @@ class Tier1LambdaReturnParameterTest {
       assertTrue("__$name(" !in result.generated, "orphan Kotlin export for $name")
     }
     assertTrue("Napper" !in result.generatedCSharp && "NapFor" !in result.generatedCSharp)
-    // The sentence says where a suspend lambda DOES bind, not that it binds nowhere.
+    // The sentence says where a suspend lambda DOES bind (a property, and since ADR-210 a
+    // parameter), not that it binds nowhere.
     val napper: String = result.kspWarnings.first { "lambdareturnsuspend.napper" in it }
     assertTrue(
-      "a `suspend` lambda binds as a class property (`KotlinSuspendFunc<...>`), but not as a " +
-          "parameter or as a function return" in napper,
+      "a `suspend` lambda binds as a class property (`KotlinSuspendFunc<...>`) and as a " +
+          "parameter (`Func<T, CancellationToken, Task<R>>`" in napper,
       "got: $napper",
     )
     assertTrue("not bridged at any position" !in napper, "got: $napper")

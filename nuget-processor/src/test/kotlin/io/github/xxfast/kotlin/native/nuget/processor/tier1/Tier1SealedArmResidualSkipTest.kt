@@ -39,7 +39,9 @@ class Tier1SealedArmResidualSkipTest {
         fun <T> sort(values: List<T>): Int = values.size
 
         // The suspend-lambda residual: SUSPEND_CALLBACK_PROTOCOL from the parameter.
-        fun later(block: suspend (Int) -> String): Int = item.length
+        // A `Char` result: ADR-210 binds a suspend lambda parameter on an arm for a Unit, primitive
+        // or String result, so this is the shape the arm still drops.
+        fun later(block: suspend (Int) -> Char): Int = item.length
 
         // The control: an ordinary member on the same arm keeps binding.
         fun weight(): Int = item.length

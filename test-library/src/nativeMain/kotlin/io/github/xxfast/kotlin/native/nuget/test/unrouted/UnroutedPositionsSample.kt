@@ -37,7 +37,7 @@ class Depot {
   /** row 17 / extra observation: own `<T>` on an ordinary class; binds since ADR-197. */
   fun <T> structuralOnClass(value: T): T = value
 
-  /** extra observation: SUSPEND_CALLBACK_PROTOCOL, suspend lambda parameter on a class method. */
+  /** extra observation: a suspend lambda parameter on a class method. BINDS since ADR-210. */
   fun suspendCallbackParamOnClass(cb: suspend (Int) -> Unit): Int = if (cb === cb) 0 else 1
 
   /** row 7: FLOW_PROTOCOL as a collection element. Predicted NONE. */

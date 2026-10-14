@@ -6,6 +6,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallableCat
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPlanSkipReason
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardSkipPosition
+import io.github.xxfast.kotlin.native.nuget.processor.forward.GENERIC_ARM_ERASED_LAMBDA
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -115,6 +116,18 @@ class ForwardSkippedCallableWarningTest {
         detail = "SUSPEND",
       ) to "it is a `suspend` member of a generic class, and the route that binds that member " +
           "kind cannot spell a generic receiver yet (ADR-147)",
+      // ADR-199: a generic sealed arm's receiver IS spelled, so its type-parameter lambda names
+      // the erased payload, and the hint names the two shapes that bind.
+      ForwardCallableCatalogEntry.Skipped(
+        symbol = "com.example.Dish.Hot.withItem",
+        reason = ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE,
+        detail = GENERIC_ARM_ERASED_LAMBDA,
+      ) to "one of its lambdas takes or returns a type parameter of its generic sealed arm, and " +
+          "the bridge calls the arm with that parameter erased: the lambda's payload crosses as " +
+          "`Any?`, which the callback route cannot marshal (ADR-199). give the lambda a " +
+          "concrete payload type (`(Int) -> Unit`), or declare the member on an arm that fixes " +
+          "the type argument (for example `class Whole : Base<Int>()`), where the lambda is " +
+          "concrete and the member binds",
       ForwardCallableCatalogEntry.Skipped(
         symbol = "com.example.Api.rename",
         reason = ForwardPlanSkipReason.NULLABLE,
@@ -173,8 +186,9 @@ class ForwardSkippedCallableWarningTest {
         symbol = "com.example.Shape.Circle.later",
         reason = ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED,
         detail = ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL.name,
-      ) to "take or return a plain (non-suspend) lambda instead, or expose the `suspend` lambda " +
-          "as a property of an ordinary class",
+      ) to "take the `suspend` lambda as a non-nullable parameter with a Unit, primitive or " +
+          "String result, take or return a plain (non-suspend) lambda instead, or expose it as " +
+          "a property of an ordinary class",
     )
 
     val logger = RecordingLogger()

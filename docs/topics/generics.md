@@ -31,6 +31,7 @@ a catchable `KotlinException` at the call.
 | `<T : Bound>` | `where T : Bound` |
 | `out T` / `in T` on an interface | `out T` / `in T` |
 | `fun <T> f(value: T): T` (top-level) | a generic method |
+| `fun <T : Any> describe(value: T): String` (top-level) | `static string Describe<T>(T value_) where T : notnull` |
 | `inline fun` | an ordinary method |
 | `inline fun <reified T>` | an ordinary generic method |
 | `typealias` | the aliased type itself, no separate alias type |
@@ -451,7 +452,9 @@ implement a Kotlin interface that has a member returning `Box<Int>`; the impleme
 with `SKIPPED_UNIMPLEMENTABLE_INTERFACE`.
 
 A generic **sealed** hierarchy binds at the same positions; see
-[A generic sealed hierarchy](interfaces-abstract-sealed.md#generic-sealed-hierarchy).
+[A generic sealed hierarchy](interfaces-abstract-sealed.md#generic-sealed-hierarchy). Unlike a
+generic class, a generic sealed arm binds its flow and callback members; see
+[Members of a generic arm](interfaces-abstract-sealed.md#generic-sealed-arm-members).
 
 ### A flow as a type argument {id="a-flow-as-a-type-argument"}
 
@@ -494,9 +497,27 @@ Assert.Same(rex, Helpers.AdoptPet<IPet>(rex));       // fun <T : Pet> adoptPet(p
 Assert.Same(rex, PetRelayKt.RelayPet<IPet>(rex));    // fun <T> relayPet(value: T): T, unconstrained
 ```
 
-A **top-level** function binds only with a `T`-typed direct parameter (`fun <T> f(value: T): T`);
-one with no such parameter (e.g. `fun <T> f(): List<T>`) is not generated. A generic function
-declared inside a class or `object` is a different shape, covered [below](#generic-methods).
+A top-level function with one `T` parameter and a `T` (or generic class over `T`) return, like
+`fun <T> f(value: T): T`, binds as above. Any other top-level `fun <T>` binds like a
+[generic method on a class](#generic-methods): a static generic method on the file's class, with
+every `T` position boxed, any number of parameters and any return type.
+
+```kotlin
+fun <T : Any> describe(value: T): String = "$value: ${value::class.simpleName}"
+fun <T> label(value: T): String = "bowl of $value"
+```
+
+```C#
+Assert.Equal("4: Int", Descriptions.Describe(4));
+Assert.Equal("bowl of Mylo", Descriptions.Label("Mylo"));
+// public static string Describe<T>(T value_) where T : notnull
+// public static string Label<T>(T value_)
+```
+
+The C# parameter is named `value_` here, not `value`, so a named argument must spell it that way.
+A top-level `fun <T>` with `T` nested in a collection (`fun <T> f(): List<T>`), a `reified` `T`, a
+lambda or `Flow` in the signature, or an extension receiver is not generated, and the warning names
+which one.
 
 A C# builtin (`int`, `double`, `string`, `short`, ...) works as `T`, with a stdlib bound or none.
 A bound C# cannot name is dropped, so a type argument outside it compiles and throws

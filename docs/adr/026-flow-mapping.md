@@ -693,3 +693,28 @@ A `KotlinFlow<T>` taken from a property or a re-invoked method reads its owner's
 use, so it now throws `ObjectDisposedException` naming the owner once the owner is disposed, instead
 of crashing the process. Held and awaited flows keep working on their own handle. The rule and its
 evidence are in the [ADR-021](021-structured-concurrency.md) amendment of the same date.
+
+## Amendment (2026-10-12): the setter of a `var` flow property is named
+
+A public `var` of type `Flow<T>`, `StateFlow<T>`, `SharedFlow<T>`, `MutableStateFlow<T>` or
+`MutableSharedFlow<T>` has always bound as a get-only C# property, and nothing said the setter was
+gone: the legacy flow property route never read `isMutable`. This applies the
+[ADR-064](064-forward-unsupported-declaration-diagnostics.md) / [ADR-075](075-collection-property-getter-setter-independence.md)
+rule that a dropped setter is a partial skip, never a silent one, as
+[ADR-064](064-forward-unsupported-declaration-diagnostics.md)'s lambda-property amendment and
+[ADR-107](107-throwable-property-mapping.md) already do.
+
+The route now emits `SKIPPED_UNSUPPORTED_INPUT` on every owner where it renders a property (class,
+interface and implementer, sealed base and arm, an inherited `open var` on its declaring class
+alone), and the surviving C# property gains a `<remarks>` comment with the reason. The hint depends
+on temperature: a cold `Flow<T>` points at a function taking a `Flow<T>` parameter
+([ADR-210](210-flow-and-suspend-lambda-parameters.md)); a hot flow cannot bind as a parameter, so
+it points at `stateIn` / `shareIn` over one. The getter, its exports and the Kotlin half are
+unchanged, and the [ADR-071](071-mutable-stateflow-mapping.md) `.Value` write of a
+`MutableStateFlow` is still exported. `private set`, `internal set` and `val` stay silent.
+
+Not decided: binding the setter. A C# property cannot have a `KotlinFlow<T>` getter and an
+`IAsyncEnumerable<T>` setter, so it would need a property type change or a separate method, and a
+hot-flow setter cannot bind at all. Pinned by `Tier1FlowVarPropertySetterTest`, which also pins a
+flow property on a generic class as a silent whole-property drop (a `DEFECT` cell, tracked in the
+ROADMAP).

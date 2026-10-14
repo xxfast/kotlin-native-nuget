@@ -28,6 +28,8 @@ using Rankings = TestLibrary.Rankings;
 using TestLibrary.Kennel;
 using Lineage = TestLibrary.Lineage;
 using Torpor = TestLibrary.Torpor;
+using Treatprep = TestLibrary.Treatprep;
+using Trickle = TestLibrary.Trickle;
 using Outcomes = TestLibrary.Outcome;
 using Cubby = TestLibrary.Cubby;
 using TestLibrary.Boxshelf;
@@ -3591,6 +3593,22 @@ public class LiveHandleTests
         });
     }
 
+    // Row 10e. ADR-211: a top-level function's own `T`, on the same boxed wire as Row 10b, from a
+    // static method on the file facade. A builtin `T` mints one `Wrap<T>` box the C# `finally`
+    // disposes; a wrapper `T` (Mylo's toy) mints nothing and is released by its own `using`. The
+    // `string` return is not a handle.
+    // Ledger per iteration: toy +1/-1, Describe(4) box +1/-1, Describe(toy) nothing. Net zero.
+    [Fact]
+    public void TopLevelGenericMethod_BoxedTypeParameter_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var toy = new Toy("Mylo's Milo Mouse", "Brown");
+            Assert.Equal("4: Int", Descriptions.Describe(4));
+            Assert.Equal("Toy(name=Mylo's Milo Mouse, color=Brown): Toy", Descriptions.Describe(toy));
+        });
+    }
+
     // Row 10d. ADR-197 with ADR-015's checked read: a T outside a dropped builtin bound fails the
     // cast at the Kotlin read of a member's own T, on a class, an object, a generic class and a
     // sealed arm. Each `Wrap<T>` box was minted before the call and must still be disposed in the
@@ -5192,5 +5210,477 @@ public class LiveHandleTests
         Settle();
 
         Assert.Equal(baseline, NugetMarshal.LiveHandles);
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Rows 17a to 17f. ADR-210 slice (a): a suspend lambda PARAMETER
+    // (`suspend (T) -> R` as `Func<T, CancellationToken, Task<R>>`).
+    //
+    // Each invocation of the C# lambda is an `awaitForKotlin` flight, so it mints the same counted
+    // pending-continuation ctx and Task handle rows 9 to 9l watch on the reverse bridge, plus
+    // whatever the forward half mints to carry a `String` payload across. The C# delegate itself is
+    // released by a Kotlin cleaner (the ADR-084 rule) rather than when the call returns, so every
+    // row here depends on `Settle`'s cleaner rounds.
+    //
+    // WHAT THESE ROWS CANNOT SEE. `nuget_live_handles` counts Kotlin handles only, and the C#
+    // context table (`NugetThunks._ctxTable`) has no observable: a C# key the cleaner never
+    // released is silent here. `CollectabilityTests` carries that half, through a `WeakReference`
+    // on an object the lambda captured.
+    // ------------------------------------------------------------------------------------------
+
+    // Row 17a. The happy path with a lambda that really suspends, three flights per crossing, so
+    // the completion callback always arrives from the thread pool after Begin returned.
+    [Fact]
+    public async Task SuspendLambdaParameter_SuspendingLambda_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var chef = new Treatprep.TreatChef("Oreo");
+            string plated = await chef.PlateAsync(3, async (treat, token) =>
+            {
+                await Task.Delay(1, token);
+                return $"tuna#{treat}";
+            });
+            Assert.Equal("tuna#1,tuna#2,tuna#3", plated);
+        });
+    }
+
+    // Row 17b. The TIGHT LOOP row, the forward mirror of Row 9a: `Task.FromResult`, thousands of
+    // flights inside one Kotlin coroutine. The completion can land before the Begin thunk has
+    // returned, which releases the ctx on a path Row 17a's delayed task almost never takes, and at
+    // this count a per-flight leak is a five-figure delta. The sum is asserted so a run in which
+    // the lambda was not really invoked that many times cannot pass as a clean one.
+    [Fact]
+    public async Task SuspendLambdaParameter_AlreadyCompletedTask_TightLoop_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(
+            async () =>
+            {
+                using var chef = new Treatprep.TreatChef("Mylo");
+                Assert.Equal(7 * 2_000, await chef.WeighAsync(2_000, (_, _) => Task.FromResult(7)));
+            },
+            iterations: 5);
+    }
+
+    // Row 17c. The SYNCHRONOUS THROW: the lambda throws before any Task exists, so Begin reports
+    // through `errOut` and no task handle was ever minted, while `awaitForKotlin` has to release a
+    // ctx whose completion callback will never fire. Driven through the host that CATCHES in
+    // Kotlin, so the outer call completes normally and only the invocation's own cleanup is in
+    // play.
+    [Fact]
+    public async Task SuspendLambdaParameter_SynchronousThrow_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var chef = new Treatprep.TreatChef("Oreo");
+            string report = await chef.RecoverAsync(
+                (_, _) => throw new InvalidOperationException("the tuna tin is empty"));
+            Assert.StartsWith("recovered ", report);
+            Assert.Contains("the tuna tin is empty", report);
+        });
+    }
+
+    // Row 17d. The FAULTED TASK, through the host that lets it PROPAGATE: the task handle is freed
+    // in End's `finally` or not at all, and the outer suspend call then fails, so the ADR-128/130
+    // error envelope crosses on the same call. The first invocation succeeds on purpose: its
+    // `String` result is minted and must be released even though the call as a whole throws.
+    [Fact]
+    public async Task SuspendLambdaParameter_FaultedTask_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var chef = new Treatprep.TreatChef("Oreo");
+            Exception ex = await Assert.ThrowsAnyAsync<Exception>(() => chef.PlateAsync(
+                3,
+                (treat, _) => treat == 1
+                    ? Task.FromResult("plate1")
+                    : Task.FromException<string>(new InvalidOperationException("Mylo sat on plate two"))));
+            Assert.Contains("Mylo sat on plate two", ex.ToString());
+        });
+    }
+
+    // Row 17e. The CANCEL row: the outer token is cancelled while the C# Task is pending, and the
+    // lambda IGNORES its token. Kotlin's wait ends on its own cancellation and End is never
+    // called, but the ctx is released only by the completion callback (ADR-210, "Lifetime"), so
+    // one counted handle stays held until the lambda's Task really completes. That is a bounded
+    // hold, not a leak: the crossing therefore awaits the lambda's own Task before it returns, and
+    // only then may the baseline be asserted. A channel that drops the ctx on the cancelled path,
+    // or one that never frees the task handle of an abandoned flight, shows up here and nowhere in
+    // rows 17a to 17d.
+    [Fact]
+    public async Task SuspendLambdaParameter_OuterTokenCancelledWhilePending_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(
+            async () =>
+            {
+                using var chef = new Treatprep.TreatChef("Mylo");
+                using var cts = new CancellationTokenSource();
+                var started = new TaskCompletionSource<Task<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
+                var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+                async Task<string> Dawdle()
+                {
+                    await release.Task;   // deliberately not the token: Mylo finishes when Mylo finishes
+                    return "late";
+                }
+
+                Task<string> plating = chef.PlateAsync(
+                    1,
+                    (_, _) =>
+                    {
+                        Task<string> dawdling = Dawdle();
+                        started.TrySetResult(dawdling);
+                        return dawdling;
+                    },
+                    cts.Token);
+
+                Task<string> pending = await started.Task.WaitAsync(TimeSpan.FromSeconds(30));
+                cts.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => plating);
+                Assert.False(pending.IsCompleted, "the lambda finished before the cancel, so nothing was abandoned");
+
+                release.SetResult();
+                Assert.Equal("late", await pending);
+            },
+            iterations: 5);
+    }
+
+    // Row 17f. The STORED lambda, through the constructor host: the delegate outlives the call
+    // that supplied it, is invoked by a later suspend member, and is released by the cleaner only
+    // once the Kotlin object that stored it is unreachable, which is after this wrapper's Dispose.
+    // A holder that is never collected, or a key released twice, moves the count here.
+    [Fact]
+    public async Task SuspendLambdaParameter_StoredByAConstructor_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var timer = new Treatprep.TreatTimer(async (treat, token) =>
+            {
+                await Task.Delay(1, token);
+                return $"ding{treat}";
+            });
+            Assert.Equal("ding1,ding2", await timer.RingAsync(2));
+            Assert.Equal("ding1", await timer.RingAsync(1));
+        });
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Rows 18a to 18f. ADR-210 slice (b): a `Flow<T>` PARAMETER (`IAsyncEnumerable<T>` in C#).
+    //
+    // Every pull is an `awaitForKotlin` flight (a counted ctx plus a Task handle, as in rows 17),
+    // and each Kotlin `collect` additionally holds one enumeration handle from `GetAsyncEnumerator`
+    // until the enumerator is disposed. That disposal has four ways to happen (completion, early
+    // abort, a throw, cancellation) and each row below ends the collection a different way. The C#
+    // source itself is released by a Kotlin cleaner, so every row depends on `Settle`.
+    //
+    // As for rows 17: the C# context table has no observable, so a source the cleaner never
+    // released is silent here and `CollectabilityTests` carries that half.
+    // ------------------------------------------------------------------------------------------
+
+    // A source that never suspends: every MoveNextAsync is an already completed ValueTask.
+    private sealed class SteadyDrops(int count) : IAsyncEnumerable<int>
+    {
+        public IAsyncEnumerator<int> GetAsyncEnumerator(CancellationToken cancellationToken = default) =>
+            new Enumerator(count);
+
+        private sealed class Enumerator(int count) : IAsyncEnumerator<int>
+        {
+            private int _pulled;
+            public int Current => 7;
+            public ValueTask<bool> MoveNextAsync() => new(++_pulled <= count);
+            public ValueTask DisposeAsync() => default;
+        }
+    }
+
+    // Really suspends before every element; `closed` completes when the iterator's `finally` ran,
+    // which is the iterator's REAL completion and what a row has to await before it measures.
+    private static async IAsyncEnumerable<int> Drip(
+        int count, TaskCompletionSource closed, [EnumeratorCancellation] CancellationToken token = default)
+    {
+        try
+        {
+            for (int drop = 1; drop <= count; drop++)
+            {
+                await Task.Delay(1, token);
+                yield return drop;
+            }
+        }
+        finally
+        {
+            closed.TrySetResult();
+        }
+    }
+
+    private static async IAsyncEnumerable<string> Sips(
+        [EnumeratorCancellation] CancellationToken token = default)
+    {
+        foreach (string sip in new[] { "sip", "lap", "slurp" })
+        {
+            await Task.Delay(1, token);
+            yield return sip;
+        }
+    }
+
+    private static async IAsyncEnumerable<int> DripThenSplutter(
+        TaskCompletionSource closed, [EnumeratorCancellation] CancellationToken token = default)
+    {
+        try
+        {
+            await Task.Delay(1, token);
+            yield return 1;
+            await Task.Delay(1, token);
+            throw new InvalidOperationException("the fountain ran dry");
+        }
+        finally
+        {
+            closed.TrySetResult();
+        }
+    }
+
+    // One element, then a pull that IGNORES the token it was given and waits on `release` instead.
+    private static async IAsyncEnumerable<int> DripThenDawdle(
+        TaskCompletionSource parked, Task release, TaskCompletionSource closed)
+    {
+        try
+        {
+            yield return 1;
+            parked.TrySetResult();
+            await release;   // deliberately not the token: Mylo finishes when Mylo finishes
+            yield return 2;
+        }
+        finally
+        {
+            closed.TrySetResult();
+        }
+    }
+
+    private static TaskCompletionSource NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private static readonly TimeSpan FlowPatience = TimeSpan.FromSeconds(30);
+
+    // Row 18a. The FULL COLLECT, one row per element kind: `Int` crosses by value, `String` is
+    // minted at `Current` once per element and has to be released once per element.
+    [Fact]
+    public async Task FlowParameter_FullCollect_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var fountain = new Trickle.WaterFountain("Oreo");
+            TaskCompletionSource closed = NewSignal();
+            Assert.Equal(10, await fountain.TotalDropsAsync(Drip(4, closed)));
+            await closed.Task.WaitAsync(FlowPatience);
+            Assert.Equal("sip|lap|slurp", await fountain.DescribeAsync(Sips()));
+        });
+    }
+
+    // Row 18b. The EARLY ABORT: Kotlin takes two of five, so the enumeration handle is released
+    // by a dispose that finds the iterator parked at a `yield` rather than by a final pull that
+    // said no. The abort also ends Kotlin's side with its own internal exception, the path on
+    // which a pending-flight ctx or the enumeration handle is easiest to drop.
+    [Fact]
+    public async Task FlowParameter_EarlyAbort_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var fountain = new Trickle.WaterFountain("Oreo");
+            TaskCompletionSource closed = NewSignal();
+            Assert.Equal("1,2", await fountain.FirstTwoAsync(Drip(5, closed)));
+            await closed.Task.WaitAsync(FlowPatience);
+        });
+    }
+
+    // Row 18c. The iterator THROWS MID-STREAM, both ways out: caught in Kotlin (the outer call
+    // completes normally) and propagated (the ADR-128/130 error envelope crosses on the same call).
+    // The faulted pull never reaches a `Current`, and the enumerator still has to be disposed.
+    [Fact]
+    public async Task FlowParameter_IteratorThrowsMidStream_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var fountain = new Trickle.WaterFountain("Mylo");
+
+            TaskCompletionSource caught = NewSignal();
+            string report = await fountain.RecoverAsync(DripThenSplutter(caught));
+            Assert.StartsWith("recovered after 1 ", report);
+            await caught.Task.WaitAsync(FlowPatience);
+
+            TaskCompletionSource escaped = NewSignal();
+            Exception ex = await Assert.ThrowsAnyAsync<Exception>(
+                () => fountain.TotalDropsAsync(DripThenSplutter(escaped)));
+            Assert.Contains("the fountain ran dry", ex.ToString());
+            await escaped.Task.WaitAsync(FlowPatience);
+        });
+    }
+
+    // Row 18d. The CANCEL row: the outer token is cancelled while a pull is pending, and the
+    // iterator IGNORES its token. Kotlin's wait ends on its own cancellation, but the flight's ctx
+    // is released only by the completion callback, and the enumerator can only be disposed once
+    // that pending pull has finished (ADR-210: queue cancel, await pending, then DisposeAsync). So
+    // handles stay held until the iterator really completes: a bounded hold, not a leak. The
+    // crossing therefore releases the iterator and awaits its `finally` before it returns, and
+    // only then may the baseline be asserted.
+    [Fact]
+    public async Task FlowParameter_OuterTokenCancelledMidStep_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(
+            async () =>
+            {
+                using var fountain = new Trickle.WaterFountain("Mylo");
+                using var cts = new CancellationTokenSource();
+                TaskCompletionSource parked = NewSignal();
+                TaskCompletionSource release = NewSignal();
+                TaskCompletionSource closed = NewSignal();
+
+                Task<int> counting = fountain.TotalDropsAsync(
+                    DripThenDawdle(parked, release.Task, closed), cts.Token);
+
+                await parked.Task.WaitAsync(FlowPatience);
+                cts.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => counting);
+                Assert.False(closed.Task.IsCompleted, "the iterator finished before the cancel, so nothing was abandoned");
+
+                release.SetResult();
+                await closed.Task.WaitAsync(FlowPatience);
+            },
+            iterations: 5);
+    }
+
+    // Row 18e. The TIGHT LOOP row, the mirror of rows 9a and 17b: a source with no suspension at
+    // all, thousands of pulls inside one Kotlin collect, each of which can complete before the
+    // thunk that started it has returned. The sum is asserted so a short run cannot pass as clean.
+    [Fact]
+    public async Task FlowParameter_SourceThatNeverSuspends_TightLoop_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(
+            async () =>
+            {
+                using var fountain = new Trickle.WaterFountain("Oreo");
+                Assert.Equal(7 * 2_000, await fountain.TotalDropsAsync(new SteadyDrops(2_000)));
+            },
+            iterations: 5);
+    }
+
+    // Row 18f. The STORED flow, through the constructor host: the source outlives the call that
+    // supplied it, is enumerated twice by a later suspend member (two enumeration handles, one
+    // after the other), and is released by the cleaner only after this wrapper's Dispose.
+    [Fact]
+    public async Task FlowParameter_StoredByAConstructor_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            TaskCompletionSource closed = NewSignal();
+            using var dripper = new Trickle.Dripper(Drip(3, closed));
+            Assert.Equal("1,2,3", await dripper.DrainAsync());
+            await closed.Task.WaitAsync(FlowPatience);
+            Assert.Equal("1,2,3", await dripper.DrainAsync());
+        });
+    }
+
+    // Row 18g. The COLLECTOR THROWS: a Kotlin exception raised inside `collect { }` on the second
+    // element. The fourth way a collection ends, and the only one where the failure starts on the
+    // Kotlin side with no pull pending: the enumeration handle has to be released by a dispose
+    // that runs while Kotlin's own exception is unwinding, and the ADR-128/130 error envelope then
+    // crosses on the same call. The iterator's `finally` is awaited so the row measures after the
+    // enumerator is really gone, not before.
+    [Fact]
+    public async Task FlowParameter_CollectorThrows_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var fountain = new Trickle.WaterFountain("Oreo");
+            TaskCompletionSource closed = NewSignal();
+            KotlinInvalidOperationException ex = await Assert.ThrowsAsync<KotlinInvalidOperationException>(
+                () => fountain.ChokeOnSecondAsync(Drip(5, closed)));
+            Assert.Contains("Oreo choked on drop 2", ex.Message);
+            await closed.Task.WaitAsync(FlowPatience);
+        });
+    }
+
+    // ADR-124 on a generic sealed arm (ADR-199): the arm owns the scope its flow members collect
+    // on, and each collected element is one owned crossing. A flow the generic base declares, one
+    // whose element is the arm's type parameter (a boxed `String` per emission), a StateFlow read
+    // and write, the method half, and the phantom arm's StateFlow and suspend member must each
+    // come back to baseline once the arm is drained.
+    [Fact]
+    public async Task GenericSealedArm_FlowMembers_ReturnToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await using (var oreo = new Outcomes.Dish.Hot<string>("tuna"))
+            {
+                int courses = 0;
+                await foreach (int course in oreo.Served) courses += course;
+                Assert.Equal(6, courses);
+                var portions = new List<string>();
+                await foreach (string portion in oreo.Portions) portions.Add(portion);
+                Assert.Equal(new[] { "tuna", "tuna" }, portions);
+                oreo.Heat.Value = 45;
+                Assert.Equal(45, oreo.Heat.Value);
+                int wafts = 0;
+                await foreach (int waft in oreo.Wafts(3)) wafts += waft;
+                Assert.Equal(3, wafts);
+            }
+            await using (var mylo = new Outcomes.Dish.Bare<string>(4))
+            {
+                Assert.Equal(4, mylo.Drips.Value);
+                Assert.Equal(4, await mylo.WipeAsync());
+            }
+        });
+    }
+
+    private sealed class ProbeDiner : Outcomes.IDiner
+    {
+        public int Courses { get; private set; }
+        public void OnPlated(int course) => Courses += course;
+        public void Dispose() { }
+    }
+
+    // ADR-116's per-call lambda route on a generic sealed arm (ADR-199): one `Char` crossing per
+    // invocation, nothing retained once the call returns.
+    [Fact]
+    public async Task GenericSealedArm_PerCallLambda_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await using var oreo = new Outcomes.Dish.Hot<string>("tuna");
+            int letters = 0;
+            oreo.Spell(_ => letters++);
+            Assert.Equal(4, letters);
+        });
+    }
+
+    // The stored-callback pair on the same arm: subscribe, fire, unsubscribe. The Kotlin bridge
+    // lambda the subscription holds must be released by `Dispose()`, and a fire after it must not
+    // reach the listener.
+    [Fact]
+    public async Task GenericSealedArm_StoredCallbackPair_SubscribeFireUnsubscribe_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await using var oreo = new Outcomes.Dish.Hot<string>("tuna");
+            int rung = 0;
+            IDisposable bell = oreo.AddBell(course => rung += course);
+            Assert.Equal(1, oreo.Plate(3));
+            bell.Dispose();
+            Assert.Equal(0, oreo.Plate(5));
+            Assert.Equal(3, rung);
+        });
+    }
+
+    // And the interface-bridge pair: the bridge object Kotlin holds for the C# listener goes with
+    // the subscription.
+    [Fact]
+    public async Task GenericSealedArm_InterfaceBridgePair_SubscribeFireUnsubscribe_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await using var oreo = new Outcomes.Dish.Hot<int>(7);
+            var mylo = new ProbeDiner();
+            IDisposable seat = oreo.AddDiner(mylo);
+            Assert.Equal(1, oreo.Plate(3));
+            seat.Dispose();
+            Assert.Equal(0, oreo.Plate(5));
+            Assert.Equal(3, mylo.Courses);
+        });
     }
 }

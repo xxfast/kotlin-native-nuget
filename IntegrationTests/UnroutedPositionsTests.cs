@@ -88,14 +88,20 @@ public class UnroutedPositionsTests
         AssertAllAbsent(
             typeof(Depot),
             PublicInstance,
-            "FlowParamOnClass",
+            // ADR-210: `FlowParamOnClass` BINDS now (a `Flow<T>` parameter is `IAsyncEnumerable<T>`),
+            // asserted present below.
             "CallbackReturnOnClass",
             // ADR-208: `GenericReturnOnClass`, `GenericParamOnClass` and `GenericElementOnClass`
             // BIND now (a closed `Box<Int>` is an ordinary handle at every position) and are called
             // in GenericInstantiationsBindOnEveryOwner instead of being absent here.
-            "SuspendCallbackParamOnClass",
+            // ADR-210: `SuspendCallbackParamOnClass` BINDS now too (a `suspend` lambda parameter is
+            // `Func<T, CancellationToken, Task>`), asserted present below.
             "FlowElementOnClass",
             "CallbackElementOnClass");
+
+        // ADR-210: the cell this row lost. Asserted positively so it cannot quietly go back.
+        Assert.NotNull(typeof(Depot).GetMethod("SuspendCallbackParamOnClass", PublicInstance));
+        Assert.NotNull(typeof(Depot).GetMethod("FlowParamOnClass", PublicInstance));
     }
 
     /// <summary>
@@ -113,7 +119,7 @@ public class UnroutedPositionsTests
             registry,
             PublicStatic,
             "FlowReturnOnObject",
-            "FlowParamOnObject",
+            // ADR-210: `FlowParamOnObject` BINDS now, asserted present below.
             // ADR-160 moved the per-call lambda parameter onto the ADR-062 plan, which is keyed to
             // the position rather than to the owner kind, so `CallbackParamOnObject` BINDS now and
             // is asserted present below instead of absent here.
@@ -123,6 +129,7 @@ public class UnroutedPositionsTests
         // ADR-160: the object position's per-call lambda parameter is the one cell this matrix row
         // lost. Asserted positively so the row cannot silently go back to refusing it.
         Assert.NotNull(registry!.GetMethod("CallbackParamOnObject", PublicStatic));
+        Assert.NotNull(registry.GetMethod("FlowParamOnObject", PublicStatic));
     }
 
     /// <summary>
@@ -138,13 +145,16 @@ public class UnroutedPositionsTests
         AssertAllAbsent(
             typeof(IManifest),
             PublicInstance,
-            "FlowParamOnInterface",
             "StructuralOnInterface");
         AssertAllAbsent(
             typeof(ManifestDesk),
             PublicInstance,
-            "FlowParamOnInterface",
             "StructuralOnInterface");
+
+        // ADR-210: the Flow PARAMETER is the cell this row lost, on the interface and on the class
+        // that inherits the default.
+        Assert.NotNull(typeof(IManifest).GetMethod("FlowParamOnInterface"));
+        Assert.NotNull(typeof(ManifestDesk).GetMethod("FlowParamOnInterface", PublicInstance));
     }
 
     /// <summary>
@@ -183,7 +193,7 @@ public class UnroutedPositionsTests
             "FlowReturnOnExtension",
             "FlowParamOnExtension",
             "StructuralOnExtension",
-            "FlowParamOnTopLevel",
+            // ADR-210: `FlowParamOnTopLevel` BINDS now, asserted present below.
             // ADR-160: the top-level per-call lambda parameter binds off the plan now, exactly as
             // the class-method one does; asserted present below. ADR-208: so does the generic
             // parameter (`GenericParamOnTopLevel`), called in GenericInstantiationsBindOnEveryOwner.
@@ -192,6 +202,7 @@ public class UnroutedPositionsTests
         // ADR-160: the top-level per-call lambda parameter is the cell this row lost. Asserted
         // positively so the row cannot silently go back to refusing it.
         Assert.NotNull(sample!.GetMethod("CallbackParamOnTopLevel", PublicStatic));
+        Assert.NotNull(sample.GetMethod("FlowParamOnTopLevel", PublicStatic));
 
         // An extension does NOT share the file-named class: it is emitted on a per-receiver
         // `{Receiver}Extensions` static class, which is why every `*OnExtension` name asserted
@@ -204,9 +215,10 @@ public class UnroutedPositionsTests
             extensions,
             PublicStatic,
             "FlowReturnOnExtension",
-            "FlowParamOnExtension",
             "StructuralOnExtension");
         Assert.NotNull(extensions!.GetMethod("CallbackParamOnExtension", PublicStatic));
+        // ADR-210: and so does the extension's Flow parameter.
+        Assert.NotNull(extensions.GetMethod("FlowParamOnExtension", PublicStatic));
 
         // The LIE cell: today this renders `public static Flow<int> FlowReturnOnTopLevel()` against
         // a `Flow<T>` type that exists nowhere in Interop.cs (the class route spells the same thing
@@ -267,10 +279,11 @@ public class UnroutedPositionsTests
     }
 
     /// <summary>
-    /// Row 24: two secondary constructors each carry one unroutable parameter (a lambda, a Flow)
-    /// and are dropped, but the good primary keeps the class constructible -- the class-level "no
-    /// public constructor" fallback must not have swallowed it. The third secondary, over a
-    /// `Box<Int>`, binds since ADR-208.
+    /// Row 24: one secondary constructor carries an unroutable parameter (a lambda) and is dropped,
+    /// but the good primary keeps the class constructible -- the class-level "no public
+    /// constructor" fallback must not have swallowed it. The secondary over a
+    /// <c>Box&lt;Int&gt;</c> binds since ADR-208, and the one over a <c>Flow&lt;Int&gt;</c> since
+    /// ADR-210 (as <c>IAsyncEnumerable&lt;int&gt;</c>).
     /// </summary>
     [Fact]
     public void DockIsStillConstructibleViaItsPrimaryConstructor()
@@ -278,7 +291,8 @@ public class UnroutedPositionsTests
         Assert.NotNull(typeof(Dock).GetConstructor([typeof(int)]));
         using Dock dock = new(7);
         Assert.Equal(7, dock.OkOnDock());
-        Assert.Equal(2, typeof(Dock).GetConstructors().Length);
+        Assert.Equal(3, typeof(Dock).GetConstructors().Length);
+        Assert.NotNull(typeof(Dock).GetConstructor([typeof(int), typeof(IAsyncEnumerable<int>)]));
 
         using var box = new TestLibrary.Cat.Box<int>(3);
         using Dock boxed = new(8, box);

@@ -134,3 +134,13 @@ public abstract class Shape : IDisposable, IAsyncDisposable, INugetHandle
   owns the scope (no fixture), ineligible sealed interfaces (`IMixed`, unreachable per ADR-174 ruling 2),
   and lambda-parameter and generic base members.
 - Known cosmetic, pre-existing: a `flowProperty` getter renders a stray blank line before `}`.
+
+## Amendment (2026-10-12): a generic sealed base puts its flow member on each arm
+
+The "Not covered: a generic sealed base" bullet above stands for the base: [ADR-147](147-generic-class-methods.md)
+keeps a generic sealed base off the suspend and flow routes, so `Dish<T>` carries no `Served`. A
+`Flow`/`StateFlow` property the generic base declares binds on every arm instead (`Dish.Hot<T>.Served`),
+the placement this ADR replaced for a non-generic base. A `suspend` member of an arm that has a Kotlin
+type parameter, or an override of one the generic base declares, is a named
+`SKIPPED_UNSUPPORTED_COMBINATION`. See ADR-147's 2026-10-12 amendment. Pinned by the Tier 1 test
+`the generic base carries none of them and nothing is skipped`.

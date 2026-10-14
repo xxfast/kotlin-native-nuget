@@ -121,6 +121,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticHint
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardGuardName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMemberGenericRefusal
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardOwnerTypeName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.guarded
 import io.github.xxfast.kotlin.native.nuget.processor.forward.internalFailureDetail
 import io.github.xxfast.kotlin.native.nuget.processor.forward.wholeRoundFailureDiagnostic
@@ -175,6 +176,10 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedRetur
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedFlowElementShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameterShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParameterShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.asyncCallbackHolderType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.asyncKind
+import io.github.xxfast.kotlin.native.nuget.processor.forward.HOT_FLOW_INPUT_HINT
+import io.github.xxfast.kotlin.native.nuget.processor.forward.HOT_FLOW_INPUT_REASON
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardSkipPosition
 import io.github.xxfast.kotlin.native.nuget.processor.forward.skipReason
 import io.github.xxfast.kotlin.native.nuget.processor.forward.skipDetail
@@ -526,6 +531,9 @@ private fun cappedDefaultDiagnostics(catalog: ForwardCallablePlanCatalog): List<
  * diagnostic and the two emitters cannot drift. The position is the RETURN: a refused declaration
  * always has a `T` somewhere other than a direct parameter, which for every measured cell is the
  * return type.
+ *
+ * ADR-211: a non-suspend gate-refused `fun <T>` is planned now, and the plan names its refusal, so
+ * this sees only the ADR-198 reified case and a gate-refused `suspend fun <T>`.
  */
 internal fun warnUnroutedGenericFunctions(
   genericFunctions: List<KSFunctionDeclaration>,
@@ -583,7 +591,8 @@ internal fun warnDroppedForwardPropertySetters(
       reason = "its setter is not generated because " +
           (dropped.reason ?: "the ${dropped.componentDescription} cannot be written into a " +
           "Kotlin collection"),
-      hint = "the C# property ${dropped.publicName} is read-only",
+      hint = "the C# property ${dropped.publicName} is read-only" +
+          (dropped.remedy?.let { remedy -> "; $remedy" } ?: ""),
       // Issue #249: the property SURVIVES read-only, so the remark belongs on the generated C#
       // property and never on its type -- a type-level "not available" paragraph would report a
       // member as absent that a consumer can call.
@@ -924,7 +933,15 @@ internal fun warnRefusedLegacyRouteMembers(
       add(
         shape.refusal?.let {
           refusedDependency(member, declaration, it, ForwardSkipPosition.INPUT, owner)
-        } ?: refusedParameter(member, declaration, "$name: ${shape.description}", owner),
+        } ?: refusedParameter(member, declaration, "$name: ${shape.description}", owner)
+          .let { named ->
+            // ADR-210: a hot flow at a parameter has its own sentence and remedy.
+            if (shape.hotFlow) {
+              named.copy(reason = HOT_FLOW_INPUT_REASON, hint = HOT_FLOW_INPUT_HINT)
+            } else {
+              named
+            }
+          },
       )
       return
     }
@@ -1857,13 +1874,16 @@ internal class NugetProcessor(
       .filter { it.extensionReceiver != null }
       .filter { !it.hasCNameAnnotation() }
 
+    // ADR-211: a non-suspend top-level `fun <T>` the legacy width-variant gate refuses is planned
+    // like any other top-level function, as a static generic method; the gate keeps the rest.
     val (suspendFunctions, regularFunctions) = allFunctions
-      .filter { it.typeParameters.isEmpty() }
+      .filter { it.isPlannedTopLevelFunction() }
       .partition { it.modifiers.contains(Modifier.SUSPEND) }
 
     val functions: List<KSFunctionDeclaration> = regularFunctions
     val genericFunctions: List<KSFunctionDeclaration> = allFunctions
       .filter { it.typeParameters.isNotEmpty() }
+      .filterNot { it.isPlannedTopLevelFunction() }
 
     val allProperties: List<KSPropertyDeclaration> = allDeclarations
       .filterIsInstance<KSPropertyDeclaration>()
@@ -2419,7 +2439,7 @@ internal class NugetProcessor(
     // and the suspend route reads that number back. `functions` itself stays non-suspend: it also
     // feeds the synchronous translate loop.
     val topLevelCatalogFunctions: List<KSFunctionDeclaration> =
-      allFunctions.filter { it.typeParameters.isEmpty() }
+      allFunctions.filter { it.isPlannedTopLevelFunction() }
     val ordinaryCatalog: ForwardCallablePlanCatalog = forwardPlanner.catalog(
       classes, topLevelCatalogFunctions, extensionFunctions, objects, properties,
       extensionProperties, valueClasses, sealedClasses, enums,
@@ -2473,6 +2493,8 @@ internal class NugetProcessor(
       is BridgeType.ValueClass,
       BridgeType.ByteArray,
       is BridgeType.Callback,
+      is BridgeType.AsyncCallback,
+      is BridgeType.FlowSource,
       is BridgeType.ReturnedLambda,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,
@@ -3760,12 +3782,16 @@ internal class NugetProcessor(
           val armFlowMethods: List<KSFunctionDeclaration> =
             subclass.forwardArmFlowMethods(forwardClassifier)
           if (armFlowProperties.isEmpty() && armFlowMethods.isEmpty()) return@guardDeclaration
+          // ADR-199: a generic arm (`Hot<T>`) has no bare spelling, so the receiver read takes the
+          // erased one the arm's planned getters already read (`asStableRef<Dish.Hot<Any?>>()`).
+          // The flow emitters use the name as receiver-cast text only.
+          val armReceiver: String = subclass.forwardOwnerTypeName() ?: subQualifiedName
           armFlowProperties.forEach { prop ->
-            builder.addFlowPropertyExports(prop, subQualifiedName, armPrefix, forwardClassifier)
+            builder.addFlowPropertyExports(prop, armReceiver, armPrefix, forwardClassifier)
           }
           armFlowMethods.forEach { method ->
             builder.addFlowMethodExports(
-              method, subQualifiedName, armPrefix, forwardClassifier, callableCatalog,
+              method, armReceiver, armPrefix, forwardClassifier, callableCatalog,
             )
           }
         }
@@ -3787,8 +3813,10 @@ internal class NugetProcessor(
           val armLambdaMethods: List<KSFunctionDeclaration> =
             subclass.forwardArmLambdaMethods(forwardClassifier)
           if (armLambdaMethods.isEmpty()) return@guardDeclaration
+          // ADR-199: the erased receiver of a generic arm, as on the arm flow route above.
+          val armReceiver: String = subclass.forwardOwnerTypeName() ?: subQualifiedName
           armLambdaMethods.forEach { method ->
-            builder.addLambdaParamMethodExport(method, subQualifiedName, armPrefix)
+            builder.addLambdaParamMethodExport(method, armReceiver, armPrefix)
           }
         }
       }
@@ -3812,12 +3840,14 @@ internal class NugetProcessor(
           val bridgePairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
             subclass.forwardArmInterfaceBridgePairs(forwardClassifier)
           if (storedPairs.isEmpty() && bridgePairs.isEmpty()) return@guardDeclaration
+          // ADR-199: the erased receiver of a generic arm, as on the arm flow route above.
+          val armReceiver: String = subclass.forwardOwnerTypeName() ?: subQualifiedName
           storedPairs.forEach { (addMethod, removeMethod) ->
-            builder.addStoredCallbackExports(addMethod, removeMethod, subQualifiedName, armPrefix)
+            builder.addStoredCallbackExports(addMethod, removeMethod, armReceiver, armPrefix)
           }
           bridgePairs.forEach { (addMethod, removeMethod) ->
             builder.addInterfaceBridgeExports(
-              addMethod, removeMethod, subQualifiedName, armPrefix, forwardClassifier,
+              addMethod, removeMethod, armReceiver, armPrefix, forwardClassifier,
             )
           }
         }
@@ -3871,6 +3901,25 @@ internal class NugetProcessor(
     // every route above has classified its types; a sighting only the C# half makes fails the
     // forward ABI contract (an import with no export) rather than a consumer's first collect.
     builder.addFlowArgumentExports(forwardClassifier.closedFlowArguments.values, context.symbols)
+    // ADR-210: the holder a generated `suspend` lambda captures, and the two cinterop extensions
+    // its lambda and cleaner call. Last for the same reason as the line above: the legacy suspend
+    // routes record their sightings on the classifier as they emit. Everything else the lambda
+    // names is spelled fully qualified, so a module with no suspend lambda parameter gains nothing.
+    val legacyRoutesTakeAsyncParameters: Boolean =
+      forwardClassifier.asyncCallbacks.isNotEmpty() || forwardClassifier.flowSources.isNotEmpty()
+    val plansTakeAsyncParameters: Boolean = callableCatalog.plans.any { plan ->
+      plan.publicSignature.parameters.any { parameter ->
+        parameter.type.asyncKind() != null
+      }
+    }
+    val hasAsyncCallbackParameters: Boolean =
+      legacyRoutesTakeAsyncParameters || plansTakeAsyncParameters
+    if (hasAsyncCallbackParameters) {
+      builder.addImport("kotlinx.cinterop", "reinterpret")
+      builder.addImport("kotlinx.cinterop", "invoke")
+      builder.addImport("kotlinx.cinterop", "asStableRef")
+      builder.addType(asyncCallbackHolderType())
+    }
     ForwardDiagnosticSink.emit(
       forwardClassifier.readOnlyMutableStateFlowArguments.map { (spelling, holder) ->
         ForwardDiagnostic(
@@ -3894,3 +3943,13 @@ internal class NugetProcessor(
   }
 
 }
+
+/**
+ * ADR-211: whether this top-level function goes through the ADR-062 catalog. A non-generic one
+ * always does; a non-suspend `fun <T>` does when the legacy width-variant gate refuses it, unless
+ * that refusal is ADR-198's reified unspellable bound, which [warnUnroutedGenericFunctions] names.
+ */
+private fun KSFunctionDeclaration.isPlannedTopLevelFunction(): Boolean =
+  typeParameters.isEmpty() ||
+    (!modifiers.contains(Modifier.SUSPEND) && !hasLegacyGenericFunctionRoute() &&
+      !isReifiedWithUnspellableBound())

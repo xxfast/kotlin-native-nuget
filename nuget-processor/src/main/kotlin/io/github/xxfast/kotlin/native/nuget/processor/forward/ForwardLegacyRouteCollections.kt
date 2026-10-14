@@ -12,9 +12,12 @@ import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSValueParameter
 import com.google.devtools.ksp.symbol.Modifier
+import com.google.devtools.ksp.symbol.Variance
 import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.MUTABLE_STATE_FLOW_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.PLAIN_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.READ_ONLY_STATE_FLOW_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.SHARED_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 
@@ -125,6 +128,14 @@ internal sealed interface ForwardLegacyParameterShape {
   data class ManagedException(val nullable: Boolean) : ForwardLegacyParameterShape
 
   /**
+   * ADR-210: a `suspend (T) -> R` parameter of a `suspend` member, public
+   * `Func<T, CancellationToken, Task<R>>`. Lowered eagerly, before the coroutine launches, into a
+   * Kotlin `suspend` lambda whose captured holder owns the C# context key; its ABI slots are
+   * [ForwardLegacyNames.asyncSlots], the plan route's own fan-out.
+   */
+  data class Async(val type: BridgeType) : ForwardLegacyParameterShape
+
+  /**
    * Any other parameter, named so the skip diagnostic can quote it.
    *
    * [refusal] is the classifier's own [BridgeType.Unsupported] when the parameter is an
@@ -134,6 +145,8 @@ internal sealed interface ForwardLegacyParameterShape {
   data class Refused(
     val description: String,
     val refusal: BridgeType.Unsupported? = null,
+    /** ADR-210: a `StateFlow`, `SharedFlow` or `MutableStateFlow`, which has its own sentence. */
+    val hotFlow: Boolean = false,
   ) : ForwardLegacyParameterShape
 }
 
@@ -247,6 +260,39 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
 }
 
 /**
+ * [legacyParameterShape] for a declared parameter. ADR-210: on a `suspend` member a suspend lambda
+ * is [ForwardLegacyParameterShape.Async]; on a Flow-returning member it stays refused, the
+ * suspend route being the only legacy host that lowers it.
+ */
+internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
+  parameter: KSValueParameter,
+): ForwardLegacyParameterShape {
+  val type: KSType = parameter.type.resolve()
+  val host: KSFunctionDeclaration? = parameter.parent as? KSFunctionDeclaration
+  if (host != null) {
+    val suspends: Boolean = Modifier.SUSPEND in host.modifiers
+    if (suspends) {
+      asyncCallbackOrNull(type)?.let { callback ->
+        return ForwardLegacyParameterShape.Async(callback)
+      }
+    }
+    // A `Flow<T>` binds on a `suspend` member and on a member that itself returns a plain `Flow`,
+    // whose collect export lowers it once per C# collect.
+    val returnsPlainFlow: Boolean =
+      host.returnType?.resolve()?.expandAliases()?.declaration?.qualifiedName?.asString() in
+          PLAIN_FLOW_TYPES
+    if (suspends || returnsPlainFlow) {
+      flowSourceOrNull(type)?.let { flow -> return ForwardLegacyParameterShape.Async(flow) }
+    }
+  }
+  val expanded: KSType = type.expandAliases()
+  if (expanded.declaration.qualifiedName?.asString() in STATE_FLOW_TYPES + SHARED_FLOW_TYPES) {
+    return ForwardLegacyParameterShape.Refused(expanded.legacyDescription(), hotFlow = true)
+  }
+  return legacyParameterShape(type)
+}
+
+/**
  * The 13 entries `mapParamType` can spell (`cir/CirTypeMapping.kt`). This is the whole of what
  * [ForwardLegacyParameterShape.Plain] may cover: anything outside it rendered `IntPtr`, which is
  * issue #126.
@@ -338,7 +384,7 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShapes(
   defaults: List<Boolean> = emptyList(),
 ): List<ForwardLegacyParameterShape> {
   val shapes: List<ForwardLegacyParameterShape> =
-    parameters.map { legacyParameterShape(it.type.resolve()) }
+    parameters.map { legacyParameterShape(it) }
   val widened: Set<Int> =
     legacyWidenedIndices(shapes, defaults).takeLast(MAX_OPTIONAL_DEFAULTS).toSet()
   return shapes.mapIndexed { index, shape ->
@@ -368,7 +414,7 @@ internal fun ForwardBridgeTypeClassifier.legacyCappedDefaults(
   defaults: List<Boolean>,
 ): List<String> {
   val shapes: List<ForwardLegacyParameterShape> =
-    parameters.map { legacyParameterShape(it.type.resolve()) }
+    parameters.map { legacyParameterShape(it) }
   return legacyWidenedIndices(shapes, defaults).dropLast(MAX_OPTIONAL_DEFAULTS)
     .map { index -> parameters[index].name?.asString() ?: "_" }
 }
@@ -384,6 +430,7 @@ private fun legacyWidenedIndices(
     // Only a nullable one: the `IsSet` slot rides the nullable pointer slot.
     is ForwardLegacyParameterShape.Marshalled -> shape.nullable
     is ForwardLegacyParameterShape.ManagedException,
+    is ForwardLegacyParameterShape.Async,
     is ForwardLegacyParameterShape.Refused -> false
   }
 }
@@ -442,6 +489,7 @@ internal val ForwardLegacyParameterShape.isLegacyDefaulted: Boolean
     ForwardLegacyParameterShape.Plain,
     is ForwardLegacyParameterShape.Enum,
     is ForwardLegacyParameterShape.ManagedException,
+    is ForwardLegacyParameterShape.Async,
     is ForwardLegacyParameterShape.Refused -> false
   }
 
@@ -457,7 +505,7 @@ internal fun ForwardBridgeTypeClassifier.legacyRefusedParameterShape(
   parameters: List<KSValueParameter>,
 ): Pair<String, ForwardLegacyParameterShape.Refused>? =
   parameters.firstNotNullOfOrNull { parameter ->
-    val shape = legacyParameterShape(parameter.type.resolve())
+    val shape = legacyParameterShape(parameter)
     if (shape is ForwardLegacyParameterShape.Refused) {
       (parameter.name?.asString() ?: "_") to shape
     } else null
@@ -1284,6 +1332,16 @@ internal class ForwardLegacyNames(
   }
 
   /**
+   * ADR-210: per parameter, the slots a suspend lambda fans out to, or null. Both halves mint the
+   * same stems in the same order, so the positional ABI agrees.
+   */
+  val asyncSlots: List<ForwardAsyncSlots?> = mintAsyncSlots(
+    parameters.mapIndexed { index, name ->
+      name to (shapes[index] as? ForwardLegacyParameterShape.Async)?.type?.asyncKind()
+    },
+  ) { base -> mint(base) }
+
+  /**
    * Kotlin only: the ADR-164 presence-mask local (`mask` unless taken), or null when no parameter
    * is defaulted. Bound in the prelude, before the coroutine launches, and read by `when (mask)`.
    */
@@ -1395,7 +1453,8 @@ internal val ForwardLegacyParameterShape.isLegacyNullableSlot: Boolean
  * one rule instead of testing two variants in five places.
  */
 internal fun ForwardLegacyParameterShape.isLegacyLowered(): Boolean = when (this) {
-  is ForwardLegacyParameterShape.Marshalled, is ForwardLegacyParameterShape.Handle -> true
+  is ForwardLegacyParameterShape.Marshalled, is ForwardLegacyParameterShape.Handle,
+  is ForwardLegacyParameterShape.Async -> true
   ForwardLegacyParameterShape.Plain,
   is ForwardLegacyParameterShape.Enum,
   is ForwardLegacyParameterShape.NullableScalar,
@@ -1480,8 +1539,13 @@ internal fun ForwardLegacyNames.legacyInvocation(target: String, parameters: Lis
  * so a coroutine only ever captures values.
  */
 internal fun ForwardLegacyNames.legacyPrelude(parameters: List<String>): String = buildString {
-  parameters.forEachIndexed { index, parameter ->
-    shapes[index].legacyPrelude(parameter.kotlinIdentifier(), loweredLocals[index])
+  // ADR-210: the suspend lambda lowerings lead, because each builds the holder that takes
+  // ownership of a C# key: no other lowering may be able to throw before Kotlin owns every key.
+  val ordered: List<Int> = parameters.indices.sortedBy { index -> asyncSlots[index] == null }
+  ordered.forEach { index ->
+    val parameter: String = parameters[index]
+    shapes[index]
+      .legacyPrelude(parameter.kotlinIdentifier(), loweredLocals[index], asyncSlots[index])
       ?.let { line -> appendLine(line) }
   }
   val mask: String = mask ?: return@buildString
@@ -1516,7 +1580,14 @@ internal fun legacyOptionalArgument(name: String, fansOut: Boolean, enum: Boolea
 internal fun ForwardLegacyParameterShape.legacyPrelude(
   parameter: String,
   local: String?,
+  async: ForwardAsyncSlots? = null,
 ): String? = when (this) {
+  // ADR-210: built on the calling thread, so Kotlin owns the C# key before the coroutine launches.
+  is ForwardLegacyParameterShape.Async -> {
+    val expression: String =
+      asyncParameterExpression(parameter.trim('`'), type, requireNotNull(async))
+    "val ${requireNotNull(local)}: ${asyncParameterKotlinType(type)} = $expression"
+  }
   is ForwardLegacyParameterShape.Marshalled ->
     legacyLoweringStatement(parameter, requireNotNull(local), type, nullable)
   is ForwardLegacyParameterShape.Handle ->
@@ -1787,25 +1858,57 @@ private fun ForwardBridgeTypeClassifier.refusedListenerMember(
  * A Kotlin source spelling for a diagnostic: simple names, type arguments and every `?` kept, head
  * and arguments alike. Aliases are expanded at every level (ADR-018 amendment), so `Names?` reads
  * `List<String>?` and `Map<Name?, Int>` reads `Map<String?, Int>`: the shape being refused, not the
- * alias hiding it. A `kotlin.FunctionN` is spelled in arrow syntax (`(Int) -> Unit`).
+ * alias hiding it. A function type is spelled in arrow syntax at every arity, a `kotlin.FunctionN`
+ * as `(Int) -> Unit` and a `kotlin.coroutines.SuspendFunctionN` as `suspend (Int) -> Unit`, and a
+ * nullable one keeps its parentheses (`(suspend (Int) -> Unit)?`): the class name a
+ * `KSType.toString()` prints (`SuspendFunction1<Int, Unit>`) is not something the author wrote.
+ *
+ * [keepProjections] keeps a use-site `in`/`out`, for a message about the projection itself and for
+ * a site that printed the raw `KSType` before; the default drops it, as this always has.
  */
-internal fun KSType.kotlinSpelling(): String {
+internal fun KSType.kotlinSpelling(keepProjections: Boolean = false): String {
   val type: KSType = expandAliases()
-  val qualifiedName: String? = type.declaration.qualifiedName?.asString()
-  if (qualifiedName in LEGACY_CALLBACK_TYPES && type.arguments.isNotEmpty()) {
+  val keyword: String? = functionTypeKeyword(type.declaration.qualifiedName?.asString())
+  if (keyword != null && type.arguments.isNotEmpty()) {
     val spelled: List<String> = type.arguments.map { argument ->
-      argument.type?.resolve()?.kotlinSpelling() ?: "*"
+      argument.type?.resolve()?.kotlinSpelling(keepProjections) ?: "*"
     }
-    val lambda: String = "(${spelled.dropLast(1).joinToString(", ")}) -> ${spelled.last()}"
+    val lambda: String =
+      "$keyword(${spelled.dropLast(1).joinToString(", ")}) -> ${spelled.last()}"
     return if (type.isMarkedNullable) "($lambda)?" else lambda
   }
   val arguments: String =
     if (type.arguments.isEmpty()) ""
     else type.arguments.joinToString(", ", "<", ">") { argument ->
-      argument.type?.resolve()?.kotlinSpelling() ?: "*"
+      val spelled: String =
+        argument.type?.resolve()?.kotlinSpelling(keepProjections) ?: return@joinToString "*"
+      when {
+        !keepProjections -> spelled
+        argument.variance == Variance.STAR -> "*"
+        argument.variance == Variance.COVARIANT -> "out $spelled"
+        argument.variance == Variance.CONTRAVARIANT -> "in $spelled"
+        else -> spelled
+      }
     }
   val nullable: String = if (type.isMarkedNullable) "?" else ""
   return "${type.declaration.simpleName.asString()}$arguments$nullable"
+}
+
+private val FUNCTION_TYPE_NAME = Regex("""kotlin\.Function\d+""")
+
+private val SUSPEND_FUNCTION_TYPE_NAME = Regex("""kotlin\.coroutines\.SuspendFunction\d+""")
+
+/**
+ * The keyword a function type's arrow spelling opens with: empty for a `kotlin.FunctionN`,
+ * `suspend ` for a `kotlin.coroutines.SuspendFunctionN`, null for anything else. Spelling only, at
+ * any arity: which function types a route BINDS is `LEGACY_CALLBACK_TYPES` and
+ * `SUSPEND_LAMBDA_TYPES`.
+ */
+private fun functionTypeKeyword(qualifiedName: String?): String? = when {
+  qualifiedName == null -> null
+  FUNCTION_TYPE_NAME.matches(qualifiedName) -> ""
+  SUSPEND_FUNCTION_TYPE_NAME.matches(qualifiedName) -> "suspend "
+  else -> null
 }
 
 /**
@@ -1882,6 +1985,8 @@ internal fun BridgeType.interfaceBridgeWire(): InterfaceBridgeWire = when (this)
   is BridgeType.Collection,
   is BridgeType.Nullable,
   is BridgeType.Callback,
+  is BridgeType.AsyncCallback,
+  is BridgeType.FlowSource,
   is BridgeType.ReturnedLambda,
   is BridgeType.SpecializedProtocol,
   is BridgeType.RawKSType,

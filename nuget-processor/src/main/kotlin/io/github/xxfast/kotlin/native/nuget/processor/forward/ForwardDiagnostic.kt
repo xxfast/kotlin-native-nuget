@@ -880,8 +880,12 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
     // somewhere else and the generic sentence ("its FLOW_PROTOCOL type combination is not
     // supported") would send the author looking for a type problem that does not exist.
     ForwardPlanSkipReason.UNROUTED_POSITION -> when (detail) {
+      // ADR-210: a hot flow at a parameter has its own sentence; a cold one binds there now.
+      HOT_FLOW_INPUT_DETAIL -> HOT_FLOW_INPUT_REASON
+
       ForwardPlanSkipReason.FLOW_PROTOCOL.name ->
-        "a Flow/StateFlow binds at a class-method return and a property, but not at this position"
+        "a Flow/StateFlow binds at a class-method return and a property, and a `Flow<T>` of a " +
+            "primitive or String at a parameter, but not at this position"
 
       // ADR-160: a per-call lambda PARAMETER now binds off the ADR-062 plan at every ordinary
       // position (class method, sealed arm, object member, top-level function, extension), so the
@@ -896,8 +900,10 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
             "payload/return has no route"
 
       ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL.name ->
-        "a `suspend` lambda binds as a class property (`KotlinSuspendFunc<...>`), but not as a " +
-            "parameter or as a function return"
+        // ADR-210: it binds at a parameter now, for the payload and result types the route carries.
+        "a `suspend` lambda binds as a class property (`KotlinSuspendFunc<...>`) and as a " +
+            "parameter (`Func<T, CancellationToken, Task<R>>`, up to three primitive, String, " +
+            "enum or class payloads and a Unit, primitive or String result), but not here"
 
       // ROADMAP Phase 4 line 23 fold-in: the suspend route covers top-level functions and class,
       // sealed-arm members, never an extension. The ADR-064 audit amendment: one sentence for
@@ -914,8 +920,8 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
       // function's own type parameter out of place.
       ForwardPlanSkipReason.GENERIC.name ->
         "an exported generic class binds at every position, and a function's own type " +
-            "parameter at a top-level function with a parameter of it and on a class, object, " +
-            "companion or sealed-class member as a bare `T` or `T?` parameter or return; a " +
+            "parameter on a top-level function and on a class, object, companion or " +
+            "sealed-class member as a bare `T` or `T?` parameter or return; a " +
             "generic interface or an inner class of a generic owner does not bind, nor does a " +
             "type parameter at this position"
 
@@ -952,9 +958,17 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
       }
 
     // ADR-147: names the owner, not a type: the member binds unchanged on a non-generic class.
+    // ADR-199: a generic sealed arm's callback member has its receiver spelled, so it names what
+    // does stop it, the lambda's erased payload.
     ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE ->
-      "it is a ${genericOwnerMemberKind(detail)} member of a generic class, and the route that " +
-          "binds that member kind cannot spell a generic receiver yet (ADR-147)"
+      if (detail == GENERIC_ARM_ERASED_LAMBDA) {
+        "one of its lambdas takes or returns a type parameter of its generic sealed arm, and " +
+            "the bridge calls the arm with that parameter erased: the lambda's payload crosses " +
+            "as `Any?`, which the callback route cannot marshal (ADR-199)"
+      } else {
+        "it is a ${genericOwnerMemberKind(detail)} member of a generic class, and the route " +
+            "that binds that member kind cannot spell a generic receiver yet (ADR-147)"
+      }
 
     // ADR-064's 2026-09-11 amendment: scope, position and nesting drops. None of these is about
     // an unsupported type combination, and each contradicted the hint printed beside it. The
@@ -1382,18 +1396,21 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
   // ADR-064 amendment (2026-09-13): the remedy is always "move it to a position that does bind",
   // and the positions that bind differ per member kind, so each detail names its own.
   ForwardPlanSkipReason.UNROUTED_POSITION -> when (detail) {
+    HOT_FLOW_INPUT_DETAIL -> HOT_FLOW_INPUT_HINT
+
     ForwardPlanSkipReason.FLOW_PROTOCOL.name ->
-      "return the Flow from a method on an ordinary class (or expose it as a property); a Flow " +
-          "cannot be passed in, and no object, interface, extension or constructor route carries " +
-          "one"
+      "return the Flow from a method on an ordinary class (or expose it as a property), or " +
+          "take a `Flow<T>` of a primitive or String as a parameter; no object, interface, " +
+          "extension or constructor route carries a returned one"
 
     ForwardPlanSkipReason.CALLBACK_PROTOCOL.name ->
       "take the lambda as a parameter of an ordinary class method (a per-call one, or an " +
           "add/remove pair), or return it from a top-level function"
 
     ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL.name ->
-      "take or return a plain (non-suspend) lambda instead, or expose the `suspend` lambda as " +
-          "a property of an ordinary class"
+      "take the `suspend` lambda as a non-nullable parameter with a Unit, primitive or String " +
+          "result, take or return a plain (non-suspend) lambda instead, or expose it as a " +
+          "property of an ordinary class"
 
     ForwardPlanSkipReason.SUSPEND.name ->
       "declare it as a `suspend` member of a class (or of an interface a function returns), or " +
@@ -1441,8 +1458,14 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
         "class"
 
   ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE ->
-    "move the member onto a non-generic class (for example a wrapper that holds this one), " +
-        "which keeps the route this member kind needs"
+    if (detail == GENERIC_ARM_ERASED_LAMBDA) {
+      "give the lambda a concrete payload type (`(Int) -> Unit`), or declare the member on an " +
+          "arm that fixes the type argument (for example `class Whole : Base<Int>()`), where " +
+          "the lambda is concrete and the member binds"
+    } else {
+      "move the member onto a non-generic class (for example a wrapper that holds this one), " +
+          "which keeps the route this member kind needs"
+    }
 
   // Issue #57: the old hint ("declare the member directly on the value class") was already true
   // of an explicit `override`, which skips by the same rule (ADR-082: an override *is* the
@@ -1648,6 +1671,21 @@ private const val genericSkipHint: String =
       "instead"
 
 /**
+ * ADR-210: the detail a `StateFlow<T>`, `SharedFlow<T>` or `MutableStateFlow<T>` PARAMETER
+ * carries under [ForwardPlanSkipReason.UNROUTED_POSITION], and its sentence and hint. A cold
+ * `Flow<T>` binds as `IAsyncEnumerable<T>`; a hot one has nothing on the C# side to be made from.
+ */
+internal const val HOT_FLOW_INPUT_DETAIL: String = "HOT_FLOW_INPUT"
+
+internal const val HOT_FLOW_INPUT_REASON: String =
+  "a StateFlow, SharedFlow or MutableStateFlow cannot be passed in: C# has no source for a " +
+      "synchronous current value or a replay cache, only an `IAsyncEnumerable<T>`, which binds " +
+      "a `Flow<T>` parameter"
+
+internal const val HOT_FLOW_INPUT_HINT: String =
+  "declare the parameter as `Flow<T>` and call `stateIn(scope)` (or `shareIn`) on it in Kotlin"
+
+/**
  * A short, human-readable name for a diagnostic message; never used to drive marshalling.
  *
  * Lifted from a `ForwardPropertyPlanner` private member to file-level `internal` (the body touches
@@ -1661,6 +1699,15 @@ internal fun BridgeType.diagnosticTypeName(): String = when (this) {
     prefix = "(",
     postfix = ") -> ${result.diagnosticTypeName()}",
   ) { parameter -> parameter.diagnosticTypeName() }
+
+  // ADR-210: the same, as the `suspend` function type the author wrote.
+  is BridgeType.AsyncCallback -> parameters.joinToString(
+    prefix = "suspend (",
+    postfix = ") -> ${result.diagnosticTypeName()}",
+  ) { parameter -> parameter.diagnosticTypeName() }
+
+  // ADR-210: as the author wrote it.
+  is BridgeType.FlowSource -> "Flow<${element.diagnosticTypeName()}>"
 
   // ADR-160 amendment: the same arrow spelling for a function type handed OUT.
   is BridgeType.ReturnedLambda -> typeArguments.dropLast(1).joinToString(
@@ -1684,9 +1731,18 @@ internal fun BridgeType.diagnosticTypeName(): String = when (this) {
   is BridgeType.ValueClass -> qualifiedName.substringAfterLast('.')
   is BridgeType.Collection -> "Collection"
   // ADR-147 amendment: a bare `T` the bound alone made nullable reads as the author wrote it.
-  is BridgeType.Nullable ->
-    if ((type as? BridgeType.TypeParameter)?.nullableFromBound == true) type.diagnosticTypeName()
-    else "${type.diagnosticTypeName()}?"
+  // A nullable function type keeps its parentheses: `(Int) -> String?` is a nullable RESULT.
+  is BridgeType.Nullable -> {
+    val nullableFromBound: Boolean = (type as? BridgeType.TypeParameter)?.nullableFromBound == true
+    val isCallback: Boolean = type is BridgeType.Callback || type is BridgeType.AsyncCallback
+    val isLambda: Boolean = isCallback || type is BridgeType.ReturnedLambda
+
+    when {
+      nullableFromBound -> type.diagnosticTypeName()
+      isLambda -> "(${type.diagnosticTypeName()})?"
+      else -> "${type.diagnosticTypeName()}?"
+    }
+  }
   is BridgeType.SpecializedProtocol -> name
   // ADR-147: the parameter's own name, which is how the author spelled it -- the Kotlin one, not
   // a C# spelling renamed around a member.

@@ -200,10 +200,7 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
         "t.SetResult($marshalRef.FromHandle<TResult>(resultPtr));",
       )
       appendLine("            callbackHandle = GCHandle.Alloc(callback);")
-      appendLine(
-        "            IntPtr jobHandle = $funcNativeRef.Invoke0(_handle, " +
-            "NugetThunks.NugetAsyncCallbackPtr, GCHandle.ToIntPtr(callbackHandle));"
-      )
+      appendInvoke0(funcNativeRef)
       appendLine("            CancellationTokenRegistration reg = cancellationToken.CanBeCanceled")
       appendLine(
         "                ? cancellationToken.Register(() => " +
@@ -255,7 +252,9 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
       // disposing them the moment `Invoke` returns is safe rather than a use-after-free.
       // ADR-171: every box is minted before the GCHandle, so a box that throws (a value class's
       // `init`) strands neither the callback handle nor an earlier argument's box.
-      appendBoxedArguments(arity, marshalRef, funcNativeRef, "IntPtr jobHandle") {
+      appendBoxedArguments(
+        arity, marshalRef, funcNativeRef, "IntPtr jobHandle", freesCompletionHandle = true,
+      ) {
         appendLine("                callbackHandle = GCHandle.Alloc(callback);")
         appendLine("                jobHandle = $funcNativeRef.Invoke$arity($invokeArgs);")
       }
@@ -296,10 +295,7 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
       // ADR-161: one shared, materialisation-fault-containing closure body.
       appendAsyncCompletionClosure("TaskCompletionSource<bool>", "t.SetResult(true);")
       appendLine("            callbackHandle = GCHandle.Alloc(callback);")
-      appendLine(
-        "            IntPtr jobHandle = $funcNativeRef.Invoke0(_handle, " +
-            "NugetThunks.NugetAsyncCallbackPtr, GCHandle.ToIntPtr(callbackHandle));"
-      )
+      appendInvoke0(funcNativeRef)
       appendLine("            CancellationTokenRegistration reg = cancellationToken.CanBeCanceled")
       appendLine(
         "                ? cancellationToken.Register(() => " +
@@ -343,7 +339,9 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
       appendAsyncCompletionClosure("TaskCompletionSource<bool>", "t.SetResult(true);")
       // Boundary nullability part A1, the Unit-returning suspend twin; the same synchronous-read
       // ordering constraint applies, see `KotlinSuspendFunc.InvokeAsync` above.
-      appendBoxedArguments(arity, marshalRef, funcNativeRef, "IntPtr jobHandle") {
+      appendBoxedArguments(
+        arity, marshalRef, funcNativeRef, "IntPtr jobHandle", freesCompletionHandle = true,
+      ) {
         appendLine("                callbackHandle = GCHandle.Alloc(callback);")
         appendLine("                jobHandle = $funcNativeRef.Invoke$arity($invokeArgs);")
       }
@@ -368,6 +366,23 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
 }
 
 /**
+ * The arity-zero suspend invoke. Nothing is boxed, so the only early exits between the allocation
+ * and the native call's return are the marshaller refusing a closed `_handle` and the P/Invoke
+ * itself; [appendCompletionHandleCatch] frees the completion handle on both.
+ */
+private fun StringBuilder.appendInvoke0(funcNativeRef: String) {
+  appendLine("            IntPtr jobHandle;")
+  appendLine("            try")
+  appendLine("            {")
+  appendLine(
+    "                jobHandle = $funcNativeRef.Invoke0(_handle, " +
+        "NugetThunks.NugetAsyncCallbackPtr, GCHandle.ToIntPtr(callbackHandle));"
+  )
+  appendLine("            }")
+  appendCompletionHandleCatch()
+}
+
+/**
  * ADR-171: the argument boxing shared by the four `Invoke`/`InvokeAsync` shapes. Every box and the
  * native call sit inside one `try` and the owned-dispose loop in its `finally`, so a box that
  * throws (a value class's `init`, rejected by its box export) still disposes the boxes already
@@ -379,6 +394,9 @@ private fun StringBuilder.appendBoxedArguments(
   marshalRef: String,
   funcNativeRef: String,
   resultDeclaration: String,
+  // The two suspend shapes allocate their completion `GCHandle` inside [call], after the boxes
+  // (ADR-171); a native call that then throws must free it, see [appendCompletionHandleCatch].
+  freesCompletionHandle: Boolean = false,
   call: StringBuilder.() -> Unit,
 ) {
   (0 until arity).forEach { i ->
@@ -393,6 +411,7 @@ private fun StringBuilder.appendBoxedArguments(
   }
   call()
   appendLine("            }")
+  if (freesCompletionHandle) appendCompletionHandleCatch()
   appendLine("            finally")
   appendLine("            {")
   // ADR-187: a borrowed box is a live wrapper's raw `Handle`, so the wrapper is kept alive past the

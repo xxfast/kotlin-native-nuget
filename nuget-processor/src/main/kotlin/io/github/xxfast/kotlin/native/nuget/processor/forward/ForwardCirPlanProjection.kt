@@ -305,6 +305,8 @@ internal object ForwardCirPlanProjection {
           is BridgeType.BoundInterface,
           is BridgeType.Nullable,
           is BridgeType.Callback,
+          is BridgeType.AsyncCallback,
+          is BridgeType.FlowSource,
           is BridgeType.ReturnedLambda,
           is BridgeType.SpecializedProtocol,
           is BridgeType.RawKSType,
@@ -319,6 +321,8 @@ internal object ForwardCirPlanProjection {
       BridgeType.Char,
       is BridgeType.BoundInterface,
       is BridgeType.Callback,
+      is BridgeType.AsyncCallback,
+      is BridgeType.FlowSource,
       is BridgeType.ReturnedLambda,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,
@@ -378,11 +382,13 @@ internal object ForwardCirPlanProjection {
               ?: plan.interfacePrelude(parameter)
               ?: plan.boundInterfacePrelude(parameter)
               ?: plan.typeParameterPrelude(parameter)
+              ?: asyncPrelude(parameter)
           }
     val cleanup: List<String> =
       inputs.unwrapped().mapNotNull {
         plan.bytesCleanup(it) ?: plan.collectionCleanup(it) ?: plan.interfaceCleanup(it)
           ?: plan.typeParameterCleanup(it)
+          ?: asyncCleanup(it)
       }
     val argumentList: List<String> = inputs.flatMap { plan.inputArguments(it) }
     val callArgs: String = (argumentList + "out IntPtr error").joinToString(", ")
@@ -764,6 +770,8 @@ internal object ForwardCirPlanProjection {
       BridgeType.ByteArray,
       is BridgeType.Collection,
       is BridgeType.Callback,
+      is BridgeType.AsyncCallback,
+      is BridgeType.FlowSource,
       is BridgeType.ReturnedLambda,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,
@@ -914,6 +922,8 @@ internal object ForwardCirPlanProjection {
     BridgeType.ByteArray,
     is BridgeType.Collection,
     is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -973,6 +983,14 @@ internal object ForwardCirPlanProjection {
       // ADR-160: the two-slot ADR-102 pair -- the link-time thunk address, then the ADR-161 table
       // key [forwardCallbackPrelude] registered the managed delegate under.
       is BridgeType.Callback -> forwardCallbackArguments(parameter.csharpLocal, type)
+      // ADR-210: the Begin and End thunk addresses and the key minted for the delegate, then (once
+      // per export) the three release thunks. The key is the local [asyncPrelude] registered into:
+      // C# owns it until the call returns, the Kotlin holder from then on.
+      is BridgeType.AsyncCallback, is BridgeType.FlowSource -> forwardAsyncArguments(
+        type,
+        "${parameter.csharpLocal}AsyncKey",
+        requireNotNull(parameter.asyncSlots),
+      )
       // ADR-077: the generated `readonly record struct` capitalizes the Kotlin underlying
       // property (`value` -> `Value`, CirClassTranslator); the unwrapped value is lowered to its
       // wire form per underlying (sub-item 4), and Kotlin re-wraps it on the other side.
@@ -998,6 +1016,8 @@ internal object ForwardCirPlanProjection {
             is BridgeType.Collection,
             is BridgeType.Nullable,
             is BridgeType.Callback,
+            is BridgeType.AsyncCallback,
+            is BridgeType.FlowSource,
             is BridgeType.ReturnedLambda,
             is BridgeType.SpecializedProtocol,
             is BridgeType.RawKSType,
@@ -1087,6 +1107,8 @@ internal object ForwardCirPlanProjection {
         is BridgeType.BoundInterface,
         is BridgeType.Nullable,
         is BridgeType.Callback,
+        is BridgeType.AsyncCallback,
+        is BridgeType.FlowSource,
         is BridgeType.ReturnedLambda,
         is BridgeType.SpecializedProtocol,
         is BridgeType.RawKSType,
@@ -1126,6 +1148,8 @@ internal object ForwardCirPlanProjection {
       is BridgeType.ValueClass,
       BridgeType.ByteArray,
       is BridgeType.Callback,
+      is BridgeType.AsyncCallback,
+      is BridgeType.FlowSource,
       is BridgeType.ReturnedLambda,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,
@@ -1171,6 +1195,23 @@ internal object ForwardCirPlanProjection {
     if (parameter.default != null) return null
     val guard = "ArgumentNullException.ThrowIfNull(${parameter.csharpName});"
     return ForwardCirHandleStep(flat = guard, declarations = listOf(guard), statement = "")
+  }
+
+  /**
+   * ADR-210: the guarded span that owns a suspend lambda's key until the native call returns. The
+   * registration is a statement inside the `try`, the hand-over the statement after the call, and
+   * [asyncCleanup]'s `finally` unregisters whatever was not handed over.
+   */
+  private fun asyncPrelude(parameter: ForwardPublicParameter): ForwardCirHandleStep? {
+    if (parameter.type.asyncKind() == null) return null
+    return forwardAsyncPrelude(
+      parameter.csharpName, parameter.type, "${parameter.csharpLocal}AsyncKey",
+    )
+  }
+
+  private fun asyncCleanup(parameter: ForwardPublicParameter): String? {
+    if (parameter.type.asyncKind() == null) return null
+    return forwardAsyncCallbackCleanup("${parameter.csharpLocal}AsyncKey")
   }
 
   private fun ForwardCallablePlan.callbackCleanup(parameter: ForwardPublicParameter): String? {
@@ -1403,6 +1444,7 @@ internal object ForwardCirPlanProjection {
               ?: boundInterfacePrelude(parameter)
               ?: typeParameterPrelude(parameter)
               ?: callbackPrelude(parameter)
+              ?: asyncPrelude(parameter)
           }
     val cleanup: List<String> =
       parameters.unwrapped().mapNotNull { parameter ->
@@ -1411,6 +1453,7 @@ internal object ForwardCirPlanProjection {
           ?: interfaceCleanup(parameter)
           ?: typeParameterCleanup(parameter)
           ?: callbackCleanup(parameter)
+          ?: asyncCleanup(parameter)
       }
     val argumentList: List<String> =
       listOfNotNull(receiverArgument) + parameters.flatMap { parameter -> inputArguments(parameter) }
@@ -1787,6 +1830,8 @@ internal object ForwardCirPlanProjection {
         is BridgeType.BoundInterface,
         is BridgeType.Nullable,
         is BridgeType.Callback,
+        is BridgeType.AsyncCallback,
+        is BridgeType.FlowSource,
         is BridgeType.ReturnedLambda,
         is BridgeType.SpecializedProtocol,
         is BridgeType.RawKSType,
@@ -1804,6 +1849,8 @@ internal object ForwardCirPlanProjection {
       BridgeType.String,
       is BridgeType.Enum,
       is BridgeType.Callback,
+      is BridgeType.AsyncCallback,
+      is BridgeType.FlowSource,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,
       is BridgeType.Unsupported,
@@ -1863,6 +1910,8 @@ internal object ForwardCirPlanProjection {
     is BridgeType.Collection,
     is BridgeType.Nullable,
     is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -1898,6 +1947,8 @@ internal object ForwardCirPlanProjection {
       is BridgeType.Collection,
       is BridgeType.Nullable,
       is BridgeType.Callback,
+      is BridgeType.AsyncCallback,
+      is BridgeType.FlowSource,
       is BridgeType.ReturnedLambda,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,
@@ -2186,6 +2237,9 @@ internal object ForwardCirPlanProjection {
     is BridgeType.Throwable,
       // ADR-160: `Action<>`/`Func<>` are delegate types, which are C# reference types.
     is BridgeType.Callback -> true
+    // ADR-210: a `Func<>` over a `Task`, a delegate type like the one above.
+    is BridgeType.AsyncCallback -> true
+    is BridgeType.FlowSource -> true
     // ADR-076: DateTimeOffset is a C# value type, same as Enum/ValueClass.
     // ADR-103: so is TimeSpan.
     // ADR-106: Guid is a C# value type too, so `Uuid?` renders Nullable<Guid> ("Guid?").
