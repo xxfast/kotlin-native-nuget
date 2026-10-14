@@ -33,10 +33,15 @@ import kotlin.reflect.KClass
  * is refused, and the refusal is total for the declaration: nothing is emitted on either half.
  * `NugetProcessor` names the refused ones (`SKIPPED_UNSUPPORTED_RETURN`) rather than leaving them
  * silent, which is the amendment.
+ *
+ * ADR-211 (issue #556): both halves carry only that one parameter, so the route also takes only
+ * single-parameter declarations. `fun <T> pick(first: T, second: T): T` returns -1 here and binds
+ * on the plan as `Pick<T>(T first, T second)` instead of emitting a one-argument call.
  */
 internal fun KSFunctionDeclaration.legacyGenericRouteParameterIndex(): Int {
   // ADR-198: refused on both halves, and named by `warnUnroutedGenericFunctions`.
   if (isReifiedWithUnspellableBound()) return -1
+  if (parameters.size != 1) return -1
   val typeParamName: String = typeParameters.firstOrNull()?.name?.asString() ?: "T"
   // The two returns both halves spell: `T` itself, or a generated generic class over it
   // (`Box<T>`). Anything else (`String`, `Unit`, a builtin `List<T>`) was read as a generic-class

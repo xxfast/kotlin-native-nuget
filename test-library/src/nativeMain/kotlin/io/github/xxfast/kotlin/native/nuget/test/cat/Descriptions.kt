@@ -11,3 +11,12 @@ fun <T : Any> describe(value: T): String = "$value: ${value::class.simpleName}"
 
 /** The unbounded sibling of [describe]: C# gets no `where` clause. */
 fun <T> label(value: T): String = "bowl of $value"
+
+/**
+ * Issue #556: two bare-`T` parameters. The legacy width-variant gate must refuse this so it binds
+ * on the plan with both parameters. Mylo always picks the second bowl.
+ */
+fun <T> pick(first: T, second: T): T = second
+
+/** Issue #556: a bare `T` beside a non-`T` parameter. Oreo counts his treats. */
+fun <T : Any> tally(x: T, n: Int): String = "$x x$n"
