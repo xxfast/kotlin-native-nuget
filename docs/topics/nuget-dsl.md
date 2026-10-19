@@ -70,7 +70,7 @@ old task name fails with "task not found".
 
 | Before | Now |
 |---|---|
-| `bind { include(...) }`, `bind { exclude(...) }` | `includeNamespaces(...)`, `excludeNamespaces(...)`. The old functions are deprecated at `ERROR` level with a `ReplaceWith`. `publish { include/exclude }` is unchanged: it selects Kotlin packages. |
+| `bind { include(...) }`, `bind { exclude(...) }` | `includeNamespaces(...)`, `excludeNamespaces(...)`. The old functions were deprecated at `ERROR` level in 0.9.0 and removed in 0.10.0. `publish { include/exclude }` is unchanged: it selects Kotlin packages. |
 | `nugetGen` | `nugetGenerateRestoreProject` |
 | `NugetGenTask` | `NugetGenerateRestoreProjectTask` |
 
