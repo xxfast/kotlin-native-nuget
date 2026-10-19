@@ -101,7 +101,8 @@ internal fun KSFunctionDeclaration.forwardMethodTypeParameters(): List<ForwardMe
  *    no closed spelling, `Enum<T>`, `Node<T>`, routes through ADR-198's trampoline instead);
  *  - a multi-bound `T` no parameter mentions, since no type argument spells it and nothing infers
  *    it;
- *  - a `T` nested in another type (`List<T>`, `Box<T>`), and a lambda or `Flow` anywhere in the
+ *  - a `T` nested in another type (`Box<T>`, `Result<List<T>>`; ADR-212 admits `List<T>`,
+ *    `Set<T>`, `Map<K, V>` and their nests), and a lambda or `Flow` anywhere in the
  *    signature, whose own routes are keyed to non-generic members.
  */
 internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
@@ -145,6 +146,15 @@ internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
   fun KSType.mentionsOwn(): Boolean = ownParameter() ||
       arguments.any { argument -> argument.type?.resolve()?.expandAliases()?.mentionsOwn() == true }
 
+  // ADR-212: a `List`/`Set`/`Map` (or a mutable kind) whose every component is the own `T`, a
+  // type that does not mention it, or such a collection again, carries `T` per element.
+  fun KSType.carriesOwn(): Boolean = ownParameter() ||
+      declaration.qualifiedName?.asString() in OWN_PARAMETER_COLLECTIONS &&
+      arguments.all { argument ->
+        val type: KSType? = argument.type?.resolve()?.expandAliases()
+        type != null && (!type.mentionsOwn() || type.carriesOwn())
+      }
+
   fun KSType.carriesProtocol(): Boolean {
     val qualifiedName: String? = declaration.qualifiedName?.asString()
     return isFunctionType || isSuspendFunctionType ||
@@ -162,11 +172,11 @@ internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
     return "its signature carries a lambda or a Flow"
   }
   parameterTypes.forEach { type ->
-    if (type.mentionsOwn() && !type.ownParameter()) {
+    if (type.mentionsOwn() && !type.carriesOwn()) {
       return "its type parameter is nested in `$type`"
     }
   }
-  if (returned != null && returned.mentionsOwn() && !returned.ownParameter()) {
+  if (returned != null && returned.mentionsOwn() && !returned.carriesOwn()) {
     val resultPayload: KSType? = returned
       .takeIf { type -> type.declaration.qualifiedName?.asString() == "kotlin.Result" }
       ?.arguments?.singleOrNull()?.type?.resolve()?.expandAliases()
@@ -176,10 +186,21 @@ internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
     .filter { parameter -> parameter.forwardBoundSpellings().size > 1 }
     .forEach { parameter ->
       val name: String = parameter.simpleName.asString()
-      val witnessed: Boolean = parameterTypes.any { type ->
-        (type.declaration as? KSTypeParameter)?.simpleName?.asString() == name
-      }
+      // ADR-212: a collection of `T` witnesses it too; its elements carry the intersection.
+      fun KSType.witnesses(): Boolean =
+        (declaration as? KSTypeParameter)?.simpleName?.asString() == name ||
+            arguments.any { argument ->
+              argument.type?.resolve()?.expandAliases()?.witnesses() == true
+            }
+      val witnessed: Boolean = parameterTypes.any { type -> type.witnesses() }
       if (!witnessed) return "its multi-bound type parameter `$name` is mentioned by no parameter"
     }
   return null
 }
+
+/** ADR-212: the collection kinds whose components may be a member's own type parameter. */
+private val OWN_PARAMETER_COLLECTIONS: Set<String> = setOf(
+  "kotlin.collections.List", "kotlin.collections.MutableList",
+  "kotlin.collections.Set", "kotlin.collections.MutableSet",
+  "kotlin.collections.Map", "kotlin.collections.MutableMap",
+)

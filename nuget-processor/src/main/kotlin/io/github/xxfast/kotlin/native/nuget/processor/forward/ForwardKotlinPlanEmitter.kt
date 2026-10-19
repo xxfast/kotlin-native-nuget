@@ -644,6 +644,9 @@ internal fun componentLowering(
   // ADR-201 amendment: the box holds the managed-exception text the C# call site projected.
   is BridgeType.Throwable -> managedExceptionLowering("($name as kotlin.String)", nullable = false)
 
+  // ADR-212: the box holds the element itself; it is cast to the bound chain, never to `T`.
+  is BridgeType.TypeParameter -> typeParameterElementCast(name, type, nullable = false)
+
   is BridgeType.ValueClass -> when (val underlying: BridgeType = type.underlying) {
     is BridgeType.Enum ->
       "${type.qualifiedName}(${underlying.qualifiedName}.entries[$name as kotlin.Int])"
@@ -726,6 +729,8 @@ internal fun componentLowering(
     is BridgeType.Throwable ->
       managedExceptionLowering("($name as kotlin.String?)", nullable = true)
 
+    is BridgeType.TypeParameter -> typeParameterElementCast(name, inner, nullable = true)
+
     BridgeType.Unit,
     is BridgeType.Primitive,
     BridgeType.Char,
@@ -747,7 +752,6 @@ internal fun componentLowering(
     is BridgeType.RawKSType,
     is BridgeType.Unsupported,
     is BridgeType.RawCollection,
-    is BridgeType.TypeParameter,
       -> "$name as ${elementKotlinTypeName(inner)}?"
   }
 
@@ -770,8 +774,31 @@ internal fun componentLowering(
   is BridgeType.RawKSType,
   is BridgeType.Unsupported,
   is BridgeType.RawCollection,
-  is BridgeType.TypeParameter,
     -> "$name as ${elementKotlinTypeName(type)}"
+}
+
+/**
+ * ADR-212: one `T` element of an incoming collection, cast to its bound chain as
+ * [forwardBoundedRead] casts a bare `T` box: `as kotlin.Any?` unconstrained, `as Bound` for one,
+ * a smart-cast chain on a local for several, each nullable for a nullable element. Never `as T`
+ * (unchecked) and never [elementKotlinTypeName], which has no spelling for a type parameter.
+ */
+private fun typeParameterElementCast(
+  name: String,
+  type: BridgeType.TypeParameter,
+  nullable: Boolean,
+): String {
+  check(!type.trampolined) { "A trampolined type parameter ${type.name} has no element cast" }
+  val mark: String = if (nullable) "?" else ""
+  val bounds: List<String> = type.bounds()
+  return when (bounds.size) {
+    0 -> "$name as kotlin.Any$mark"
+    1 -> "($name as ${bounds.single()}$mark)"
+    else -> {
+      val casts: String = bounds.joinToString("") { bound -> "bounded as $bound$mark; " }
+      "$name.let { bounded -> ${casts}bounded }"
+    }
+  }
 }
 
 /**
@@ -1171,11 +1198,17 @@ internal fun List<String>.castsToGenericBound(): Boolean = any { bound -> '<' in
 
 /** True when this plan reads a non-trampolined `T` through a generic bound's erased spelling. */
 private fun ForwardCallablePlan.castsToGenericBound(): Boolean =
-  publicSignature.parameters.any { parameter ->
-    val type: BridgeType.TypeParameter? =
-      parameter.type.unwrapNullable() as? BridgeType.TypeParameter
-    type != null && !type.trampolined && type.bounds().castsToGenericBound()
+  publicSignature.parameters.any { parameter -> parameter.type.castsToGenericBound() }
+
+/** ADR-212: a collection component's element cast is the same bound read, so it is scanned too. */
+private fun BridgeType.castsToGenericBound(): Boolean {
+  val type: BridgeType = unwrapNullable()
+  if (type is BridgeType.Collection) {
+    return listOfNotNull(type.element, type.key, type.value).any { it.castsToGenericBound() }
   }
+  return type is BridgeType.TypeParameter && !type.trampolined &&
+    type.bounds().castsToGenericBound()
+}
 
 /** ADR-198: the trampoline type variable a trampolined `T` box is cast to, else null. */
 private fun BridgeType.TypeParameter.typeVariable(): String? = kotlinName.takeIf { trampolined }

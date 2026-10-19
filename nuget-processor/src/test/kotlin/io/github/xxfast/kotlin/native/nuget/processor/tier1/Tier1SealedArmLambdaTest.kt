@@ -45,8 +45,8 @@ class Tier1SealedArmLambdaTest {
       data class Running(val progress: Int) : Job() {
         fun relabel(transform: (String) -> String): String = transform("running-${'$'}progress")
 
-        // ADR-197: a bare `T` binds on an arm now; a `T` nested in a collection is still unrouted.
-        fun <T> pick(values: List<T>): Int = values.size
+        // ADR-197: a bare `T` binds on an arm now; a `T` nested in an `Array` is still unrouted.
+        fun <T> pick(values: Array<T>): Int = values.size
       }
 
       // The Action cell: a (String) -> Unit parameter and a Unit outer return, on a data object

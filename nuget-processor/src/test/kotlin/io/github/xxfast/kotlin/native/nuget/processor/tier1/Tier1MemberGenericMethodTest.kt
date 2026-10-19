@@ -17,7 +17,7 @@ import kotlin.test.assertTrue
  * Overrides follow the two rules the C# compiler imposes: an `override` restates no `where` clause
  * (CS0460), and one with a `T?` position says `where T : default` (CS0115 without it).
  *
- * Every shape the route does not carry keeps a named skip: a `T` nested in a collection, a
+ * Every shape the route does not carry keeps a named skip: a `T` nested in a `Result`, a
  * shadowed owner `T`, a `reified` one, an `Enum<T>` bound, a multi-bound `T` no parameter
  * mentions, and the interface, extension, enum and value-class owners.
  *
@@ -360,7 +360,6 @@ class Tier1MemberGenericMethodTest {
 
     class Depot {
       fun ok(): Int = 1
-      fun <T> nested(values: List<T>): Int = values.size
       fun <T> lambda(item: T, block: (Int) -> Unit): T = item
       inline fun <reified T> kind(item: Any?): Boolean = item is T
       fun <T : Enum<T>> first(item: T): T = item
@@ -403,7 +402,6 @@ class Tier1MemberGenericMethodTest {
 
     // Each warning names the shape rule the member broke; the hint stays the general remedy.
     mapOf(
-      "tier1.membergeneric.Depot.nested" to "(here, its type parameter is nested in `",
       "tier1.membergeneric.Depot.lambda" to "(here, its signature carries a lambda or a Flow)",
       "tier1.membergeneric.Depot.kind" to "(here, its type parameter `T` is reified)",
       "tier1.membergeneric.Depot.conjure" to
@@ -431,7 +429,7 @@ class Tier1MemberGenericMethodTest {
       .map(String::trim)
       .filterNot { line -> line.startsWith("//") }
     listOf(
-      "Nested", "Lambda", "Kind", "Conjure", "Narrow", "Gather", "Shadow", "Structural",
+      "Lambda", "Kind", "Conjure", "Narrow", "Gather", "Shadow", "Structural",
       "Extended",
     )
       .forEach { member ->
@@ -452,6 +450,142 @@ class Tier1MemberGenericMethodTest {
         line.contains("public T First<T>(T item) where T : struct, global::System.Enum")
       },
       "expected Depot.First to bind; got ${declarations.filter { it.contains("First") }}",
+    )
+  }
+
+  private val collections: String = """
+    package tier1.membergeneric
+
+    interface Furry { val name: String }
+    interface Trainable { val tricks: Int }
+
+    class Deck {
+      fun <T> shuffle(list: List<T>): List<T> = list.reversed()
+      fun <T> pad(list: List<T?>): List<T?> = list + null
+      fun <T : Furry> groom(pets: List<T>): List<T> = pets
+      fun <T> drill(pets: List<T>): Int where T : Furry, T : Trainable = pets.size
+      fun <T> dedupe(items: Set<T>): Set<T> = items
+      fun <K : Any, V> tally(map: Map<K, V>): Int = map.size
+      fun <K : Any, V> keep(map: Map<K, V>): Map<K, V> = map
+      fun <K, V> loose(map: Map<K, V>): Int = map.size
+      fun <T> stack(lists: List<List<T>>): List<List<T>> = lists
+      fun <T : Comparable<T>> best(items: List<T>): T = items.max()
+      fun <T> nested(values: List<T>): Int = values.size
+      fun <T : Enum<T>> moods(items: List<T>): Int = items.size
+      fun <T> gather(item: T): Result<List<T>> = Result.success(listOf(item))
+      fun relist(list: List<Int>): List<Int> = list
+    }
+
+    class Crate<T>(val item: T) {
+      val items: List<T> get() = listOf(item)
+      fun fill(items: List<T>): List<T> = items
+    }
+  """.trimIndent()
+
+  private fun runCollections(): Tier1Result =
+    Tier1Harness.run(collections, processorOptions = options)
+
+  /** ADR-212: a method's or a class's `T` binds as a collection element, key or value. */
+  @Test
+  fun `a type parameter binds as a collection element key or value`() {
+    val result: Tier1Result = runCollections()
+    assertKotlinCompiles(result)
+
+    val furry = "global::TestLibrary.Membergeneric.IFurry"
+    listOf(
+      "public IReadOnlyList<T> Shuffle<T>(IReadOnlyList<T> list)",
+      "public IReadOnlyList<T?> Pad<T>(IReadOnlyList<T?> list)",
+      "public IReadOnlyList<T> Groom<T>(IReadOnlyList<T> pets) where T : $furry",
+      "public IReadOnlySet<T> Dedupe<T>(IReadOnlySet<T> items)",
+      "public int Tally<K, V>(IReadOnlyDictionary<K, V> map) where K : notnull",
+      "public IReadOnlyDictionary<K, V> Keep<K, V>(IReadOnlyDictionary<K, V> map) " +
+        "where K : notnull",
+      "public IReadOnlyList<IReadOnlyList<T>> Stack<T>(IReadOnlyList<IReadOnlyList<T>> lists)",
+      "public int Nested<T>(IReadOnlyList<T> values)",
+      "public IReadOnlyList<T> Items",
+      "public IReadOnlyList<T> Fill(IReadOnlyList<T> items)",
+    ).forEach { signature ->
+      assertTrue(
+        result.generatedCSharp.contains(signature),
+        "expected `$signature`; got: ${result.csharpLines("IReadOnly")}",
+      )
+    }
+    assertContains(result.generatedCSharp, "NugetMarshal.CreateList(list)")
+    assertContains(result.generatedCSharp, "NugetMarshal.FromHandle<T>(")
+    assertFalse(result.generatedCSharp.contains("(T)null"), "a T element never reads as (T)null")
+
+    val furryKt = "tier1.membergeneric.Furry"
+    val trainableKt = "tier1.membergeneric.Trainable"
+    listOf(
+      "as kotlin.Any?",
+      "as $furryKt",
+      "bounded as $furryKt; bounded as $trainableKt; bounded",
+      "as kotlin.Comparable<Any?>",
+      "@Suppress(\"UNCHECKED_CAST\")",
+      ".shuffle<Any?>(",
+      ".groom<$furryKt>(",
+    ).forEach { fragment -> assertContains(result.generated, fragment) }
+    assertFalse(result.generated.contains(" as T)"), "an element is never cast to the bare `T`")
+  }
+
+  /** An unconstrained key, a trampolined `T` and `Result<List<T>>` keep their named refusals. */
+  @Test
+  fun `a collection of T the wire does not carry is refused by name`() {
+    val result: Tier1Result = runCollections()
+    assertKotlinCompiles(result)
+
+    mapOf(
+      "tier1.membergeneric.Deck.loose" to "key type K",
+      "tier1.membergeneric.Deck.moods" to "",
+      "tier1.membergeneric.Deck.gather" to "(here, its type parameter is nested in `",
+    ).forEach { (member, refusal) ->
+      val named: List<String> = result.kspWarnings.filter { warning ->
+        Regex("\\b${Regex.escape(member)}\\b").containsMatchIn(warning)
+      }
+      assertEquals(1, named.size, "expected exactly one warning naming $member; got: $named")
+      assertContains(named.single(), refusal)
+    }
+    val declarations: List<String> = result.generatedCSharp.lines()
+      .map(String::trim)
+      .filterNot { line -> line.startsWith("//") }
+    listOf("Loose", "Moods", "Gather").forEach { member ->
+      assertFalse(
+        declarations.any { line -> Regex("\\b$member\\s*[<(]").containsMatchIn(line) },
+        "expected no C# member $member",
+      )
+    }
+  }
+
+  @Test
+  fun `the generated collection-of-T C# compiles against a consumer`() {
+    val result: Tier1Result = runCollections()
+
+    Tier1CSharpCompile.assertCompiles(
+      result,
+      """
+      using System.Collections.Generic;
+      using TestLibrary.Membergeneric;
+
+      public static class Consumer
+      {
+          public static int Use(Deck deck, Crate<string> crate)
+          {
+              IReadOnlyList<int> ints = deck.Shuffle(new[] { 1, 2, 3 });
+              IReadOnlyList<string> names = deck.Shuffle(new List<string> { "Oreo", "Mylo" });
+              IReadOnlyList<int?> padded = deck.Pad(new int?[] { 1, null });
+              IReadOnlySet<long> set = deck.Dedupe<long>(new HashSet<long> { 1L });
+              int tallied = deck.Tally(new Dictionary<string, int> { ["a"] = 1 });
+              IReadOnlyDictionary<int, string?> kept =
+                  deck.Keep(new Dictionary<int, string?> { [1] = null });
+              IReadOnlyList<IReadOnlyList<int>> stacked =
+                  deck.Stack(new[] { new[] { 1 } });
+              IReadOnlyList<string> filled = crate.Fill(new[] { "x" });
+              IReadOnlyList<int> relisted = deck.Relist(new[] { 1 });
+              return ints.Count + names.Count + padded.Count + set.Count + tallied + kept.Count
+                  + stacked.Count + filled.Count + crate.Items.Count + relisted.Count;
+          }
+      }
+      """.trimIndent(),
     )
   }
 }

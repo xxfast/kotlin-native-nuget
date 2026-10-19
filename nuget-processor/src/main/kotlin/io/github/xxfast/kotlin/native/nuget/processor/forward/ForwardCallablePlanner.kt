@@ -5041,6 +5041,11 @@ internal fun BridgeType.sealedAsHandle(): BridgeType = when (this) {
  * collection property's setter eligibility.
  */
 internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
+  // ADR-212: a method's or a class's `T` is a collection component on the same boxed handle it
+  // crosses on at a top-level position (ADR-147). A trampolined `T` (ADR-198) has no closed bound
+  // to cast an element to, so it stays refused.
+  is BridgeType.TypeParameter -> !trampolined
+
   BridgeType.Unit, BridgeType.Char, BridgeType.String, is BridgeType.Primitive,
   is BridgeType.Enum, is BridgeType.ObjectHandle,
     -> true
@@ -5109,9 +5114,6 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
   // ADR-088: "bound interfaces as collection components" is on this ADR's own deferred list, for
   // the same reason -- the wrap/box helpers have no route for a GCHandle element.
   // ADR-103: "Duration as a collection element" is deferred for the identical reason.
-  // ADR-147 v1: a type parameter binds at a top-level position only. `List<T>` would need a
-  // per-element box the write side has no arm for, so it skips named here instead.
-  is BridgeType.TypeParameter,
   is BridgeType.BoundInterface, BridgeType.Instant, BridgeType.Duration,
   is BridgeType.RawCollection, is BridgeType.RawKSType, is BridgeType.SpecializedProtocol,
   is BridgeType.Unsupported,
@@ -5289,6 +5291,9 @@ internal fun BridgeType.Collection.declinesNullableMapKey(): Boolean = when (kin
  * body touches no planner state.
  */
 internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
+  // ADR-212: `Wrap<T>` boxes each element by its runtime type, as it does for a bare `T`.
+  is BridgeType.TypeParameter -> !trampolined
+
   BridgeType.String -> true
   // ADR-098: every PrimitiveKind is wrappable now that the six narrow kinds have a
   // `nuget_wrap_*` export each. Kept as an explicit set rather than `true` so a future kind has
@@ -5389,7 +5394,6 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
   is BridgeType.RawKSType,
   is BridgeType.Unsupported,
   is BridgeType.RawCollection,
-  is BridgeType.TypeParameter,
     -> false
 }
 

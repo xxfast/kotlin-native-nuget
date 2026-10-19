@@ -140,8 +140,11 @@ fun genericParamOnTopLevel(box: Box<Int>): Int = box.value
 /** row 15: structural GENERIC with a `T`-typed parameter, top level. Predicted RE. */
 fun <T> structuralOnTopLevel(value: T): T = value
 
-/** row 16: structural GENERIC with NO `T`-typed parameter, top level. Predicted PART. */
-fun <T> structuralRefusedOnTopLevel(): List<T> = emptyList()
+/**
+ * row 16: structural GENERIC with NO `T`-typed parameter, top level. Predicted PART. ADR-212 binds a
+ * bare `List<T>`, so the sentinel nests it in `Result`.
+ */
+fun <T> structuralRefusedOnTopLevel(): Result<List<T>> = Result.success(emptyList())
 
 /** row 6: FLOW_PROTOCOL return on an extension. Predicted NONE. */
 fun Depot.flowReturnOnExtension(): Flow<Int> = flowOf(1)

@@ -24,6 +24,7 @@ class Tier1TopLevelGenericMethodTest {
     fun <T> identity(value: T): T = value
     fun <T> pick(first: T, second: T): T = first
     fun <T> scale(x: T, n: Int): T = x
+    fun <T> shuffle(list: List<T>): List<T> = list.reversed()
   """.trimIndent()
 
   private fun run(): Tier1Result =
@@ -82,6 +83,23 @@ class Tier1TopLevelGenericMethodTest {
     )
     val warnings: List<String> = result.kspWarnings.filter { it.contains("tier1.") }
     assertTrue(warnings.isEmpty(), "expected every function to bind; got: $warnings")
+  }
+
+  /** ADR-212: a `T` list element at top level binds on the plan with no width variants. */
+  @Test
+  fun `a top-level generic over a list of T binds on the plan`() {
+    val result: Tier1Result = run()
+    assertKotlinCompiles(result)
+
+    val cs: String = result.generatedCSharp
+    assertContains(cs, "public static IReadOnlyList<T> Shuffle<T>(IReadOnlyList<T> list)")
+    assertContains(cs, "NugetMarshal.FromHandle<T>(")
+    assertFalse(
+      cs.contains("library_toplevelgeneric__shuffle_int"),
+      "shuffle has no width variants: $cs",
+    )
+    assertContains(result.generated, ".shuffle<Any?>(")
+    assertContains(result.generated, "map { it as kotlin.Any? }")
   }
 
   /** ADR-211 open question: the Try twin's `out value` beside a `value_` parameter. */

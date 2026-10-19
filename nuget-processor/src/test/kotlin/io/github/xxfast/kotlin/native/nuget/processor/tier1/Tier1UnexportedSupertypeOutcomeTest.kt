@@ -41,8 +41,8 @@ class Tier1UnexportedSupertypeOutcomeTest {
 
       open class MixedBase {
         fun okBase(): Int = 2
-        // ADR-197: a bare `T` binds on Bench now; a `T` nested in a collection still has no route.
-        fun <T> weigh(items: List<T>): Int = items.size
+        // ADR-197: a bare `T` binds on Bench now; a `T` nested in an `Array` still has no route.
+        fun <T> weigh(items: Array<T>): Int = items.size
       }
     """.trimIndent(),
     "Owners.kt" to """
