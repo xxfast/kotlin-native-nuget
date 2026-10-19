@@ -1401,7 +1401,14 @@ internal data class CirParameter(
   // native call has returned and unregisters it in the `finally`.
   val asyncKeyLocal: String? = null,
   val asyncKeyRegister: String? = null,
+  // ADR-211 (#557): the extern's spelling of this parameter when it differs from [name]: a user
+  // `value` keeps its name in the public signature while its ABI slot stays `value_`. Read only
+  // where an extern is derived from the public parameters ([nativeName]). Null means [name].
+  val abiName: String? = null,
 ) {
+  /** The parameter as an extern derived from the public signature spells it. */
+  val nativeName: String get() = abiName ?: name
+
   /** The parameter as declared in a public C# signature, with its default when it has one. */
   val declaration: String
     get() = if (defaultValue == null) "$type $name" else "$type $name = $defaultValue"

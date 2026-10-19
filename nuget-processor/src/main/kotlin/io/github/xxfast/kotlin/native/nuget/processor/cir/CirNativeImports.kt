@@ -80,7 +80,9 @@ internal fun constructorNativeImport(
   returnType = "IntPtr",
   name = "Native_Create${ctor.nativeSuffix}",
   parameters = ctor.nativeParameters
-    ?: ctor.parameters.map { parameter -> parameter.copy(nativeType = parameter.type) },
+    ?: ctor.parameters.map { parameter ->
+      parameter.copy(name = parameter.nativeName, nativeType = parameter.type)
+    },
   visibility = CirVisibility.PRIVATE,
   hasSyncErrorOut = true,
 )
@@ -177,7 +179,10 @@ internal fun methodNativeImport(
   }
   val parameters: List<CirParameter> = buildList {
     add(CirParameter("handle", KOTLIN_HANDLE))
-    addAll(method.nativeParameters ?: method.parameters)
+    addAll(
+      method.nativeParameters
+        ?: method.parameters.map { parameter -> parameter.copy(name = parameter.nativeName) },
+    )
     addAll(method.extraNativeParams.map { declaration -> declaration.toRawNativeParameter() })
   }
   return CirDllImport(
@@ -264,7 +269,9 @@ internal fun CirValueClass.constructorNativeImport(ctor: CirValueClassConstructo
     // Every value-class constructor is plan-routed since the reference-underlying legacy adapter
     // was deleted, so `nativeParameters` is only absent on a hand-built CIR fixture.
     parameters = ctor.nativeParameters
-      ?: ctor.parameters.map { parameter -> parameter.copy(nativeType = parameter.type) },
+      ?: ctor.parameters.map { parameter ->
+        parameter.copy(name = parameter.nativeName, nativeType = parameter.type)
+      },
     visibility = CirVisibility.PRIVATE,
     // Unconditional, because `renderValueClass` calls `Native_Create` with `out IntPtr error`
     // unconditionally: every value-class constructor is planned with `includeError = true`.
@@ -282,7 +289,9 @@ internal fun CirValueClass.propertyNativeImport(property: CirProperty): CirDllIm
 
 internal fun CirValueClass.methodNativeImport(method: CirMethod): CirDllImport {
   val methodParams: List<CirParameter> = method.nativeParameters
-    ?: method.parameters.map { parameter -> parameter.copy(nativeType = parameter.type) }
+    ?: method.parameters.map { parameter ->
+      parameter.copy(name = parameter.nativeName, nativeType = parameter.type)
+    }
   return CirDllImport(
     libraryName = libraryName,
     entryPoint = "${nativePrefix}_${method.nativeName}",

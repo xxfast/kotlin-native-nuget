@@ -5,8 +5,8 @@ namespace IntegrationTests;
 /// <summary>
 /// ADR-211: a top-level generic function (<c>fun &lt;T : Any&gt; describe(value: T): String</c>)
 /// is a static generic method on its file facade. The bare <c>T</c> crosses as a boxed handle, so
-/// a builtin argument and a generated wrapper both reach Kotlin as themselves. Arguments are
-/// passed positionally: the parameter name is still <c>value_</c> in this lane.
+/// a builtin argument and a generated wrapper both reach Kotlin as themselves. The parameter
+/// keeps its Kotlin name, so it can be passed as a named argument (#557).
 /// </summary>
 public class TopLevelGenericMethodTests
 {
@@ -15,6 +15,12 @@ public class TopLevelGenericMethodTests
     {
         // Oreo's age in years.
         Assert.Equal("4: Int", Descriptions.Describe(4));
+    }
+
+    [Fact]
+    public void Describe_NamedValueArgument_KeepsItsKotlinName()
+    {
+        Assert.Equal("4: Int", Descriptions.Describe(value: 4));
     }
 
     [Fact]

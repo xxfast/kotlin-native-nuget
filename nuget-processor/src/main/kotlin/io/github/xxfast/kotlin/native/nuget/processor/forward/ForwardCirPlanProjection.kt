@@ -837,6 +837,7 @@ internal object ForwardCirPlanProjection {
           parameter.isOptional -> "default"
           else -> "null"
         },
+        abiName = parameter.name.csharpParameterName().takeIf { name -> name != parameter.csharpName },
       )
     }
 
@@ -2393,8 +2394,21 @@ internal fun durationLiftCs(ticks: String): String = "new global::System.TimeSpa
 private fun BridgeType.isInterfaceInput(): Boolean =
   this is BridgeType.Interface || (this is BridgeType.Nullable && type is BridgeType.Interface)
 
-/** The C# spelling of a public parameter, at both its declaration and every use site. */
-internal val ForwardPublicParameter.csharpName: String get() = name.csharpParameterName()
+/**
+ * The C# spelling of a public parameter, at both its declaration and every use site.
+ *
+ * ADR-211 (#557): the plan shifts a user `value` to `value_` for the property-setter ABI slot, but
+ * no C# wrapper body declares `value`, so the public parameter takes the source name back by
+ * undoing that one shift (`value_` -> `value`, `value__` -> `value_`, still injective). The extern
+ * reads [ForwardAbiParameter.csharpName] and keeps `value_`. The other plan-owned names keep the
+ * shift here too, since the wrapper body does declare them.
+ */
+internal val ForwardPublicParameter.csharpName: String
+  get() = name.unshiftedValue().csharpParameterName()
+
+/** `value_`, `value__`, ... back to the source `value`, `value_`, ...; any other name as is. */
+private fun String.unshiftedValue(): String =
+  if (startsWith("value_") && substring("value".length).all { it == '_' }) dropLast(1) else this
 
 /**
  * The C# stem of a parameter's wrapper locals (`${csharpLocal}Handle`, `...Owned`, `...Box`,
