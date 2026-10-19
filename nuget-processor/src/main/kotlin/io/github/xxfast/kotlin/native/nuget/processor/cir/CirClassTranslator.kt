@@ -36,6 +36,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardInterfaceFl
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardInterfaceSuspendMethods
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardKdoc
 import io.github.xxfast.kotlin.native.nuget.processor.forward.toCirDoc
+import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinSpelling
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedCallbackMember
 import io.github.xxfast.kotlin.native.nuget.processor.forward.optInMarker
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedInterfaceBridgePair
@@ -338,13 +339,15 @@ private fun emitUnspellableSuperInterface(
   logger: KSPLogger,
 ) {
   val simpleName: String = type.declaration.simpleName.asString()
+  // Spelled, never the raw `KSType`, which prints a function-type argument by its class name.
+  val spelled: String = type.kotlinSpelling(keepProjections = true)
   ForwardDiagnosticSink.emit(
     listOf(
       ForwardDiagnostic(
         kind = ForwardDiagnosticKind.SKIPPED_UNEXPORTED_SUPERTYPE,
         symbol = owner,
-        declaration = "$name : $type",
-        reason = "super-interface '$type' has a type argument with no public C# spelling, so " +
+        declaration = "$name : $spelled",
+        reason = "super-interface '$spelled' has a type argument with no public C# spelling, so " +
             "the generated C# base list cannot close I$simpleName over it; $name is generated " +
             "without it and its members still bind on $name directly",
         hint = "C# sees no relation between $name and I$simpleName, so `is`/`as` against it is " +

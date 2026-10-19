@@ -713,8 +713,10 @@ internal class ForwardBridgeTypeClassifier(
 
     val arguments: List<KSTypeArgument> = type.arguments
     if (arguments.any { it.variance != Variance.INVARIANT || it.type == null }) {
-      return refused("`${type}` is a use-site projection, and C# has no " +
-          "projection of a generic class")
+      return refused(
+        "`${type.kotlinSpelling(keepProjections = true)}` is a use-site projection, and C# has " +
+            "no projection of a generic class",
+      )
     }
     val shape: ForwardSealedArmShape? = parent?.let { declaration.forwardSealedArmShape(it) }
     val own: Map<String, KSType> = declaration.typeParameters
@@ -774,7 +776,7 @@ internal class ForwardBridgeTypeClassifier(
       val classified: BridgeType = classify(argument).sealedAsHandle()
       if (!classified.isErasedTypeArgument()) {
         return refused("the erased wire cannot read its type argument " +
-            "`${argument}`")
+            "`${argument.kotlinSpelling(keepProjections = true)}`")
       }
       if (argument.mentionsAnyTypeParameter()) closed = false
       classified.forwardPublicCsharpType()

@@ -119,7 +119,7 @@ class Tier1GenericReturnTypeArgumentTest {
     "crateOfList" to "List<Int>",
     "crateOfNullableList" to "List<Int>?",
     "crateOfMap" to "Map<String, Int>",
-    "crateOfLambda" to "Function1<Int, Int>",
+    "crateOfLambda" to "(Int) -> Int",
     "crateOfAny" to "Any",
     "crateOfBytes" to "ByteArray",
     "duoOfIntList" to "List<Int>",

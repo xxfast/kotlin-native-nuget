@@ -689,6 +689,47 @@ await foreach (var item in feeder.MealAnnouncements)
 `Flow<T>` becomes `KotlinFlow<T> : IAsyncEnumerable<T>`. It is cold: each `await foreach` re-runs
 the Kotlin flow from the start. `WithCancellation` stops the enumeration early.
 
+### A `var` flow property is read-only {id="flow-var-property"}
+
+A public `var` of type `Flow<T>`, `StateFlow<T>`, `SharedFlow<T>`, `MutableStateFlow<T>` or
+`MutableSharedFlow<T>` binds a get-only C# property, because no setter route turns a C# stream back
+into a Kotlin flow. The build reports `SKIPPED_UNSUPPORTED_INPUT` naming the property, and the C#
+property carries a `<remarks>` comment with the same reason. A `val`, a `private set` and an
+`internal set` bind the same way and report nothing, since there is no public setter to lose.
+
+```kotlin
+class CatFeeder(val name: String) {
+  var source: Flow<Int> = flowOf(1)
+  var level: MutableStateFlow<Int> = MutableStateFlow(0)
+}
+```
+
+The cold `Flow<T>` diagnostic reads:
+
+```
+its setter is not generated because a Flow property binds read-only: its getter hands out the
+Kotlin flow, and no setter route turns a C# stream back into one. the C# property Source is
+read-only; to let C# replace the flow, expose a function taking a `Flow<T>` parameter instead,
+which binds as `IAsyncEnumerable<T>` for a primitive or String element
+```
+
+A hot flow cannot be taken as a parameter either, so its diagnostic names the type
+(`StateFlow`, `SharedFlow`, `MutableStateFlow` or `MutableSharedFlow`) and points at
+`stateIn(scope)` or `shareIn` on a `Flow<T>` parameter in Kotlin:
+
+```
+its setter is not generated because a MutableStateFlow property binds read-only: its getter hands
+out the Kotlin flow, and C# has no source for a synchronous current value or a replay cache to set
+it from. the C# property Level is read-only; to let C# replace the flow, expose a function instead:
+declare the parameter as `Flow<T>` and call `stateIn(scope)` (or `shareIn`) on it in Kotlin
+```
+
+To replace the flow from C#, take it as a [`Flow` parameter](#flow-parameter). Only the property
+setter is dropped: `feeder.Level.Value = 5` on the `MutableStateFlow` above still works (see
+[Settable `.Value`](#settable-value)). The skip fires on a class, an interface and its implementer,
+a sealed base or arm (each for the property it declares), and on an inherited `open var` once, on
+the class that declares it.
+
 ### Backpressure {id="flow-backpressure"}
 
 A slow `await foreach` body slows the Kotlin producer, as a slow `collect` would. At most one item
@@ -1329,6 +1370,9 @@ members. A `Throwable`, `Exception` or `RuntimeException` parameter does bind, a
   [read-only](#flow-type-argument).
 - A top-level non-`suspend` `fun f(): Flow<T>?` and an `object` or companion `Flow<T>?` member are
   skipped with a diagnostic, like their non-null forms.
+- A `var` property of a flow type binds get-only: the setter is dropped and reported as
+  `SKIPPED_UNSUPPORTED_INPUT`. Take a `Flow<T>` parameter to replace the flow from C#; see
+  [a `var` flow property](#flow-var-property).
 - A `Pair` or a nullable collection (`List<T>?`) as a `Flow`/`StateFlow` element is not supported.
 - `Boolean?` / `Char?` value elements on a nullable `StateFlow` are not supported.
 - A `suspend inline fun <reified T> Receiver.f(...): Result<T>` extension has no bridge at all:
