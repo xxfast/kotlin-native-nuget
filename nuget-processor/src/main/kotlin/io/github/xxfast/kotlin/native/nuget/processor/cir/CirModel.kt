@@ -851,8 +851,28 @@ internal data class CirCallbackDelegate(
   val returnType: String,
 )
 
+/**
+ * ADR-210: one Begin thunk per payload WIRE shape of a suspend lambda parameter. [payloadTypes] are
+ * the C ABI types of the payloads; the completion callback, the pending ctx, the key and the error
+ * slot follow them on every Begin.
+ */
+internal data class CirAsyncBegin(
+  val name: String,
+  val payloadTypes: List<String>,
+)
+
+/** ADR-210: one End thunk per result type; [invocation] reads the task handle `a0`. */
+internal data class CirAsyncEnd(
+  val name: String,
+  val returnType: String,
+  val invocation: String,
+)
+
 internal data class CirCallbackDelegateHelper(
   val delegates: List<CirCallbackDelegate>,
+  // ADR-210: empty unless a bound member takes a suspend lambda parameter.
+  val asyncBegins: List<CirAsyncBegin> = emptyList(),
+  val asyncEnds: List<CirAsyncEnd> = emptyList(),
 ) : CirDeclaration
 
 internal data class CirEnumEntry(
@@ -1370,6 +1390,14 @@ internal data class CirParameter(
   // The wire-handle local a [collectionCreate] is built into, minted apart from the member's user
   // parameters (`ForwardLegacyNames.handleLocals`). Null means the unrenamed `<name>Handle`.
   val collectionHandle: String? = null,
+  // ADR-210: the `IntPtr` slots a suspend lambda parameter occupies in the `DllImport` instead of
+  // one slot of its own (`ForwardLegacyNames.asyncSlots`). Null for every other parameter.
+  val nativeSlots: List<String>? = null,
+  // ADR-210: the local a suspend lambda's key is registered into, and the registering expression.
+  // `collectionScopedCall` owns the pair: it registers inside its `try`, zeroes the local once the
+  // native call has returned and unregisters it in the `finally`.
+  val asyncKeyLocal: String? = null,
+  val asyncKeyRegister: String? = null,
 ) {
   /** The parameter as declared in a public C# signature, with its default when it has one. */
   val declaration: String

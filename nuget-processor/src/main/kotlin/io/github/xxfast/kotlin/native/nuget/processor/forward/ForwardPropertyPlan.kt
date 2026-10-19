@@ -91,6 +91,7 @@ internal fun BridgeType.hasValueFanOutInner(): BridgeType? {
     is BridgeType.Collection,
     is BridgeType.Nullable,
     is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -132,6 +133,7 @@ internal fun BridgeType.isNullableValueTypeReceiver(): Boolean {
     is BridgeType.Collection,
     is BridgeType.Nullable,
     is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -291,6 +293,7 @@ internal data class ForwardPropertyPlan(
       is BridgeType.Nullable -> validateType(type.type)
       is BridgeType.BoundInterface,
       is BridgeType.Callback,
+      is BridgeType.AsyncCallback,
       is BridgeType.ReturnedLambda,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,

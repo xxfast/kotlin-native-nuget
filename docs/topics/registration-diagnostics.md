@@ -525,6 +525,36 @@ A [value class's own member](value-classes.md#nullable) that returns an object, 
 `ValueClassMemberThrowableResult_NullAndNonNull_ReturnsToBaseline` pin it. There is no throw-path
 row, because these members have no error slot.
 
+### A `suspend` lambda parameter
+
+Each time Kotlin invokes a [`suspend` lambda parameter](coroutines-and-flow.md#suspend-lambda-parameter)
+it mints a counted pending-continuation handle and a task handle, so these
+`LeakTests/LiveHandleTests.cs` rows pin the count after a call settles:
+
+| Row | Test | Pins |
+|---|---|---|
+| 17a | `SuspendLambdaParameter_SuspendingLambda_ReturnsToBaseline` | a lambda that really suspends, invoked three times |
+| 17b | `SuspendLambdaParameter_AlreadyCompletedTask_TightLoop_ReturnsToBaseline` | thousands of already-completed tasks in one call, where completion can land before the start thunk returns |
+| 17c | `SuspendLambdaParameter_SynchronousThrow_ReturnsToBaseline` | a throw before any `Task` exists, caught in Kotlin |
+| 17d | `SuspendLambdaParameter_FaultedTask_ReturnsToBaseline` | a faulted `Task` that propagates and faults the outer call |
+| 17e | `SuspendLambdaParameter_OuterTokenCancelledWhilePending_ReturnsToBaseline` | the outer token cancelled while a lambda that ignores its token is pending |
+| 17f | `SuspendLambdaParameter_StoredByAConstructor_ReturnsToBaseline` | a lambda a constructor stores, released after its owner is disposed |
+
+These rows cannot see the C# half. The table that holds the delegate until Kotlin releases it is
+not counted by `nuget_live_handles`, so a delegate that is never released leaves the count
+unchanged. `LeakTests/CollectabilityTests.cs` covers that half by holding a `WeakReference` to an
+object the lambda captured and asserting it is collected:
+
+- `SuspendLambdaParameter_AfterTheCallCompletes_ItsClosureIsCollected`: a `suspend fun` host.
+- `SuspendLambdaParameter_StoredByAConstructor_IsReleasedWithItsOwner`: alive while the owner is
+  alive and still callable, collected after the owner is disposed and dropped.
+- `SuspendLambdaParameter_CallOnADisposedWrapper_ItsClosureIsCollected`: the call throws before
+  reaching Kotlin.
+- `SuspendLambdaParameter_LaterArgumentFailsItsNullGuard_ItsClosureIsCollected`: a later argument
+  is refused after the lambda was prepared.
+- `SuspendLambdaParameter_LambdaBeforeAString_AfterTheCallCompletes_ItsClosureIsCollected`: the
+  control for the row above, with a valid later argument.
+
 ### Dropped wrappers are released by the GC
 
 A wrapper dropped without `Dispose()` returns `LiveHandles` to baseline once the .NET GC finalizes it

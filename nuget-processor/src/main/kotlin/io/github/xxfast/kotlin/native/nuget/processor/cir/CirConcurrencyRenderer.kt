@@ -511,7 +511,12 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
       "$jobHandle = $nativeName($nativeCallArgs)",
       returns = false,
     )
-  if (acquiredFlow) {
+  // ADR-210: a member taking a suspend lambda frees the completion callback's GCHandle when the
+  // native call statement throws (a later argument's guard, a registration, the P/Invoke). C#
+  // hoists every lambda of this method into one closure object, so the leaked handle would root
+  // the consumer's lambda through the completion delegate even after its own key is unregistered.
+  val guardsKey: Boolean = method.parameters.any { parameter -> parameter.asyncKeyLocal != null }
+  if (acquiredFlow || guardsKey) {
     appendLine("            IntPtr $jobHandle = IntPtr.Zero;")
     appendLine("            try")
     appendLine("            {")

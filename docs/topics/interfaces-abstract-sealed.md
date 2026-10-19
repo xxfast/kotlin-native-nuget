@@ -1646,9 +1646,9 @@ like the same member on any [generic class](generics.md#limitations).
 - A generic sealed hierarchy skips a few uses, named: a use-site projection (`Outcome<*>`), an
   argument the bridge cannot read, `Nothing` under a constraint, and an arm parameter the base never
   sees. See [A generic sealed hierarchy](#generic-sealed-hierarchy).
-- A `suspend` lambda parameter (`suspend (T) -> R`) on a sealed arm has no binding, the same as on
-  an ordinary class. A generic method on an arm or a sealed base binds as a C# generic method; see
-  [Generic methods on a class](generics.md#generic-methods).
+- A generic method on an arm or a sealed base binds as a C# generic method; see
+  [Generic methods on a class](generics.md#generic-methods). A `suspend` lambda parameter binds on
+  an arm as well; see [A `suspend` lambda as a parameter](coroutines-and-flow.md#suspend-lambda-parameter).
 - A member whose C# name equals a type nested in the sealed base, or another arm's name
   (`backing()` beside a nested `class Backing`), is a named `ERROR_CSHARP_NAME_COLLISION` at the
   arm. So is a member named like its own type (`OnTap.OnTap`, `Cat.cat`) on a class, a sealed base

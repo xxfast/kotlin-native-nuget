@@ -9,6 +9,7 @@ started. `Flow<T>` becomes `IAsyncEnumerable<T>`, and `StateFlow<T>` adds a sync
 |---|---|
 | `suspend fun` | `async Task<T>`, suffixed `Async` |
 | `suspend (A) -> R` lambda | `KotlinSuspendFunc<A, R>` with `InvokeAsync` |
+| `suspend (A) -> R` as a parameter | `Func<A, CancellationToken, Task<R>>`, see [below](#suspend-lambda-parameter) |
 | `Flow<T>` | `KotlinFlow<T> : IAsyncEnumerable<T>` |
 | `SharedFlow<T>` | `KotlinSharedFlow<T> : KotlinFlow<T>`, replays the Kotlin replay cache first, never completes, adds `ReplayCache` |
 | `MutableSharedFlow<T>` (declared, not narrowed to `SharedFlow<T>`) | `KotlinMutableSharedFlow<T> : KotlinSharedFlow<T>`, adds `SubscriptionCount`, `EmitAsync` and `TryEmit` |
@@ -333,6 +334,92 @@ string result = await onFeedWith.InvokeAsync("salmon");
 
 `InvokeAsync` optionally accepts a `CancellationToken`; cancelling it throws
 `TaskCanceledException` from the awaited call.
+
+## A `suspend` lambda as a parameter {id="suspend-lambda-parameter"}
+
+A Kotlin parameter of type `suspend (T) -> R` binds as `Func<T, CancellationToken, Task<R>>`, or
+`Func<T, CancellationToken, Task>` when the result is `Unit`. The delegate can take up to three
+payloads before the token, so `suspend () -> R` is `Func<CancellationToken, Task<R>>`.
+
+```kotlin
+class TreatChef(val cat: String) {
+  suspend fun plate(count: Int, prepare: suspend (Int) -> String): String {
+    val plated: MutableList<String> = mutableListOf()
+    for (treat in 1..count) plated += prepare(treat)
+    return plated.joinToString(",")
+  }
+
+  suspend fun serve(count: Int, bowl: suspend (Int) -> Unit): Int { /* ... */ }
+}
+```
+
+```C#
+public Task<string> PlateAsync(int count, Func<int, global::System.Threading.CancellationToken, global::System.Threading.Tasks.Task<string>> prepare, CancellationToken cancellationToken = default)
+public Task<int> ServeAsync(int count, Func<int, global::System.Threading.CancellationToken, global::System.Threading.Tasks.Task> bowl, CancellationToken cancellationToken = default)
+```
+
+```C#
+using var chef = new TreatChef("Oreo");
+string plated = await chef.PlateAsync(3, async (treat, token) =>
+{
+    await Task.Delay(10, token);
+    return $"tuna#{treat}";
+});
+// "tuna#1,tuna#2,tuna#3": Kotlin awaits each invocation before starting the next
+```
+
+Pass the token you are given to anything you await: when Kotlin cancels the invocation (a timeout,
+or the `CancellationToken` you passed to `PlateAsync`), that token is cancelled. A lambda that
+ignores it keeps running until it finishes, and its captured state stays alive until then.
+
+The same parameter binds on a class `suspend fun`, a `suspend fun` on a sealed arm, a top-level
+`suspend fun`, and on a **non-suspend** method or constructor that stores the lambda for later.
+Kotlin may call a stored lambda any number of times after the constructor returns:
+
+```kotlin
+class TreatTimer(private val prepare: suspend (Int) -> String) {
+  suspend fun ring(count: Int): String { /* calls prepare(1)..prepare(count) */ }
+}
+```
+
+```C#
+public TreatTimer(Func<int, global::System.Threading.CancellationToken, global::System.Threading.Tasks.Task<string>> prepare)
+```
+
+```C#
+using var timer = new TreatTimer(async (treat, token) =>
+{
+    await Task.Delay(1, token);
+    return $"ding{treat}";
+});
+await timer.RingAsync(2); // "ding1,ding2"
+await timer.RingAsync(3); // "ding1,ding2,ding3"
+```
+
+### Lifetime, threads and errors {id="suspend-lambda-parameter-behaviour"}
+
+- **Kotlin owns the delegate.** It, and everything it captures, is released by a Kotlin cleaner
+  after Kotlin has dropped the lambda, so release follows a Kotlin garbage-collection round and not
+  the end of the call. This is the same rule as a
+  [C# class implementing a Kotlin interface](interfaces-abstract-sealed.md#implementing-a-kotlin-interface-in-c).
+  Do not rely on a captured `IDisposable` being disposed when the call returns; dispose it yourself.
+- **Threads.** The lambda starts on the Kotlin dispatcher thread that invoked it. After its first
+  `await` that does not complete synchronously it continues on the .NET thread pool, never on the
+  caller's `SynchronizationContext`, so do not touch UI state from inside it.
+- **Errors.** A throw, whether synchronous or a faulted `Task`, reaches the Kotlin line that invoked
+  the lambda as an exception Kotlin can catch. If Kotlin does not catch it, the outer `Task` from
+  `PlateAsync` faults with the original message; catch `Exception` rather than relying on the
+  original type. A throw of `OperationCanceledException`, or a cancelled returned `Task`, cancels the
+  invoking coroutine and surfaces as a cancellation, not a fault.
+- **Types.** A payload is a primitive, `String`, an enum or an exported class. The result is `Unit`,
+  a primitive or `String`. A `Char` or `Throwable` result, a collection, or a nullable payload or
+  result is refused by name, and so is a nullable lambda parameter (`(suspend (T) -> R)?`); the
+  member is then not generated. A plain `(T) -> R` lambda on a `suspend fun` is also refused; see
+  [Lambdas and callbacks](lambdas-and-callbacks.md#c-kotlin-per-call-lambda-parameters). A
+  `suspend` lambda parameter on a data class `copy`, an enum member or a value class member is
+  untested.
+- **Null.** Passing `null` for the delegate throws `ArgumentNullException` before Kotlin runs, as
+  for any other lambda parameter.
 
 ## Cancellation and disposal
 
@@ -1099,9 +1186,10 @@ This holds for `suspend` members, sealed-subclass members, top-level `suspend` f
 `Flow`/`StateFlow` members and `suspend` functions returning `StateFlow`. A nullable handle with a
 default value (`cat: Cat? = null`) is still required in C#, so pass `null` explicitly.
 
-Any other generic parameter (`Pair<A, B>`, `Array<T>`, a lambda; your own `Box<String>` binds as a
-handle), `Instant`/`Duration`/`Uuid`, a value class or an interface is not supported at these
-positions and is skipped with a diagnostic naming the member. Pass an enum, or a
+Any other generic parameter (`Pair<A, B>`, `Array<T>`, a plain `(T) -> R` lambda; your own
+`Box<String>` binds as a handle), `Instant`/`Duration`/`Uuid`, a value class or an interface is not
+supported at these positions and is skipped with a diagnostic naming the member. A
+[`suspend` lambda parameter](#suspend-lambda-parameter) is the one lambda that binds. Pass an enum, or a
 class/object/sealed handle, `List`/`Set`/`Map` or primitive/`String` (each of these nullable or
 not) instead, or split the parameter across separate
 members. A `Throwable`, `Exception` or `RuntimeException` parameter does bind, as a

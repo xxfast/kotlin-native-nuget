@@ -241,6 +241,22 @@ internal sealed interface BridgeType {
   ) : BridgeType
 
   /**
+   * ADR-210: a Kotlin `suspend (T) -> R` at a **parameter** position, the C# caller's own
+   * `Func<T, CancellationToken, Task<R>>`. Unlike [Callback] it may be stored: the generated Kotlin
+   * `suspend` lambda captures a holder whose cleaner releases the C# context key, so the lifetime
+   * is Kotlin-owned at every position. Fans out to three POINTER slots of its own (Begin thunk,
+   * End thunk, key); the first one on an export also carries the three parameter-independent
+   * release thunks (task, cancellation, context), so those cross once per export.
+   *
+   * [parameters] are exactly `isCallbackPayload`, [result] exactly `isCallbackResult` minus
+   * `Throwable`.
+   */
+  data class AsyncCallback(
+    val parameters: List<BridgeType>,
+    val result: BridgeType,
+  ) : BridgeType
+
+  /**
    * ADR-160 amendment: a Kotlin function type (`() -> Pet`, `(Int) -> Int`) handed OUT of Kotlin
    * as a top-level function's RESULT, the other mechanism [Callback] names. Never produced by
    * [ForwardBridgeTypeClassifier.classify], which is position-agnostic; the planner builds it for
@@ -672,6 +688,8 @@ internal data class ForwardPublicParameter(
   /** ADR-160: the thunk-address and GCHandle-ctx slots a callback parameter fans out to. */
   val callbackPtrSlot: String = "${name}Ptr",
   val callbackUserDataSlot: String = "${name}UserData",
+  /** ADR-210: the slots a suspend lambda parameter fans out to, null for every other type. */
+  val asyncSlots: ForwardAsyncSlots? = null,
   /**
    * The stem of the C# wrapper's per-parameter locals (`${stem}Handle`, `${stem}Owned`,
    * `${stem}Box`, `${stem}Ctx`, `${stem}Native`): the name the wrapper reads the value under
@@ -1205,6 +1223,14 @@ internal object ForwardCallablePlanValidator {
         validateType(type.result, "$position callback result")
       }
 
+      // ADR-210: valid at a parameter position only, the one place the classifier mints it.
+      is BridgeType.AsyncCallback -> {
+        type.parameters.forEach { parameter ->
+          validateType(parameter, "$position suspend lambda parameter")
+        }
+        validateType(type.result, "$position suspend lambda result")
+      }
+
       // ADR-160 amendment: valid at a top-level result only, the one place the planner mints it.
       is BridgeType.ReturnedLambda -> type.typeArguments.forEach { argument ->
         validateType(argument, "$position returned lambda type argument")
@@ -1320,6 +1346,7 @@ internal object ForwardCallablePlanValidator {
     BridgeType.Char,
     is BridgeType.Nullable,
     is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
     is BridgeType.Unsupported,

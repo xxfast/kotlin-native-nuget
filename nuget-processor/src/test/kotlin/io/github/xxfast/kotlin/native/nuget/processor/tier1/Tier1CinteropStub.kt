@@ -186,6 +186,27 @@ internal object Tier1CinteropStub {
       arg3: P3,
       arg4: P4,
     ): R = TODO("Tier 1 compiles generated code, it never runs it")
+
+    // ADR-210: a suspend lambda's Begin thunk takes its payloads (up to three) plus the completion
+    // callback, the pending ctx, the key and the error slot, so arities six and seven.
+    fun <P0, P1, P2, P3, P4, P5, R> CFunction<(P0, P1, P2, P3, P4, P5) -> R>.invoke(
+      arg0: P0,
+      arg1: P1,
+      arg2: P2,
+      arg3: P3,
+      arg4: P4,
+      arg5: P5,
+    ): R = TODO("Tier 1 compiles generated code, it never runs it")
+
+    fun <P0, P1, P2, P3, P4, P5, P6, R> CFunction<(P0, P1, P2, P3, P4, P5, P6) -> R>.invoke(
+      arg0: P0,
+      arg1: P1,
+      arg2: P2,
+      arg3: P3,
+      arg4: P4,
+      arg5: P5,
+      arg6: P6,
+    ): R = TODO("Tier 1 compiles generated code, it never runs it")
   """.trimIndent()
 
   // ADR-084 stage 2: the bridge object's cleaner and the forced-collection support export. Real

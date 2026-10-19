@@ -73,6 +73,15 @@ internal object Tier1RuntimeStub {
     @NugetRuntimeApi
     fun <R> nugetCallbackCall(block: (COpaquePointer) -> R): R = TODO()
 
+    // ADR-152's await seam, which ADR-210's generated `suspend` lambda composes. A `suspend`
+    // modifier needs no kotlinx.coroutines, so it sits with the coroutine-free surface.
+    @NugetRuntimeApi
+    suspend fun awaitForKotlin(
+      release: (task: COpaquePointer) -> Unit,
+      cancel: (source: COpaquePointer, cancelled: Boolean) -> Unit,
+      begin: (callback: COpaquePointer, ctx: COpaquePointer) -> COpaquePointer?,
+    ): COpaquePointer = TODO()
+
     @NugetRuntimeApi
     interface NugetCSharpBridge {
       val nugetToken: COpaquePointer
