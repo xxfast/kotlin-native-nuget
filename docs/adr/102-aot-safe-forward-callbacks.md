@@ -231,7 +231,9 @@ observed on the Flow shape only.
 - Kotlin-side exports, the C ABI, and the KSP Kotlin renderers: nothing. (**Verified** that every
   invocation site already echoes ctx.)
 - GCHandle allocation/free points: identical to today, the handle just changes role from
-  "pin so the marshaller's thunk stays alive" to "ctx key the thunk dispatches through".
+  "pin so the marshaller's thunk stays alive" to "ctx key the thunk dispatches through". (The
+  suspend completion handle's early-exit free was added later: see
+  [ADR-210's 2026-10-12 amendment](210-flow-and-suspend-lambda-parameters.md).)
 - ADR-036 remains correct for the JIT-only rationale it recorded; this ADR supersedes its pointer
   acquisition choice for the whole forward callback surface.
 
