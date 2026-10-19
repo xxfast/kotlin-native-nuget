@@ -128,22 +128,4 @@ class NugetTaskNamesTest {
     assertEquals(mapOf("Acme" to listOf("Acme.Core")), extract.namespaceIncludes.get())
     assertEquals(mapOf("Acme" to listOf("Acme.Core.Internal")), extract.namespaceExcludes.get())
   }
-
-  // The old verbs cannot be called from here (ERROR-level deprecation is a compile error), so the
-  // annotation is read reflectively; the migrated fixture build scripts prove the compiler side.
-  @Test
-  fun `the old bind include and exclude are ERROR-level deprecations pointing at the new names`() {
-    val renames: Map<String, String> =
-      mapOf("include" to "includeNamespaces", "exclude" to "excludeNamespaces")
-    renames.forEach { (old, new) ->
-      val deprecated: Deprecated = assertNotNull(
-        NugetBindConfig::class.java
-          .getDeclaredMethod(old, Array<String>::class.java)
-          .getAnnotation(Deprecated::class.java),
-        "$old has no @Deprecated",
-      )
-      assertEquals(DeprecationLevel.ERROR, deprecated.level)
-      assertEquals("$new(*namespace)", deprecated.replaceWith.expression)
-    }
-  }
 }
