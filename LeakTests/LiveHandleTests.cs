@@ -3597,7 +3597,10 @@ public class LiveHandleTests
     // static method on the file facade. A builtin `T` mints one `Wrap<T>` box the C# `finally`
     // disposes; a wrapper `T` (Mylo's toy) mints nothing and is released by its own `using`. The
     // `string` return is not a handle.
-    // Ledger per iteration: toy +1/-1, Describe(4) box +1/-1, Describe(toy) nothing. Net zero.
+    // Pick(oreoToy, toy) (issue #556) passes two wrappers, minting nothing, and returns the second
+    // as a fresh wrapper its own `using` releases.
+    // Ledger per iteration: toy +1/-1, oreoToy +1/-1, Describe(4) box +1/-1, Describe(toy) nothing,
+    // picked +1/-1. Net zero.
     [Fact]
     public void TopLevelGenericMethod_BoxedTypeParameter_ReturnsToBaseline()
     {
@@ -3606,6 +3609,9 @@ public class LiveHandleTests
             using var toy = new Toy("Mylo's Milo Mouse", "Brown");
             Assert.Equal("4: Int", Descriptions.Describe(4));
             Assert.Equal("Toy(name=Mylo's Milo Mouse, color=Brown): Toy", Descriptions.Describe(toy));
+            using var oreoToy = new Toy("Oreo's Biscuit Ball", "Black");
+            using var picked = Descriptions.Pick(oreoToy, toy);
+            Assert.Equal("Mylo's Milo Mouse", picked.Name);
         });
     }
 

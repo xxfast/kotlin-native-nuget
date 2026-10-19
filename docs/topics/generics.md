@@ -32,6 +32,7 @@ a catchable `KotlinException` at the call.
 | `out T` / `in T` on an interface | `out T` / `in T` |
 | `fun <T> f(value: T): T` (top-level) | a generic method |
 | `fun <T : Any> describe(value: T): String` (top-level) | `static string Describe<T>(T value_) where T : notnull` |
+| `fun <T> pick(first: T, second: T): T` (top-level) | `static T Pick<T>(T first, T second)` |
 | `inline fun` | an ordinary method |
 | `inline fun <reified T>` | an ordinary generic method |
 | `typealias` | the aliased type itself, no separate alias type |
@@ -497,21 +498,28 @@ Assert.Same(rex, Helpers.AdoptPet<IPet>(rex));       // fun <T : Pet> adoptPet(p
 Assert.Same(rex, PetRelayKt.RelayPet<IPet>(rex));    // fun <T> relayPet(value: T): T, unconstrained
 ```
 
-A top-level function with one `T` parameter and a `T` (or generic class over `T`) return, like
-`fun <T> f(value: T): T`, binds as above. Any other top-level `fun <T>` binds like a
+A top-level function with exactly one parameter, of type `T`, and a `T` (or generic class over `T`)
+return, like `fun <T> f(value: T): T`, binds as above. Any other top-level `fun <T>`, including one
+with two or more parameters or a `T` beside a non-`T` parameter, binds like a
 [generic method on a class](#generic-methods): a static generic method on the file's class, with
-every `T` position boxed, any number of parameters and any return type.
+every `T` position boxed and any return type.
 
 ```kotlin
 fun <T : Any> describe(value: T): String = "$value: ${value::class.simpleName}"
 fun <T> label(value: T): String = "bowl of $value"
+fun <T> pick(first: T, second: T): T = second
+fun <T : Any> tally(x: T, n: Int): String = "$x x$n"
 ```
 
 ```C#
 Assert.Equal("4: Int", Descriptions.Describe(4));
 Assert.Equal("bowl of Mylo", Descriptions.Label("Mylo"));
+Assert.Equal(9, Descriptions.Pick(7, 9));
+Assert.Equal("4 x2", Descriptions.Tally(4, 2));
 // public static string Describe<T>(T value_) where T : notnull
 // public static string Label<T>(T value_)
+// public static T Pick<T>(T first, T second)
+// public static string Tally<T>(T x, int n) where T : notnull
 ```
 
 The C# parameter is named `value_` here, not `value`, so a named argument must spell it that way.

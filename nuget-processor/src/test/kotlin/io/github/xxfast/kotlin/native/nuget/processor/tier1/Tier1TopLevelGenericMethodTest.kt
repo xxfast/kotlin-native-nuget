@@ -22,6 +22,8 @@ class Tier1TopLevelGenericMethodTest {
     fun <T : Any> describe(value: T): String = "${'$'}value"
     fun <T> label(value: T): String = "bowl of ${'$'}value"
     fun <T> identity(value: T): T = value
+    fun <T> pick(first: T, second: T): T = first
+    fun <T> scale(x: T, n: Int): T = x
   """.trimIndent()
 
   private fun run(): Tier1Result =
@@ -59,6 +61,27 @@ class Tier1TopLevelGenericMethodTest {
       cs.contains("EntryPoint = \"library_toplevelgeneric__describe_int\""),
       "describe has no width variants: $cs",
     )
+  }
+
+  /** Issue #556: the width-variant route carries one parameter, so a second sends it to the plan */
+  @Test
+  fun `a multi-parameter top-level generic binds on the plan with no width variants`() {
+    val result: Tier1Result = run()
+    assertKotlinCompiles(result)
+
+    val cs: String = result.generatedCSharp
+    assertContains(cs, "public static T Pick<T>(T first, T second)")
+    assertContains(cs, "public static T Scale<T>(T x, int n)")
+    assertFalse(
+      cs.contains("EntryPoint = \"library_toplevelgeneric__pick_int\""),
+      "pick has no width variants: $cs",
+    )
+    assertFalse(
+      cs.contains("EntryPoint = \"library_toplevelgeneric__scale_int\""),
+      "scale has no width variants: $cs",
+    )
+    val warnings: List<String> = result.kspWarnings.filter { it.contains("tier1.") }
+    assertTrue(warnings.isEmpty(), "expected every function to bind; got: $warnings")
   }
 
   /** ADR-211 open question: the Try twin's `out value` beside a `value_` parameter. */
