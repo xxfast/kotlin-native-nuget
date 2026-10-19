@@ -219,6 +219,18 @@ internal fun StringBuilder.appendAsyncCompletionClosure(
   appendLine("                {")
   appendLine("                    t.TrySetException(ex);")
   appendLine("                }")
+  // The managed-fault stash is cleared where it is CONSUMED, never where the thunk catches. A C#
+  // callback that throws on a Kotlin dispatcher thread stashes the exception in that thread's
+  // `_lastManagedFault`; when Kotlin catches the throw, no synchronous export returns on that
+  // thread to clear the slot, so this completion is the crossing that ends it, as `Check<T>` is
+  // on the calling thread. A `finally`, so it follows `BuildException` on the fault arm (which
+  // must read the stash first to hand the ORIGINAL exception back, ADR-161) and covers the
+  // cancelled arm, the success arm and a materialisation that threw alike. Every `Task` here
+  // runs its continuations asynchronously, so no awaiter resumes on this thread before it.
+  appendLine("                finally")
+  appendLine("                {")
+  appendLine("                    NugetErrorNative.ClearManagedFault();")
+  appendLine("                }")
   appendLine("            };")
 }
 

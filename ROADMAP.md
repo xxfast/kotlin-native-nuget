@@ -56,7 +56,6 @@ Complete.
 
 ## Phase 7: Bidirectional support (C# → Kotlin)
 - [ ] Fold the reverse template's internal `NugetManagedException` onto the runtime class over the ADR-130 expect/actual seam ([details](docs/backlog/fold-reverse-managed-exception-onto-runtime-class.md))
-- [ ] A callback that throws on a Kotlin dispatcher thread (suspend or `Flow` routes) leaves its `NugetErrorNative._lastManagedFault` stash uncleared, as that thread never runs a C# export call site; inferred, not reproduced; ADR-210's suspend lambda thunks run user C# on Kotlin dispatcher threads too, which widens its reach (inferred) ([details](docs/backlog/managed-fault-stash-never-cleared-on-dispatcher-threads.md))
 - [ ] `NugetManagedException` carries no `@NugetRuntimeApi`, unlike every other public runtime export ([details](docs/backlog/managed-exception-missing-runtime-api-marker.md))
 
 ## Phase 8: Ecosystem – consuming NuGet packages from Kotlin
@@ -239,6 +238,8 @@ Forward handles are now counted ([ADR-120](docs/adr/120-live-stableref-counter-a
 - [ ] **A BenchmarkDotNet project over the fresh-versioned `TestLibrary` fixture, one class per crossing family with a managed-only baseline, reporting allocated bytes beside mean time** ([details](docs/backlog/crossing-microbenchmark.md)). Committed baseline table, not a CI gate.
 - [ ] Object identity preservation (caching wrappers), if the benchmark above shows wrapper allocation is significant. Blocked on that benchmark existing.
 - [ ] **Inferred:** `AotIntegrationTests` and `AotLeakTests` root the test assembly (`TrimmerRootAssembly`), so they prove runtime behaviour under NativeAOT but not that the trimmer keeps what the generated code needs; only `AotSmokeTest`, which is unrooted, checks trimming of generated code.
+- [ ] **Inferred:** an async callback fault whose coroutine hops threads before it completes leaves one exception per dispatcher thread in `NugetErrorNative._lastManagedFault` until that thread's next completion or fault, because the [ADR-161](docs/adr/161-csharp-callback-exception-into-kotlin.md) 2026-10-12 clear runs on the completion's thread, not the stashing thread. A bounded hold, not a leak; no fixture has Kotlin catch a callback fault and then suspend, so the hop is unexercised.
+- [ ] **Inferred:** known from ADR-161's 2026-10-07 amendment and the generator source, with Tier 1 pinning the emitted shape; the runtime hold is not reproduced. The synchronous error arms are `throw BuildException(error);` with `ClearManagedFault()` on the success path only (`cir/CirErrorRenderer.kt` ~246-247 and ~310-312, same shape at every synchronous site), so when the escaping Kotlin error does not match the stash (the Kotlin author wrapped the managed fault in their own type, or an unrelated error follows a caught fault) the exception stays in the calling thread's slot until that thread's next successful crossing. Not a one-line fix: making `BuildException` clear unconditionally would also wipe a stash that a later rethrow of the original fault still needs, which changes ADR-161's original-object recovery and needs a decision.
 
 ## Future Improvements
 

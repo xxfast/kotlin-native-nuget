@@ -161,6 +161,75 @@ class Tier1CallbackFaultContainmentTest {
   }
 
   /**
+   * The managed-fault stash is `[ThreadStatic]`, and a C# callback that throws on a Kotlin
+   * dispatcher thread leaves its exception there when Kotlin catches the throw: no synchronous
+   * export returns on that thread to clear it. The completion closure is the crossing that ends
+   * there, so it clears on EVERY exit: a `finally` after the containment, which is after
+   * `BuildException` has read the stash on the fault arm (ADR-161's original-object recovery)
+   * and covers the cancelled arm, the success arm and a failed materialisation alike.
+   * `LeakTests` (`ManagedFault_ThrownOnAKotlinDispatcherThread_*`) proves the behaviour.
+   */
+  @Test
+  fun `every suspend completion closure clears the managed-fault stash on all three arms`() {
+    val faultArm = "BuildException(errorPtr)"
+    val closures: List<String> = run().generatedCSharp
+      .split("job.CompleteFromCallback();")
+      .drop(1)
+      .map { tail -> tail.substringBefore("            };") }
+    assertTrue(closures.size >= 2, "expected the fixture to reach the async and drain closures")
+    // The fixture reaches a closure with the fault arm and one (the drain) without it.
+    assertTrue(closures.any { closure -> closure.contains(faultArm) })
+    assertTrue(closures.any { closure -> !closure.contains(faultArm) })
+
+    closures.forEach { closure ->
+      val lines: List<String> = closure.lines().map(String::trim)
+      val cleared: Int = lines.indexOf("NugetErrorNative.ClearManagedFault();")
+      assertTrue(cleared >= 0, "a completion closure that never clears the stash:\n$closure")
+      assertEquals(listOf("}", "finally", "{"), lines.subList(cleared - 3, cleared), closure)
+      // One `finally` on the one `try` every arm sits in, so after each of them.
+      assertEquals(1, lines.count { line -> line == "try" }, closure)
+      listOf("t.TrySetCanceled(", faultArm, "t.SetResult(", "t.TrySetException(ex);")
+        .map { arm -> lines.indexOfFirst { line -> line.contains(arm) } }
+        .forEach { armIndex -> assertTrue(armIndex < cleared, closure) }
+      assertTrue(lines.any { line -> line.contains("t.TrySetCanceled(") }, closure)
+      assertTrue(lines.any { line -> line.contains("t.SetResult(") }, closure)
+    }
+  }
+
+  /**
+   * The flow twin: the three TERMINAL callbacks clear the stash on the emitter's thread, `onError`
+   * only after `BuildException` has read it. The per-item arm does not: it ends nothing.
+   */
+  @Test
+  fun `every flow terminal callback clears the managed-fault stash`() {
+    val csharp: String = run().generatedCSharp
+    val clear = "NugetErrorNative.ClearManagedFault();"
+
+    val onNext: String = csharp
+      .substringAfter("NugetFlowOnNextCallback onNext = ")
+      .substringBefore("NugetFlowOnCompleteCallback onComplete = ")
+    val cancelled: String = onNext.lines().single { line -> line.contains("isCancelled != 0") }
+    val clearsOnCancel: Boolean = cancelled.contains(clear)
+    val returnsAfterClear: Boolean = cancelled.trim().endsWith("return; }")
+    assertTrue(clearsOnCancel && returnsAfterClear, cancelled)
+    assertEquals(1, occurrences(onNext, clear), onNext)
+
+    val onComplete: String = csharp
+      .substringAfter("NugetFlowOnCompleteCallback onComplete = ")
+      .substringBefore("NugetFlowOnErrorCallback onError = ")
+    assertEquals(1, occurrences(onComplete, clear), onComplete)
+
+    val onError: String = csharp
+      .substringAfter("NugetFlowOnErrorCallback onError = ")
+      .substringBefore("callbacks.OnNext = onNext;")
+    assertEquals(1, occurrences(onError, clear), onError)
+    assertTrue(
+      onError.indexOf(clear) > onError.indexOf("_channel.Writer.TryComplete(ex);"),
+      "expected the clear after the containment, so after BuildException read the stash: $onError",
+    )
+  }
+
+  /**
    * ADR-161 part C: the two runtime-invoked thunk families stay on `GCHandle` dispatch and must NOT
    * take the key-table lookup. A `void` thunk answers a table MISS by dropping the call, which on
    * the async route means the `TaskCompletionSource` is never completed and every awaiting caller
