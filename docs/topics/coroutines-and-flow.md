@@ -10,6 +10,7 @@ started. `Flow<T>` becomes `IAsyncEnumerable<T>`, and `StateFlow<T>` adds a sync
 | `suspend fun` | `async Task<T>`, suffixed `Async` |
 | `suspend (A) -> R` lambda | `KotlinSuspendFunc<A, R>` with `InvokeAsync` |
 | `suspend (A) -> R` as a parameter | `Func<A, CancellationToken, Task<R>>`, see [below](#suspend-lambda-parameter) |
+| `Flow<T>` as a parameter | `IAsyncEnumerable<T>`, see [below](#flow-parameter) |
 | `Flow<T>` | `KotlinFlow<T> : IAsyncEnumerable<T>` |
 | `SharedFlow<T>` | `KotlinSharedFlow<T> : KotlinFlow<T>`, replays the Kotlin replay cache first, never completes, adds `ReplayCache` |
 | `MutableSharedFlow<T>` (declared, not narrowed to `SharedFlow<T>`) | `KotlinMutableSharedFlow<T> : KotlinSharedFlow<T>`, adds `SubscriptionCount`, `EmitAsync` and `TryEmit` |
@@ -420,6 +421,120 @@ await timer.RingAsync(3); // "ding1,ding2,ding3"
   untested.
 - **Null.** Passing `null` for the delegate throws `ArgumentNullException` before Kotlin runs, as
   for any other lambda parameter.
+
+## A `Flow` as a parameter {id="flow-parameter"}
+
+A Kotlin `Flow<T>` parameter whose element is a primitive or `String` binds as
+`IAsyncEnumerable<T>`. Kotlin collects it as a cold flow: it asks your enumerable for a fresh
+enumerator on each `collect` and pulls one element at a time, so a source never runs ahead of the
+Kotlin collector.
+
+```kotlin
+class WaterFountain(val cat: String) {
+  suspend fun totalDrops(drops: Flow<Int>): Int {
+    var total = 0
+    drops.collect { drop -> total += drop }
+    return total
+  }
+}
+
+suspend fun countDrops(drops: Flow<Int>): Int = drops.count()
+```
+
+```C#
+public Task<int> TotalDropsAsync(global::System.Collections.Generic.IAsyncEnumerable<int> drops, CancellationToken cancellationToken = default)
+public static Task<int> CountDropsAsync(global::System.Collections.Generic.IAsyncEnumerable<int> drops, CancellationToken cancellationToken = default)
+```
+
+```C#
+using System.Runtime.CompilerServices;
+
+static async IAsyncEnumerable<int> Drip(int count, [EnumeratorCancellation] CancellationToken token = default)
+{
+    for (int drop = 1; drop <= count; drop++)
+    {
+        await Task.Delay(5, token);
+        yield return drop;
+    }
+}
+
+using var fountain = new WaterFountain("Oreo");
+int total = await fountain.TotalDropsAsync(Drip(4)); // 10
+```
+
+The element is a `Boolean`, any signed or unsigned integer type, `Float`, `Double` or `String`.
+A `KotlinFlow<T>` that Kotlin handed out is an `IAsyncEnumerable<T>`, so it can be passed straight
+back in.
+
+### Where it binds
+
+The parameter binds on a class `suspend fun`, a `suspend fun` on a sealed arm, a top-level `suspend
+fun`, an `object` member, an extension, and on a **non-suspend** method or constructor that stores
+the flow for later. A `Flow`-returning member that takes a `Flow` enumerates nothing until C#
+collects the result it returns. A stored flow can be collected any number of times, and each
+`collect` is its own enumeration:
+
+```kotlin
+class Dripper(private val drops: Flow<Int>) {
+  suspend fun drain(): String = drops.toList().joinToString(",")
+}
+```
+
+```C#
+public Dripper(global::System.Collections.Generic.IAsyncEnumerable<int> drops)
+```
+
+```C#
+using var dripper = new Dripper(Drip(3));
+await dripper.DrainAsync(); // "1,2,3"
+await dripper.DrainAsync(); // "1,2,3", from a second enumerator
+```
+
+### Enumeration, disposal and errors {id="flow-parameter-behaviour"}
+
+- **Cold.** `GetAsyncEnumerator` runs once per Kotlin `collect`, so a replayed or one-shot source
+  behaves as its own type does. Collecting the same parameter twice enumerates it twice.
+- **Disposal is queued.** Each enumerator's `DisposeAsync` runs exactly once, however the
+  collection ends: to the end, an early exit such as `take(2)`, a throw, or cancellation. It runs
+  on a queued work item, so it lands shortly **after** the `Task` from the Kotlin call completes,
+  not before. Do not assert or rely on disposal having happened at that instant. To observe an
+  iterator's `finally`, signal from it and await the signal.
+- **Cancellation.** When Kotlin cancels the collection (the `CancellationToken` you passed to the
+  call, or a timeout inside it), the token your enumerator received is cancelled.
+  Mark the iterator with `[EnumeratorCancellation]` and pass the token to what it awaits. An
+  iterator that ignores it stops at its next element, and its captured state stays alive until then.
+- **Errors.** A throw from the iterator, at any point in the stream, reaches the Kotlin collector
+  as a `NugetManagedException` that Kotlin can catch. If Kotlin does not catch it, the outer `Task`
+  faults with the original message; catch `Exception` rather than relying on the original type.
+  An exception that Kotlin's own collector throws faults the outer `Task` with that exception,
+  and the enumerator is still disposed.
+- **Threads.** The synchronous part of `GetAsyncEnumerator` and of each `MoveNextAsync`, up to its
+  first `await` that does not complete synchronously, runs on the Kotlin dispatcher thread. What
+  follows resumes on the .NET thread pool, never on the caller's `SynchronizationContext`.
+- **Lifetime.** Kotlin owns the enumerable after the call, as with a
+  [`suspend` lambda parameter](#suspend-lambda-parameter-behaviour): a stored flow, and whatever it
+  captures, is released by a Kotlin cleaner after its owner is dropped, so release follows a
+  garbage-collection round and not the end of the call.
+- **Null.** Passing `null` throws `ArgumentNullException` before Kotlin runs.
+
+### What does not bind {id="flow-parameter-limits"}
+
+Each of these is skipped with a build diagnostic naming the member, and the rest of the class is
+unaffected.
+
+- **`StateFlow<T>`, `SharedFlow<T>` and `MutableStateFlow<T>` parameters.** C# has no source for a
+  synchronous current value or a replay cache. Declare the parameter as `Flow<T>` and call
+  `stateIn(scope)` or `shareIn` on it in Kotlin. A member that itself returns a `StateFlow` or
+  `SharedFlow` does not admit a `Flow` parameter either; its diagnostic still reads `but not
+  <name>: Flow<Int>`, which is about that host and not about `Flow` parameters in general.
+- **Other elements.** Only the primitives and `String` bind. `Char`, `Throwable`, an enum, an
+  object, a collection or a nullable element is refused, and so is a nullable `Flow<T>?`.
+- **Enum and value class members, and a data class `copy`.** A member of an enum or value class
+  that takes a `Flow` is not generated, and a data class `copy` omits a `Flow` component.
+- **Implementing the interface in C#.** A Kotlin interface member that takes a `Flow` binds for
+  calling, but a C# class cannot implement that interface: the build reports
+  `SKIPPED_UNIMPLEMENTABLE_INTERFACE`, and passing such an implementation to Kotlin throws
+  `NotSupportedException`.
 
 ## Cancellation and disposal
 
@@ -1189,8 +1304,9 @@ default value (`cat: Cat? = null`) is still required in C#, so pass `null` expli
 Any other generic parameter (`Pair<A, B>`, `Array<T>`, a plain `(T) -> R` lambda; your own
 `Box<String>` binds as a handle), `Instant`/`Duration`/`Uuid`, a value class or an interface is not
 supported at these positions and is skipped with a diagnostic naming the member. A
-[`suspend` lambda parameter](#suspend-lambda-parameter) is the one lambda that binds. Pass an enum, or a
-class/object/sealed handle, `List`/`Set`/`Map` or primitive/`String` (each of these nullable or
+[`suspend` lambda parameter](#suspend-lambda-parameter) is the one lambda that binds, and a
+[`Flow<T>` of a primitive or `String`](#flow-parameter) is the one generic type that does. Pass an
+enum, or a class/object/sealed handle, `List`/`Set`/`Map` or primitive/`String` (each of these nullable or
 not) instead, or split the parameter across separate
 members. A `Throwable`, `Exception` or `RuntimeException` parameter does bind, as a
 `System.Exception` (see [Throwable values](exceptions.md#throwable-values)).
@@ -1208,8 +1324,9 @@ members. A `Throwable`, `Exception` or `RuntimeException` parameter does bind, a
   `suspend fun` returning `MutableStateFlow<T>`, and a non-`suspend` function returning
   `MutableStateFlow<T>?`, bind a read-only holder. The build names each with
   `SKIPPED_UNSUPPORTED_INPUT`.
-- `StateFlow<T>` or `Flow<T>` as a function parameter is not supported. As a generic type argument
-  it binds [read-only](#flow-type-argument).
+- A `StateFlow<T>`, `SharedFlow<T>` or `MutableStateFlow<T>` as a function parameter is not
+  supported; see [what does not bind](#flow-parameter-limits). As a generic type argument it binds
+  [read-only](#flow-type-argument).
 - A top-level non-`suspend` `fun f(): Flow<T>?` and an `object` or companion `Flow<T>?` member are
   skipped with a diagnostic, like their non-null forms.
 - A `Pair` or a nullable collection (`List<T>?`) as a `Flow`/`StateFlow` element is not supported.

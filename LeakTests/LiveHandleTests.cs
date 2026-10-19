@@ -29,6 +29,7 @@ using TestLibrary.Kennel;
 using Lineage = TestLibrary.Lineage;
 using Torpor = TestLibrary.Torpor;
 using Treatprep = TestLibrary.Treatprep;
+using Trickle = TestLibrary.Trickle;
 using Outcomes = TestLibrary.Outcome;
 using Cubby = TestLibrary.Cubby;
 using TestLibrary.Boxshelf;
@@ -5344,6 +5345,238 @@ public class LiveHandleTests
             });
             Assert.Equal("ding1,ding2", await timer.RingAsync(2));
             Assert.Equal("ding1", await timer.RingAsync(1));
+        });
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Rows 18a to 18f. ADR-210 slice (b): a `Flow<T>` PARAMETER (`IAsyncEnumerable<T>` in C#).
+    //
+    // Every pull is an `awaitForKotlin` flight (a counted ctx plus a Task handle, as in rows 17),
+    // and each Kotlin `collect` additionally holds one enumeration handle from `GetAsyncEnumerator`
+    // until the enumerator is disposed. That disposal has four ways to happen (completion, early
+    // abort, a throw, cancellation) and each row below ends the collection a different way. The C#
+    // source itself is released by a Kotlin cleaner, so every row depends on `Settle`.
+    //
+    // As for rows 17: the C# context table has no observable, so a source the cleaner never
+    // released is silent here and `CollectabilityTests` carries that half.
+    // ------------------------------------------------------------------------------------------
+
+    // A source that never suspends: every MoveNextAsync is an already completed ValueTask.
+    private sealed class SteadyDrops(int count) : IAsyncEnumerable<int>
+    {
+        public IAsyncEnumerator<int> GetAsyncEnumerator(CancellationToken cancellationToken = default) =>
+            new Enumerator(count);
+
+        private sealed class Enumerator(int count) : IAsyncEnumerator<int>
+        {
+            private int _pulled;
+            public int Current => 7;
+            public ValueTask<bool> MoveNextAsync() => new(++_pulled <= count);
+            public ValueTask DisposeAsync() => default;
+        }
+    }
+
+    // Really suspends before every element; `closed` completes when the iterator's `finally` ran,
+    // which is the iterator's REAL completion and what a row has to await before it measures.
+    private static async IAsyncEnumerable<int> Drip(
+        int count, TaskCompletionSource closed, [EnumeratorCancellation] CancellationToken token = default)
+    {
+        try
+        {
+            for (int drop = 1; drop <= count; drop++)
+            {
+                await Task.Delay(1, token);
+                yield return drop;
+            }
+        }
+        finally
+        {
+            closed.TrySetResult();
+        }
+    }
+
+    private static async IAsyncEnumerable<string> Sips(
+        [EnumeratorCancellation] CancellationToken token = default)
+    {
+        foreach (string sip in new[] { "sip", "lap", "slurp" })
+        {
+            await Task.Delay(1, token);
+            yield return sip;
+        }
+    }
+
+    private static async IAsyncEnumerable<int> DripThenSplutter(
+        TaskCompletionSource closed, [EnumeratorCancellation] CancellationToken token = default)
+    {
+        try
+        {
+            await Task.Delay(1, token);
+            yield return 1;
+            await Task.Delay(1, token);
+            throw new InvalidOperationException("the fountain ran dry");
+        }
+        finally
+        {
+            closed.TrySetResult();
+        }
+    }
+
+    // One element, then a pull that IGNORES the token it was given and waits on `release` instead.
+    private static async IAsyncEnumerable<int> DripThenDawdle(
+        TaskCompletionSource parked, Task release, TaskCompletionSource closed)
+    {
+        try
+        {
+            yield return 1;
+            parked.TrySetResult();
+            await release;   // deliberately not the token: Mylo finishes when Mylo finishes
+            yield return 2;
+        }
+        finally
+        {
+            closed.TrySetResult();
+        }
+    }
+
+    private static TaskCompletionSource NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private static readonly TimeSpan FlowPatience = TimeSpan.FromSeconds(30);
+
+    // Row 18a. The FULL COLLECT, one row per element kind: `Int` crosses by value, `String` is
+    // minted at `Current` once per element and has to be released once per element.
+    [Fact]
+    public async Task FlowParameter_FullCollect_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var fountain = new Trickle.WaterFountain("Oreo");
+            TaskCompletionSource closed = NewSignal();
+            Assert.Equal(10, await fountain.TotalDropsAsync(Drip(4, closed)));
+            await closed.Task.WaitAsync(FlowPatience);
+            Assert.Equal("sip|lap|slurp", await fountain.DescribeAsync(Sips()));
+        });
+    }
+
+    // Row 18b. The EARLY ABORT: Kotlin takes two of five, so the enumeration handle is released
+    // by a dispose that finds the iterator parked at a `yield` rather than by a final pull that
+    // said no. The abort also ends Kotlin's side with its own internal exception, the path on
+    // which a pending-flight ctx or the enumeration handle is easiest to drop.
+    [Fact]
+    public async Task FlowParameter_EarlyAbort_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var fountain = new Trickle.WaterFountain("Oreo");
+            TaskCompletionSource closed = NewSignal();
+            Assert.Equal("1,2", await fountain.FirstTwoAsync(Drip(5, closed)));
+            await closed.Task.WaitAsync(FlowPatience);
+        });
+    }
+
+    // Row 18c. The iterator THROWS MID-STREAM, both ways out: caught in Kotlin (the outer call
+    // completes normally) and propagated (the ADR-128/130 error envelope crosses on the same call).
+    // The faulted pull never reaches a `Current`, and the enumerator still has to be disposed.
+    [Fact]
+    public async Task FlowParameter_IteratorThrowsMidStream_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var fountain = new Trickle.WaterFountain("Mylo");
+
+            TaskCompletionSource caught = NewSignal();
+            string report = await fountain.RecoverAsync(DripThenSplutter(caught));
+            Assert.StartsWith("recovered after 1 ", report);
+            await caught.Task.WaitAsync(FlowPatience);
+
+            TaskCompletionSource escaped = NewSignal();
+            Exception ex = await Assert.ThrowsAnyAsync<Exception>(
+                () => fountain.TotalDropsAsync(DripThenSplutter(escaped)));
+            Assert.Contains("the fountain ran dry", ex.ToString());
+            await escaped.Task.WaitAsync(FlowPatience);
+        });
+    }
+
+    // Row 18d. The CANCEL row: the outer token is cancelled while a pull is pending, and the
+    // iterator IGNORES its token. Kotlin's wait ends on its own cancellation, but the flight's ctx
+    // is released only by the completion callback, and the enumerator can only be disposed once
+    // that pending pull has finished (ADR-210: queue cancel, await pending, then DisposeAsync). So
+    // handles stay held until the iterator really completes: a bounded hold, not a leak. The
+    // crossing therefore releases the iterator and awaits its `finally` before it returns, and
+    // only then may the baseline be asserted.
+    [Fact]
+    public async Task FlowParameter_OuterTokenCancelledMidStep_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(
+            async () =>
+            {
+                using var fountain = new Trickle.WaterFountain("Mylo");
+                using var cts = new CancellationTokenSource();
+                TaskCompletionSource parked = NewSignal();
+                TaskCompletionSource release = NewSignal();
+                TaskCompletionSource closed = NewSignal();
+
+                Task<int> counting = fountain.TotalDropsAsync(
+                    DripThenDawdle(parked, release.Task, closed), cts.Token);
+
+                await parked.Task.WaitAsync(FlowPatience);
+                cts.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => counting);
+                Assert.False(closed.Task.IsCompleted, "the iterator finished before the cancel, so nothing was abandoned");
+
+                release.SetResult();
+                await closed.Task.WaitAsync(FlowPatience);
+            },
+            iterations: 5);
+    }
+
+    // Row 18e. The TIGHT LOOP row, the mirror of rows 9a and 17b: a source with no suspension at
+    // all, thousands of pulls inside one Kotlin collect, each of which can complete before the
+    // thunk that started it has returned. The sum is asserted so a short run cannot pass as clean.
+    [Fact]
+    public async Task FlowParameter_SourceThatNeverSuspends_TightLoop_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(
+            async () =>
+            {
+                using var fountain = new Trickle.WaterFountain("Oreo");
+                Assert.Equal(7 * 2_000, await fountain.TotalDropsAsync(new SteadyDrops(2_000)));
+            },
+            iterations: 5);
+    }
+
+    // Row 18f. The STORED flow, through the constructor host: the source outlives the call that
+    // supplied it, is enumerated twice by a later suspend member (two enumeration handles, one
+    // after the other), and is released by the cleaner only after this wrapper's Dispose.
+    [Fact]
+    public async Task FlowParameter_StoredByAConstructor_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            TaskCompletionSource closed = NewSignal();
+            using var dripper = new Trickle.Dripper(Drip(3, closed));
+            Assert.Equal("1,2,3", await dripper.DrainAsync());
+            await closed.Task.WaitAsync(FlowPatience);
+            Assert.Equal("1,2,3", await dripper.DrainAsync());
+        });
+    }
+
+    // Row 18g. The COLLECTOR THROWS: a Kotlin exception raised inside `collect { }` on the second
+    // element. The fourth way a collection ends, and the only one where the failure starts on the
+    // Kotlin side with no pull pending: the enumeration handle has to be released by a dispose
+    // that runs while Kotlin's own exception is unwinding, and the ADR-128/130 error envelope then
+    // crosses on the same call. The iterator's `finally` is awaited so the row measures after the
+    // enumerator is really gone, not before.
+    [Fact]
+    public async Task FlowParameter_CollectorThrows_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var fountain = new Trickle.WaterFountain("Oreo");
+            TaskCompletionSource closed = NewSignal();
+            KotlinInvalidOperationException ex = await Assert.ThrowsAsync<KotlinInvalidOperationException>(
+                () => fountain.ChokeOnSecondAsync(Drip(5, closed)));
+            Assert.Contains("Oreo choked on drop 2", ex.Message);
+            await closed.Task.WaitAsync(FlowPatience);
         });
     }
 }

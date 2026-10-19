@@ -117,6 +117,7 @@ internal fun forwardCallbackPrelude(
     is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -184,6 +185,7 @@ private fun BridgeType.callbackArgumentExpression(slot: String): String = when (
   is BridgeType.Nullable,
   is BridgeType.Callback,
   is BridgeType.AsyncCallback,
+  is BridgeType.FlowSource,
   is BridgeType.ReturnedLambda,
   is BridgeType.SpecializedProtocol,
   is BridgeType.RawKSType,
@@ -214,6 +216,7 @@ private fun BridgeType.callbackWireCsharpType(): String = when (this) {
   is BridgeType.Nullable,
   is BridgeType.Callback,
   is BridgeType.AsyncCallback,
+  is BridgeType.FlowSource,
   is BridgeType.ReturnedLambda,
   is BridgeType.SpecializedProtocol,
   is BridgeType.RawKSType,
@@ -248,6 +251,7 @@ private fun BridgeType.wireSuffix(): String = when (this) {
   is BridgeType.Nullable,
   is BridgeType.Callback,
   is BridgeType.AsyncCallback,
+  is BridgeType.FlowSource,
   is BridgeType.ReturnedLambda,
   is BridgeType.SpecializedProtocol,
   is BridgeType.RawKSType,
@@ -321,6 +325,7 @@ internal fun BridgeType.AsyncCallback.forwardAsyncEnd(): CirAsyncEnd {
     is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -372,40 +377,100 @@ internal fun forwardAsyncCallbackHandOver(keyLocal: String): String = "$keyLocal
 internal fun forwardAsyncCallbackCleanup(keyLocal: String): String =
   "NugetThunks.UnregisterCtx($keyLocal);"
 
-/** The plan route's guarded span for one suspend lambda parameter. See the registration above. */
-internal fun forwardAsyncCallbackPrelude(
+// ------------------------------------------------------------------------------------------------
+// ADR-210: a `Flow<T>` parameter, as `IAsyncEnumerable<T>`, and the helpers both kinds share.
+// ------------------------------------------------------------------------------------------------
+
+/** `NugetAsync{Element}Current`, one per element type: the thunk casts the enumeration it names. */
+internal fun BridgeType.FlowSource.forwardAsyncCurrentName(): String =
+  "NugetAsync${element.wireSuffix()}Current"
+
+/**
+ * The Current thunk of this element type, in the End thunk's model: `a0` is the enumeration handle.
+ * A `String` is boxed here, on the read, so nothing is minted for an element nobody asks for.
+ */
+internal fun BridgeType.FlowSource.forwardAsyncCurrent(): CirAsyncEnd {
+  val name: String = forwardAsyncCurrentName()
+  val public: String = element.forwardPublicCsharpType()
+  return when {
+    element == BridgeType.String -> CirAsyncEnd(
+      name,
+      "IntPtr",
+      "NugetMarshal.WrapString(NugetAsyncEnumeration.Current<string>(a0))",
+    )
+
+    element is BridgeType.Primitive && element.kind == PrimitiveKind.BOOLEAN ->
+      CirAsyncEnd(name, "byte", "NugetAsyncEnumeration.Current<bool>(a0) ? (byte)1 : (byte)0")
+
+    else -> CirAsyncEnd(name, public, "NugetAsyncEnumeration.Current<$public>(a0)")
+  }
+}
+
+/**
+ * The expression that registers either asynchronous parameter [name] and evaluates to its key. A
+ * `Flow` registers a factory, not the enumerable: the shared Enumerate thunk cannot name `T`, so
+ * the closure does, and each call of it is one `GetAsyncEnumerator` (one Kotlin `collect`).
+ */
+internal fun forwardAsyncRegistration(name: String, type: BridgeType): String =
+  when (type.asyncKind()) {
+    ForwardAsyncKind.LAMBDA ->
+      forwardAsyncCallbackRegistration(name, type as BridgeType.AsyncCallback)
+
+    ForwardAsyncKind.FLOW -> "NugetTasks.Register($name, nameof($name), " +
+        "(Func<IntPtr>)(() => NugetAsyncEnumeration.Enumerate($name)))"
+
+    null -> error("Forward CIR projection has no asynchronous registration for $type")
+  }
+
+private fun ForwardAsyncShared.thunkPointer(): String = when (this) {
+  ForwardAsyncShared.RELEASE_TASK -> "NugetThunks.NugetAsyncReleaseTaskPtr"
+  ForwardAsyncShared.RELEASE_CANCELLATION -> "NugetThunks.NugetAsyncReleaseCancellationPtr"
+  ForwardAsyncShared.MOVE_NEXT_BEGIN -> "NugetThunks.NugetAsyncMoveNextBeginPtr"
+  ForwardAsyncShared.MOVE_NEXT_END -> "NugetThunks.NugetAsyncMoveNextEndPtr"
+  ForwardAsyncShared.DISPOSE_ENUMERATION -> "NugetThunks.NugetAsyncDisposeEnumerationPtr"
+  ForwardAsyncShared.RELEASE_CONTEXT -> "NugetThunks.NugetAsyncReleaseContextPtr"
+}
+
+/**
+ * The native arguments either asynchronous parameter contributes, in the planner's slot order: its
+ * two own thunks and [key], then every parameter-independent thunk it is first to need
+ * ([ForwardAsyncSlots.carried]), so each of those crosses once per export.
+ */
+internal fun forwardAsyncArguments(
+  type: BridgeType,
+  key: String,
+  slots: ForwardAsyncSlots,
+): List<String> {
+  val own: List<String> = when (type.asyncKind()) {
+    ForwardAsyncKind.LAMBDA -> {
+      val callback: BridgeType.AsyncCallback = type as BridgeType.AsyncCallback
+      listOf(
+        "NugetThunks.${callback.forwardAsyncBeginName()}Ptr",
+        "NugetThunks.${callback.forwardAsyncEndName()}Ptr",
+      )
+    }
+
+    ForwardAsyncKind.FLOW -> listOf(
+      "NugetThunks.NugetAsyncEnumeratePtr",
+      "NugetThunks.${(type as BridgeType.FlowSource).forwardAsyncCurrentName()}Ptr",
+    )
+
+    null -> error("Forward CIR projection has no asynchronous arguments for $type")
+  }
+  return own + key + slots.carried.map { slot -> slot.thunkPointer() }
+}
+
+/** The plan route's guarded span for either asynchronous parameter. See the registration above. */
+internal fun forwardAsyncPrelude(
   name: String,
-  type: BridgeType.AsyncCallback,
+  type: BridgeType,
   keyLocal: String,
 ): ForwardCirHandleStep {
-  val register: String = "$keyLocal = ${forwardAsyncCallbackRegistration(name, type)};"
+  val register: String = "$keyLocal = ${forwardAsyncRegistration(name, type)};"
   return ForwardCirHandleStep(
     flat = "IntPtr $register",
     declarations = listOf("IntPtr $keyLocal = IntPtr.Zero;"),
     statement = register,
     afterCall = forwardAsyncCallbackHandOver(keyLocal),
   )
-}
-
-/**
- * The native arguments a suspend lambda parameter contributes, in the planner's slot order: the
- * Begin thunk, the End thunk and [key], then (on the export's first suspend lambda only,
- * [carriesShared]) the three parameter-independent release thunks.
- */
-internal fun forwardAsyncCallbackArguments(
-  type: BridgeType.AsyncCallback,
-  key: String,
-  carriesShared: Boolean,
-): List<String> {
-  val own: List<String> = listOf(
-    "NugetThunks.${type.forwardAsyncBeginName()}Ptr",
-    "NugetThunks.${type.forwardAsyncEndName()}Ptr",
-    key,
-  )
-  val shared: List<String> = listOf(
-    "NugetThunks.NugetAsyncReleaseTaskPtr",
-    "NugetThunks.NugetAsyncReleaseCancellationPtr",
-    "NugetThunks.NugetAsyncReleaseContextPtr",
-  )
-  return if (carriesShared) own + shared else own
 }

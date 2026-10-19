@@ -99,8 +99,15 @@ class Tier1SuspendFlowTest {
   @Test fun `refused combinations name their refusal and emit neither half`() {
     val refused: List<String> = listOf(
       "nullableCollection", "unsupported",
-      "mutableStateCollection", "input", "extensionFlow",
+      "mutableStateCollection", "extensionFlow",
     )
+    // ADR-210: `suspend fun input(flow: Flow<Int>)` binds now, as `IAsyncEnumerable<int>`.
+    assertTrue(
+      "InputAsync(global::System.Collections.Generic.IAsyncEnumerable<int> flow, " in
+          result.generatedCSharp,
+      result.generatedCSharp.lines().filter { "InputAsync" in it }.toString(),
+    )
+    assertFalse(result.kspWarnings.any { "Source.input" in it }, result.kspWarnings.toString())
     refused.forEach { name ->
       assertTrue(result.kspWarnings.any { name in it }, "missing warning for $name: ${result.kspWarnings}")
       assertFalse("${name}_collect" in result.generated, result.generated)

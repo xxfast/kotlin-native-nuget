@@ -9,21 +9,44 @@ import com.squareup.kotlinpoet.PropertySpec
 import com.squareup.kotlinpoet.TypeSpec
 import io.github.xxfast.kotlin.native.nuget.processor.freshName
 
+/** ADR-210: which kind of asynchronous parameter a set of [ForwardAsyncSlots] belongs to. */
+internal enum class ForwardAsyncKind {
+  /** A `suspend (T) -> R`: its own slots are the Begin thunk, the End thunk and the key. */
+  LAMBDA,
+
+  /** A `Flow<T>`: its own slots are the Enumerate thunk, the Current thunk and the key. */
+  FLOW,
+}
+
 /**
- * ADR-210: the native slots one suspend lambda parameter is read from, already minted against the
- * export's other names. [begin], [end] and [key] are the parameter's own. The three release thunks
- * do not depend on the parameter, so they cross ONCE per export: the first suspend lambda parameter
- * declares them ([carriesShared]) right after its own three, and every later one reads the same
- * names.
+ * ADR-210: the thunks that do not depend on the parameter, so they cross ONCE per export. Declared
+ * in this order by whichever parameter is first to need each: release task and release context by
+ * the export's first asynchronous parameter, release cancellation by its first suspend lambda, the
+ * three enumeration thunks by its first `Flow`.
+ */
+internal enum class ForwardAsyncShared {
+  RELEASE_TASK,
+  RELEASE_CANCELLATION,
+  MOVE_NEXT_BEGIN,
+  MOVE_NEXT_END,
+  DISPOSE_ENUMERATION,
+  RELEASE_CONTEXT,
+}
+
+/**
+ * ADR-210: the native slots one suspend lambda or `Flow` parameter is read from, already minted
+ * against the export's other names. [begin], [end] and [key] are the parameter's own (for a
+ * `Flow`, the Enumerate and Current thunks). [shared] names every parameter-independent thunk this
+ * parameter reads; [carried] are the ones it is first to need and therefore declares, right after
+ * its own three. So one suspend lambda is 6 slots, one `Flow` 8, one of each 12.
  */
 internal data class ForwardAsyncSlots(
+  val kind: ForwardAsyncKind,
   val begin: String,
   val end: String,
   val key: String,
-  val releaseTask: String,
-  val releaseCancellation: String,
-  val releaseContext: String,
-  val carriesShared: Boolean,
+  val shared: Map<ForwardAsyncShared, String>,
+  val carried: List<ForwardAsyncShared>,
   /** Kotlin: the local the key-owning holder is bound to, built before anything can throw. */
   val holder: String,
   /**
@@ -32,34 +55,96 @@ internal data class ForwardAsyncSlots(
    */
   val csharpKey: String,
 ) {
+  val releaseTask: String get() = shared.getValue(ForwardAsyncShared.RELEASE_TASK)
+  val releaseContext: String get() = shared.getValue(ForwardAsyncShared.RELEASE_CONTEXT)
+  val releaseCancellation: String get() = shared.getValue(ForwardAsyncShared.RELEASE_CANCELLATION)
+  val moveNextBegin: String get() = shared.getValue(ForwardAsyncShared.MOVE_NEXT_BEGIN)
+  val moveNextEnd: String get() = shared.getValue(ForwardAsyncShared.MOVE_NEXT_END)
+  val disposeEnumeration: String get() = shared.getValue(ForwardAsyncShared.DISPOSE_ENUMERATION)
+
   /** The slots this parameter itself declares, in ABI order. */
   val declared: List<String>
-    get() = listOf(begin, end, key) +
-        if (carriesShared) listOf(releaseTask, releaseCancellation, releaseContext) else emptyList()
+    get() = listOf(begin, end, key) + carried.map { slot -> shared.getValue(slot) }
+}
+
+/** The shared thunks a parameter of [kind] reads, in declaration order. */
+private fun ForwardAsyncKind.sharedSlots(): List<ForwardAsyncShared> = when (this) {
+  ForwardAsyncKind.LAMBDA -> listOf(
+    ForwardAsyncShared.RELEASE_TASK,
+    ForwardAsyncShared.RELEASE_CANCELLATION,
+    ForwardAsyncShared.RELEASE_CONTEXT,
+  )
+
+  ForwardAsyncKind.FLOW -> listOf(
+    ForwardAsyncShared.RELEASE_TASK,
+    ForwardAsyncShared.MOVE_NEXT_BEGIN,
+    ForwardAsyncShared.MOVE_NEXT_END,
+    ForwardAsyncShared.DISPOSE_ENUMERATION,
+    ForwardAsyncShared.RELEASE_CONTEXT,
+  )
+}
+
+private fun ForwardAsyncShared.stem(): String = when (this) {
+  ForwardAsyncShared.RELEASE_TASK -> "ReleaseTask"
+  ForwardAsyncShared.RELEASE_CANCELLATION -> "ReleaseCancellation"
+  ForwardAsyncShared.MOVE_NEXT_BEGIN -> "MoveNextBegin"
+  ForwardAsyncShared.MOVE_NEXT_END -> "MoveNextEnd"
+  ForwardAsyncShared.DISPOSE_ENUMERATION -> "DisposeEnumeration"
+  ForwardAsyncShared.RELEASE_CONTEXT -> "ReleaseContext"
+}
+
+/** The [ForwardAsyncKind] of a parameter of [this] type, or null for every other type. */
+internal fun BridgeType.asyncKind(): ForwardAsyncKind? = when (this) {
+  is BridgeType.AsyncCallback -> ForwardAsyncKind.LAMBDA
+  is BridgeType.FlowSource -> ForwardAsyncKind.FLOW
+  BridgeType.Unit,
+  is BridgeType.Primitive,
+  BridgeType.Char,
+  BridgeType.String,
+  BridgeType.Instant,
+  BridgeType.Duration,
+  is BridgeType.Throwable,
+  BridgeType.Uuid,
+  is BridgeType.Enum,
+  is BridgeType.ObjectHandle,
+  is BridgeType.Interface,
+  is BridgeType.BoundInterface,
+  is BridgeType.ValueClass,
+  BridgeType.ByteArray,
+  is BridgeType.Collection,
+  is BridgeType.Nullable,
+  is BridgeType.Callback,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+  is BridgeType.TypeParameter,
+    -> null
 }
 
 /**
- * Mints the [ForwardAsyncSlots] of every suspend lambda parameter in [parameters] (name to
- * "is a suspend lambda"), through [mint], in declaration order.
+ * Mints the [ForwardAsyncSlots] of every asynchronous parameter in [parameters] (name to kind, null
+ * for every other parameter), through [mint], in declaration order. A shared thunk is named after
+ * the parameter that declares it.
  */
 internal fun mintAsyncSlots(
-  parameters: List<Pair<String, Boolean>>,
+  parameters: List<Pair<String, ForwardAsyncKind?>>,
   mint: (String) -> String,
 ): List<ForwardAsyncSlots?> {
-  var shared: Triple<String, String, String>? = null
-  return parameters.map { (name, async) ->
-    if (!async) return@map null
-    val begin: String = mint("${name}Begin")
-    val end: String = mint("${name}End")
+  val shared: MutableMap<ForwardAsyncShared, String> = mutableMapOf()
+  return parameters.map { (name, kind) ->
+    if (kind == null) return@map null
+    val isFlow: Boolean = kind == ForwardAsyncKind.FLOW
+    val begin: String = mint(if (isFlow) "${name}Enumerate" else "${name}Begin")
+    val end: String = mint(if (isFlow) "${name}Current" else "${name}End")
     val key: String = mint("${name}Key")
-    val first: Boolean = shared == null
-    val releases: Triple<String, String, String> = shared ?: Triple(
-      mint("${name}ReleaseTask"),
-      mint("${name}ReleaseCancellation"),
-      mint("${name}ReleaseContext"),
-    ).also { minted -> shared = minted }
+    val carried: List<ForwardAsyncShared> = kind.sharedSlots().filter { slot -> slot !in shared }
+    carried.forEach { slot -> shared[slot] = mint("$name${slot.stem()}") }
     ForwardAsyncSlots(
-      begin, end, key, releases.first, releases.second, releases.third, carriesShared = first,
+      kind, begin, end, key,
+      shared = kind.sharedSlots().associateWith { slot -> shared.getValue(slot) },
+      carried = carried,
       holder = mint("${name}Holder"),
       csharpKey = mint("${name}AsyncKey"),
     )
@@ -140,6 +225,7 @@ private fun BridgeType.asyncKotlinType(): String = when (this) {
   is BridgeType.Nullable,
   is BridgeType.Callback,
   is BridgeType.AsyncCallback,
+  is BridgeType.FlowSource,
   is BridgeType.ReturnedLambda,
   is BridgeType.SpecializedProtocol,
   is BridgeType.RawKSType,
@@ -169,6 +255,7 @@ private fun BridgeType.asyncKotlinWire(): String = when (this) {
   is BridgeType.Nullable,
   is BridgeType.Callback,
   is BridgeType.AsyncCallback,
+  is BridgeType.FlowSource,
   is BridgeType.ReturnedLambda,
   is BridgeType.SpecializedProtocol,
   is BridgeType.RawKSType,
@@ -199,6 +286,7 @@ private fun BridgeType.asyncPayloadArgument(argument: String): String = when (th
   is BridgeType.Nullable,
   is BridgeType.Callback,
   is BridgeType.AsyncCallback,
+  is BridgeType.FlowSource,
   is BridgeType.ReturnedLambda,
   is BridgeType.SpecializedProtocol,
   is BridgeType.RawKSType,
@@ -310,6 +398,7 @@ internal fun asyncCallbackExpression(
       is BridgeType.Nullable,
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
+      is BridgeType.FlowSource,
       is BridgeType.ReturnedLambda,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,
@@ -322,4 +411,139 @@ internal fun asyncCallbackExpression(
     appendLine("  $lambda")
     append("}")
   }
+}
+
+/** `kotlinx.coroutines.flow.Flow<kotlin.Int>`. */
+internal fun BridgeType.FlowSource.kotlinFlowType(): String =
+  "kotlinx.coroutines.flow.Flow<${element.asyncKotlinType()}>"
+
+/**
+ * ADR-210: the Kotlin `Flow<T>` over the C# caller's `IAsyncEnumerable<T>`, as one self-contained
+ * expression of type [kotlinFlowType].
+ *
+ * The whole shape is the runtime's `flowForKotlin` (ADR-156): cold, so the Enumerate thunk (and
+ * with it `GetAsyncEnumerator`) runs once per `collect`; one `awaitForKotlin` per element; the
+ * enumeration disposed exactly once from its `finally`. Enumerate, both halves of a step and
+ * Current run user C#, so each goes through `nugetCallbackCall`; the dispose and the task release
+ * are plumbing and carry no error slot. `enumerate` reads the key off the holder, which is what
+ * keeps the holder (and so the C# source) alive for as long as the flow is reachable.
+ */
+internal fun flowSourceExpression(
+  name: String,
+  type: BridgeType.FlowSource,
+  slots: ForwardAsyncSlots,
+  // See [asyncCallbackExpression].
+  holderBuilt: Boolean = false,
+): String {
+  val taken: MutableSet<String> = (slots.declared + slots.shared.values + name + slots.holder)
+    .toMutableSet()
+  fun mint(base: String): String = freshName(base, taken).also { taken += it }
+  val holder: String = slots.holder
+  val flow: String = mint("${name}Flow")
+  val box: String = mint("${name}Box")
+  val value: String = mint("${name}Value")
+  val wire: String = type.element.asyncKotlinWire()
+  val read: String = "nugetCallbackCall { nugetErr -> " +
+      "${slots.end}.reinterpret<$CFUNCTION<($POINTER, $POINTER?) -> $wire>>()" +
+      ".invoke(nugetEnumeration, nugetErr) }"
+  return buildString {
+    appendLine("run {")
+    if (!holderBuilt) appendLine("  val $holder = ${asyncCallbackHolderConstruction(slots)}")
+    appendLine("  val $flow: ${type.kotlinFlowType()} = $RUNTIME.flowForKotlin(")
+    appendLine(
+      "    release = { nugetTask -> ${slots.releaseTask}" +
+          ".reinterpret<$CFUNCTION<($POINTER) -> Unit>>().invoke(nugetTask) },"
+    )
+    appendLine(
+      "    enumerate = { nugetCallbackCall { nugetErr -> ${slots.begin}" +
+          ".reinterpret<$CFUNCTION<($POINTER, $POINTER?) -> $POINTER?>>()" +
+          ".invoke($holder.key, nugetErr) }!! },"
+    )
+    appendLine(
+      "    moveNextBegin = { nugetEnumeration, nugetCallback, nugetCtx -> " +
+          "nugetCallbackCall { nugetErr -> ${slots.moveNextBegin}" +
+          ".reinterpret<$CFUNCTION<($POINTER, $POINTER, $POINTER, $POINTER?) -> Unit>>()" +
+          ".invoke(nugetEnumeration, nugetCallback, nugetCtx, nugetErr) } },"
+    )
+    appendLine(
+      "    moveNextEnd = { nugetTask -> nugetCallbackCall { nugetErr -> ${slots.moveNextEnd}" +
+          ".reinterpret<$CFUNCTION<($POINTER, $POINTER?) -> Int>>()" +
+          ".invoke(nugetTask, nugetErr) } != 0 },"
+    )
+    when (val element: BridgeType = type.element) {
+      is BridgeType.Primitive ->
+        if (element.kind == PrimitiveKind.BOOLEAN) {
+          appendLine("    current = { nugetEnumeration -> $read != 0.toByte() },")
+        } else {
+          appendLine("    current = { nugetEnumeration -> $read },")
+        }
+
+      BridgeType.String -> {
+        // The Current thunk boxes the string with `WrapString`; this side reads it, then releases
+        // the box through the counted registry (ADR-036's return-box rule).
+        appendLine("    current = { nugetEnumeration ->")
+        appendLine("      val $box = $read!!")
+        appendLine("      val $value = $box.asStableRef<String>().get()")
+        appendLine("      NugetHandles.release($box)")
+        appendLine("      $value")
+        appendLine("    },")
+      }
+
+      BridgeType.Unit,
+      BridgeType.Char,
+      BridgeType.Instant,
+      BridgeType.Duration,
+      is BridgeType.Throwable,
+      BridgeType.Uuid,
+      is BridgeType.Enum,
+      is BridgeType.ObjectHandle,
+      is BridgeType.Interface,
+      is BridgeType.BoundInterface,
+      is BridgeType.ValueClass,
+      BridgeType.ByteArray,
+      is BridgeType.Collection,
+      is BridgeType.Nullable,
+      is BridgeType.Callback,
+      is BridgeType.AsyncCallback,
+      is BridgeType.FlowSource,
+      is BridgeType.ReturnedLambda,
+      is BridgeType.SpecializedProtocol,
+      is BridgeType.RawKSType,
+      is BridgeType.Unsupported,
+      is BridgeType.RawCollection,
+      is BridgeType.TypeParameter,
+        -> error("ADR-210 admits no Flow parameter element $element")
+    }
+    appendLine(
+      "    dispose = { nugetEnumeration, nugetCancelled -> ${slots.disposeEnumeration}" +
+          ".reinterpret<$CFUNCTION<($POINTER, Int) -> Unit>>()" +
+          ".invoke(nugetEnumeration, if (nugetCancelled) 1 else 0) },"
+    )
+    appendLine("  )")
+    appendLine("  $flow")
+    append("}")
+  }
+}
+
+/** The Kotlin expression for either asynchronous parameter kind. */
+internal fun asyncParameterExpression(
+  name: String,
+  type: BridgeType,
+  slots: ForwardAsyncSlots,
+  holderBuilt: Boolean = false,
+): String = when (type.asyncKind()) {
+  ForwardAsyncKind.LAMBDA ->
+    asyncCallbackExpression(name, type as BridgeType.AsyncCallback, slots, holderBuilt)
+
+  ForwardAsyncKind.FLOW ->
+    flowSourceExpression(name, type as BridgeType.FlowSource, slots, holderBuilt)
+
+  null -> error("ADR-210 has no asynchronous parameter lowering for $type")
+}
+
+/** The Kotlin type of either asynchronous parameter kind, as the member declares it. */
+internal fun asyncParameterKotlinType(type: BridgeType): String = when (type.asyncKind()) {
+  ForwardAsyncKind.LAMBDA -> (type as BridgeType.AsyncCallback).kotlinFunctionType()
+  ForwardAsyncKind.FLOW -> (type as BridgeType.FlowSource).kotlinFlowType()
+  null -> error("ADR-210 has no asynchronous parameter type for $type")
 }

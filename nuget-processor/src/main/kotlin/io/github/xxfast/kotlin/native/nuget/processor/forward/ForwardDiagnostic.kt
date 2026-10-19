@@ -880,8 +880,12 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
     // somewhere else and the generic sentence ("its FLOW_PROTOCOL type combination is not
     // supported") would send the author looking for a type problem that does not exist.
     ForwardPlanSkipReason.UNROUTED_POSITION -> when (detail) {
+      // ADR-210: a hot flow at a parameter has its own sentence; a cold one binds there now.
+      HOT_FLOW_INPUT_DETAIL -> HOT_FLOW_INPUT_REASON
+
       ForwardPlanSkipReason.FLOW_PROTOCOL.name ->
-        "a Flow/StateFlow binds at a class-method return and a property, but not at this position"
+        "a Flow/StateFlow binds at a class-method return and a property, and a `Flow<T>` of a " +
+            "primitive or String at a parameter, but not at this position"
 
       // ADR-160: a per-call lambda PARAMETER now binds off the ADR-062 plan at every ordinary
       // position (class method, sealed arm, object member, top-level function, extension), so the
@@ -1384,10 +1388,12 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
   // ADR-064 amendment (2026-09-13): the remedy is always "move it to a position that does bind",
   // and the positions that bind differ per member kind, so each detail names its own.
   ForwardPlanSkipReason.UNROUTED_POSITION -> when (detail) {
+    HOT_FLOW_INPUT_DETAIL -> HOT_FLOW_INPUT_HINT
+
     ForwardPlanSkipReason.FLOW_PROTOCOL.name ->
-      "return the Flow from a method on an ordinary class (or expose it as a property); a Flow " +
-          "cannot be passed in, and no object, interface, extension or constructor route carries " +
-          "one"
+      "return the Flow from a method on an ordinary class (or expose it as a property), or " +
+          "take a `Flow<T>` of a primitive or String as a parameter; no object, interface, " +
+          "extension or constructor route carries a returned one"
 
     ForwardPlanSkipReason.CALLBACK_PROTOCOL.name ->
       "take the lambda as a parameter of an ordinary class method (a per-call one, or an " +
@@ -1651,6 +1657,21 @@ private const val genericSkipHint: String =
       "instead"
 
 /**
+ * ADR-210: the detail a `StateFlow<T>`, `SharedFlow<T>` or `MutableStateFlow<T>` PARAMETER
+ * carries under [ForwardPlanSkipReason.UNROUTED_POSITION], and its sentence and hint. A cold
+ * `Flow<T>` binds as `IAsyncEnumerable<T>`; a hot one has nothing on the C# side to be made from.
+ */
+internal const val HOT_FLOW_INPUT_DETAIL: String = "HOT_FLOW_INPUT"
+
+internal const val HOT_FLOW_INPUT_REASON: String =
+  "a StateFlow, SharedFlow or MutableStateFlow cannot be passed in: C# has no source for a " +
+      "synchronous current value or a replay cache, only an `IAsyncEnumerable<T>`, which binds " +
+      "a `Flow<T>` parameter"
+
+internal const val HOT_FLOW_INPUT_HINT: String =
+  "declare the parameter as `Flow<T>` and call `stateIn(scope)` (or `shareIn`) on it in Kotlin"
+
+/**
  * A short, human-readable name for a diagnostic message; never used to drive marshalling.
  *
  * Lifted from a `ForwardPropertyPlanner` private member to file-level `internal` (the body touches
@@ -1670,6 +1691,9 @@ internal fun BridgeType.diagnosticTypeName(): String = when (this) {
     prefix = "suspend (",
     postfix = ") -> ${result.diagnosticTypeName()}",
   ) { parameter -> parameter.diagnosticTypeName() }
+
+  // ADR-210: as the author wrote it.
+  is BridgeType.FlowSource -> "Flow<${element.diagnosticTypeName()}>"
 
   // ADR-160 amendment: the same arrow spelling for a function type handed OUT.
   is BridgeType.ReturnedLambda -> typeArguments.dropLast(1).joinToString(

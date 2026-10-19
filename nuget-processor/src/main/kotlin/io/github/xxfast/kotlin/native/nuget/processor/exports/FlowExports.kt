@@ -354,6 +354,11 @@ internal fun FileSpec.Builder.addFlowMethodExports(
   fun FunSpec.Builder.addFlowParameters() {
     method.parameters.forEachIndexed { index, param ->
       val paramName: String = param.name?.asString() ?: "_"
+      // ADR-210: a `Flow<T>` parameter's flat thunk and key slots, in the planner's order.
+      names.asyncSlots[index]?.let { slots ->
+        slots.declared.forEach { slot -> addParameter(slot, cOpaquePointer) }
+        return@forEachIndexed
+      }
       // ADR-114: the wire container is a handle to MutableList<Any?>/MutableSet<Any?>, never the
       // declared collection type, so the ABI slot is a COpaquePointer like every other handle.
       // ADR-122: so is a class/object/sealed parameter, which used to declare its real Kotlin

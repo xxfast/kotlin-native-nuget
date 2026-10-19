@@ -211,6 +211,7 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
 
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
     is BridgeType.Unsupported,
@@ -295,6 +296,7 @@ private fun addValueClassOrdinaryResult(
     is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -492,6 +494,7 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
     is BridgeType.BoundInterface,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -545,6 +548,7 @@ private fun valueClassReconstruction(plan: ForwardCallablePlan, call: ForwardNat
     is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -603,6 +607,7 @@ private fun elementKotlinTypeName(type: BridgeType): String = when (type) {
   is BridgeType.Nullable,
   is BridgeType.Callback,
   is BridgeType.AsyncCallback,
+  is BridgeType.FlowSource,
   is BridgeType.ReturnedLambda,
   is BridgeType.SpecializedProtocol,
   is BridgeType.RawKSType,
@@ -660,6 +665,7 @@ internal fun componentLowering(
     is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -704,6 +710,7 @@ internal fun componentLowering(
       is BridgeType.Nullable,
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
+      is BridgeType.FlowSource,
       is BridgeType.ReturnedLambda,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,
@@ -734,6 +741,7 @@ internal fun componentLowering(
     is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -756,6 +764,7 @@ internal fun componentLowering(
   BridgeType.ByteArray,
   is BridgeType.Callback,
   is BridgeType.AsyncCallback,
+  is BridgeType.FlowSource,
   is BridgeType.ReturnedLambda,
   is BridgeType.SpecializedProtocol,
   is BridgeType.RawKSType,
@@ -1039,6 +1048,7 @@ private fun addNullableResult(
     is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -1642,6 +1652,7 @@ private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): Typ
   is BridgeType.BoundInterface -> cOpaquePointer
   // ADR-210: every slot of a suspend lambda is an opaque address or key.
   is BridgeType.AsyncCallback -> cOpaquePointer
+  is BridgeType.FlowSource -> cOpaquePointer
   // ADR-160: both of a callback's two slots are opaque addresses -- the ADR-102 thunk and the
   // GCHandle ctx it dispatches through. Non-null: C# always supplies a real thunk address, and a
   // nullable `CFunction` reinterpret would need a guard at every invocation.
@@ -1669,6 +1680,7 @@ private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): Typ
     is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -1841,6 +1853,7 @@ private fun defaultResult(type: BridgeType): String = when (type) {
   is BridgeType.Nullable,
   is BridgeType.Callback,
   is BridgeType.AsyncCallback,
+  is BridgeType.FlowSource,
   is BridgeType.ReturnedLambda,
   is BridgeType.SpecializedProtocol,
   is BridgeType.RawKSType,
@@ -1897,10 +1910,10 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
     // parameter on the same member cannot collide with this one's locals).
     // ADR-210: a real Kotlin `suspend` lambda over `awaitForKotlin`, capturing the holder whose
     // cleaner releases the C# key, so the member may invoke it now or store it.
-    is BridgeType.AsyncCallback ->
-      asyncCallbackExpression(
-        parameter.ref, type, requireNotNull(parameter.asyncSlots), holderBuilt = true,
-      )
+    // A `Flow<T>` parameter is a cold Kotlin `Flow` over `flowForKotlin`, with the same holder.
+    is BridgeType.AsyncCallback, is BridgeType.FlowSource -> asyncParameterExpression(
+      parameter.ref, type, requireNotNull(parameter.asyncSlots), holderBuilt = true,
+    )
 
     is BridgeType.Callback -> loweredCallbackExpression(
       parameter.ref, type, parameter.callbackPtrSlot, parameter.callbackUserDataSlot,
@@ -1977,6 +1990,7 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
       is BridgeType.Nullable,
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
+      is BridgeType.FlowSource,
       is BridgeType.ReturnedLambda,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,
@@ -2031,6 +2045,7 @@ private fun loweredCallbackExpression(
     is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -2064,6 +2079,7 @@ private fun loweredCallbackExpression(
     is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -2103,6 +2119,7 @@ private fun loweredCallbackExpression(
           is BridgeType.Nullable,
           is BridgeType.Callback,
           is BridgeType.AsyncCallback,
+          is BridgeType.FlowSource,
           is BridgeType.ReturnedLambda,
           is BridgeType.SpecializedProtocol,
           is BridgeType.RawKSType,
@@ -2163,6 +2180,7 @@ private fun loweredCallbackExpression(
       is BridgeType.Nullable,
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
+      is BridgeType.FlowSource,
       is BridgeType.ReturnedLambda,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,
@@ -2201,6 +2219,7 @@ internal fun valueClassUnderlyingLowering(name: String, underlying: BridgeType):
     is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,

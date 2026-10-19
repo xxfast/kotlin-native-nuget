@@ -29,7 +29,7 @@ Reverse-direction backlog items deferred by the 2026-10-07 triage (experimental 
 
 ### Deferred to 1.x
 
-Additive, so none of it forces a major; each stays in its phase below: `Flow` as a parameter, reverse exception fidelity, events, `ValueTask`, operators, indexers, arrays, generic interfaces, the crossing benchmark, the size gate, the leak-ladder rungs beyond what the disposal contract needs, `LibraryImport`, record classes.
+Additive, so none of it forces a major; each stays in its phase below: reverse exception fidelity, events, `ValueTask`, operators, indexers, arrays, generic interfaces, the crossing benchmark, the size gate, the leak-ladder rungs beyond what the disposal contract needs, `LibraryImport`, record classes.
 
 ## Phase 1: Basic bridging
 
@@ -55,7 +55,6 @@ Complete.
 Complete.
 
 ## Phase 7: Bidirectional support (C# → Kotlin)
-- [ ] Forward: a `Flow<T>` function parameter (`IAsyncEnumerable<T>` in C#), with a `StateFlow<T>` parameter refused by name, including on sealed arms. This is slice (b) of [ADR-210](docs/adr/210-flow-and-suspend-lambda-parameters.md); the suspend lambda parameter shipped as slice (a).
 - [ ] Fold the reverse template's internal `NugetManagedException` onto the runtime class over the ADR-130 expect/actual seam ([details](docs/backlog/fold-reverse-managed-exception-onto-runtime-class.md))
 - [ ] A callback that throws on a Kotlin dispatcher thread (suspend or `Flow` routes) leaves its `NugetErrorNative._lastManagedFault` stash uncleared, as that thread never runs a C# export call site; inferred, not reproduced; ADR-210's suspend lambda thunks run user C# on Kotlin dispatcher threads too, which widens its reach (inferred) ([details](docs/backlog/managed-fault-stash-never-cleared-on-dispatcher-threads.md))
 - [ ] `NugetManagedException` carries no `@NugetRuntimeApi`, unlike every other public runtime export ([details](docs/backlog/managed-exception-missing-runtime-api-marker.md))
@@ -214,6 +213,7 @@ Fallout from [ADR-053](docs/adr/053-nullable-reference-types-in-kotlin.md) (reve
 - [ ] A refused sealed type at a `suspend` return or `Flow` item is reported as "but not the generic type `X`" although `X` is not generic: wording only, from `refusedReturn` in `warnRefusedLegacyRouteMembers` (`NugetProcessor.kt` ~859). Verified in Tier 1 output; found with [ADR-204](docs/adr/204-sealed-interface-over-declared-arms.md).
 - [ ] `SuspendLambdaTests.CatFeeder_OnFeedPortion_CancelViaToken_MyloLeftHungry` failed once ("No exception was thrown") while a second full build shared the machine, and passed solo; cause inferred to be a pre-cancelled-token race under load, not reproduced.
 - [ ] The `Interface` and `Throwable` payload arms of a suspend lambda parameter, and a suspend lambda parameter on a `copy`, enum or value-class member, have no fixture ([ADR-210](docs/adr/210-flow-and-suspend-lambda-parameters.md) slice (a) left them cold by decision); the classifier admits the two payload arms, the member kinds are unchecked.
+- [ ] A `Flow<T>` parameter is not admitted on a `StateFlow`/`SharedFlow`-returning host, an enum or value-class member, or a data class `copy`, and the refusal on the hot-flow-returning host reuses the legacy sentence "but not drops: Flow<Int>", which now reads oddly because `Flow<Int>` binds on sibling hosts ([ADR-210](docs/adr/210-flow-and-suspend-lambda-parameters.md) slice (b)). Verified by a Tier 1 run.
 
 ## Performance & Resource Hygiene
 

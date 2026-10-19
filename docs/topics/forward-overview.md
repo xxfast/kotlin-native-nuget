@@ -341,12 +341,16 @@ used to vanish from both the Kotlin and C# output with no diagnostic at all. Sin
 2026-09-13 amendment every one of those positions is a named skip instead:
 
 ```
-[nuget:SKIPPED_UNSUPPORTED_INPUT] Skipping Depot.flowParamOnClass: a Flow/StateFlow binds at a
-    class-method return and a property, but not at this position. return the Flow from a method on
-    an ordinary class (or expose it as a property); a Flow cannot be passed in, and no object,
-    interface, extension or constructor route carries one
-    at UnroutedPositionsSample.kt:21
+[nuget:SKIPPED_UNSUPPORTED_RETURN] Skipping DepotRegistry.flowReturnOnObject: a Flow/StateFlow
+    binds at a class-method return and a property, and a `Flow<T>` of a primitive or String at a
+    parameter, but not at this position. return the Flow from a method on an ordinary class (or
+    expose it as a property), or take a `Flow<T>` of a primitive or String as a parameter; no
+    object, interface, extension or constructor route carries a returned one
+    at UnroutedPositionsSample.kt:68
 ```
+
+A `Flow<T>` *parameter* of a primitive or `String` is not one of these: it binds at every ordinary
+position, see [A `Flow` as a parameter](coroutines-and-flow.md#flow-parameter).
 
 A callable's own type parameter is one of these positions too, and skips
 `SKIPPED_UNSUPPORTED_COMBINATION` naming the structural mismatch rather than the position. A class,
@@ -363,7 +367,7 @@ elsewhere: an interface default with a `Flow`/`StateFlow` return or a lambda par
 re-emits on every class that implements the interface (just not on the generated C# `interface`
 itself, see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)).
 
-The same kind also fires when an extension property's *receiver* type, not its declared type, is
+A related skip, `SKIPPED_UNSUPPORTED_PROPERTY`, fires when an extension property's *receiver* type, not its declared type, is
 what the planner can't wire. See [Extensions: Supported receivers](extensions.md#supported-receivers)
 for the full admitted set; a receiver outside it warns and the property is dropped entirely, naming
 the receiver rather than the property's own (usually fine) type:
@@ -759,7 +763,7 @@ bring a marked type into scope. `Shelter.rules()` returns `HouseRules`, and the 
 
 A marked primary-constructor `val` follows one invariant: the marked declaration never appears in a
 C# signature. A trailing marked parameter with a default is dropped from the widened constructor
-signature the same way a `Flow` or sealed defaulted parameter is
+signature the same way a nullable `Flow<T>?` or sealed defaulted parameter is
 ([ADR-164](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/164-optional-default-parameters.md)),
 and Kotlin always evaluates its default; an undefaulted or non-trailing marked parameter has no
 routable form at all, so the constructor itself is dropped, `copy` along with it, and the class

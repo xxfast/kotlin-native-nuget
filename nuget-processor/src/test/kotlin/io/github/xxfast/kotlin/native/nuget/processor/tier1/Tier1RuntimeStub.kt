@@ -134,6 +134,19 @@ internal object Tier1RuntimeStub {
       mappedType: (Throwable) -> String?,
       body: suspend (emit: suspend (COpaquePointer?) -> Unit) -> Unit,
     ): COpaquePointer = TODO()
+
+    // ADR-156's pull seam, which ADR-210's `Flow<T>` parameter composes. It names `Flow`, so it
+    // sits with the coroutine-dependent stubs.
+    @NugetRuntimeApi
+    fun <T> flowForKotlin(
+      release: (task: COpaquePointer) -> Unit,
+      enumerate: () -> COpaquePointer,
+      moveNextBegin:
+        (enumeration: COpaquePointer, callback: COpaquePointer, ctx: COpaquePointer) -> Unit,
+      moveNextEnd: (task: COpaquePointer) -> Boolean,
+      current: (enumeration: COpaquePointer) -> T,
+      dispose: (enumeration: COpaquePointer, cancelled: Boolean) -> Unit,
+    ): kotlinx.coroutines.flow.Flow<T> = TODO()
   """.trimIndent()
 
   /** relative file name -> file content, ready for [Tier1Harness] to write to disk and compile. */
