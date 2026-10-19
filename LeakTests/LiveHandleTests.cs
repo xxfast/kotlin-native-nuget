@@ -3593,6 +3593,22 @@ public class LiveHandleTests
         });
     }
 
+    // Row 10e. ADR-211: a top-level function's own `T`, on the same boxed wire as Row 10b, from a
+    // static method on the file facade. A builtin `T` mints one `Wrap<T>` box the C# `finally`
+    // disposes; a wrapper `T` (Mylo's toy) mints nothing and is released by its own `using`. The
+    // `string` return is not a handle.
+    // Ledger per iteration: toy +1/-1, Describe(4) box +1/-1, Describe(toy) nothing. Net zero.
+    [Fact]
+    public void TopLevelGenericMethod_BoxedTypeParameter_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var toy = new Toy("Mylo's Milo Mouse", "Brown");
+            Assert.Equal("4: Int", Descriptions.Describe(4));
+            Assert.Equal("Toy(name=Mylo's Milo Mouse, color=Brown): Toy", Descriptions.Describe(toy));
+        });
+    }
+
     // Row 10d. ADR-197 with ADR-015's checked read: a T outside a dropped builtin bound fails the
     // cast at the Kotlin read of a member's own T, on a class, an object, a generic class and a
     // sealed arm. Each `Wrap<T>` box was minted before the call and must still be disposed in the

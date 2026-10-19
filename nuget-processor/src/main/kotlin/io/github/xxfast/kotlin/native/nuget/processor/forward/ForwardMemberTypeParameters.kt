@@ -10,15 +10,17 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.SUSPEND_LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
+import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyGenericFunctionRoute
 
 /**
  * ADR-197: whether this function's own type parameters classify as [BridgeType.TypeParameter]: a
  * member (not an extension) of a class, a sealed class, an object or a companion. An interface,
- * an enum and a value class keep the named refusal, as does every top-level function, which the
- * legacy generic-function route owns.
+ * an enum and a value class keep the named refusal. ADR-211: so does a top-level function, unless
+ * the legacy width-variant gate refuses it; that one routes on the plan too.
  */
 internal fun KSFunctionDeclaration.isForwardGenericMemberOwner(): Boolean {
   if (extensionReceiver != null) return false
+  if (parentDeclaration == null) return !hasLegacyGenericFunctionRoute()
   val owner: KSClassDeclaration = parentDeclaration as? KSClassDeclaration ?: return false
   return when (owner.classKind) {
     ClassKind.CLASS -> !owner.isValueClass()
@@ -117,8 +119,10 @@ internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
   }
   // ADR-196: the owner's own parameters and those an `inner` owner captures from a generic outer;
   // a nested (non-inner) class sees none of its outer's, in Kotlin or on its C# holder.
-  val ownerNames: Set<String> = (parentDeclaration as KSClassDeclaration)
-    .forwardTypeParametersInScope()
+  // ADR-211: a top-level function has no owner, so none in scope.
+  val ownerNames: Set<String> = (parentDeclaration as? KSClassDeclaration)
+    ?.forwardTypeParametersInScope()
+    .orEmpty()
     .map { (_, parameter) -> parameter.simpleName.asString() }
     .toSet()
   val own: Set<String> = typeParameters.map { it.simpleName.asString() }.toSet()

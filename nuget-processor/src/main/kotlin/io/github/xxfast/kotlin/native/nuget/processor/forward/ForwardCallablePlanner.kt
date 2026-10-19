@@ -2645,10 +2645,11 @@ internal class ForwardCallablePlanner(
     // ADR-164: per-parameter "has a default", positionally, from the route's own flag reader.
     defaults: List<Boolean>,
   ): ForwardCallableCatalogEntry {
-    // ADR-197: an object or companion member's own type parameters route on the plan; a top-level
-    // function's stay on the legacy generic-function route.
+    // ADR-197: an object or companion member's own type parameters route on the plan. ADR-211: so
+    // do a top-level function's, when the legacy width-variant gate refuses it (only those reach
+    // the catalog).
     val routesGeneric: Boolean = origin == ForwardCallableOrigin.OBJECT ||
-        origin == ForwardCallableOrigin.COMPANION
+        origin == ForwardCallableOrigin.COMPANION || origin == ForwardCallableOrigin.TOP_LEVEL
     val structuralReason: ForwardPlanSkipReason? = when {
       function.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
       function.typeParameters.isNotEmpty() &&
