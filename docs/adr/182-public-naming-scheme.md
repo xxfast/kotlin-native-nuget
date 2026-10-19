@@ -272,7 +272,7 @@ Implemented (2026-10-02, diagnostics half; the DSL filter and task renames follo
 
 - The functions `NugetBindConfig.include` / `exclude` stay in 0.9.x as
   `@Deprecated(level = DeprecationLevel.ERROR, ReplaceWith("includeNamespaces(*namespace)"))`
-  (and the `exclude` twin), and are deleted in 0.10.0.
+  (and the `exclude` twin), and were deleted in 0.10.0 (2026-10-19).
 - `nugetGen` is a clean break (4c): no task is registered under the old name, and the old task
   class is gone. A stub would have to be removed in 0.10.0, which must have no breaks.
 - Diagnostic codes and the JSON files get no compatibility shim; `schemaVersion` is the signal.

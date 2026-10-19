@@ -9,16 +9,27 @@ Maintenance rules:
 
 ## First stable release (1.0.0)
 
-Two minor releases lead to 1.0.0: 0.9.0 carries every breaking change, 0.10.0 is hardening and acts as the release candidate, and 1.0.0 adds policy and docs with no breaks. Scope agreed 2026-09-29, after the 0.8.0 release; a claim below is verified (read in code or spiked) or inferred (not run), as labelled. An item that would force a semver-major after 1.0.0 lands in 0.9.0; additive work stays in its phase below and ships in 1.x. At 1.0.0 the forward direction (Kotlin to C#) is stable, and semver covers the Gradle DSL, the task names, the fixed generated C# types, the `nuget_*` runtime ABI, the diagnostic codes and `NugetDiagnostics.json`. The reverse direction (C# to Kotlin) is experimental behind an opt-in and may break in 1.x: it binds 34.0% of public members over nine real packages (`nuget-plugin/src/test/resources/dogfood/SUMMARY.md`) and its output has never been compiled against one. The Maven artifact ids stay `nuget-plugin`, `nuget-processor` and `nuget-runtime`.
+A run of minor releases leads to 1.0.0: 0.9.0 carried every forward breaking change, 0.10.0 ships the Phase 6 Flow work and the 2026-10-07 audit fixes, the minors after it bring the reverse direction to feature parity with forward (Phases 7 to 13), the first minor after the last parity break is hardening and acts as the release candidate, and 1.0.0 adds policy and docs with no breaks. Scope agreed 2026-09-29, after the 0.8.0 release, and widened on 2026-10-19 to pull reverse parity before 1.0.0: widening a bound interface adds abstract members to every Kotlin implementer, and inheritance, typed exception mapping, the acronym and namespace naming fixes and the diagnostics-report shape each change generated Kotlin, so they cannot ship as 1.x additive work. A claim below is verified (read in code or spiked) or inferred (not run), as labelled. An item that would force a semver-major after 1.0.0 lands in a minor before the release candidate; additive work stays in its phase below and may ship in 1.x. At 1.0.0 both directions are stable, and semver covers the Gradle DSL, the task names, the fixed generated C# types, the generated Kotlin shapes, the `nuget_*` runtime ABI, the diagnostic codes and `NugetDiagnostics.json`. Until then the reverse direction stays behind `@ExperimentalNugetBindingApi` (dropping the marker is itself a break, so it lands in the last parity minor): it binds 34.0% of public members over nine real packages (`nuget-plugin/src/test/resources/dogfood/SUMMARY.md`) and its output has never been compiled against one. The Maven artifact ids stay `nuget-plugin`, `nuget-processor` and `nuget-runtime`.
 
 ### 0.9.0: breaking changes
 
 Complete.
 
-### 0.10.0: hardening
+### 0.10.0: Phase 6 Flow and the audit fixes
+
+Complete. Cut from `main` on 2026-10-19 as-is, before the reverse parity work starts.
+
+### 0.11.0 onward: reverse parity
+
+Phases 7 to 13 below, in that order, each phase one or more minors. A gap that needs a decision first (inheritance, events, generic interfaces, `ref`/`out`, typed exception mapping, the policy for widening a bound interface) gets its ADR before its lane. Breaks to generated Kotlin are allowed here, under the experimental marker, and each needs a "Breaking changes" entry in its release notes. The reverse backlog items the 2026-10-07 triage deferred are part of this work (each stays on its phase line): the silent `UP-TO-DATE` reverse diagnostics, `alias`/`includeNamespaces` prefix matching, same-named types overwriting one generated file, the Shape B `init`-only property, the four delegate gaps, nested public types, the `dynamic` parameter, unsupported-struct members, and `validateKotlinSignatures` skipping generic and struct routes. The forward, tooling and runtime leak, wrong-behaviour and silent-omission items from that audit were fixed in the 2026-10-07 stack (#489 to #514).
+
+### Hardening: the release candidate
+
+The first minor after the last parity break.
 
 - [ ] [ADR-165](docs/adr/165-publish-nuget-task.md)'s three Unverified claims need one real push to nuget.org and one to GitHub Packages before the next release ([details](docs/backlog/adr-165-unverified-claims-need-a-real-push.md))
-Reverse-direction backlog items deferred by the 2026-10-07 triage (experimental direction, outside the 1.0 promise; each stays on its phase line): the silent `UP-TO-DATE` reverse diagnostics, `alias`/`includeNamespaces` prefix matching, same-named types overwriting one generated file, the Shape B `init`-only property, the four delegate gaps, nested public types, the `dynamic` parameter, unsupported-struct members, and `validateKotlinSignatures` skipping generic and struct routes. The forward, tooling and runtime leak, wrong-behaviour and silent-omission items from that audit were fixed in the 2026-10-07 stack (#489 to #514).
+- [ ] Drop `@ExperimentalNugetBindingApi` from the generated reverse bindings, or decide it stays with a narrower meaning.
+- [ ] A reverse dogfood layer that compiles and runs the generated Kotlin for the nine census packages ([design](docs/backlog/reverse-dogfooding-layer2-layer3-design.md)); parity is measured against it, not against the generation-only census.
 
 ### 1.0.0: policy and docs
 
@@ -29,7 +40,7 @@ Reverse-direction backlog items deferred by the 2026-10-07 triage (experimental 
 
 ### Deferred to 1.x
 
-Additive, so none of it forces a major; each stays in its phase below: reverse exception fidelity, events, `ValueTask`, operators, indexers, arrays, generic interfaces, the crossing benchmark, the size gate, the leak-ladder rungs beyond what the disposal contract needs, `LibraryImport`, record classes.
+Additive, so none of it forces a major; each stays in its phase below: the crossing benchmark, the size gate, the leak-ladder rungs beyond what the disposal contract needs, `LibraryImport`. The reverse items this list used to carry (exception fidelity, events, `ValueTask`, operators, indexers, arrays, generic interfaces, record classes) moved into the parity minors above on 2026-10-19.
 
 ## Phase 1: Basic bridging
 
