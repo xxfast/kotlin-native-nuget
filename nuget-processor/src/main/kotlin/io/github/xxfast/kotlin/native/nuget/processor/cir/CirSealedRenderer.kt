@@ -354,15 +354,22 @@ internal fun sealedSubclassBlock(
   // an ordinary class's `companionMembers` are dispatched -- the private `[DllImport]` and the
   // `async` body -- both baked at the ordinary-class depth, so the whole block takes the same +4
   // re-indent the property and method arms take.
+  // ADR-199: the name is read by `nameof(...)` only, and `nameof(Bare)` is CS0305 inside the
+  // `Bare<T>` a phantom parameter makes of a non-generic Kotlin arm.
   subclass.asyncMembers.forEach { member ->
-    append(buildString { renderMember(member, subclass.name) }.indentNestedBody())
+    append(
+      buildString { renderMember(member, "${subclass.name}$armArguments") }.indentNestedBody(),
+    )
   }
 
   // ADR-124: the arm's Flow/StateFlow-returning methods, dispatched by the same `renderMember` and
   // re-indented the same way. A flow member's private `[DllImport]` set rides the pair, so nothing
   // here composes an entry point of its own.
+  // ADR-199: the name is read by `nameof(...)` only, and `nameof(Hot)` is CS0305 inside `Hot<T>`.
   subclass.flowMembers.forEach { member ->
-    append(buildString { renderMember(member, subclass.name) }.indentNestedBody())
+    append(
+      buildString { renderMember(member, "${subclass.name}$armArguments") }.indentNestedBody(),
+    )
   }
 
   // ADR-116 amendment (2026-09-11): the arm's per-call lambda-parameter methods, dispatched by the

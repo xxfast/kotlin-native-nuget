@@ -451,7 +451,9 @@ implement a Kotlin interface that has a member returning `Box<Int>`; the impleme
 with `SKIPPED_UNIMPLEMENTABLE_INTERFACE`.
 
 A generic **sealed** hierarchy binds at the same positions; see
-[A generic sealed hierarchy](interfaces-abstract-sealed.md#generic-sealed-hierarchy).
+[A generic sealed hierarchy](interfaces-abstract-sealed.md#generic-sealed-hierarchy). Unlike a
+generic class, a generic sealed arm binds its flow and callback members; see
+[Members of a generic arm](interfaces-abstract-sealed.md#generic-sealed-arm-members).
 
 ### A flow as a type argument {id="a-flow-as-a-type-argument"}
 
