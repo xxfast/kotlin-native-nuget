@@ -718,6 +718,9 @@ public fun export_nuget_runtime_version(): String = NUGET_RUNTIME_VERSION
  * Public, and thrown by [nugetCallbackCall], so a library author can `catch` it at the Kotlin call
  * site of the lambda. The message carries the managed type first so a `catch (e: Exception)` that
  * only prints `e.message` still names what actually failed on the other side.
+ *
+ * Deliberately not `@NugetRuntimeApi`: the marker fences what generated code calls, and this type
+ * exists for the author's `catch` (ADR-127, 2026-10-22 amendment).
  */
 public class NugetManagedException(
   public val managedType: String,

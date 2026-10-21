@@ -150,7 +150,8 @@ not: it is a type an author catches at an ordinary `try`/`catch`, and requiring 
 catch site (rather than only at the few call sites that invoke a marked function) would be an
 unusual and probably unwanted spread of that annotation. This reads against ADR-127's general rule
 that everything the runtime klib exposes carries the marker; recorded here rather than silently
-deviating, and left for a human decision rather than resolved in this ADR.
+deviating. Decided 2026-10-22, see the ADR-127 amendment of that date: the marker fences the
+generator-facing surface and this type is author-facing.
 
 ### Part C: a never-reused key replaces the `GCHandle` ctx for stored callbacks and bridge slots
 
@@ -230,7 +231,8 @@ moment ago. That is ordinary late delivery, not a wrong-listener bug and not a u
    the next fault overwrote it or read it back. Mostly fixed, see the 2026-10-07 amendment; the
    dispatcher-thread case is fixed by the 2026-10-12 amendment.
 6. `NugetManagedException` carries no `@NugetRuntimeApi`, unlike every other public runtime export;
-   left for a human decision (above).
+   Closed 2026-10-22, see the ADR-127 amendment of that date: the marker fences the generator-facing
+   surface and this type is author-facing.
 
 ## Alternatives considered
 
