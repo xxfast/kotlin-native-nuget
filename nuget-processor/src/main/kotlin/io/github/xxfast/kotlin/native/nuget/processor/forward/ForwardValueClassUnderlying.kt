@@ -1,7 +1,14 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.KSClassDeclaration
+import com.google.devtools.ksp.symbol.KSDeclaration
+import com.google.devtools.ksp.symbol.KSFunctionDeclaration
+import com.google.devtools.ksp.symbol.KSPropertyDeclaration
+import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.symbol.KSTypeParameter
 import com.google.devtools.ksp.symbol.KSValueParameter
+import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.valueClassUnderlyingOrThrow
 
 /**
@@ -22,6 +29,14 @@ internal enum class ForwardValueClassUnderlying {
   /** Crosses as a Kotlin handle; the record struct is positional over the C# wrapper (ADR-035). */
   REFERENCE,
 
+  /**
+   * ADR-220: a generic value class whose underlying is one of its own type parameters (`T` or
+   * `T?`) or a phantom one (`val raw: Long`, VALUE or REFERENCE). Declared once as a positional
+   * `readonly record struct V<T>(T Value)`: no `_create`, no box pair, no members. A closed
+   * instantiation crosses as its substituted underlying (the classifier substitutes it).
+   */
+  GENERIC,
+
   /** Neither wire implements it: the value class is not declared, and is refused by name. */
   REFUSED,
 }
@@ -32,10 +47,19 @@ internal fun ForwardBridgeTypeClassifier.valueClassUnderlying(
 ): ForwardValueClassUnderlying {
   val parameter: KSValueParameter = cls.primaryConstructor?.parameters?.singleOrNull()
     ?: return ForwardValueClassUnderlying.REFUSED
-  return classify(parameter.type.resolve()).valueClassUnderlyingRole()
+  val underlying: KSType = parameter.type.resolve()
+  val role: ForwardValueClassUnderlying = classify(underlying).valueClassUnderlyingRole()
+  if (cls.typeParameters.isEmpty()) return role
+  // ADR-220: a bare own type parameter, or a phantom `T` over an underlying that already crosses.
+  val isOwnTypeParameter: Boolean = underlying.declaration is KSTypeParameter &&
+      cls.typeParameters.any { it.name.asString() == underlying.declaration.simpleName.asString() }
+  val isPhantom: Boolean = role == ForwardValueClassUnderlying.VALUE ||
+      role == ForwardValueClassUnderlying.REFERENCE
+  return if (isOwnTypeParameter || isPhantom) ForwardValueClassUnderlying.GENERIC
+  else ForwardValueClassUnderlying.REFUSED
 }
 
-private fun BridgeType.valueClassUnderlyingRole(): ForwardValueClassUnderlying = when (this) {
+internal fun BridgeType.valueClassUnderlyingRole(): ForwardValueClassUnderlying = when (this) {
   BridgeType.String, is BridgeType.Primitive, is BridgeType.Enum ->
     ForwardValueClassUnderlying.VALUE
   is BridgeType.ObjectHandle -> ForwardValueClassUnderlying.REFERENCE
@@ -75,7 +99,17 @@ private fun BridgeType.valueClassUnderlyingRole(): ForwardValueClassUnderlying =
  * real value, and a nullable underlying's null is one too, so neither is refused.
  */
 internal fun BridgeType.ValueClass.hasNullDefault(): Boolean =
-  underlying == BridgeType.String || underlying is BridgeType.ObjectHandle
+  underlying == BridgeType.String || underlying is BridgeType.ObjectHandle ||
+      // ADR-220: a bound own `T` (`T : Any`) inside a generic value class is a non-null slot.
+      underlying is BridgeType.TypeParameter
+
+/**
+ * ADR-220: the member's own type parameter this generic value class instantiation carries as its
+ * underlying (`Sticker<T>` inside `fun <T> stick`), either nullability, or null for any other.
+ */
+internal fun BridgeType.ValueClass.ownTypeParameterUnderlying(): BridgeType.TypeParameter? =
+  underlying as? BridgeType.TypeParameter
+    ?: (underlying as? BridgeType.Nullable)?.type as? BridgeType.TypeParameter
 
 /**
  * [struct]'s underlying property in C#, the unwrap every C# to Kotlin crossing of a value class
@@ -87,4 +121,38 @@ internal fun BridgeType.ValueClass.underlyingCs(struct: String, parameter: Strin
   if (!hasNullDefault()) return "$struct.$property"
   val structName: String = qualifiedName.substringAfterLast('.')
   return valueClassUnderlyingOrThrow(struct, property, structName, parameter)
+}
+
+/**
+ * ADR-220: one named skip per public own member or secondary constructor of a generic value class.
+ * The struct is declared positional and memberless, because a member would need its receiver
+ * substituted per instantiation, which the value-class member route has no spelling for.
+ */
+internal fun KSClassDeclaration.genericValueClassMemberSkips(): List<ForwardDiagnostic> {
+  val name: String = qualifiedName?.asString() ?: simpleName.asString()
+  val underlying: String? = primaryConstructor?.parameters?.singleOrNull()?.name?.asString()
+  val members: List<KSDeclaration> = declarations
+    .filter { it.getVisibility() == Visibility.PUBLIC }
+    .filter { member ->
+      when (member) {
+        is KSFunctionDeclaration -> member != primaryConstructor
+        is KSPropertyDeclaration -> member.simpleName.asString() != underlying
+        else -> false
+      }
+    }
+    .toList()
+  return members.map { member ->
+    val memberName: String = member.simpleName.asString()
+      .let { if (it == "<init>") "constructor" else it }
+    ForwardDiagnostic(
+      kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
+      symbol = member.takeIf { it.containingFile != null },
+      declaration = "$name.$memberName",
+      reason = "`$memberName` is declared on the generic value class `$name`, whose C# record " +
+          "struct carries no members: a member needs its receiver substituted per instantiation",
+      hint = "move it to a top-level function over a closed instantiation " +
+          "(`fun bumped(sticker: Sticker<Int>)`), which binds",
+      owner = null,
+    )
+  }
 }

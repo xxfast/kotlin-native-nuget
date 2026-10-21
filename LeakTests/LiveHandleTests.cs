@@ -6234,4 +6234,32 @@ public class LiveHandleTests
             },
             iterations: 5);
     }
+
+    // ADR-220
+    // A generic value class crosses as its substituted underlying, so a closed `Sticker<Cat>`
+    // borrows the cat's handle at a parameter and mints one fresh wrapper at a return, and a
+    // member's own `T` inside `Sticker<T>` rides the bare-`T` wire (one box in, one box out, both
+    // released). The struct itself owns nothing. Ledger per iteration: mylo +1, the stuck and
+    // adopted cats +1 each, the book +1, every box +1/-1, four disposes -1 each. Net zero.
+    [Fact]
+    public void GenericValueClass_Instantiations_ReturnToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var mylo = new Cat("Mylo", 9);
+            Assert.Equal("Mylo", TestLibrary.Stickers.Stickers.NameOf(
+                new TestLibrary.Stickers.Sticker<Cat>(mylo)));
+            using (Cat stuck = TestLibrary.Stickers.Stickers.Stick(mylo).Value)
+                Assert.Equal("Mylo", stuck.Name);
+            Assert.Equal("Oreo", TestLibrary.Stickers.Stickers.Peel(
+                new TestLibrary.Stickers.Sticker<string>("Oreo")));
+            using (Cat adopted = TestLibrary.Stickers.Stickers.Adopt("Oreo")!.Value.Value)
+                Assert.Equal("Oreo", adopted.Name);
+            using var book = new TestLibrary.Stickers.StickerBook(
+                new TestLibrary.Stickers.Sticker<string>("Oreo's"),
+                new TestLibrary.Stickers.Sticker<int>(1));
+            Assert.Equal(1, book.Pages.Value);
+            Assert.Equal(3, book.Peel(book.Stick(3)));
+        });
+    }
 }

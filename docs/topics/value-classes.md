@@ -35,8 +35,49 @@ class over `Char`, a plain interface, a nullable non-scalar, `Instant`, `Duratio
 `ByteArray`, a collection, another value class, or a type outside the export set is refused by
 name; every member typed with it, at any position, is a separate named skip
 (`SKIPPED_UNSUPPORTED_TYPE`: "its value class type `X` has no C# record struct, because it wraps
-`kotlin.Char`, which no value-class wire carries"). That covers a generic value class, and a
-`Box<X>`, `List<X>`, lambda or `Flow` of one.
+`kotlin.Char`, which no value-class wire carries"). That covers a `Box<X>`, `List<X>`, lambda or
+`Flow` of one.
+
+## A generic value class
+
+A generic value class over its own type parameter, or a phantom one that never uses it, becomes a
+positional generic `readonly record struct`. Each closed instantiation crosses as its argument
+would on its own, so `Sticker<Int>` rides the primitive route and `Sticker<Cat>` the object route.
+
+```kotlin
+value class Sticker<T>(val value: T)
+value class Decal<T>(val serial: Long)
+
+fun count(): Sticker<Int> = Sticker(3)
+fun adopt(name: String?): Sticker<Cat>? = name?.let { Sticker(Cat(it)) }
+fun <T> stick(value: T): Sticker<T> = Sticker(value)
+fun <T> peel(sticker: Sticker<T>): T = sticker.value
+fun oreoDecal(): Decal<Cat> = Decal(7L)
+```
+
+```C#
+Sticker<int> treats = Stickers.Count();                 // new Sticker<int>(3)
+Sticker<Cat>? adopted = Stickers.Adopt("Oreo");         // null when the name is null
+using Cat oreo = adopted!.Value.Value;                  // dispose the wrapped Cat
+string label = Stickers.Peel(new Sticker<string>("x"));
+Decal<Cat> decal = Stickers.OreoDecal();                // Serial stays a long
+```
+
+- The struct is `Sticker<T>(T Value)`, with no `where` clause. A function's own `T` inside it
+  (`Stick<T>`, `Peel<T>`) binds like a bare `T`, and its bound becomes the method's `where`.
+- `init` does not run at `new Sticker<int>(-1)` in C#. It runs when the value first crosses into
+  Kotlin, so the call that receives it throws. A non-generic value class validates at construction.
+- `default(Sticker<string>)` passed to a non-null `Sticker<String>` parameter throws
+  `ArgumentException` in C#. For an unconstrained `T`, `default` carries `null`.
+- A KDoc `[Sticker]` link renders as plain `<c>Sticker</c>`, as it does for a generic class.
+- The struct has no members of its own and no secondary constructors. Each one is a named skip
+  (`SKIPPED_UNSUPPORTED_TYPE`); read `Value` or expose a top-level function instead.
+- A closed instantiation works as a `List`, `Set` or `Map` component and under `?`. These skip,
+  named: `Sticker<T>?` or `List<Sticker<T>>` over a function's own `T`, a bound that needs a
+  trampoline (`T : Comparable<T>`), and an erased position (`Box<Sticker<Int>>`, a lambda payload
+  or result, a `Flow` element, an awaited `suspend` result).
+- A generic value class over `List<T>` or any other shape that is not `T` or a phantom stays
+  refused by name.
 
 ## As an ordinary parameter, property, or return type
 

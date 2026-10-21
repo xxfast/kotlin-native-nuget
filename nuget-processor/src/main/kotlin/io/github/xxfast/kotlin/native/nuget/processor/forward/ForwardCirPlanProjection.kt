@@ -997,6 +997,8 @@ internal object ForwardCirPlanProjection {
       // wire form per underlying (sub-item 4), and Kotlin re-wraps it on the other side.
       is BridgeType.ValueClass -> {
         // A String or handle underlying refuses `default(V)` in the unwrap itself.
+        // ADR-220: a member's own `T` inside a generic value class, the box the prelude minted.
+        if (type.ownTypeParameterUnderlying() != null) return listOf("${parameter.csharpLocal}Box")
         val unwrapped: String = type.underlyingCs(parameter.csharpName, named)
         listOf(
           when (type.underlying) {
@@ -1320,10 +1322,28 @@ internal object ForwardCirPlanProjection {
     parameter: ForwardPublicParameter,
   ): ForwardCirHandleStep? =
     forwardCirTypeParameterBox(parameter.type, parameter.csharpName, parameter.csharpLocal)
+      ?: valueClassTypeParameterBox(parameter)
+
+  /** ADR-220: the box of a member's own `T` inside a generic value class, read off `.Value`. */
+  private fun valueClassTypeParameterBox(parameter: ForwardPublicParameter): ForwardCirHandleStep? {
+    val type: BridgeType.ValueClass = parameter.type as? BridgeType.ValueClass ?: return null
+    if (type.ownTypeParameterUnderlying() == null) return null
+    val unwrapped: String = type.underlyingCs(parameter.csharpName, parameter.csharpName)
+    return forwardCirTypeParameterBox(type.underlying, unwrapped, parameter.csharpLocal)
+  }
 
   /** ADR-099/147: the shared [forwardCirTypeParameterCleanup]. */
   private fun ForwardCallablePlan.typeParameterCleanup(parameter: ForwardPublicParameter): String? =
     forwardCirTypeParameterCleanup(parameter.type, parameter.csharpName, parameter.csharpLocal)
+      ?: (parameter.type as? BridgeType.ValueClass)
+        ?.takeIf { type -> type.ownTypeParameterUnderlying() != null }
+        ?.let { type ->
+          forwardCirTypeParameterCleanup(
+            type.underlying,
+            parameter.csharpName,
+            parameter.csharpLocal,
+          )
+        }
 
   /**
    * ADR-088: a bound C# interface argument crosses as a fresh transfer GCHandle. There is
@@ -1907,7 +1927,11 @@ internal object ForwardCirPlanProjection {
    * ordinal, "IntPtr" for String/ObjectHandle).
    */
   private fun valueClassUnderlyingWireCs(underlying: BridgeType): String = when (underlying) {
-    BridgeType.String, is BridgeType.ObjectHandle -> "IntPtr"
+    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.TypeParameter -> "IntPtr"
+    // ADR-220: an own `T?` inside a generic value class, the same null-pointer box wire.
+    is BridgeType.Nullable ->
+      if (underlying.type is BridgeType.TypeParameter) "IntPtr"
+      else error("Forward CIR plan projection has no value-class underlying wire for $underlying")
     is BridgeType.Enum -> "int"
     is BridgeType.Primitive -> underlying.kind.csharpType()
     BridgeType.Unit,
@@ -1921,7 +1945,6 @@ internal object ForwardCirPlanProjection {
     is BridgeType.ValueClass,
     BridgeType.ByteArray,
     is BridgeType.Collection,
-    is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
     is BridgeType.FlowSource,
@@ -1930,7 +1953,6 @@ internal object ForwardCirPlanProjection {
     is BridgeType.RawKSType,
     is BridgeType.Unsupported,
     is BridgeType.RawCollection,
-    is BridgeType.TypeParameter,
       -> error("Forward CIR plan projection has no value-class underlying wire for $underlying")
   }
 
@@ -1947,6 +1969,13 @@ internal object ForwardCirPlanProjection {
       is BridgeType.Enum -> "(${underlying.csharpType})$wireValue"
       is BridgeType.ObjectHandle -> underlying.handleReconstruction(wireValue)
       is BridgeType.Primitive -> wireValue
+      // ADR-220: a member's own `T` inside a generic value class, read like a bare `T` result.
+      is BridgeType.TypeParameter -> "NugetMarshal.FromHandle<${underlying.name}>($wireValue)"
+      is BridgeType.Nullable -> {
+        val inner: BridgeType.TypeParameter = underlying.type as? BridgeType.TypeParameter
+          ?: error("Forward CIR plan projection has no value-class reconstruction for $underlying")
+        "NugetMarshal.FromHandle<${inner.nullableRead()}>($wireValue)"
+      }
       BridgeType.Unit,
       BridgeType.Char,
       BridgeType.Instant,
@@ -1958,7 +1987,6 @@ internal object ForwardCirPlanProjection {
       is BridgeType.ValueClass,
       BridgeType.ByteArray,
       is BridgeType.Collection,
-      is BridgeType.Nullable,
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
       is BridgeType.FlowSource,
@@ -1967,7 +1995,6 @@ internal object ForwardCirPlanProjection {
       is BridgeType.RawKSType,
       is BridgeType.Unsupported,
       is BridgeType.RawCollection,
-      is BridgeType.TypeParameter,
         -> error("Forward CIR plan projection has no value-class reconstruction for $underlying")
     }
     return "new ${type.csharpType}($inner)"

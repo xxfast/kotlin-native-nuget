@@ -789,20 +789,15 @@ class Tier1NestedTypesTest {
     val result = Tier1Harness.run(genericNestedSource, fileName = "GenericNested.kt")
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
-    // A nested generic interface is declared like a top-level one; a nested generic value class is
-    // refused like a top-level one (its `T` underlying has no value-class wire), named either way.
-    assertContains(
-      blockBody(result.generatedCSharp, "public class Basket"),
-      "public interface IPicker<T>",
-    )
+    // A nested generic interface is declared like a top-level one, and (ADR-220) so is a nested
+    // generic value class: one positional record struct under its non-generic owner.
+    val basket: String = blockBody(result.generatedCSharp, "public class Basket")
+    assertContains(basket, "public interface IPicker<T>")
+    assertContains(basket, "public readonly record struct Wrap<T>(T Value)")
     assertTrue(
-      result.kspWarnings.any {
-        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE.name) &&
-            it.contains("Skipping tier1.genericnested.Basket.Wrap:")
-      },
-      "expected Basket.Wrap to be refused named; warnings=${result.kspWarnings}",
+      result.kspWarnings.none { it.contains("Skipping tier1.genericnested.Basket.Wrap:") },
+      "expected Basket.Wrap to be declared; warnings=${result.kspWarnings}",
     )
-    assertFalse(Regex("""\bstruct Wrap\b""").containsMatchIn(result.generatedCSharp))
     Tier1CSharpCompile.assertCompiles(result, genericNestedConsumer)
   }
 

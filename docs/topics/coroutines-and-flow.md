@@ -1139,8 +1139,8 @@ tracker.SpareChipId.Value = null;
   exported class or object. A value class over anything else is not a flow element at all, on a
   `Flow`, `StateFlow` or `SharedFlow` alike, and the member is skipped by name rather than bound
   read-only. A `Char`, another value class, a `kotlin.*` class such as `Instant` or `Uuid`, a
-  `Throwable`, a `List` or a generic value class has no C# record struct
-  (`SKIPPED_UNSUPPORTED_TYPE`). A nullable underlying (`value class Nick(val name: String?)`) has a
+  `Throwable`, a `List` has no C# record struct
+  (`SKIPPED_UNSUPPORTED_TYPE`). A generic value class (`Crate<Int>`) is skipped here too. A nullable underlying (`value class Nick(val name: String?)`) has a
   record struct but cannot be read back as a bare flow element, an awaited result or a lambda
   payload, so it is skipped too; it still works inside a `List`. Expose the underlying value, or
   change the underlying, to bind it.

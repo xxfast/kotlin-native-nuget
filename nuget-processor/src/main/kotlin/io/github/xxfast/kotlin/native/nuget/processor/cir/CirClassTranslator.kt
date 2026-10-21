@@ -5082,6 +5082,32 @@ internal fun translateValueClass(
   val underlyingType: String = underlyingResolved.declaration.simpleName.asString()
   val underlyingName: String =
     underlyingProp.simpleName.asString().replaceFirstChar { it.uppercase() }
+
+  // ADR-220: a generic value class is one positional record struct for every instantiation. It
+  // has no `CreateChecked` (one constructor cannot call a per-instantiation export), so `init`
+  // runs in Kotlin when a value first crosses, and no members (named skips upstream).
+  if (cls.typeParameters.isNotEmpty()) {
+    val isOwnTypeParameter: Boolean = underlyingResolved.declaration is KSTypeParameter
+    val genericUnderlyingType: String = if (isOwnTypeParameter) {
+      underlyingType + if (underlyingResolved.isMarkedNullable) "?" else ""
+    } else {
+      qualifiedElementCsType(underlyingResolved, context, underlyingResolved.isMarkedNullable)
+    }
+    return CirValueClass(
+      name = name,
+      libraryName = libraryName,
+      nativePrefix = prefix,
+      underlyingType = genericUnderlyingType,
+      underlyingName = underlyingName,
+      underlyingNativeType = "nint",
+      underlyingIsReference = true,
+      properties = emptyList(),
+      methods = emptyList(),
+      doc = cls.forwardKdoc(expects)?.toCirDoc(),
+      underlyingDoc = underlyingProp.forwardKdoc(expects)?.toCirDoc(),
+      typeParameters = cls.typeParameters.map { it.name.asString() },
+    )
+  }
   // ADR-077 sub-item 4 prerequisite: an enum underlying is a *value* underlying (ordinal over the
   // int wire), not a reference one. The name-map check below cannot see that ("Mood" is not in
   // KOTLIN_TO_CSHARP_PARAM), and misclassifying it as reference used to defer the primary

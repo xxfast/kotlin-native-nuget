@@ -204,6 +204,11 @@ lends it to Kotlin at a parameter. `LeakTests/LiveHandleTests.cs`'s
 names (`Hamper<Outcome<long>>`), read back through a second handle to the same Kotlin object that you
 dispose as well.
 
+A [generic value class](value-classes.md#a-generic-value-class) owns no handle of its own. A
+`Sticker<Cat>` wraps the `Cat`'s handle, so you dispose the `Cat` you read out of `.Value`, and the
+count returns to baseline. `LeakTests/LiveHandleTests.cs`'s
+`GenericValueClass_Instantiations_ReturnToBaseline` pins the closed, own-`T` and nullable shapes.
+
 The [members of a generic arm](interfaces-abstract-sealed.md#generic-sealed-arm-members) add no new
 handle kind either. Each element a flow collects from `Dish.Hot<string>.Portions` mints one owned
 crossing, and the count returns to baseline once you `DisposeAsync` the arm. A stored-callback or

@@ -110,13 +110,13 @@ class Tier1MutableStateFlowGenericElementTest {
       "expected no Crate member; got: ${cs.lines().filter { " Crate" in it }}",
     )
     assertFalse(result.generated.contains("_crate_"), "expected no export for crate")
-    // A generic value class has no C# record struct, so the classifier refuses it at every
-    // position and the skip says so, as the one undeclarable type it is.
+    // ADR-220: the record struct is declared, but a flow element is an erased position and a
+    // generic value class has no box pair, so the member is refused as a generic type, named.
     assertTrue(
       result.kspWarnings.any {
-        it.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE.name}]") &&
+        it.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name}]") &&
           it.contains("Shelf.crate") &&
-          it.contains("value class type `tier1.cells.VCrate` has no C# record struct")
+          it.contains("not the generic type VCrate<Int>")
       },
       "expected crate to be a named skip; kspWarnings=${result.kspWarnings}",
     )

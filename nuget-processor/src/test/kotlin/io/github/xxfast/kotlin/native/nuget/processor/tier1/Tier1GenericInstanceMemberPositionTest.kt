@@ -448,65 +448,63 @@ class Tier1GenericInstanceMemberPositionTest {
 
 
   /**
-   * Every member of the [crates] fixture, with its named skip. A generic value class has no C#
-   * record struct, so the classifier refuses it as one undeclarable type at every position
-   * (`SKIPPED_UNSUPPORTED_TYPE`), flow and `suspend` routes included; an ordinary property keeps
-   * the property kind.
+   * ADR-220: the [crates] members a generic value class instantiation binds at, now that `Crate<T>`
+   * is declared as a positional `readonly record struct Crate<T>(T Item)` and `Crate<Int>` crosses
+   * as its substituted `Int`.
    */
-  private val crateMembers: Map<String, ForwardDiagnosticKind> = mapOf(
-    "held" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
-    "spare" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
-    "fetch" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
-    "stow" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
-    "maybeFetch" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
-    "maybeStow" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
-    "boxed" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
-    "listed" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
-    "later" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
-    "laterWith" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
-    "stream" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
-    "state" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
-    "mutable" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
-    "streamOf" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
-    "dial" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
-    "topCrate" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
-    "topFetch" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
-    "topStow" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
-    "label" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
+  private val crateBound: Map<String, String> = mapOf(
+    "held" to "public global::Interop.Crates.Crate<int> Held",
+    "spare" to "public global::Interop.Crates.Crate<string> Spare",
+    "fetch" to "public global::Interop.Crates.Crate<int> Fetch()",
+    "stow" to "public int Stow(global::Interop.Crates.Crate<int> crate)",
+    "maybeFetch" to "public global::Interop.Crates.Crate<int>? MaybeFetch()",
+    "maybeStow" to "public int MaybeStow(global::Interop.Crates.Crate<int>? crate)",
+    "listed" to "public IReadOnlyList<global::Interop.Crates.Crate<int>> Listed()",
+    "topCrate" to "public static global::Interop.Crates.Crate<int> TopCrate",
+    "topFetch" to "public static global::Interop.Crates.Crate<int> TopFetch()",
+    "topStow" to "public static int TopStow(global::Interop.Crates.Crate<int> crate)",
   )
+
+  /**
+   * The [crates] members at an erased position (ADR-171 mints no box pair for a generic value
+   * class): inside `Box<...>`, an awaited `suspend` result or parameter, and a flow element. Each
+   * stays a named skip, absent on both halves.
+   */
+  private val crateSkipped: List<String> =
+    listOf("boxed", "later", "laterWith", "stream", "state", "mutable", "streamOf", "dial")
 
   /**
    * A generic VALUE class (`@JvmInline value class Crate<T>`) is not a handle-carrying object, so
    * an instantiation of it is not an ADR-208 handle at any position: it has no `_handle`, no
-   * `asStableRef` read and no `Factories` line. Every member typed with one stays a named skip,
-   * absent on both halves, and what is left of `Interop.cs` compiles.
+   * `asStableRef` read and no `Factories` line. ADR-220: it is a record struct, so every ordinary
+   * position binds over the substituted underlying, and every erased one stays a named skip.
    */
   @Test
-  fun `a generic value class instantiation is never a handle and stays a named skip`() {
+  fun `a generic value class instantiation is never a handle and binds at an ordinary position`() {
     assertTrue(crates.kspErrors.isEmpty(), "expected no KSP errors; got: ${crates.kspErrors}")
     assertTrue(crates.compiledClean, "expected a clean compile; got: ${crates.compileErrors}")
     val cs: String = crates.generatedCSharp.withoutDocComments()
-    val mentions: List<String> = cs.lines().filter { Regex("""\bCrate\b""").containsMatchIn(it) }
-    assertTrue(mentions.isEmpty(), "expected no C# code naming Crate; got: $mentions")
+    assertContains(cs, "public readonly record struct Crate<T>(T Item)")
     assertFalse(
-      "tier1.crates.Crate" in crates.generated,
-      "expected no Kotlin export reading or minting a Crate",
+      Regex("""Crate<[^>]*>\(handle, out _\)|Crate<[^>]*>\)\]""").containsMatchIn(cs),
+      "a generic value class has no Factories or Boxers line",
     )
     assertFalse(
-      Regex("""@CName\("[^"]*depot_(?!create"|dispose")""").containsMatchIn(crates.generated),
-      "expected no Depot member export; generated=${crates.generated}",
+      Regex("""asStableRef<tier1\.crates\.Crate""").containsMatchIn(crates.generated),
+      "expected no Kotlin export reading a Crate as a handle",
     )
+    crateBound.forEach { (member, signature) ->
+      assertContains(cs, signature, message = "expected $member to bind")
+    }
     val declarations: List<String> = cs.lines().filter { it.trimStart().startsWith("public") }
-    crateMembers.forEach { (member, kind) ->
+    crateSkipped.forEach { member ->
       val csName: String = member.replaceFirstChar { it.uppercase() }
       val declared: List<String> =
         declarations.filter { Regex("""\b$csName(Async)?\b""").containsMatchIn(it) }
       assertTrue(declared.isEmpty(), "expected no $csName declaration; got: $declared")
       assertTrue(
-        crates.kspWarnings.any {
-          it.contains("[nuget:${kind.name}]") && it.contains(".$member: ")
-        },
-        "expected a ${kind.name} naming $member; kspWarnings=${crates.kspWarnings}",
+        crates.kspWarnings.any { it.contains("[nuget:") && it.contains(".$member: ") },
+        "expected a skip naming $member; kspWarnings=${crates.kspWarnings}",
       )
     }
     // The ADR-208 refusal sentence belongs to a generic CLASS. Only `Box<Crate<Int>>` gets it, for
@@ -532,6 +530,9 @@ class Tier1GenericInstanceMemberPositionTest {
               public static void Run()
               {
                   using var depot = new Depot();
+                  Crate<int> held = depot.Held;
+                  depot.Spare = new Crate<string>("ball");
+                  int stowed = depot.Stow(new Crate<int>(4));
               }
           }
       }
@@ -552,10 +553,8 @@ class Tier1GenericInstanceMemberPositionTest {
     listOf("mutable", "dial").forEach { member ->
       val named: List<String> = crates.kspWarnings.filter { it.contains(".$member: ") }
       assertEquals(1, named.size, "expected $member named once; kspWarnings=${crates.kspWarnings}")
-      assertContains(
-        named.single(),
-        "its value class type `tier1.crates.Crate` has no C# record struct",
-      )
+      // ADR-220: the struct is declared; a flow element still needs the box pair it has not got.
+      assertContains(named.single(), "not the generic type Crate<Int>")
     }
     assertFalse(
       crates.kspWarnings.any { it.contains("has no write arm") },
