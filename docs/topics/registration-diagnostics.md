@@ -229,6 +229,11 @@ of `Brook<T>.Updates`, `Level` and `Babble()` that Kotlin hands back is one owne
 count returns to baseline once the flow is drained and the class disposed.
 `LeakTests/LiveHandleTests.cs`'s `GenericClass_FlowElements_ReturnToBaseline` pins it.
 
+A [`Flow<T>` parameter and a `suspend (T) -> T` lambda](coroutines-and-flow.md#flow-and-suspend-lambda-type-parameter)
+mint one owned crossing per element read and per lambda result, and release it when Kotlin has
+read it. A source Kotlin stops early, or cancels half-way, is disposed like any other. The count
+returns to baseline after the call; `MemberGeneric_FlowParameterAndSuspendResult_ReturnToBaseline` pins it.
+
 A [sealed interface whose arms extend a class](interfaces-abstract-sealed.md#sealed-interface-over-arms)
 follows the same rule: an `I<Name>` Kotlin hands back is the arm wrapper, owns one handle, and its
 `Dispose` is the only release, for each element of a returned list too. A C#-built arm passed at a

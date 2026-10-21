@@ -266,6 +266,11 @@ using KotlinFunc<int, int> echo = Decks.Echoer<int>();
 A wrapper `T` follows [the ownership rules below](#ownership-of-a-callback-payload) as a payload.
 The rest, including bounds and `T?`, is covered in [Generics](generics.md#a-type-parameter-in-a-lambda).
 
+A `suspend (T) -> T` lambda over a member's or class's `T` binds the same way, as
+`Func<T, CancellationToken, Task<T>>`; see [A type parameter in a `Flow` or `suspend` lambda
+parameter](coroutines-and-flow.md#flow-and-suspend-lambda-type-parameter). A `suspend` member cannot
+take a plain lambda at all, `T` or not.
+
 ## Ownership of a callback payload {id="ownership-of-a-callback-payload"}
 
 A value handed to your callback from any of the C# → Kotlin routes on this page is owned by C#, not

@@ -9,6 +9,7 @@ import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.symbol.KSTypeParameter
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.FileSpec
@@ -235,6 +236,19 @@ internal fun KSFunctionDeclaration.refusedLegacyLambdaShape(
     val result: KSType = arguments.lastOrNull()?.expandAliases() ?: return@firstNotNullOfOrNull null
     if (result.declaration.qualifiedName?.asString() in LEGACY_LAMBDA_RESULTS) {
       return@firstNotNullOfOrNull null
+    }
+    // ADR-215 lane A: a `T` result is legal on an ordinary member's per-call lambda (the plan's
+    // callback); a member reaching this hand-written route (a `suspend` member, a stored callback)
+    // is refused for where the lambda sits, not for returning `T`.
+    if (result.declaration is KSTypeParameter) {
+      return@firstNotNullOfOrNull LegacyRefusedInterfaceBridgePair(
+        kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
+        reason = "a callback returning a type parameter binds only as a per-call lambda on an " +
+            "ordinary (non-suspend) member, but $spelled returns " +
+            "`${result.kotlinSpelling()}` from a member that lambda route does not carry",
+        hint = "take the lambda on a non-suspend member that does not store it, or return " +
+            "`Unit`, a primitive or a `String` from it",
+      )
     }
     LegacyRefusedInterfaceBridgePair(
       kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,

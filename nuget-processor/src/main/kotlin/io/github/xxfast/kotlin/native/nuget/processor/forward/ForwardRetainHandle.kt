@@ -11,15 +11,46 @@ import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 internal fun ForwardSymbolTable.retainHandleExport(): String = "${librarySegment}__retain_handle"
 
 /**
- * ADR-215 lane A: the symbol of the first plan that hands a `T` from a C# lambda back to Kotlin,
- * the one position that needs [retainHandleExport], or null when none does. It is the export's
- * ADR-117 owner. Both halves read this, so the export and its import appear and disappear
- * together.
+ * ADR-215: whether this parameter type hands a `T` from C# INTO Kotlin as an owned box, the one
+ * position that needs [retainHandleExport]: a lambda's `T` result (lane A), a `suspend` lambda's
+ * `T` result (`EndBoxed()`) and a `Flow<T>` element (`CurrentBoxed()`, both lane C).
+ */
+internal fun BridgeType.boxesIntoKotlin(): Boolean = when (this) {
+  is BridgeType.Callback -> result.unwrapNullable() is BridgeType.TypeParameter
+  is BridgeType.AsyncCallback -> result.unwrapNullable() is BridgeType.TypeParameter
+  is BridgeType.FlowSource -> element.unwrapNullable() is BridgeType.TypeParameter
+  BridgeType.Unit,
+  is BridgeType.Primitive,
+  BridgeType.Char,
+  BridgeType.String,
+  BridgeType.Instant,
+  BridgeType.Duration,
+  is BridgeType.Throwable,
+  BridgeType.Uuid,
+  is BridgeType.Enum,
+  is BridgeType.ObjectHandle,
+  is BridgeType.Interface,
+  is BridgeType.BoundInterface,
+  is BridgeType.ValueClass,
+  BridgeType.ByteArray,
+  is BridgeType.Collection,
+  is BridgeType.Nullable,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+  is BridgeType.TypeParameter,
+    -> false
+}
+
+/**
+ * ADR-215 lane A: the symbol of the first plan that hands a `T` from C# back to Kotlin
+ * ([boxesIntoKotlin]), or null when none does. It is the export's ADR-117 owner. Both halves
+ * read this, so the export and its import appear and disappear together; lane C's legacy suspend
+ * route adds its own sighting (`ForwardBridgeTypeClassifier.boxedAsyncHost`) on both halves.
  */
 internal fun ForwardCallablePlanCatalog.objectCallbackResultOwner(): String? =
   plans.firstOrNull { plan ->
-    plan.publicSignature.parameters.any { parameter ->
-      val callback: BridgeType.Callback? = parameter.type as? BridgeType.Callback
-      callback != null && callback.result.unwrapNullable() is BridgeType.TypeParameter
-    }
+    plan.publicSignature.parameters.any { parameter -> parameter.type.boxesIntoKotlin() }
   }?.invocation?.symbol

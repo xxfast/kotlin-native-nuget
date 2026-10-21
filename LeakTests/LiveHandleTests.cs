@@ -6121,4 +6121,117 @@ public class LiveHandleTests
             }
         }, iterations: 200);
     }
+
+    // ADR-215 lane C
+    // A `T` flowing INTO Kotlin asynchronously. Each `Flow<T>` element is read as an owned box
+    // (`CurrentBoxed()`: a builtin mints one, a borrowed wrapper is retained through
+    // `<lib>__retain_handle`), and each `suspend (T) -> T` result as an owned box (`EndBoxed()`).
+    // Kotlin disposes exactly one box per element and per result. Half-way through, Kotlin stops
+    // the source itself (`Sip` takes two of four), and the outer token cancels a source parked on
+    // its own token, so the enumeration handle and the parked pull's flight are released on both
+    // abort paths. Ledger per iteration: siphon, oreo, mylo +1/-1 each; Gulp over ints and over
+    // `string?` with a null: one box per non-null element +1/-1, one returned box per non-null
+    // element +1/-1; Sip over four wrappers: two retained boxes +1/-1, two returned wrappers +1/-1
+    // (`Dispose`), the enumeration handle +1/-1; the cancelled Gulp: one retained box +1/-1, the
+    // enumeration handle and the pending flight +1/-1; Brew(oreo, borrowed mylo): payload wrapper
+    // +1/-1 (disposed in the lambda), retained box +1/-1, returned wrapper +1/-1; Brew(oreo, fresh):
+    // payload +1/-1, the fresh Tabby +1/-1, its box +1/-1, the returned wrapper +1/-1;
+    // Brew<string?>(null): nothing minted. Net zero.
+    private static async IAsyncEnumerable<T> PourForKotlin<T>(
+        T[] items, TaskCompletionSource closed, [EnumeratorCancellation] CancellationToken token = default)
+    {
+        try
+        {
+            foreach (T item in items)
+            {
+                await Task.Delay(1, token);
+                yield return item;
+            }
+        }
+        finally
+        {
+            closed.TrySetResult();
+        }
+    }
+
+    private static async IAsyncEnumerable<T> PourOneThenWaitOnTheToken<T>(
+        T first, TaskCompletionSource parked, TaskCompletionSource closed,
+        [EnumeratorCancellation] CancellationToken token = default)
+    {
+        try
+        {
+            yield return first;
+            parked.TrySetResult();
+            await Task.Delay(Timeout.Infinite, token);
+            yield return first;
+        }
+        finally
+        {
+            closed.TrySetResult();
+        }
+    }
+
+    [Fact]
+    public async Task MemberGeneric_FlowParameterAndSuspendResult_ReturnToBaseline()
+    {
+        await AssertNoLeakAsync(
+            async () =>
+            {
+                using var siphon = new Membergeneric.Siphon();
+                using var oreo = new Membergeneric.Tabby("Oreo", 3);
+                using var mylo = new Membergeneric.Tabby("Mylo", 5);
+
+                TaskCompletionSource drank = NewSignal();
+                Assert.Equal(new[] { 3, 5 }, await siphon.GulpAsync(PourForKotlin(new[] { 3, 5 }, drank)));
+                await drank.Task.WaitAsync(FlowPatience);
+
+                TaskCompletionSource seated = NewSignal();
+                Assert.Equal(
+                    new string?[] { "Oreo", null },
+                    await siphon.GulpAsync<string?>(PourForKotlin(new string?[] { "Oreo", null }, seated)));
+                await seated.Task.WaitAsync(FlowPatience);
+
+                // Half-way, Kotlin's side: two of four, then the source is disposed.
+                TaskCompletionSource sipped = NewSignal();
+                IReadOnlyList<Membergeneric.Tabby> two =
+                    await siphon.SipAsync(PourForKotlin(new[] { oreo, mylo, oreo, mylo }, sipped), 2);
+                foreach (Membergeneric.Tabby cat in two) cat.Dispose();
+                await sipped.Task.WaitAsync(FlowPatience);
+
+                // Half-way, C#'s side: the outer token lands while the source waits on its own.
+                using (var cts = new CancellationTokenSource())
+                {
+                    TaskCompletionSource parked = NewSignal();
+                    TaskCompletionSource closed = NewSignal();
+                    Task<IReadOnlyList<Membergeneric.Tabby>> gulping =
+                        siphon.GulpAsync(PourOneThenWaitOnTheToken(oreo, parked, closed), cts.Token);
+                    await parked.Task.WaitAsync(FlowPatience);
+                    cts.Cancel();
+                    await Assert.ThrowsAnyAsync<OperationCanceledException>(() => gulping);
+                    await closed.Task.WaitAsync(FlowPatience);
+                }
+
+                using (Membergeneric.Tabby swapped = await siphon.BrewAsync(oreo, async (cat, token) =>
+                {
+                    cat.Dispose();
+                    await Task.Yield();
+                    return mylo;
+                }))
+                {
+                    Assert.Equal("Mylo", swapped.Name);
+                }
+                using (Membergeneric.Tabby fresh = await siphon.BrewAsync(oreo, async (cat, token) =>
+                {
+                    cat.Dispose();
+                    await Task.Yield();
+                    return new Membergeneric.Tabby("Mylo", 5);
+                }))
+                {
+                    Assert.Equal("Mylo", fresh.Name);
+                }
+                Assert.Null(await siphon.BrewAsync<string?>(null, (seat, _) => Task.FromResult(seat)));
+                Assert.Equal(5, mylo.Tricks);
+            },
+            iterations: 5);
+    }
 }

@@ -411,8 +411,6 @@ class Tier1MemberGenericMethodTest {
 
     // Each warning names the shape rule the member broke; the hint stays the general remedy.
     mapOf(
-      "tier1.membergeneric.Depot.lambda" to
-        "(here, its signature carries a suspend lambda or a Flow)",
       "tier1.membergeneric.Depot.kind" to "(here, its type parameter `T` is reified)",
       "tier1.membergeneric.Depot.conjure" to
           "(here, its multi-bound type parameter `T` is mentioned by no parameter)",
@@ -447,7 +445,7 @@ class Tier1MemberGenericMethodTest {
     )
     assertContains(result.generated, ".rank<T>(")
     listOf(
-      "Lambda", "Kind", "Conjure", "Narrow", "Sort", "Shadow", "Structural",
+      "Kind", "Conjure", "Narrow", "Sort", "Shadow", "Structural",
       "Extended",
     )
       .forEach { member ->
@@ -468,6 +466,12 @@ class Tier1MemberGenericMethodTest {
         line.contains("public T First<T>(T item) where T : struct, global::System.Enum")
       },
       "expected Depot.First to bind; got ${declarations.filter { it.contains("First") }}",
+    )
+    // ADR-215 lane C: a suspend lambda no longer refuses a generic member; this one binds on the
+    // plan route, its `Func<int, CancellationToken, Task>` registered like any ADR-210 parameter.
+    assertTrue(
+      declarations.any { line -> Regex("\\bT Lambda<T>\\(T item, ").containsMatchIn(line) },
+      "expected Depot.Lambda to bind; got ${declarations.filter { it.contains("Lambda") }}",
     )
   }
 

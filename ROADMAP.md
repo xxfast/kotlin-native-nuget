@@ -55,7 +55,6 @@ Complete.
 
 ## Phase 4: Rich type support
 
-- [ ] A method or class `T` inside a `Flow` parameter or a `suspend` lambda is still skipped, named ([ADR-215](docs/adr/215-type-parameter-in-lambda-and-flow.md))
 - [ ] An open exported generic instantiation nested two or more levels deep, read through a property getter or any position outside a member's result before the consumer holds one, has no factory ([ADR-216](docs/adr/216-own-type-parameter-in-result-and-generic-class.md))
 
 ## Phase 5: Exception handling
@@ -64,10 +63,11 @@ Complete.
 
 ## Phase 6: Async support
 
-Two open items.
+Three open items.
 
 - [ ] A `suspend` member of an `object` or companion has no route, generic or not, named `SKIPPED_UNSUPPORTED_COMBINATION`; found by [ADR-214](docs/adr/214-suspend-generic-functions-on-the-suspend-route.md)
-- [ ] A `Flow` return on an `object`, companion or top-level function has no route, generic or not (a static owner has no instance coroutine scope to collect on); the generic form is named with the `GENERIC` sentence, which blames the type parameter; found by [ADR-215](docs/adr/215-type-parameter-in-lambda-and-flow.md)
+- [ ] A `Flow` return on an `object`, companion or top-level function has no route, generic or not (a static owner has no instance coroutine scope to collect on); the generic form gets the Flow route's own `SKIPPED_UNSUPPORTED_RETURN`; found by [ADR-215](docs/adr/215-type-parameter-in-lambda-and-flow.md)
+- [ ] A plain (non-suspend) lambda parameter on a `suspend` member has no route for any payload, `T` or not: the per-call callback context would have to outlive the P/Invoke until the `Task` completes; found by [ADR-215](docs/adr/215-type-parameter-in-lambda-and-flow.md)
 
 ## Phase 7: Bidirectional support (C# → Kotlin)
 - [ ] A generic interface (`IHolder<T>`) implemented in C# and passed to Kotlin is not bridged: [ADR-084](docs/adr/084-csharp-implemented-interface-handles.md) bridges no generic interface, so the C# side of an interface `var item: T` is out of reach ([ADR-218](docs/adr/218-type-parameter-property-setter.md))

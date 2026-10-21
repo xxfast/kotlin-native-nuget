@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.exports
 
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementEnvelope
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMemberGenericRefusal
+import io.github.xxfast.kotlin.native.nuget.processor.forward.asyncTypeParameterNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinIdentifier
 import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
 import io.github.xxfast.kotlin.native.nuget.processor.freshName
@@ -1129,7 +1130,10 @@ internal fun flowTrampoline(
 ): ForwardFlowTrampoline? {
   val boxed: Set<String> = shapes.filterIsInstance<ForwardLegacyParameterShape.Boxed>()
     .map { shape -> shape.type.kotlinName }
-    .toSet()
+    .toSet() +
+    // ADR-215 lane C: an owner parameter a suspend lambda or `Flow` names is re-declared too.
+    shapes.filterIsInstance<ForwardLegacyParameterShape.Async>()
+      .flatMap { shape -> shape.type.asyncTypeParameterNames() }
   val own: List<Pair<String, List<String>>> = method.forwardMethodTypeParameters()
     .filter { parameter -> parameter.trampolineBounds.isNotEmpty() }
     .map { parameter -> parameter.kotlinName to parameter.trampolineBounds }

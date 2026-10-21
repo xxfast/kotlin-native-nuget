@@ -3954,7 +3954,9 @@ internal class NugetProcessor(
     // forward ABI contract (an import with no export) rather than a consumer's first collect.
     builder.addFlowArgumentExports(forwardClassifier.closedFlowArguments.values, context.symbols)
     // ADR-215 lane A: the retain a lambda's `T` result needs, when some plan carries one.
-    builder.addRetainHandleExport(callableCatalog, context.symbols)
+    builder.addRetainHandleExport(
+      callableCatalog, context.symbols, legacyHost = forwardClassifier.boxedAsyncHost,
+    )
     // ADR-210: the holder a generated `suspend` lambda captures, and the two cinterop extensions
     // its lambda and cleaner call. Last for the same reason as the line above: the legacy suspend
     // routes record their sightings on the classifier as they emit. Everything else the lambda
