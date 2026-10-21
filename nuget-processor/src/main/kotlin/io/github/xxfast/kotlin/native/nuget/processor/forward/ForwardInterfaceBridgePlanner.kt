@@ -61,12 +61,22 @@ internal data class ForwardBridgeParameter(
   val type: ForwardBridgeType,
 )
 
+/**
+ * What one slot forwards to: a member function, or one accessor of a property. ADR-084 amendment
+ * (2026-10-22): a `var` gets a [SETTER] slot, `(value, ctx) -> Unit`, directly after its [GETTER].
+ */
+internal enum class ForwardBridgeSlotKind {
+  FUNCTION,
+  GETTER,
+  SETTER,
+}
+
 internal data class ForwardBridgeSlot(
   /** Kotlin member name (`speak`), also the slot's variable prefix. */
   val name: String,
   /** C# member name (`Speak`). */
   val csName: String,
-  val isProperty: Boolean,
+  val kind: ForwardBridgeSlotKind,
   val result: ForwardBridgeType,
   val parameters: List<ForwardBridgeParameter>,
   /**
@@ -82,14 +92,20 @@ internal data class ForwardBridgeSlot(
    */
   val uniqueSuffix: String = "",
 ) {
+  /** A getter or a setter slot: forwards to a property, not a member function. */
+  val isProperty: Boolean = kind != ForwardBridgeSlotKind.FUNCTION
+
   /**
-   * `nameGetPtr` / `speakPtr` / `speak_2Ptr`: the ABI parameter prefix, shared by both
-   * projections.
+   * `nameGetPtr` / `nameSetPtr` / `speakPtr` / `speak_2Ptr`: the ABI parameter prefix, shared by
+   * both projections.
    */
   val slotPrefix: String =
     // `asCSymbol`: a `@CSharpName`d backticked member (`tug hard`) slots as `tug_hardPtr`.
-    (if (isProperty) "${name.asCSymbol()}Get" else "${name.asCSymbol()}$overloadSuffix") +
-      uniqueSuffix
+    when (kind) {
+      ForwardBridgeSlotKind.GETTER -> "${name.asCSymbol()}Get"
+      ForwardBridgeSlotKind.SETTER -> "${name.asCSymbol()}Set"
+      ForwardBridgeSlotKind.FUNCTION -> "${name.asCSymbol()}$overloadSuffix"
+    } + uniqueSuffix
 }
 
 /**
@@ -184,7 +200,11 @@ internal sealed interface ForwardBridgePlanOutcome {
 
 /** One member's half of the walk. */
 private sealed interface ForwardBridgeSlotOutcome {
-  data class Slot(val slot: ForwardBridgeSlot) : ForwardBridgeSlotOutcome
+  /** [setter] is a `var`'s second slot, ordered directly after [slot], its getter. */
+  data class Slot(
+    val slot: ForwardBridgeSlot,
+    val setter: ForwardBridgeSlot? = null,
+  ) : ForwardBridgeSlotOutcome
 
   data class Refused(val refusal: ForwardBridgeRefusal) : ForwardBridgeSlotOutcome
 }
@@ -264,7 +284,10 @@ internal object ForwardInterfaceBridgePlanner {
     val refusals: MutableList<ForwardBridgeRefusal> = mutableListOf()
     fun collect(outcome: ForwardBridgeSlotOutcome, add: (ForwardBridgeSlot) -> Unit) {
       when (outcome) {
-        is ForwardBridgeSlotOutcome.Slot -> add(outcome.slot)
+        is ForwardBridgeSlotOutcome.Slot -> {
+          add(outcome.slot)
+          outcome.setter?.let(add)
+        }
         is ForwardBridgeSlotOutcome.Refused -> refusals += outcome.refusal
       }
     }
@@ -315,15 +338,19 @@ internal object ForwardInterfaceBridgePlanner {
   }
 
   /**
-   * The getter slot for [property], or null when it falls outside the slot vocabulary. Also read by
-   * the ADR-039 `add*`/`remove*` subscription route ([listenerPropertySlots]), so a listener `val`
-   * crosses there exactly as it does on this factory.
+   * The slots for [property], its getter then (for a `var`) its setter, or null when it falls
+   * outside the slot vocabulary. Also read by the ADR-039 `add*`/`remove*` subscription route
+   * ([listenerPropertySlots]), so a listener property crosses there exactly as it does on this
+   * factory.
    */
-  internal fun slotOf(
+  internal fun slotsOf(
     property: KSPropertyDeclaration,
     classifier: ForwardBridgeTypeClassifier,
-  ): ForwardBridgeSlot? =
-    (slotOrRefusal(property, classifier) as? ForwardBridgeSlotOutcome.Slot)?.slot
+  ): List<ForwardBridgeSlot>? {
+    val outcome = slotOrRefusal(property, classifier) as? ForwardBridgeSlotOutcome.Slot
+      ?: return null
+    return listOfNotNull(outcome.slot, outcome.setter)
+  }
 
   private fun slotOrRefusal(
     property: KSPropertyDeclaration,
@@ -337,13 +364,6 @@ internal object ForwardInterfaceBridgePlanner {
     val member: String = "${if (property.isMutable) "var" else "val"} $name: $spelled"
     fun refuse(reason: String, hint: String): ForwardBridgeSlotOutcome =
       ForwardBridgeSlotOutcome.Refused(ForwardBridgeRefusal(member, reason, hint, name))
-    // `var` properties would need a second (setter) slot each: deferred by the ADR's scope.
-    if (property.isMutable) {
-      return refuse(
-        "is a `var`, and the bridge carries a property through a getter slot only",
-        "declare it `val`, or hand the value over through a member function",
-      )
-    }
     // A backticked `slack line` with no `@CSharpName` has no C# member to implement.
     if (!property.hasBridgeableName()) {
       return refuse("has no C# member name to implement", "give it a `@CSharpName`")
@@ -357,15 +377,25 @@ internal object ForwardInterfaceBridgePlanner {
     if (result.wire == ForwardBridgeWire.UNIT) {
       return refuse("is `Unit`, which carries no value", "give it a value type or remove it")
     }
-    return ForwardBridgeSlotOutcome.Slot(
-      ForwardBridgeSlot(
-        name = name,
-        csName = property.csharpMemberName(),
-        isProperty = true,
-        result = result,
-        parameters = emptyList(),
-      ),
+    val getter = ForwardBridgeSlot(
+      name = name,
+      csName = property.csharpMemberName(),
+      kind = ForwardBridgeSlotKind.GETTER,
+      result = result,
+      parameters = emptyList(),
     )
+    // ADR-084 amendment (2026-10-22): the setter carries the value exactly as a one-parameter
+    // function slot of the getter's type does, so both halves reuse that parameter marshalling.
+    val setter: ForwardBridgeSlot? = if (property.isMutable) {
+      getter.copy(
+        kind = ForwardBridgeSlotKind.SETTER,
+        result = ForwardBridgeType(ForwardBridgeWire.UNIT, "Unit", "void"),
+        parameters = listOf(ForwardBridgeParameter("value", result)),
+      )
+    } else {
+      null
+    }
+    return ForwardBridgeSlotOutcome.Slot(getter, setter)
   }
 
   private fun slotOrRefusal(
@@ -427,7 +457,7 @@ internal object ForwardInterfaceBridgePlanner {
       ForwardBridgeSlot(
         name = name,
         csName = function.csharpMemberName(),
-        isProperty = false,
+        kind = ForwardBridgeSlotKind.FUNCTION,
         result = result,
         parameters = parameters,
       ),

@@ -406,7 +406,7 @@ slots too, not only returns.
 path; the identity probe. Parameter types: the ADR-036/039 table (primitives, `Boolean`, enum,
 `String`, object handles).
 
-**Deferred:** `var` property setters (second slot each); object-typed and collection-typed slot
+**Deferred:** ~~`var` property setters (second slot each)~~ (shipped, see the 2026-10-22 amendment); object-typed and collection-typed slot
 returns; `suspend` members (compose with ADR-019); exception propagation from a C# member into
 Kotlin (ROADMAP Phase 7 line, mirrors ADR-024; v1 members must not throw); generic interfaces;
 converging the ADR-039 subscription route onto the factory; multiple bridgeable interfaces on one
@@ -601,10 +601,10 @@ The `add*/remove*` route now binds a listener `val` through this ADR's getter sl
 vocabulary: `ForwardInterfaceBridgePlanner.slotOf(property)` is `internal` and read by the
 subscription route, `appendSlotOverride` and the C# `slotBody` are shared, and the vocabulary is the
 one this ADR already fixed (`String`, `String?`, `Boolean`, `Int`, `Long`, `Float`, `Double`,
-non-null enum; no `var`, no inherited property, since the generated `IListener` declares only the
+non-null enum; no inherited property, since the generated `IListener` declares only the
 listener's own members). The subscription route converges on the factory's slots for properties
 only; its function members keep their own flat `Void` delegates. A property outside the vocabulary,
-a `var` or an inherited one refuses the whole pair by name; see the ADR-039 amendment of the same
+an inherited one refuses the whole pair by name (a `var` no longer does, see the 2026-10-22 amendment); see the ADR-039 amendment of the same
 date for the gate, the refusal kinds and the evidence.
 
 ## Amendment (2026-10-04): slot prefixes are unique, and a member-less interface gets a factory
@@ -676,3 +676,22 @@ Evidence, verified: `Tier1InterfaceBridgeRefusalTest` (one line per refusal shap
 named in a single line, the narrow-Throwable case keeping ADR-201's code, a bridgeable interface
 silent) and `ForwardBridgeRefusalDiagnosticTest` (the rendered line). The residual is inferred, not
 tested.
+
+## Amendment (2026-10-22): `var` property setters ship
+
+**Rule.** A `var` on a C#-implemented interface no longer refuses the bridge. It carries two slots
+instead of one: the getter slot, then a `<name>Set` slot of shape `(value, ctx) -> Unit`, ordered
+directly after its getter. Kotlin's `set(value)` override calls the slot, and the C# slot body
+assigns the property, so a Kotlin write lands on the C# object and a later read through the getter
+slot sees it. The value crosses the way the same type does at a getter or method parameter (a
+`String` argument is a handle Kotlin mints and C# reads and releases; a scalar is passed as is).
+The slot vocabulary is unchanged, so a `var` of a type the getter cannot carry still refuses the
+interface, named.
+
+**Both routes.** The ADR-039 `add`/`remove` listener route lifts its `var` refusal too, since it
+shares `slotOf`, `appendSlotOverride` and the C# `slotBody` with the factory. The pair is still
+refused, named, for an inherited property or a type outside the vocabulary.
+
+Evidence: `Tier1InterfaceBridgeFactoryTest` and `Tier1InterfaceBridgeListenerPropertyTest` (the
+`var` cells flipped from refusals to bridged), `InterfaceParameterTests` cell (e) and
+`ListenerPropertyTests` on the native pipeline, and LeakTests rows 8j-var and 8j-listener-var.

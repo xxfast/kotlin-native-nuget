@@ -252,13 +252,73 @@ class Tier1InterfaceBridgeListenerPropertyTest {
     Tier1CSharpCompile.assertCompiles(result, "", allowUnsafe = true)
   }
 
+  /**
+   * ADR-084 amendment (2026-10-22): a listener `var` binds on the pair as it does on the bridge
+   * factory: a `<name>Set` slot, `(value, ctx) -> Unit`, directly after its getter.
+   */
   @Test
-  fun `a listener var refuses the pair by name`() {
-    assertRefused(
-      "lvvar",
-      "var name: String",
-      "`BarkListener.var name: String` is a `var`",
-      ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
+  fun `a listener var binds as a getter and setter slot pair`() {
+    val result: Tier1Result = Tier1Harness.run(
+      """
+      package tier1.lvvar
+
+      interface BarkListener {
+        var name: String
+        var volume: Int
+        fun onBark(loudness: Int)
+      }
+
+      $dog
+      """.trimIndent(),
+    )
+
+    assertTrue(result.compiledClean, "compileErrors=${result.compileErrors}")
+    assertContains(result.generated, "override var name: String")
+    assertContains(result.generated, "override var volume: Int")
+    assertContains(
+      result.generated,
+      "handle: COpaquePointer,\n  nameGetPtr: COpaquePointer,\n  nameGetCtx: COpaquePointer,\n" +
+          "  nameSetPtr: COpaquePointer,\n  nameSetCtx: COpaquePointer,\n" +
+          "  volumeGetPtr: COpaquePointer,\n  volumeGetCtx: COpaquePointer,\n" +
+          "  volumeSetPtr: COpaquePointer,\n  volumeSetCtx: COpaquePointer,\n" +
+          "  onBarkPtr: COpaquePointer,",
+    )
+    assertContains(
+      result.generated,
+      "val nameSetFn = nameSetPtr.reinterpret<CFunction<(COpaquePointer?, COpaquePointer, " +
+          "COpaquePointer?) -> Unit>>()",
+    )
+    assertContains(result.generated, "val arg0Ref = NugetHandles.retain(value as Any)")
+    assertContains(
+      result.generatedCSharp,
+      "(IntPtr arg0, IntPtr _) => { string value0 = NugetMarshal.FromHandle<string>(arg0); " +
+          "listener.Name = value0; };",
+    )
+    assertContains(result.generatedCSharp, "int value0 = arg0; listener.Volume = value0;")
+    assertTrue(
+      result.kspWarnings.none { warning -> warning.contains("Dog.addBarkListener") },
+      "kspWarnings=${result.kspWarnings}",
+    )
+    Tier1CSharpCompile.assertCompiles(
+      result,
+      """
+      using System;
+      using Interop;
+
+      public sealed class Rex : IBarkListener
+      {
+          public string Name { get; set; } = "Rex";
+          public int Volume { get; set; }
+          public void OnBark(int loudness) { }
+          public void Dispose() { }
+      }
+
+      public static class Probe
+      {
+          public static IDisposable Listen(Dog dog) => dog.AddBarkListener(new Rex());
+      }
+      """.trimIndent(),
+      allowUnsafe = true,
     )
   }
 

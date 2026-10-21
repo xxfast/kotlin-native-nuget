@@ -9,6 +9,7 @@ import com.squareup.kotlinpoet.KModifier
 import com.squareup.kotlinpoet.TypeSpec
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInterfacePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeSlot
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeSlotKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeWire
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinWire
 import io.github.xxfast.kotlin.native.nuget.processor.forward.managedExceptionLowering
@@ -61,7 +62,7 @@ internal fun FileSpec.Builder.addInterfaceBridgeFactoryExport(plan: ForwardBridg
     appendLine("    private val cleaner = createCleaner(releaseFn to releaseCtx) { (fn, ctx) ->")
     appendLine("      fn.invoke(ctx, null)")
     appendLine("    }")
-    plan.slots.forEach { slot -> appendSlotOverride(slot) }
+    appendSlotOverrides(plan.slots)
     appendLine("  }")
     appendLine("  NugetHandles.retain(bridge)")
     appendLine("} catch (e: Throwable) {")
@@ -99,23 +100,57 @@ internal fun FileSpec.Builder.addInterfaceBridgeFactoryExport(plan: ForwardBridg
 }
 
 /**
+ * Every slot's `override`, in order. ADR-084 amendment (2026-10-22): a getter whose setter slot
+ * follows it is a `var`. Shared by the bridge factory and the ADR-039 subscription route.
+ */
+internal fun StringBuilder.appendSlotOverrides(slots: List<ForwardBridgeSlot>) {
+  val setters: Set<String> = slots
+    .filter { slot -> slot.kind == ForwardBridgeSlotKind.SETTER }
+    .map { slot -> slot.name }
+    .toSet()
+  slots.forEach { slot -> appendSlotOverride(slot, mutable = slot.name in setters) }
+}
+
+/**
  * One slot's `override`, forwarding to `${slotPrefix}Fn` with `${slotPrefix}Ctx`. Also the ADR-039
  * subscription route's listener-property override, so a listener `val` reads and releases its
  * result exactly as it does here.
  */
-internal fun StringBuilder.appendSlotOverride(slot: ForwardBridgeSlot) {
+private fun StringBuilder.appendSlotOverride(slot: ForwardBridgeSlot, mutable: Boolean) {
   val call: String = invocation(slot)
-  if (slot.isProperty) {
-    appendLine("    override val ${slot.name.kotlinIdentifier()}: ${slot.result.kotlin}")
-    appendLine("      get() {")
-    appendResultMarshalling(slot, call, "        ")
-    appendLine("      }")
-    return
-  }
+  when (slot.kind) {
+    ForwardBridgeSlotKind.GETTER -> {
+      val keyword: String = if (mutable) "var" else "val"
+      appendLine("    override $keyword ${slot.name.kotlinIdentifier()}: ${slot.result.kotlin}")
+      appendLine("      get() {")
+      appendResultMarshalling(slot, call, "        ")
+      appendLine("      }")
+    }
 
-  val params: String =
-    slot.parameters.joinToString(", ") { "${it.name.kotlinIdentifier()}: ${it.type.kotlin}" }
-  appendLine("    override fun ${slot.name.kotlinIdentifier()}($params): ${slot.result.kotlin} {")
+    // ADR-084 amendment (2026-10-22): rendered directly after its getter, so this accessor
+    // attaches to the `override var` above. `value` crosses as a function slot's argument does.
+    ForwardBridgeSlotKind.SETTER -> {
+      appendLine("      set(value) {")
+      appendArgumentRefs(slot, "        ")
+      appendResultMarshalling(slot, call, "        ")
+      appendLine("      }")
+    }
+
+    ForwardBridgeSlotKind.FUNCTION -> {
+      val params: String =
+        slot.parameters.joinToString(", ") { "${it.name.kotlinIdentifier()}: ${it.type.kotlin}" }
+      appendLine(
+        "    override fun ${slot.name.kotlinIdentifier()}($params): ${slot.result.kotlin} {",
+      )
+      appendArgumentRefs(slot, "      ")
+      appendResultMarshalling(slot, call, "      ")
+      appendLine("    }")
+    }
+  }
+}
+
+/** The `argNRef` handle each [ForwardBridgeWire.OBJECT] argument of [slot] crosses as. */
+private fun StringBuilder.appendArgumentRefs(slot: ForwardBridgeSlot, indent: String) {
   slot.parameters.forEachIndexed { index, parameter ->
     if (parameter.type.wire == ForwardBridgeWire.OBJECT) {
       val reference: String = parameter.name.kotlinIdentifier()
@@ -131,11 +166,9 @@ internal fun StringBuilder.appendSlotOverride(slot: ForwardBridgeSlot) {
       } else {
         "NugetHandles.retain(${boxed(reference)})"
       }
-      appendLine("      val arg${index}Ref = $line")
+      appendLine("${indent}val arg${index}Ref = $line")
     }
   }
-  appendResultMarshalling(slot, call, "      ")
-  appendLine("    }")
 }
 
 /** The `fooFn.invoke(...)` text: marshalled arguments in slot order, then the slot's context. */

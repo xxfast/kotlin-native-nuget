@@ -76,4 +76,31 @@ public class ListenerPropertyTests
 
         Assert.Equal("", box.RollCall());
     }
+
+    // ADR-084 amendment: a listener `var` writes through its `<name>Set` slot on the pair route too.
+
+    private sealed class RecordingNameTagListener(string tag) : INameTagListener
+    {
+        public string Tag { get; set; } = tag;
+        public int Retags { get; private set; }
+        public void OnRetag() => Retags++;
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void NameTagBoard_RetagAll_KotlinWriteLandsOnTheCSharpObject()
+    {
+        // Kotlin reads the old tag, writes the new one through the setter slot, and reads it back
+        // through the getter, so the C# object is the only place the combined tag can come from.
+        using var board = new NameTagBoard();
+        var oreo = new RecordingNameTagListener("Oreo");
+        var mylo = new RecordingNameTagListener("Mylo");
+        using IDisposable oreoSub = board.AddNameTagListener(oreo);
+        using IDisposable myloSub = board.AddNameTagListener(mylo);
+
+        Assert.Equal("cat:Oreo; cat:Mylo", board.RetagAll("cat"));
+        Assert.Equal("cat:Oreo", oreo.Tag);
+        Assert.Equal("cat:Mylo", mylo.Tag);
+        Assert.Equal(1, oreo.Retags);
+    }
 }

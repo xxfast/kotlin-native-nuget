@@ -5627,7 +5627,8 @@ private fun translateInterfaceBridgeMethod(
 
   tracker.needsSubscription = true
 
-  // A listener property crosses as its ADR-084 getter slot, ahead of the function slots, read off
+  // A listener property crosses as its ADR-084 getter slot (and a `var` as its setter slot right
+  // after), ahead of the function slots, read off
   // the same list the Kotlin half's parameters come from.
   val propertyEntries: List<CirInterfaceBridgeMethodEntry> =
     classifier.listenerPropertySlots(ifaceDecl).map { slot ->
@@ -5643,7 +5644,7 @@ private fun translateInterfaceBridgeMethod(
         methodCsName = slot.csName,
         methodKtName = slot.slotPrefix,
         delegateName = delegate.name,
-        delegateParamList = "(IntPtr _)",
+        delegateParamList = slotLambdaParameters(slot),
         callbackBody = slotBody(slot, "listener"),
       )
     }

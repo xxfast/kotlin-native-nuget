@@ -367,14 +367,17 @@ class Tier1InterfaceVarPropertyTest {
     assertContains(base, "Exception? Err { get; }")
     val derived: String = block(inherited.generatedCSharp, "public interface IDerived : IBase")
     assertFalse(derived.contains("Level"), derived)
+    // The setter warnings only: since the ADR-084 amendment (2026-10-22) a `var` no longer keeps
+    // `Derived` from planning a bridge, so ADR-201 names the narrow `err` result on its bridge too.
+    val setters: List<String> = inherited.kspWarnings.filter { "its setter is not generated" in it }
     assertEquals(
       0,
-      inherited.kspWarnings.count { it.contains("tier1.ivarinh.Derived.err") },
+      setters.count { it.contains("tier1.ivarinh.Derived.err") },
       "the inherited refusal is named on Base only; got: ${inherited.kspWarnings}",
     )
     assertEquals(
       1,
-      inherited.kspWarnings.count { it.contains("tier1.ivarinh.Base.err") },
+      setters.count { it.contains("tier1.ivarinh.Base.err") },
       "expected exactly one warning naming Base.err; got: ${inherited.kspWarnings}",
     )
   }

@@ -42,18 +42,6 @@ class Tier1InterfaceBridgeRefusalTest {
   }
 
   @Test
-  fun `a var property names the interface unimplementable`() {
-    val (_, warning) = refusal(
-      "refusevar",
-      "interface Pet { val name: String; var mood: String }",
-    )
-
-    assertTrue("`var mood: String` is a `var`" in warning, warning)
-    assertTrue("declare it `val`" in warning, warning)
-    assertFalse("name" in warning.substringAfter("Pet:").substringBefore("var mood"), warning)
-  }
-
-  @Test
   fun `a collection-typed slot names the interface unimplementable`() {
     val (_, warning) = refusal("refuselist", "interface Pet { val tags: List<String> }")
 
@@ -100,10 +88,13 @@ class Tier1InterfaceBridgeRefusalTest {
       """.trimIndent(),
     )
 
-    for (member in listOf("var mood", "val tags", "suspend fun fetch", "fun pick", "fun walk")) {
+    for (member in listOf("val tags", "suspend fun fetch", "fun pick", "fun walk")) {
       assertTrue("`$member" in warning, "expected $member named; got: $warning")
     }
-    assertFalse("`val name" in warning, "a bridgeable member is not named; got: $warning")
+    // ADR-084 amendment (2026-10-22): a `var` bridges through a setter slot, so it is not named.
+    for (member in listOf("val name", "var mood")) {
+      assertFalse("`$member" in warning, "a bridgeable member is not named; got: $warning")
+    }
   }
 
   /** ADR-201: a narrow-Throwable result alone keeps its shipped code, and the new one is silent. */

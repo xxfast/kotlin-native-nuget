@@ -1,5 +1,6 @@
 using System;
 using TestLibrary.Nested;
+using Wardrobe = TestLibrary.Wardrobe;
 
 namespace IntegrationTests;
 
@@ -24,10 +25,14 @@ namespace IntegrationTests;
 /// <item><see cref="ISitter"/>, reached only as an ADR-132 extension receiver, which settles
 /// ADR-135's open question about whether a receiver's type is in <c>publicSignature.parameters</c>
 /// or only on the native call's RECEIVER slot,</item>
-/// <item><see cref="IScratchLog"/>, a <c>var</c> member and therefore out of ADR-084's v1 slot
-/// vocabulary: it plans to null even once the walk is widened, and its contract is the managed
+/// <item><see cref="IScratchLog"/>, a member with its own type parameter, which no ADR-084 slot
+/// can carry: it plans to null even once the walk is widened, and its contract is the managed
 /// throw.</item>
 /// </list>
+///
+/// Cell (e), <see cref="Wardrobe.ICollar"/>, is the ADR-084 amendment that ships <c>var</c>
+/// setters: a <c>String</c> and an <c>Int</c> <c>var</c>, each written by Kotlin through its setter
+/// slot.
 ///
 /// Oreo boards under protest. Mylo holds the door.
 /// </summary>
@@ -135,7 +140,7 @@ public class InterfaceParameterTests
     [Fact]
     public void UnbridgeableInterface_CSharpImplementation_ThrowsNotSupported()
     {
-        // A `var` member is out of ADR-084's v1 slot vocabulary, so this interface plans to null
+        // A member with its own type parameter (`fun <R> tally`) has no slot, so this interface plans to null
         // whatever the reachability walk does. The contract is the managed throw that
         // `NugetBridge.HandleFor` already raises, surviving the `finally` instead of being
         // overwritten by `NugetMarshal.Dispose(IntPtr.Zero)`.
@@ -145,5 +150,40 @@ public class InterfaceParameterTests
             Assert.Throws<NotSupportedException>(() => CatteryDesk.CountScratches(log));
 
         Assert.Contains("ClawMarks", ex.Message);
+    }
+
+    // --- (e) ADR-084 amendment: a `var` writes through its `<name>Set` slot ---
+
+    private sealed class BreakawayCollar : Wardrobe.ICollar
+    {
+        public string Tag { get; set; } = "Mylo";
+        public int Bells { get; set; } = 1;
+
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void Retag_NonGenericVar_WritesThroughTheSetterSlot()
+    {
+        // The `String` var: Kotlin's write mints a handle the C# setter body reads, and the
+        // read-back goes through the getter slot, so the C# object is the only place the new tag
+        // can come from.
+        var collar = new BreakawayCollar();
+
+        Assert.Equal("OREO", Wardrobe.Retagging.Retag(collar, "OREO"));
+        Assert.Equal("OREO", collar.Tag);
+    }
+
+    [Fact]
+    public void AddBell_NonGenericIntVar_ReadsAndWritesThroughTheSlotPair()
+    {
+        // The scalar var: no conversion at the seam, so a setter slot that only works for the
+        // handle-carrying case still fails here. Two calls, so a write that never lands reads 2
+        // the second time instead of 3.
+        var collar = new BreakawayCollar();
+
+        Assert.Equal(2, Wardrobe.Retagging.AddBell(collar));
+        Assert.Equal(3, Wardrobe.Retagging.AddBell(collar));
+        Assert.Equal(3, collar.Bells);
     }
 }

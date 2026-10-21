@@ -25,7 +25,7 @@ package io.github.xxfast.kotlin.native.nuget.test.nested
  *   declared parameter. ADR-135 leaves open whether a receiver's type shows up in
  *   `publicSignature.parameters` or only on the native call's RECEIVER slot; this cell is what
  *   settles it rather than arguing it,
- * - [ScratchLog] has a `var` member, which is out of ADR-084's v1 slot vocabulary, so its bridge
+ * - [ScratchLog] has a member with its own type parameter, which no slot can carry, so its bridge
  *   **plans to null** even once the walk is widened. Its contract is a managed
  *   `NotSupportedException` naming the C# type, not a dead host process.
  *
@@ -94,14 +94,16 @@ fun Sitter.checkIn(): String = "checked in at ${house()}"
 val Sitter.address: String get() = "at ${house()}"
 
 /**
- * The residual, **plans-to-null** case: a `var` member is out of ADR-084's v1 slot vocabulary, so
- * `ForwardInterfaceBridgePlanner.plan` returns null for this interface however reachable it is.
+ * The residual, **plans-to-null** case: a member with its own type parameter (`fun <R>`) has no
+ * bridge slot, since a slot carries no type argument, so `ForwardInterfaceBridgePlanner.plan`
+ * returns null for this interface however reachable it is.
  * The contract is a managed `NotSupportedException` naming the C# implementation, which is what
  * the throw-safety half of ADR-135 buys; today the throw is overwritten by a
  * `NugetMarshal.Dispose(IntPtr.Zero)` in the `finally`.
  */
 interface ScratchLog {
   var scratches: Int
+  fun <R> tally(entry: R): R
 }
 
 /** The only position [ScratchLog] appears in. */
