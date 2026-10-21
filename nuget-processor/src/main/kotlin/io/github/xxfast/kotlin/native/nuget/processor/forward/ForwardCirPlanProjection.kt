@@ -2441,7 +2441,7 @@ private fun BridgeType.isInterfaceInput(): Boolean =
  * shift here too, since the wrapper body does declare them.
  */
 internal val ForwardPublicParameter.csharpName: String
-  get() = name.unshiftedValue().csharpParameterName()
+  get() = csharpLabel ?: name.unshiftedValue().csharpParameterName()
 
 /** `value_`, `value__`, ... back to the source `value`, `value_`, ...; any other name as is. */
 private fun String.unshiftedValue(): String =

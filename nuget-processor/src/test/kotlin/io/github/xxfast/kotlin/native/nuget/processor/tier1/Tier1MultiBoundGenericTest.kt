@@ -94,7 +94,7 @@ class Tier1MultiBoundGenericTest {
     assertContains(result.generated, "tier1.multibound.Shelf<Nothing>()")
     assertContains(
       result.generated,
-      "tier1.multibound.drill(value.asStableRef<Any>().get().let { bounded -> " +
+      "tier1.multibound.drill<_>(value_.asStableRef<Any>().get().let { bounded -> " +
           "bounded as tier1.multibound.Pet; bounded as tier1.multibound.Trainable; bounded })",
     )
   }
@@ -204,7 +204,7 @@ class Tier1MultiBoundGenericTest {
     )
     assertContains(
       result.generated,
-      "value.asStableRef<Any>().get().let { bounded -> bounded as tier1.multibound.Rival<Any?>; " +
+      "champion<_>(value_.asStableRef<Any>().get().let { bounded -> bounded as tier1.multibound.Rival<Any?>; " +
           "bounded as tier1.multibound.Pet; bounded }",
     )
   }

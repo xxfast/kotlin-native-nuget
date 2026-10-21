@@ -83,10 +83,10 @@ class Tier1EnumSelfBoundTest {
     )
     assertContains(kotlin, "(handle.asStableRef<Any>().get() as tier1.enumbound.Podium<T>)")
     assertContains(kotlin, "tier1.enumbound.Podium<T>(")
-    // The function route reads its argument the same way.
+    // The function, on the plan since ADR-213, reads its argument the same way.
     assertContains(
       kotlin,
-      "tier1.enumbound.champion(value.asStableRef<Any>().get().let { bounded -> " +
+      "tier1.enumbound.champion<T>(value_.asStableRef<Any>().get().let { bounded -> " +
           "bounded as kotlin.Enum<*>; bounded as T })",
     )
     // A member that takes no `T` keeps the erased, star-projected read and no trampoline.

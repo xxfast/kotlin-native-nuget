@@ -294,8 +294,7 @@ that isn't your own C# type and also isn't a Kotlin-backed instance Kotlin can r
 different implementation entirely) throws `InvalidCastException`; a `T = Dog` read of a
 Kotlin-backed value that isn't a `Dog` throws `NotSupportedException` naming the missing factory,
 inherent to erasure. The same identity rule applies to a lambda argument
-(see [Lambdas and callbacks](lambdas-and-callbacks.md)) and to the legacy [generic
-functions](#generic-functions) below.
+(see [Lambdas and callbacks](lambdas-and-callbacks.md)) and to [generic functions](#generic-functions) below.
 
 `T` is admitted at a parameter, a return, a constructor parameter, or a property getter, optionally
 nullable, and as the element of a `List`, `Set` or `Map` at those positions (`List<T>` binds as
@@ -474,6 +473,8 @@ fun <T> identity(value: T): T = value
 
 fun <T> wrapInBox(value: T): Box<T> = Box(value)
 
+fun <T> unwrapBox(box: Box<T>): T = box.value
+
 fun <T : Pet> adoptPet(pet: T): T = pet
 
 inline fun <reified T : Pet> groomPet(pet: T): T = pet
@@ -482,11 +483,12 @@ inline fun <reified T : Pet> groomPet(pet: T): T = pet
 ```C#
 using Box<int> box = Helpers.WrapInBox<int>(99);
 Assert.Equal(99, box.Value);
+Assert.Equal(99, Helpers.UnwrapBox(box));   // a passed Box<T> is borrowed
 ```
 
-A constrained generic function carries the same `where` clause as a constrained class. `reified`
-and non-reified `inline fun` (like a plain `square(x: Int)`) both generate as an ordinary method or
-generic method; inlining and reification only matter inside Kotlin and don't change the C# side.
+A constrained generic function carries the same `where` clause as a constrained class. Inlining
+only matters inside Kotlin. A `reified` `T` reifies at its declared bound (`Pet` for `groomPet`),
+and at `Any?` when it has none, whatever type argument C# passes.
 
 An unconstrained `T` bound to an exported interface gets the same identity treatment as the
 [generic-class case above](#an-interface-at-an-erased-position): the object arm now writes through
@@ -499,11 +501,10 @@ Assert.Same(rex, Helpers.AdoptPet<IPet>(rex));       // fun <T : Pet> adoptPet(p
 Assert.Same(rex, PetRelayKt.RelayPet<IPet>(rex));    // fun <T> relayPet(value: T): T, unconstrained
 ```
 
-A top-level function with exactly one parameter, of type `T`, and a `T` (or generic class over `T`)
-return, like `fun <T> f(value: T): T`, binds as above. Any other top-level `fun <T>`, including one
-with two or more parameters or a `T` beside a non-`T` parameter, binds like a
+Every top-level `fun <T>`, whatever its parameters and return, binds like a
 [generic method on a class](#generic-methods): a static generic method on the file's class, with
-every `T` position boxed and any return type.
+every `T` position boxed. A builtin `T` (`Identity<int>(4)`) therefore crosses as a box, not as a
+single typed call. A parameter named `handle` keeps that name on a top-level `fun <T>`.
 
 ```kotlin
 fun <T : Any> describe(value: T): String = "$value: ${value::class.simpleName}"
@@ -523,8 +524,8 @@ Assert.Equal("4 x2", Descriptions.Tally(4, 2));
 // public static string Tally<T>(T x, int n) where T : notnull
 ```
 
-A top-level `fun <T>` with `T` nested in a collection (`fun <T> f(): List<T>`), a `reified` `T`, a
-lambda or `Flow` in the signature, or an extension receiver is not generated, and the warning names
+A top-level `fun <T>` with a lambda or `Flow` in the signature, a `suspend` modifier, an extension
+receiver, or a `reified` `T` whose bound C# cannot spell is not generated, and the warning names
 which one.
 
 A C# builtin (`int`, `double`, `string`, `short`, ...) works as `T`, with a stdlib bound or none.
@@ -590,7 +591,7 @@ What differs from a generic class:
   prefix (`THold`).
 
 These stay a named skip, with the specific reason in the warning: a generic method on an interface,
-an `enum class`, a value class, or an extension function; a `reified` type parameter; a bound that
+an `enum class`, a value class, or an extension function; a `reified` type parameter on a member (a top-level `fun <T>` binds one); a bound that
 is itself a type parameter; a `T` nested in a generic value class or in a type that is not an exported generic class
 (`List`, `Set`, `Map` and `Result` aside); a lambda or `Flow` anywhere in the signature; a multi-bound `T` that no parameter mentions; and a
 `T` that shadows a type parameter in scope (the owner's, or one an `inner` class captures). A

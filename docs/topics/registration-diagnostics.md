@@ -428,8 +428,7 @@ argument box. `LeakTests/LiveHandleTests.cs`'s
 `BuiltinGenericFunction_BoxedPrimitiveAndString_ReturnsToBaseline` and
 `BuiltinGenericFunction_BoundCastFails_ReturnsToBaseline` cover the success and failure paths.
 
-A [generic method on a class](generics.md#generic-methods) or a top-level `fun <T>` that is not a
-single `T` parameter to `T` mints the same boxes: one per builtin
+A [generic method on a class](generics.md#generic-methods) or a top-level `fun <T>` mints the same boxes: one per builtin
 argument, which the call releases, and one per `T` result, which the read releases as it unwraps
 it. A member that throws, or a `T` that fails its bound's check, after the argument box crossed
 still releases the box. `LeakTests/LiveHandleTests.cs`'s
@@ -437,7 +436,8 @@ still releases the box. `LeakTests/LiveHandleTests.cs`'s
 `MemberGenericMethod_ThrowingMember_ReturnsToBaseline` and
 `MemberGenericMethod_BoundCastFails_ReturnsToBaseline` cover the success, throwing and bound-failure
 paths, and `TopLevelGenericMethod_BoxedTypeParameter_ReturnsToBaseline` covers the top-level success
-path, also driving `Shuffle`. `MemberGeneric_CollectionElements_ReturnToBaseline` covers a `T` as a list
+path, also driving `Shuffle`. `TopLevelGenericMethod_BoxedBox_ReturnsToBaseline` covers `WrapInBox`,
+`UnwrapBox` and `Identity<string>`: a returned `Box<T>` is yours to dispose, a passed one is borrowed. `MemberGeneric_CollectionElements_ReturnToBaseline` covers a `T` as a list
 element: passed wrappers stay borrowed, returned ones are disposed, and `Pad` round-trips a null element.
 `MemberGeneric_BoxedTypeParameter_ReturnsToBaseline` covers a `T` inside a generic class: a returned
 `Basket<T>` is yours to dispose, a passed one is borrowed, and `Basket(Basket(1))` disposes both.

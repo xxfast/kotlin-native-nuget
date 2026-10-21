@@ -113,7 +113,7 @@ class Tier1BacktickedNameRoutesTest {
       ".get().`class` {", // per-call lambda (legacy, `Char` payload)
       "obj.`as`", // Flow property
       "tier1.routes.keywords.`when`()", // top-level suspend
-      "tier1.routes.keywords.`return`(", // generic function
+      "tier1.routes.keywords.`return`<Any?>(", // generic function
       "obj.fetch(`in`)", // keyword parameter, suspend route
       "obj.stream(`in`)", // keyword parameter, Flow route
       ".pull(`in`", // keyword parameter, plan route with a default
@@ -397,7 +397,7 @@ class Tier1BacktickedNameRoutesTest {
     val kotlin: String = result.generated
     listOf(
       ".get().`in`(`object`).also", // the Result member the Try twin shares
-      "tier1.routes.stackkeywords.`return`((`in`.asStableRef<Any>()", // generic function read
+      "tier1.routes.stackkeywords.`return`<kotlin.Comparable<Any?>>((`in`.asStableRef<Any>()", // generic function read
       ".get().`in`((`object`.asStableRef<Any>()", // generic member's checked bounded read
       "override val `is`: Int", // the listener getter slot
       "override fun `in`(`object`: Int)", // the listener function slot

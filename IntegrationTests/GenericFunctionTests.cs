@@ -25,9 +25,8 @@ public class GenericFunctionTests
         Assert.True(result);
     }
 
-    // `short` has no width variant (only string, int, long, float, double and bool do), so it rides
-    // the object variant as a box and is unwrapped on the way back; it used to throw
-    // NotSupportedException looking for a generated factory for System.Int16.
+    // ADR-213: every `T` rides one boxed export and is unwrapped on the way back; `short` used to
+    // throw NotSupportedException looking for a generated factory for System.Int16.
     [Fact]
     public void Identity_Short()
     {
@@ -54,5 +53,15 @@ public class GenericFunctionTests
     {
         using Box<int> box = Helpers.WrapInBox<int>(99);
         Assert.Equal(99, box.Value);
+    }
+
+    // ADR-213: a `Box<T>` parameter carrying the own `T`, the inverse of `WrapInBox`.
+    [Fact]
+    public void UnwrapBox_RoundTripsWrapInBox()
+    {
+        using Box<int> box = Helpers.WrapInBox(5);
+        Assert.Equal(5, Helpers.UnwrapBox(box));
+        using Box<string> mylo = Helpers.WrapInBox("Mylo");
+        Assert.Equal("Mylo", Helpers.UnwrapBox(mylo));
     }
 }

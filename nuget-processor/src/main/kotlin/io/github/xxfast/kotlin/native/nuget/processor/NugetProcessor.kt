@@ -67,9 +67,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmLambdaMe
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowProperties
-import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyGenericFunctionRoute
-import io.github.xxfast.kotlin.native.nuget.processor.exports.isReifiedWithUnspellableBound
-import io.github.xxfast.kotlin.native.nuget.processor.exports.addGenericFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addInterfaceBridgeFactoryExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addInterfaceExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addLambdaParamMethodExport
@@ -164,6 +161,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.calls
 import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticReason
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isValueClass
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isReifiedWithUnspellableBound
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementInterface
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
@@ -519,28 +517,18 @@ private fun cappedDefaultDiagnostics(catalog: ForwardCallablePlanCatalog): List<
     }
 
 /**
- * ADR-064 amendment (2026-09-13): the structural top-level generic functions the planner never
- * sees. `catalog()` is called with `functions` (the `typeParameters.isEmpty()` half of the
- * collected list), so a `fun <T> f(...)` produces no catalog entry at all and the catalog's
- * unrouted-position reclassification cannot reach it. Its only route is
- * `addGenericFunctionExports` / `translateGenericFunction`, which dispatch on a parameter typed
- * with the function's own type parameter and refuse everything else with a bare `return` —
- * measured silent on both halves for `fun <T> f(): List<T>` (research H cell 16).
+ * ADR-064 amendment (2026-09-13): the top-level generic functions the planner never sees, so the
+ * catalog cannot name their skip.
  *
- * Same shape as [warnRefusedLegacyRouteMembers]: the route's own hoisted gate decides, so the
- * diagnostic and the two emitters cannot drift. The position is the RETURN: a refused declaration
- * always has a `T` somewhere other than a direct parameter, which for every measured cell is the
- * return type.
- *
- * ADR-211: a non-suspend gate-refused `fun <T>` is planned now, and the plan names its refusal, so
- * this sees only the ADR-198 reified case and a gate-refused `suspend fun <T>`.
+ * ADR-213: every non-suspend `fun <T>` is planned and the width-variant route is gone, so this
+ * sees only the ADR-198 reified unspellable case and a `suspend fun <T>` (ROADMAP Phase 4). The
+ * position is the RETURN, the one the suspend route cannot carry a `T` through.
  */
 internal fun warnUnroutedGenericFunctions(
   genericFunctions: List<KSFunctionDeclaration>,
   logger: KSPLogger,
 ) {
   val diagnostics: List<ForwardDiagnostic> = genericFunctions
-    .filterNot { function -> function.hasLegacyGenericFunctionRoute() }
     .map { function ->
       val declaration: String =
         "${function.packageName.asString()}.${function.simpleName.asString()}"
@@ -1874,16 +1862,18 @@ internal class NugetProcessor(
       .filter { it.extensionReceiver != null }
       .filter { !it.hasCNameAnnotation() }
 
-    // ADR-211: a non-suspend top-level `fun <T>` the legacy width-variant gate refuses is planned
-    // like any other top-level function, as a static generic method; the gate keeps the rest.
-    val (suspendFunctions, regularFunctions) = allFunctions
-      .filter { it.isPlannedTopLevelFunction() }
+    // ADR-213: every top-level `fun <T>` is planned like any other top-level function, as a static
+    // generic method, except ADR-198's reified unspellable case. The suspend partition comes
+    // first: a `suspend fun <T>` has no route yet and is only named.
+    val (suspendCandidates, regularCandidates) = allFunctions
       .partition { it.modifiers.contains(Modifier.SUSPEND) }
-
-    val functions: List<KSFunctionDeclaration> = regularFunctions
-    val genericFunctions: List<KSFunctionDeclaration> = allFunctions
-      .filter { it.typeParameters.isNotEmpty() }
-      .filterNot { it.isPlannedTopLevelFunction() }
+    val suspendFunctions: List<KSFunctionDeclaration> = suspendCandidates
+      .filter { it.typeParameters.isEmpty() }
+    val functions: List<KSFunctionDeclaration> = regularCandidates
+      .filter { it.isPlannedTopLevelFunction() }
+    val genericFunctions: List<KSFunctionDeclaration> =
+      regularCandidates.filterNot { it.isPlannedTopLevelFunction() } +
+          suspendCandidates.filter { it.typeParameters.isNotEmpty() }
 
     val allProperties: List<KSPropertyDeclaration> = allDeclarations
       .filterIsInstance<KSPropertyDeclaration>()
@@ -2917,7 +2907,7 @@ internal class NugetProcessor(
     )
 
     val cNameExports: FileSpec = generateCNameWrappers(
-      functions, genericFunctions, extensionFunctions, extensionProperties,
+      functions, extensionFunctions, extensionProperties,
       classes, enums, sealedClasses, objects, properties,
       valueClasses, suspendFunctions, callableCatalog, deps, reachableInterfaces,
       exportedObjectHandles, forwardClassifier,
@@ -2930,7 +2920,7 @@ internal class NugetProcessor(
       interfaces.filter { it.isSealedInterfaceOverDeclaredArms(exportedObjectHandles) },
     )
     val bindings: CsharpBindings = generateCSharpBindings(
-      functions, genericFunctions, extensionFunctions, extensionProperties,
+      functions, extensionFunctions, extensionProperties,
       allClasses, enums, interfaces, sealedClasses, objects, properties,
       constProperties, valueClasses, suspendFunctions, callableCatalog, deps, reachableInterfaces,
       expects, forwardClassifier, interfaceDeclarationCatalog,
@@ -3041,7 +3031,6 @@ internal class NugetProcessor(
 
   private fun generateCSharpBindings(
     functions: List<KSFunctionDeclaration>,
-    genericFunctions: List<KSFunctionDeclaration>,
     extensionFunctions: List<KSFunctionDeclaration>,
     extensionProperties: List<KSPropertyDeclaration>,
     classes: List<KSClassDeclaration>,
@@ -3066,7 +3055,6 @@ internal class NugetProcessor(
       context,
       logger,
       functions,
-      genericFunctions,
       classes,
       enums,
       interfaces,
@@ -3239,7 +3227,6 @@ internal class NugetProcessor(
 
   private fun generateCNameWrappers(
     functions: List<KSFunctionDeclaration>,
-    genericFunctions: List<KSFunctionDeclaration>,
     extensionFunctions: List<KSFunctionDeclaration>,
     extensionProperties: List<KSPropertyDeclaration>,
     classes: List<KSClassDeclaration>,
@@ -3339,11 +3326,6 @@ internal class NugetProcessor(
         // ADR-208: no else. The generic-return legacy adapter is gone; an unplanned top-level
         // function exports nothing and its skip is already named.
       }
-    }
-
-    genericFunctions.forEach { func ->
-      // The import lives inside addGenericFunctionExports, behind its own gate (ADR-064).
-      guardDeclaration(func) { builder.addGenericFunctionExports(func, context.symbols) }
     }
 
     classes.forEach { cls ->
@@ -3945,11 +3927,8 @@ internal class NugetProcessor(
 }
 
 /**
- * ADR-211: whether this top-level function goes through the ADR-062 catalog. A non-generic one
- * always does; a non-suspend `fun <T>` does when the legacy width-variant gate refuses it, unless
- * that refusal is ADR-198's reified unspellable bound, which [warnUnroutedGenericFunctions] names.
+ * ADR-213: whether this top-level function goes through the ADR-062 catalog: every one but
+ * ADR-198's reified unspellable bound, which [warnUnroutedGenericFunctions] names.
  */
 private fun KSFunctionDeclaration.isPlannedTopLevelFunction(): Boolean =
-  typeParameters.isEmpty() ||
-    (!modifiers.contains(Modifier.SUSPEND) && !hasLegacyGenericFunctionRoute() &&
-      !isReifiedWithUnspellableBound())
+  typeParameters.isEmpty() || !isReifiedWithUnspellableBound()

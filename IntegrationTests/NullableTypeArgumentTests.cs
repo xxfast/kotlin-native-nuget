@@ -130,8 +130,8 @@ public class NullableTypeArgumentTests
         Assert.Equal("Oreo's treats", tin.Value);
     }
 
-    // The legacy generic-function route: `fun <T> identity(value: T): T`. The string width already
-    // carries null; the nullable value type did not (NullReferenceException in C#).
+    // `fun <T> identity(value: T): T`, one boxed plan export since ADR-213. The nullable value type
+    // once threw NullReferenceException in C#.
     [Fact]
     public void Identity_NullableInt_NullRoundTrips()
     {
@@ -139,8 +139,8 @@ public class NullableTypeArgumentTests
         Assert.Null(mylosNaps);
     }
 
-    // A null string no longer crosses the string width into a non-null Kotlin `String`; it takes
-    // the object variant's null pointer, like every other null argument on this route.
+    // A null string crosses as the null pointer, like every other null argument, never into a
+    // non-null Kotlin `String`.
     [Fact]
     public void Identity_NullableString_NullRoundTripsThroughTheObjectVariant()
     {
@@ -156,8 +156,8 @@ public class NullableTypeArgumentTests
         Assert.Equal(7, oreosNaps);
     }
 
-    // `fun <T : Any> handBack(treat: T): T` renders `where T : notnull`; the per-width dispatch
-    // still carries a non-null `int` and `string`.
+    // `fun <T : Any> handBack(treat: T): T` renders `where T : notnull`; the boxed export
+    // carries a non-null `int` and `string`.
     [Fact]
     public void HandBack_AnyBoundFunction_CarriesNonNullValues()
     {

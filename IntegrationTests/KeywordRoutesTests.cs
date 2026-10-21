@@ -139,11 +139,10 @@ public class KeywordRoutesTests
         Assert.Equal(5, round.R);
     }
 
-    // Generated-local collisions on the generic top-level route. Each Kotlin parameter is named
-    // after a local the generated `F<T>` body declares for itself, so the named argument below is
-    // the public label that must survive: the generator renames its own locals, never these.
-    // `int` and `string` cross the width dispatch (`width`, `present`); `KeywordTick` takes the
-    // object arm (`handle`, `owned`, `result`).
+    // Generated-local collisions on a top-level `fun <T>`. Each Kotlin parameter is named after a
+    // local the deleted width-variant body declared (`width`, `present`, `handle`, `owned`,
+    // `result`), so the named argument below is the public label that must survive. Since ADR-213
+    // every `T` (`int`, `string`, `KeywordTick`) crosses one boxed plan export.
 
     [Fact]
     public void Keep_GenericTopLevelRoute_BindsAParameterNamedOwned()

@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 
 import com.google.devtools.ksp.getVisibility
@@ -2447,9 +2448,8 @@ internal class ForwardCallablePlanner(
     // reaches here (a generic interface or an inner generic class at a return, a Flow, a
     // lambda the plan does not carry) is named.
     //
-    // The structural GENERIC deferral never reaches this entry builder: `catalog()` is called with
-    // non-generic top-level functions only, so a `fun <T> f(...)` is named from `NugetProcessor`
-    // instead (`warnUnroutedGenericFunctions`). A `suspend` one does arrive (ROADMAP line 29) and
+    // ADR-213: every top-level `fun <T>` but the ADR-198 reified unspellable case reaches the
+    // catalog and names its own GENERIC skip. A `suspend` one does arrive (ROADMAP line 29) and
     // leaves `staticEntry` as a structural SUSPEND skip, which is not an unrouted candidate.
     false
   }
@@ -2645,9 +2645,8 @@ internal class ForwardCallablePlanner(
     // ADR-164: per-parameter "has a default", positionally, from the route's own flag reader.
     defaults: List<Boolean>,
   ): ForwardCallableCatalogEntry {
-    // ADR-197: an object or companion member's own type parameters route on the plan. ADR-211: so
-    // do a top-level function's, when the legacy width-variant gate refuses it (only those reach
-    // the catalog).
+    // ADR-197: an object or companion member's own type parameters route on the plan.
+    // ADR-211 / ADR-213: so do a top-level function's.
     val routesGeneric: Boolean = origin == ForwardCallableOrigin.OBJECT ||
         origin == ForwardCallableOrigin.COMPANION || origin == ForwardCallableOrigin.TOP_LEVEL
     val structuralReason: ForwardPlanSkipReason? = when {
@@ -3227,7 +3226,16 @@ internal class ForwardCallablePlanner(
         symbol, ForwardPlanSkipReason.OPT_IN_MARKER, node = node, detail = widening.marked,
       )
     }
-    val publicParameters: List<ForwardPublicParameter> = widening.parameters
+    // ADR-213: a top-level `fun <T>` keeps the `handle` label the deleted width route shipped.
+    val keepsHandle: Boolean = origin == ForwardCallableOrigin.TOP_LEVEL &&
+        (node as? KSFunctionDeclaration)?.typeParameters?.isNotEmpty() == true
+    val publicParameters: List<ForwardPublicParameter> = widening.parameters.map { parameter ->
+      if (keepsHandle && parameter.name.isShiftedHandle()) {
+        parameter.copy(csharpLabel = parameter.name.dropLast(1).csharpParameterName())
+      } else {
+        parameter
+      }
+    }
     val declared: List<Pair<String, BridgeType>> =
       publicParameters.map { parameter -> parameter.name to parameter.type }
     // Issue #131: name-carrying, so a skip can name the parameter that failed. The receiver rides
@@ -6120,3 +6128,7 @@ private fun KSNode?.declaredResultType(): KSType? = when (this) {
 
 /** ADR-006 amendment: the functions the compiler writes on every `enum class`, none authored. */
 internal val ENUM_SYNTHESIZED_FUNCTIONS: Set<String> = setOf("values", "valueOf")
+
+/** ADR-213: `handle_`, `handle__`, ...: a user `handle` (or `handle_`) the plan shifted. */
+private fun String.isShiftedHandle(): Boolean =
+  startsWith("handle_") && substring("handle".length).all { it == '_' }

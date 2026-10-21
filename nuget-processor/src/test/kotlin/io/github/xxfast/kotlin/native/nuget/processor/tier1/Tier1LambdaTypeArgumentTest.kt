@@ -248,7 +248,8 @@ class Tier1LambdaTypeArgumentTest {
    * crossing it would leave the fifth copy free to keep the bug.
    *
    * [crateOf] is the control that stops the obvious over-fix: a type *parameter* must keep
-   * rendering as `T`, never as `global::Interop.Catcam.T`.
+   * rendering as `T`, never as `global::Interop.Catcam.T` (its outer `Crate` is qualified since
+   * ADR-213 moved it onto the plan).
    */
   @Test
   fun `a generic return type argument is qualified and a type parameter is not`() {
@@ -266,7 +267,7 @@ class Tier1LambdaTypeArgumentTest {
           "${result.generatedCSharp.lines().filter { it.contains("CrateOfSnapshot") }}",
     )
     assertTrue(
-      result.generatedCSharp.contains("public static Crate<T> CrateOf<T>(T item)"),
+      result.generatedCSharp.contains("public static global::Interop.Catcam.Crate<T> CrateOf<T>(T item)"),
       "control: a type parameter is not a declaration and must never be qualified; got: " +
           "${result.generatedCSharp.lines().filter { it.contains("CrateOf<") }}",
     )

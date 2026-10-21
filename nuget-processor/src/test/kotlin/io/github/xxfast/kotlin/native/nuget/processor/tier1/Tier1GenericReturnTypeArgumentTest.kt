@@ -280,7 +280,7 @@ class Tier1GenericReturnTypeArgumentTest {
           "${result.generatedCSharp.lines().filter { it.contains("CrateOfCrate") }}",
     )
     assertTrue(
-      result.generatedCSharp.contains("public static Crate<T> CrateOf<T>(T item)"),
+      result.generatedCSharp.contains("public static global::Interop.Catcam.Crate<T> CrateOf<T>(T item)"),
       "expected a type-parameter return to keep binding; got: " +
           "${result.generatedCSharp.lines().filter { it.contains("CrateOf<") }}",
     )
@@ -331,21 +331,21 @@ class Tier1GenericReturnTypeArgumentTest {
   }
 
   /**
-   * `Crate<T?>` at a function's own type parameter is the generic-function route's (ADR-197). With
-   * a parameter of its own type parameter it binds, spelling the return by ADR-147's bare-`T` rule
-   * as `Crate<T>`: the `?` written on `T?` is not carried into C#, the instantiation says whether
-   * the item holds null (`CrateOfMaybe<int?>` does, `CrateOfMaybe<int>` reads `0`). Without one it
-   * is the plan's (ADR-211), which since ADR-216 binds a function's own `T` inside an exported
-   * generic class and spells the `?` as written: `Crate<T?>`. Both are pinned as they stand.
+   * `Crate<T?>` at a function's own type parameter. Until ADR-213 a function with a parameter of
+   * its own type parameter bound on the width-variant route and spelled the return `Crate<T>`,
+   * dropping the `?`. Every top-level `fun <T>` is on the plan now, which since ADR-216 binds a
+   * function's own `T` inside an exported generic class and spells the `?` as written: `Crate<T?>`.
+   * For an unconstrained `T` that is the same C# type (`T?` on a value type is `T` itself), so the
+   * instantiation still says whether the item holds null.
    */
   @Test
-  fun `a nullable type-parameter argument keeps the generic-function route's spelling`() {
+  fun `a nullable type-parameter argument keeps its question mark on the plan`() {
     val result = run()
     val cs: String = result.generatedCSharp
 
     assertTrue(
-      cs.contains("public static Crate<T> CrateOfMaybe<T>(T item)"),
-      "expected the generic-function route's Crate<T>; got: " +
+      cs.contains("public static global::Interop.Catcam.Crate<T?> CrateOfMaybe<T>(T item)"),
+      "expected the plan's Crate<T?>; got: " +
         "${cs.lines().filter { it.contains("CrateOfMaybe<") }}",
     )
     assertTrue(

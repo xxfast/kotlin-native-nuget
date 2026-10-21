@@ -65,9 +65,9 @@ internal class ForwardSymbolTable(
 
   /**
    * A top-level callable's entry point: its own package's qualifier plus its C-escaped name. The
-   * `toCName` escape lives here so no route can mint the symbol from the raw Kotlin name (two
-   * `exports/GenericFunctionExports.kt` sites did, and agreed with their C# twin only while the
-   * name was not a C keyword).
+   * `toCName` escape lives here so no route can mint the symbol from the raw Kotlin name (the
+   * deleted ADR-064 width-variant route did, and agreed with its C# twin only while the name was
+   * not a C keyword).
    */
   fun topLevel(
     declaration: KSDeclaration,

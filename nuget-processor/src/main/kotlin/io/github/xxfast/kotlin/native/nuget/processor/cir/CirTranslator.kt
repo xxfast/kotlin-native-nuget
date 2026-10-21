@@ -103,7 +103,6 @@ internal fun translate(
   context: NugetContext,
   logger: KSPLogger,
   functions: List<KSFunctionDeclaration>,
-  genericFunctions: List<KSFunctionDeclaration>,
   classes: List<KSClassDeclaration>,
   enums: List<KSClassDeclaration> = emptyList(),
   interfaces: List<KSClassDeclaration> = emptyList(),
@@ -210,13 +209,8 @@ internal fun translate(
   // owns the remedy for a file class whose name is taken, so this reuses it: suffix the class `Kt`.
   // Suspend functions are excluded (their `Async` suffix keeps them clear) and so are extensions
   // (they live on `{Receiver}Extensions`).
-  val fileClassFunctions: Map<Pair<String, String>, List<KSFunctionDeclaration>> = buildMap {
-    listOf(functions, genericFunctions).forEach { list ->
-      groupByNamespaceAndFile(list).forEach { (key, funcs) ->
-        put(key, getOrElse(key) { emptyList() } + funcs)
-      }
-    }
-  }
+  val fileClassFunctions: Map<Pair<String, String>, List<KSFunctionDeclaration>> =
+    groupByNamespaceAndFile(functions)
 
   fun csharpMemberName(function: KSFunctionDeclaration): String =
     function.csharpMemberName()
@@ -354,21 +348,6 @@ internal fun translate(
       logger = logger,
     )
     namespaces.addDeclaration(namespace, CirStaticClass(finalClassName, members))
-  }
-
-  groupByNamespaceAndFile(genericFunctions).forEach { (key, funcs) ->
-    val (namespace, fileClassName) = key
-    val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
-    val members: List<CirMember> =
-      funcs.flatMap { function ->
-        translateGenericFunction(function, context.libraryName, context, logger).also { emitted ->
-          recordStatic(
-            namespace, finalClassName, emitted, function,
-            function.spelling("fun"),
-          )
-        }
-      }
-    namespaces.mergeStaticClass(namespace, finalClassName, members)
   }
 
   groupByNamespaceAndFile(suspendFunctions).forEach { (key, funcs) ->

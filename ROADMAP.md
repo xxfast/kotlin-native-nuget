@@ -55,7 +55,6 @@ Complete.
 
 ## Phase 4: Rich type support
 
-- [ ] Migrate the top-level `fun <T>` width variants (`Identity<T>`, 13 exports each) onto the ADR-062 plan: a breaking change that replaces every shipped `..._{string,int,...,object}` entry point with one boxed export. Breaking, so it lands before 1.0.0 or waits for 2.0; 0.9.0 is closed ([ADR-211](docs/adr/211-top-level-generic-functions-on-the-plan.md))
 - [ ] A top-level `suspend fun <T>` is not bound; the suspend route has its own owner rules ([ADR-211](docs/adr/211-top-level-generic-functions-on-the-plan.md))
 - [ ] A method or class `T` inside a lambda or `Flow` is still skipped, named ([ADR-212](docs/adr/212-type-parameter-as-collection-element.md))
 - [ ] An open exported generic instantiation nested two or more levels deep, read through a property getter or any position outside a member's result before the consumer holds one, has no factory ([ADR-216](docs/adr/216-own-type-parameter-in-result-and-generic-class.md))

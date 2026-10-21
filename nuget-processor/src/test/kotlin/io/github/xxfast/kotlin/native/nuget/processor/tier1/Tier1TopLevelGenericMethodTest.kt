@@ -6,9 +6,9 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * ADR-211: a top-level `fun <T>` the legacy width-variant gate refuses binds on the ADR-062 plan
- * as a static generic method on its file-facade class, its bare `T` on the ADR-147 boxed wire. A
- * shape the gate accepts (`identity`) stays on the legacy route, width variants and all.
+ * ADR-211 / ADR-213: every top-level `fun <T>` binds on the ADR-062 plan as a static generic method
+ * on its file-facade class, its bare `T` on the ADR-147 boxed wire, with one export and no width
+ * variants.
  *
  * Oreo gets described; Mylo keeps whatever he is handed.
  */
@@ -51,16 +51,62 @@ class Tier1TopLevelGenericMethodTest {
   }
 
   @Test
-  fun `a gate-accepted top-level generic keeps the legacy width variants`() {
-    val result: Tier1Result = run()
+  fun `every top-level generic binds on the plan with one export`() {
+    val result: Tier1Result = Tier1Harness.run(
+      """
+      package tier1.toplevelgeneric
+
+      interface Pet { val name: String }
+      class Cat(override val name: String) : Pet
+      class Box<T>(val value: T)
+      fun <T> identity(value: T): T = value
+      fun <T> wrapInBox(value: T): Box<T> = Box(value)
+      fun <T> unwrapBox(box: Box<T>): T = box.value
+      inline fun <reified T : Pet> groomPet(pet: T): T = pet
+      inline fun <reified T> reifiedName(value: T): String = T::class.simpleName ?: "?"
+      """.trimIndent(),
+      fileName = "Helpers.kt",
+      processorOptions = options,
+    )
     assertKotlinCompiles(result)
+    val warnings: List<String> = result.kspWarnings.filter { it.contains("tier1.") }
+    assertTrue(warnings.isEmpty(), "expected every function to bind; got: $warnings")
 
     val cs: String = result.generatedCSharp
+    assertContains(cs, "EntryPoint = \"library_toplevelgeneric__identity\"")
+    assertFalse(cs.contains("__identity_"), "no width variants: $cs")
+    assertFalse(cs.contains("__groomPet_"), "no width variants: $cs")
     assertContains(cs, "public static T Identity<T>(T value)")
-    assertContains(cs, "EntryPoint = \"library_toplevelgeneric__identity_int\"")
-    assertFalse(
-      cs.contains("EntryPoint = \"library_toplevelgeneric__describe_int\""),
-      "describe has no width variants: $cs",
+    assertContains(cs, "Box<T> WrapInBox<T>(T value)")
+    assertContains(cs, "public static T UnwrapBox<T>(")
+    assertContains(cs, "public static T GroomPet<T>(T pet) where T : global::Interop.Toplevelgeneric.IPet")
+    assertContains(cs, "public static string ReifiedName<T>(T value)")
+    // ADR-213: a reified `T` reifies at its bound, `Any?` when it has none.
+    assertContains(result.generated, ".groomPet<tier1.toplevelgeneric.Pet>(")
+    assertContains(result.generated, ".reifiedName<Any?>(")
+
+    Tier1CSharpCompile.assertCompiles(
+      result,
+      """
+      using Interop.Toplevelgeneric;
+
+      namespace Consumer
+      {
+          public static class Probe
+          {
+              public static int Run(Cat cat)
+              {
+                  int four = Helpers.Identity(4);
+                  string? none = Helpers.Identity<string?>(null);
+                  using Box<int> box = Helpers.WrapInBox(5);
+                  int five = Helpers.UnwrapBox(box);
+                  Cat groomed = Helpers.GroomPet(cat);
+                  string name = Helpers.ReifiedName(3);
+                  return four + five + name.Length;
+              }
+          }
+      }
+      """.trimIndent(),
     )
   }
 

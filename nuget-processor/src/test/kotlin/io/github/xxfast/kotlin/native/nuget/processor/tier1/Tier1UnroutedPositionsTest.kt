@@ -516,14 +516,14 @@ class Tier1UnroutedPositionsTest {
 
     assertTrue(
       result.generatedCSharp.contains("public static T StructuralOnTopLevel<T>(T value)"),
-      "`fun <T> f(value: T): T` at top level is re-emitted as per-type exports plus a generic " +
-          "C# wrapper; generatedCSharp=${result.generatedCSharp.take(2000)}",
+      "`fun <T> f(value: T): T` at top level binds on the plan as one boxed export; " +
+          "generatedCSharp=${result.generatedCSharp.take(2000)}",
     )
     assertTrue(
-      result.generatedCSharp.contains("StructuralOnTopLevel_string_native") &&
-          result.generatedCSharp.contains("StructuralOnTopLevel_int_native"),
-      "the per-type dispatch is what makes this cell routed; its absence would mean the wrapper " +
-          "is a shell",
+      result.generatedCSharp.contains("Native_StructuralOnTopLevel(") &&
+          !result.generatedCSharp.contains("StructuralOnTopLevel_int_native"),
+      "ADR-213: the one plan extern is what makes this cell routed, with no width variants; its " +
+          "absence would mean the wrapper is a shell",
     )
     assertFalse(
       result.kspWarnings.any { it.contains("tier1.unrouted.structuralOnTopLevel") },
