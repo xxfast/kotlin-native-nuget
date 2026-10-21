@@ -59,9 +59,10 @@ Release commits are titled `Prepare for release <version>`.
 
 ## Pull requests
 
-Open it **ready for review** once `scripts/verify.sh` is green on the branch and nothing is still open.
-Open a **draft** only while something is: it only compiles, a question needs an answer, or it's
-exploratory. Promote it once that's settled.
+Open it **ready for review** once it's verified and nothing is still open. A code change is verified
+when `scripts/verify.sh` is green on the branch; a docs-only change needs no build. Open a **draft**
+only while something is open: it only compiles, a question needs an answer, or it's exploratory.
+Promote it once that's settled.
 
 Keep the body short. A few sentences and a code example, not an essay. The reviewer can read the diff;
 the body exists to say what the diff cannot.
