@@ -117,7 +117,7 @@ IReadOnlyList<int?> padded = deck.Pad(new int?[] { 1, null });    // T inferred 
 `List<T>`, `MutableList<T>`, `Set<T>`, `MutableSet<T>`, `Map<K, V>` and `MutableMap<K, V>` with the
 function's own or the owner's own type parameter at the element, key or value slot bind at every
 position the plan binds the same collection with a concrete component: a parameter, a return, a
-`val` getter (read only, as ADR-147 already drops a `T` setter), on a class, object, companion,
+`val` getter (read only here; *ADR-218 binds the `var` setter*), on a class, object, companion,
 sealed arm, generic class member (ADR-147) and, through ADR-211, a top-level function. C# spelling
 is the ADR-011 one, `IReadOnlyList<T>` / `IReadOnlySet<T>` / `IReadOnlyDictionary<K, V>`, with the
 same `.AsReadOnly()` suffix. A nullable element `List<T?>` spells `IReadOnlyList<T?>`; an
@@ -247,7 +247,8 @@ for the returned-element half.
   drop "`T` in a collection" from the refusal lists; `:499` changes with ADR-211.
 - Deferred, each still refused by name: `T` in a lambda or `Flow`, `Result<List<T>>`, `T` inside a
   value class or `Box<T>`, a trampolined `T` in a collection, a `T` setter (`var items: List<T>`,
-  dropped as ADR-147 drops a bare `T` setter).
+  dropped as ADR-147 drops a bare `T` setter). *Amended by [ADR-218](218-type-parameter-property-setter.md):
+  the collection setters were already compiled by this ADR, and the bare `T` setter binds too.*
 - The ADR-147 comment "a per-element box the write side has no arm for" was stale from ADR-083
   onward; this ADR replaces it with the real reason history.
 - Fixed in the same change: a collection parameter named `list` or `map` beside a collection return

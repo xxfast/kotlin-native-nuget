@@ -36,6 +36,7 @@ using TestLibrary.Boxshelf;
 
 using Membergeneric = TestLibrary.Membergeneric;
 using Litterbox = TestLibrary.Litterbox;
+using Playroom = TestLibrary.Playroom;
 using TestLibrary.Listenerprops;
 using TestLibrary.Lounge;
 using TestLibrary.Metronome;
@@ -5893,6 +5894,67 @@ public class LiveHandleTests
                 Assert.Equal("Mylo", fetched.Name);
             }
             Assert.Equal(5, mylo.Tricks);
+        });
+    }
+
+    // ADR-218
+    // A type-parameter setter mints one box per non-null assignment and disposes it in its
+    // `finally`; a borrowed wrapper (and every element of a borrowed collection) is the
+    // consumer's, so only the consumer's `using` releases it. Ledger per iteration: pen, oreo,
+    // mylo, names, tabby, cradle, sash, locket +1/-1 each; Current = i: box +1/-1; Current =
+    // "Mylo": box +1/-1; Maybe = null: nothing minted; Current = oreo: borrowed, its returned
+    // wrapper +1/-1 (`using`); Items/Tags over cats: list and map handle +1/-1 each, elements
+    // borrowed; Sash's trampolined setter: box +1/-1; Locket through IKeepsake<Cat>: borrowed.
+    // Net zero, baseline equality only.
+    [Fact]
+    public void GenericInstance_SetterBoxes_ReturnToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var oreo = new Cat("Oreo", 9);
+            using var mylo = new Cat("Mylo", 9);
+
+            using var pen = new Playroom.Playpen<int>(9);
+            pen.Current = 7;
+            pen.Maybe = 4;
+            pen.Items = new[] { 1, 2 };
+            pen.Bag = new List<int> { 3 };
+            pen.Unique = new HashSet<int> { 4 };
+            pen.Tags = new Dictionary<string, int> { ["oreo"] = 5 };
+            Assert.Equal(7, pen.Current);
+
+            using var names = new Playroom.Playpen<string?>("Oreo");
+            names.Current = "Mylo";
+            names.Maybe = null;
+            Assert.Equal("Mylo", names.Current);
+
+            using var cats = new Playroom.Playpen<Cat>(mylo);
+            cats.Current = oreo;
+            cats.Maybe = mylo;
+            cats.Items = new[] { oreo, mylo };
+            cats.Tags = new Dictionary<string, Cat> { ["brown"] = mylo };
+            using (Cat back = cats.Current)
+            {
+                Assert.Equal("Oreo", back.Name);
+            }
+            Assert.Equal("Mylo", mylo.Name);
+
+            using var tabby = new Membergeneric.Tabby("Mylo", 5);
+            using var cradle = new Playroom.Cradle<Membergeneric.Tabby>(tabby);
+            cradle.Current = tabby;
+            cradle.Pets = new[] { tabby };
+            Assert.Equal("Mylo, Mylo", cradle.Names());
+
+            using var sash = new Playroom.Sash<Rankings.Medal>(Rankings.Medal.Silver);
+            sash.Current = Rankings.Medal.Gold;
+            sash.RunnerUp = Rankings.Medal.Silver;
+            sash.RunnerUp = null;
+            Assert.Equal("GOLD#2 then nobody", sash.Describe());
+
+            using var locket = new Playroom.Locket<Cat>(oreo);
+            Playroom.IKeepsake<Cat> keepsake = locket;
+            keepsake.Item = mylo;
+            Assert.StartsWith("locket holds ", locket.Peek());
         });
     }
 }

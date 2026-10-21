@@ -80,3 +80,44 @@ internal fun forwardCirHandleScope(
     append("$indent}")
   }
 }
+
+/**
+ * ADR-147: a `T` value is boxed before the call. `Wrap<T>` reports whether it MINTED the box
+ * (a primitive, a char, a string) or contributed a live wrapper's own `_handle`; only a minted
+ * box is disposed ([forwardCirTypeParameterCleanup]), which is ADR-099's ownership rule verbatim.
+ * Shared by a callable's `T` argument and (ADR-218) a property setter's `T` value, so the ADR-198
+ * `Wrap<T?>` rule lives once. Null when [type] is not a type parameter.
+ */
+internal fun forwardCirTypeParameterBox(
+  type: BridgeType,
+  name: String,
+  local: String,
+): ForwardCirHandleStep? {
+  val parameter: BridgeType.TypeParameter =
+    type.unwrapNullable() as? BridgeType.TypeParameter ?: return null
+  // ADR-198: under a `struct` constraint `T?` is `Nullable<T>`, which `Wrap<T>` cannot take; it
+  // boxes as itself, `Wrap<T?>` normalising to the underlying enum and answering null with null.
+  val wrap: String = if (parameter.valueType && type is BridgeType.Nullable) {
+    "NugetMarshal.Wrap<${parameter.name}?>($name, out"
+  } else {
+    "NugetMarshal.Wrap<${parameter.name}>($name!, out"
+  }
+  return ForwardCirHandleStep(
+    flat = "IntPtr ${local}Box = $wrap bool ${local}Owned);",
+    declarations = listOf("IntPtr ${local}Box = IntPtr.Zero;", "bool ${local}Owned = false;"),
+    statement = "${local}Box = $wrap ${local}Owned);",
+  )
+}
+
+/** ADR-099/147: dispose only a box [forwardCirTypeParameterBox] minted, and only once it exists. */
+internal fun forwardCirTypeParameterCleanup(
+  type: BridgeType,
+  name: String,
+  local: String,
+): String? {
+  if (type.unwrapNullable() !is BridgeType.TypeParameter) return null
+  // ADR-187: keep a borrowed wrapper alive past the call (only when borrowed: `T` may be a value).
+  return "if (${local}Owned && ${local}Box != IntPtr.Zero) { " +
+      "NugetMarshal.Dispose(${local}Box); } " +
+      "if (!${local}Owned) GC.KeepAlive($name);"
+}

@@ -58,7 +58,6 @@ Complete.
 - [ ] A method or class `T` inside a `Flow` or a `suspend` lambda is still skipped, named ([ADR-215](docs/adr/215-type-parameter-in-lambda-and-flow.md))
 - [ ] An open exported generic instantiation nested two or more levels deep, read through a property getter or any position outside a member's result before the consumer holds one, has no factory ([ADR-216](docs/adr/216-own-type-parameter-in-result-and-generic-class.md))
 - [ ] A trampolined `T` (a bound with no closed spelling, such as `Enum<T>`) in a collection is still skipped, named ([ADR-212](docs/adr/212-type-parameter-as-collection-element.md))
-- [ ] A `var` property of `List<T>` renders get-only, its setter dropped as a bare `T` setter is ([ADR-212](docs/adr/212-type-parameter-as-collection-element.md))
 
 ## Phase 5: Exception handling
 
@@ -71,6 +70,7 @@ One open item.
 - [ ] A `suspend` member of an `object` or companion has no route, generic or not, named `SKIPPED_UNSUPPORTED_COMBINATION`; found by [ADR-214](docs/adr/214-suspend-generic-functions-on-the-suspend-route.md)
 
 ## Phase 7: Bidirectional support (C# → Kotlin)
+- [ ] A generic interface (`IHolder<T>`) implemented in C# and passed to Kotlin is not bridged: [ADR-084](docs/adr/084-csharp-implemented-interface-handles.md) bridges no generic interface, so the C# side of an interface `var item: T` is out of reach ([ADR-218](docs/adr/218-type-parameter-property-setter.md))
 - [ ] Fold the reverse template's internal `NugetManagedException` onto the runtime class over the ADR-130 expect/actual seam ([details](docs/backlog/fold-reverse-managed-exception-onto-runtime-class.md))
 - [ ] `NugetManagedException` carries no `@NugetRuntimeApi`, unlike every other public runtime export ([details](docs/backlog/managed-exception-missing-runtime-api-marker.md))
 

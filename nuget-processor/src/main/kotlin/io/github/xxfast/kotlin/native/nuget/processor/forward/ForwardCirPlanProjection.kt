@@ -1315,40 +1315,15 @@ internal object ForwardCirPlanProjection {
         "{ NugetMarshal.Dispose(${parameter.csharpLocal}Handle); } GC.KeepAlive(${parameter.csharpName});"
   }
 
-  /**
-   * ADR-147: a `T` argument is boxed before the call. `Wrap<T>` reports whether it MINTED the box
-   * (a primitive, a char, a string) or contributed a live wrapper's own `_handle`; only a minted
-   * box is disposed, which is ADR-099's ownership rule verbatim.
-   */
+  /** ADR-147: a `T` argument's box, the shared [forwardCirTypeParameterBox]. */
   private fun ForwardCallablePlan.typeParameterPrelude(
     parameter: ForwardPublicParameter,
-  ): ForwardCirHandleStep? {
-    val type: BridgeType.TypeParameter =
-      parameter.type.unwrapNullable() as? BridgeType.TypeParameter ?: return null
-    val name: String = parameter.csharpName
-    val local: String = parameter.csharpLocal
-    // ADR-198: under a `struct` constraint `T?` is `Nullable<T>`, which `Wrap<T>` cannot take; it
-    // boxes as itself, `Wrap<T?>` normalising to the underlying enum and answering null with null.
-    val wrap: String = if (type.valueType && parameter.type is BridgeType.Nullable) {
-      "NugetMarshal.Wrap<${type.name}?>($name, out"
-    } else {
-      "NugetMarshal.Wrap<${type.name}>($name!, out"
-    }
-    return ForwardCirHandleStep(
-      flat = "IntPtr ${local}Box = $wrap bool ${local}Owned);",
-      declarations = listOf("IntPtr ${local}Box = IntPtr.Zero;", "bool ${local}Owned = false;"),
-      statement = "${local}Box = $wrap ${local}Owned);",
-    )
-  }
+  ): ForwardCirHandleStep? =
+    forwardCirTypeParameterBox(parameter.type, parameter.csharpName, parameter.csharpLocal)
 
-  /** ADR-099/147: dispose only a box this call site minted, and only once it exists. */
-  private fun ForwardCallablePlan.typeParameterCleanup(parameter: ForwardPublicParameter): String? {
-    if (parameter.type.unwrapNullable() !is BridgeType.TypeParameter) return null
-    // ADR-187: keep a borrowed wrapper alive past the call (only when borrowed: `T` may be a value).
-    return "if (${parameter.csharpLocal}Owned && ${parameter.csharpLocal}Box != IntPtr.Zero) { " +
-        "NugetMarshal.Dispose(${parameter.csharpLocal}Box); } " +
-        "if (!${parameter.csharpLocal}Owned) GC.KeepAlive(${parameter.csharpName});"
-  }
+  /** ADR-099/147: the shared [forwardCirTypeParameterCleanup]. */
+  private fun ForwardCallablePlan.typeParameterCleanup(parameter: ForwardPublicParameter): String? =
+    forwardCirTypeParameterCleanup(parameter.type, parameter.csharpName, parameter.csharpLocal)
 
   /**
    * ADR-088: a bound C# interface argument crosses as a fresh transfer GCHandle. There is

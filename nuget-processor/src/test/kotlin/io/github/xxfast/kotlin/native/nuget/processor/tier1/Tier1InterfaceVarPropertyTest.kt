@@ -13,7 +13,8 @@ import kotlin.test.assertTrue
  * - ADR-075 independence on `IFoo`: a refused setter (`IllegalStateException?`, ADR-201) stays
  *   `{ get; }`,
  *   named in the build log and in a `<remarks>` on the member, reachable or not.
- * - ADR-147 carve-out: a `var item: T` keeps `T Item { get; }`.
+ * - ADR-113 carve-out: a `var item: T` renders `T Item { get; set; }` (ADR-218; it was get-only
+ *   under ADR-147 v1).
  * - Case D: `class TrainingClicker : Scoreboard(), Tally` overrides a base `open val` and an
  *   interface `var` with one `override var`. The public C# property stays a get-only `override`
  *   (CS0546), and the interface setter is an explicit `ITally.Count` member beside it; otherwise
@@ -94,10 +95,9 @@ class Tier1InterfaceVarPropertyTest {
   }
 
   @Test
-  fun `the type-parameter carve-out stays get-only`() {
+  fun `the type-parameter carve-out declares its setter`() {
     val holder: String = block(result.generatedCSharp, "public interface IHolder<T>")
-    assertContains(holder, "T Item { get; }")
-    assertFalse(holder.contains("T Item { get; set; }"), holder)
+    assertContains(holder, "T Item { get; set; }")
   }
 
   @Test
@@ -282,7 +282,7 @@ class Tier1InterfaceVarPropertyTest {
   }
 
   @Test
-  fun `case D names the declaring super-interface and skips a type-parameter member`() {
+  fun `case D names the declaring super-interface and implements a type-parameter member`() {
     val inherited: Tier1Result = Tier1Harness.run(
       """
       package tier1.ivardi
@@ -319,11 +319,22 @@ class Tier1InterfaceVarPropertyTest {
     assertContains(impl, "public override int Level\n")
     assertContains(impl, "int IBase.Level\n")
     assertFalse(impl.contains("IDerived.Level"), impl)
-    // `IHolder<T>.Item` is the ADR-147 get-only carve-out: an explicit `set` would be CS0550.
+    // ADR-218: `IHolder<T>.Item` declares a setter now, so the CS0546-refused public setter is
+    // reachable through an explicit `IHolder<string>.Item`, the same rule as `IBase.Level`.
     val box: String = block(inherited.generatedCSharp, "public class Box")
     assertContains(box, "public override string Item\n")
-    assertFalse(box.contains("IHolder<string>.Item"), box)
-    assertFalse(box.contains("Native_Set_item"), box)
+    assertContains(box, "string IHolder<string>.Item\n")
+    // The CS0546 remark names the explicit member as C# spells it, type arguments included (XML-
+    // escaped in the doc comment, raw in the build log).
+    assertContains(
+      box,
+      "reachable only through the explicit IHolder&lt;string&gt;.Item implementation",
+    )
+    assertTrue(
+      inherited.kspWarnings.any { "the explicit IHolder<string>.Item implementation" in it },
+      inherited.kspWarnings.joinToString("\n"),
+    )
+    assertContains(box, "Native_Set_item(_handle")
   }
 
   @Test
