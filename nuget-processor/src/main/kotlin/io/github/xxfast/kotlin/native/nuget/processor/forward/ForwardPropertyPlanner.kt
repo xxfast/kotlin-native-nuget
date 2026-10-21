@@ -520,7 +520,8 @@ internal class ForwardPropertyPlanner(
           superClass = superClass,
           implementer = cls,
           lambdaCarrier = cls.classLambdaPropertyCarrier(),
-          flowCarrier = cls.typeParameters.isEmpty(),
+          // ADR-215: a plain generic class renders its own flow property now, over the erased receiver.
+          flowCarrier = cls.typeParameters.isEmpty() || prop.takesGenericFlowRoute(cls),
         )
       }
       .toList()

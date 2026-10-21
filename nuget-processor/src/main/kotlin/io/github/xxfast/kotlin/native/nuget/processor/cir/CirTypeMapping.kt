@@ -29,6 +29,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyRec
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isValueClass
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardBoundSpellings
+import io.github.xxfast.kotlin.native.nuget.processor.forward.hasNullableBound
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isTrampolined
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.isUnderPackage
 import io.github.xxfast.kotlin.native.nuget.processor.valueClassUnderlyingOrThrow
@@ -308,6 +311,15 @@ internal sealed interface MutableStateFlowElement {
   data class Handle(val kotlinType: String) : Writable
 
   /**
+   * ADR-215: a generic owner's own `T` (`Brook<T>.level: MutableStateFlow<T>`), on ADR-147's
+   * boxed-handle wire: C# writes a `NugetMarshal.Wrap<T>` box and disposes it when it minted one
+   * (the setter-style owned box, ADR-218's), Kotlin reads it erased and casts it to [bounds], the
+   * one spellable bound or none. [nullable] is the bound's nullability: an unconstrained `T` holds
+   * null without a `?`.
+   */
+  data class Boxed(val bounds: List<String>, val nullable: Boolean) : Writable
+
+  /**
    * ADR-071 amendment (value-class element write): a value class whose underlying the synchronous
    * value-class setter carries (ADR-077: a non-null String or primitive other than `Char`, an
    * enum, or an exported class or object). It crosses as that [underlying] (`v.Id`, `(int)v.Mood`,
@@ -350,6 +362,13 @@ internal sealed interface MutableStateFlowElement {
 internal fun classifyMutableStateFlowElement(elementType: KSType?): MutableStateFlowElement {
   val declaration: KSDeclaration =
     elementType?.expandAliases()?.declaration ?: return MutableStateFlowElement.ReadOnly
+  // ADR-215: a `T` with at most one spellable bound; a multi-bound or trampolined one is read
+  // through a star-projected receiver, where no value can be written.
+  if (declaration is KSTypeParameter) {
+    val bounds: List<String> = declaration.forwardBoundSpellings()
+    if (bounds.size > 1 || declaration.isTrampolined()) return MutableStateFlowElement.ReadOnly
+    return MutableStateFlowElement.Boxed(bounds, declaration.hasNullableBound())
+  }
   val simpleName: String = declaration.simpleName.asString()
   if (KOTLIN_TO_CSHARP_PARAM.containsKey(simpleName)) return MutableStateFlowElement.Scalar
   // ROADMAP Phase 4: `kotlin.ByteArray` is a `CLASS`, so it would fall into the handle arm below,
@@ -419,6 +438,8 @@ private fun valueClassElement(
       element
     }
 
+    // ADR-215: a value class over a type parameter is generic, refused above.
+    is MutableStateFlowElement.Boxed,
     is MutableStateFlowElement.ValueClass,
     is MutableStateFlowElement.RefusedValueClass,
     MutableStateFlowElement.ReadOnly,
@@ -511,6 +532,7 @@ internal fun isMutableStateFlowElementWritable(elementType: KSType?): Boolean {
   return when (element) {
     MutableStateFlowElement.Scalar -> true
     is MutableStateFlowElement.Enum -> true
+    is MutableStateFlowElement.Boxed -> true
     is MutableStateFlowElement.Handle -> true
     // The ordinary property route plans every nullable value class it plans non-null (ADR-079):
     // an in-band null for a String or handle underlying, the has-value pair otherwise. That rule
@@ -531,6 +553,13 @@ internal fun mutableStateFlowWrite(elementType: KSType?, csElementType: String):
   val simpleName: String? = elementType?.expandAliases()?.declaration?.simpleName?.asString()
   val element: MutableStateFlowElement.Writable = writableMutableStateFlowElement(elementType)
   return when (element) {
+    // ADR-215: one box slot; the lambda wraps `v` and disposes a minted box after the call.
+    is MutableStateFlowElement.Boxed -> CirStateFlowWrite(
+      parameters = listOf(CirParameter("value", "IntPtr")),
+      arguments = "v",
+      boxedType = csElementType,
+    )
+
     is MutableStateFlowElement.Handle -> if (nullable) {
       CirStateFlowWrite(
         parameters = listOf(CirParameter("value", KOTLIN_HANDLE)),
@@ -641,6 +670,9 @@ private fun valueClassStateFlowWrite(
 
     is MutableStateFlowElement.ValueClass ->
       error("value class ${element.qualifiedName} over a value class has no write arm")
+
+    is MutableStateFlowElement.Boxed ->
+      error("value class ${element.qualifiedName} over a type parameter has no write arm")
   }
 }
 

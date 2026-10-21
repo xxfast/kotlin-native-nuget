@@ -274,11 +274,12 @@ class Tier1EnumSelfBoundTest {
   }
 
   /**
-   * ADR-198 decision 4: a `suspend` or `Flow` member on such an owner takes the generic-class
-   * route's existing named refusal (ADR-147), and the rest of the owner still compiles.
+   * ADR-198 decision 4: a `suspend` member on such an owner takes the generic-class route's
+   * existing named refusal (ADR-147), and the rest of the owner still compiles. ADR-215: a `Flow`
+   * member binds over the star-projected receiver (it takes no `T`).
    */
   @Test
-  fun `suspend and Flow members on an enum-bound owner keep the generic-owner refusal`() {
+  fun `a suspend member on an enum-bound owner keeps the generic-owner refusal, a Flow binds`() {
     val result: Tier1Result = Tier1Harness.run(
       """
       package tier1.enumasync
@@ -302,10 +303,8 @@ class Tier1EnumSelfBoundTest {
       result.kspWarnings.any { it.contains("settle") && it.contains("SKIPPED_") },
       "${result.kspWarnings}",
     )
-    assertTrue(
-      result.kspWarnings.any { it.contains("replay") && it.contains("SKIPPED_") },
-      "${result.kspWarnings}",
-    )
+    assertFalse(result.kspWarnings.any { it.contains("replay") }, "${result.kspWarnings}")
+    assertContains(result.generatedCSharp, "public KotlinFlow<T> Replay()")
     assertFalse(result.generatedCSharp.lines().any { it.contains(" SettleAsync(") })
     assertContains(result.generatedCSharp, "public bool Outranks(T other)")
   }

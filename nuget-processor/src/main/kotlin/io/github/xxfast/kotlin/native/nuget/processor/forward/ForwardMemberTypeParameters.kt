@@ -179,7 +179,19 @@ internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
 
   val parameterTypes: List<KSType> =
     parameters.map { parameter -> parameter.type.resolve().expandAliases() }
-  val returned: KSType? = returnType?.resolve()?.expandAliases()
+  val declaredReturn: KSType? = returnType?.resolve()?.expandAliases()
+  // ADR-215: a class member's `Flow`/`StateFlow` return rides the legacy Flow route, which boxes
+  // each element erased: the element is the own `T` (or `T?`), or a type that does not mention
+  // it. What is checked below is that element, never the flow around it.
+  val flowElement: KSType? = declaredReturn
+    ?.takeIf { (parentDeclaration as? KSClassDeclaration)?.classKind == ClassKind.CLASS }
+    ?.takeIf { type ->
+      val qualified: String? = type.declaration.qualifiedName?.asString()
+      qualified in FLOW_TYPES || qualified in STATE_FLOW_TYPES
+    }
+    ?.arguments?.singleOrNull()?.type?.resolve()?.expandAliases()
+    ?.takeIf { element -> element.ownParameter() || !element.mentionsOwn() }
+  val returned: KSType? = flowElement ?: declaredReturn
   if ((parameterTypes + listOfNotNull(returned)).any { type -> type.carriesProtocol() }) {
     return "its signature carries a suspend lambda or a Flow"
   }

@@ -61,6 +61,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMem
 import io.github.xxfast.kotlin.native.nuget.processor.exports.refusedLegacyLambdaShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedStoredCallbackPair
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFlowMethodExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyFlowReturn
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFlowPropertyExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.declaresOrInheritsFlowMember
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowMethods
@@ -919,7 +920,9 @@ internal fun warnRefusedLegacyRouteMembers(
     // they refuse is named with the plan's structural GENERIC sentence and its `(here, ...)` rule,
     // never as an input the route cannot take.
     val generic: String? =
-      member.forwardMemberGenericRefusal().takeIf { Modifier.SUSPEND in member.modifiers }
+      member.forwardMemberGenericRefusal()
+        // ADR-215: and a Flow-returning member's, on the legacy Flow route.
+        .takeIf { Modifier.SUSPEND in member.modifiers || member.hasLegacyFlowReturn() }
     if (generic != null) {
       add(
         ForwardDiagnostic(
@@ -1250,6 +1253,7 @@ internal fun warnRefusedLegacyRouteMembers(
         MutableStateFlowElement.Scalar,
         is MutableStateFlowElement.Enum,
         is MutableStateFlowElement.Handle,
+        is MutableStateFlowElement.Boxed,
         MutableStateFlowElement.ReadOnly,
           -> return
       }

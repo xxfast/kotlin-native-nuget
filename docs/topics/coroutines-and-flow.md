@@ -17,6 +17,7 @@ started. `Flow<T>` becomes `IAsyncEnumerable<T>`, and `StateFlow<T>` adds a sync
 | `Flow<T?>` | `KotlinFlow<T?>`, a `null` emission is a genuine item |
 | `StateFlow<T>` | `KotlinStateFlow<T> : KotlinFlow<T>`, adds a synchronous `.Value` |
 | `MutableStateFlow<T>` (declared, not narrowed to `StateFlow<T>`) | `KotlinMutableStateFlow<T> : KotlinStateFlow<T>`, `.Value` is settable |
+| `Flow<T>` with a type parameter of a class or method | `KotlinFlow<T>`, see [below](#flow-type-parameter) |
 | coroutine cancellation | `CancellationToken` |
 | structured concurrency | `Dispose()` cancels in-flight work; `DisposeAsync()` drains it |
 
@@ -1258,6 +1259,68 @@ interface, a nullable element and `ByteArray` all work. Three things differ from
 `Box<SharedFlow<E>>` binds as `KotlinFlow<E>`. A flow of a flow (`Box<Flow<Flow<Int>>>`), a lambda
 element, a star projection, an open `Box<Flow<T>>`, and a flow argument of a generic sealed type
 (`Outcome<Flow<Int>>`) are skipped with a diagnostic naming the member.
+
+## A `Flow` with a type parameter {id="flow-type-parameter"}
+
+A generic class's own `Flow<T>`, `StateFlow<T>` and `MutableStateFlow<T>` members bind as
+`KotlinFlow<T>`, `KotlinStateFlow<T>` and `KotlinMutableStateFlow<T>`, and the class is
+`IAsyncDisposable` like any class with a `Flow` member. A `Flow`-returning method can also declare
+its own `T`, on a class with or without type parameters of its own.
+
+```kotlin
+class Brook<T>(val seed: T) {
+  val updates: Flow<T> = flowOf(seed, seed)
+  val level: MutableStateFlow<T> = MutableStateFlow(seed)
+  val gaps: Flow<T?> = flowOf(seed, null, seed)
+  fun flowing(times: Int): Flow<T> = flow { repeat(times) { emit(seed) } }
+}
+
+class Creek {
+  fun <T> stream(value: T): Flow<T> = flowOf(value)
+  fun <T : Enum<T>> crown(medal: T): Flow<T> = flowOf(medal)
+  fun <T> rally(pet: T): Flow<String> where T : Furry, T : Tricky = flowOf(pet.name)
+}
+```
+
+```C#
+public KotlinFlow<T> Updates { get; }
+public KotlinMutableStateFlow<T> Level { get; }
+public KotlinFlow<T?> Gaps { get; }
+public KotlinFlow<T> Flowing(int times)
+
+public KotlinFlow<T> Stream<T>(T value)
+public KotlinFlow<T> Crown<T>(T medal) where T : struct, global::System.Enum
+public KotlinFlow<string> Rally<T>(T pet) where T : IFurry, ITricky
+```
+
+```C#
+await using var brook = new Brook<string>("Mylo");
+await foreach (string name in brook.Updates) { /* "Mylo", "Mylo" */ }
+brook.Level.Value = "Oreo";   // a MutableStateFlow<T> is writable
+
+var creek = new Creek();
+await foreach (int n in creek.Stream(4)) { /* 4 */ }
+```
+
+- An element is the same kind of value `T` is anywhere else: a builtin, a `string` or a wrapper
+  comes out as itself, and each wrapper element is yours to dispose.
+- A `Flow<T>` whose `T` is unconstrained can emit `null`, and `Flow<T?>` and `Brook<string?>` deliver
+  it as a genuine item rather than ending the stream.
+- A `T` you pass to a method (`Stream<T>(T value)`) is boxed as in a
+  [generic method](generics.md#generic-methods). A type argument outside the Kotlin bound faults the
+  stream when you enumerate it, not the call.
+- `MutableStateFlow<T>` is writable when `T` has at most one bound. A `T` with several bounds, or
+  `T : Enum<T>`, binds read-only as `KotlinStateFlow<T>`.
+- Cancelling an enumeration ends it cleanly, as on any other flow.
+
+Not every shape binds:
+
+- A `suspend` member of a generic class is still skipped, named. So is a `var` flow property's
+  setter, as on any class.
+- A `Flow` return on an `object`, a companion or a top-level function has no route at all, generic
+  or not. The generic form is named with the sentence that blames the type parameter.
+- A `Flow<T>` or `suspend` lambda *parameter* that mentions `T` is still skipped.
+
 
 ## Parameters on `Flow`, `StateFlow`, and `suspend` members {id="parameters-on-flow-stateflow-and-suspend-members"}
 

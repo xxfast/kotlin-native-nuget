@@ -28,6 +28,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmLambdaMe
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardClassLegacyMembers
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyFlowReturn
+import io.github.xxfast.kotlin.native.nuget.processor.forward.takesGenericFlowRoute
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasNullableLegacyFlowReturn
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyLambdaParameter
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasPlannedCallbackParameter
@@ -1791,6 +1792,9 @@ internal class ForwardCallablePlanner(
       if (entry.reason !in GENERIC_OWNER_LEGACY_REASONS) return@map entry
       val method: KSFunctionDeclaration = entry.node as? KSFunctionDeclaration ?: return@map entry
       if (method.isNamedElsewhere()) return@map entry
+      // ADR-215: a plain generic class's Flow member binds over the erased receiver; a refused
+      // one is named by `warnRefusedLegacyRouteMembers`, never as a generic-receiver drop.
+      if (method.takesGenericFlowRoute(cls)) return@map entry
       entry.copy(
         reason = ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE,
         detail = entry.reason.name,

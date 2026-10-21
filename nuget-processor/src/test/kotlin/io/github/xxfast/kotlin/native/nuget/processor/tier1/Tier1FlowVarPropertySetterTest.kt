@@ -349,30 +349,37 @@ class Tier1FlowVarPropertySetterTest {
   }
 
   /**
-   * The owner left pinned. A generic class renders no flow property of its own (its flow route is
-   * the explicit interface member ADR-174 gives a generic implementer), so `source` and `fixed`
-   * are absent from both halves and NOTHING names either, `val` or `var`. That is a silent
-   * whole-property drop, older than and wider than the setter: no setter skip fires here, since
-   * there is no C# property for "is read-only" to be true of. Naming it needs the planner to tell
-   * an interface-carried property (bound) from an own one (dropped), which it cannot today.
+   * ADR-215 (ROADMAP "generic class flow property dropped whole", closed): a generic class's own
+   * flow property binds over the erased receiver (`asStableRef<Crate<Any?>>()`), so `source` and
+   * `fixed` are on both halves, and the `var`'s dropped setter is named like any other owner's.
    */
   @Test
-  fun `DEFECT a generic class flow property is dropped whole with no diagnostic`() {
-    assertEquals(emptyList(), exports("crate_get_source") + exports("crate_get_fixed"))
+  fun `a generic class flow property binds over the erased receiver`() {
+    assertEquals(
+      listOf(
+        "library_tier1_flowvar__crate_get_source_collect",
+        "library_tier1_flowvar__crate_get_fixed_collect",
+        "library_tier1_flowvar__crate_get_fixed_value",
+      ),
+      exports("crate_get_source") + exports("crate_get_fixed"),
+    )
+    assertContains(result.generated, "asStableRef<tier1.flowvar.Crate<Any?>>()")
     val crate: List<String> = result.generatedCSharp.lines()
       .dropWhile { line -> !line.startsWith("    public class Crate<T> ") }
       .drop(1)
       .takeWhile { line -> line != "    }" }
     assertTrue(crate.isNotEmpty(), "expected a C# class Crate<T>")
-    assertEquals(emptyList(), crate.filter { line -> "Flow<" in line })
-    // The pinned defect: only the refused element is named, by the refused-legacy-route walk.
+    assertTrue(crate.any { line -> "public KotlinFlow<int> Source" in line }, "crate=$crate")
+    assertTrue(crate.any { line -> "public KotlinStateFlow<int> Fixed" in line }, "crate=$crate")
+    assertSetterNamed("tier1.flowvar.Crate.source", coldReason, coldHint("Source"))
+    // The refused element is still named, once, by the refused-legacy-route walk.
     assertEquals(
       listOf(
         "[nuget:$propertyCode] Skipping Crate.odd: a Flow or StateFlow element can be a " +
             "List/Set/Map, but not the generic type Pair<Int, Int>. make the element a " +
             "non-nullable List/Set/Map, or a non-generic type",
       ),
-      diagnostics.filter { line -> "Crate." in line },
+      diagnostics.filter { line -> "Crate." in line && "Crate.source" !in line },
     )
   }
 
@@ -393,6 +400,7 @@ class Tier1FlowVarPropertySetterTest {
   fun `the setter skip fires once per dropped public setter and nowhere else`() {
     assertEquals(
       listOf(
+        "tier1.flowvar.Crate.source",
         "tier1.flowvar.Feed.source",
         "tier1.flowvar.Feeder.calls",
         "tier1.flowvar.Feeder.level",

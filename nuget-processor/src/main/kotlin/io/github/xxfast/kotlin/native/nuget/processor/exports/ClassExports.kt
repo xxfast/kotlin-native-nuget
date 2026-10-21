@@ -1,6 +1,8 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinIdentifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMemberGenericRefusal
+import io.github.xxfast.kotlin.native.nuget.processor.forward.takesGenericFlowRoute
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.KSClassDeclaration
@@ -333,8 +335,10 @@ internal fun KSClassDeclaration.forwardClassLegacyMembers(
   // owner, on BOTH halves (the same predicate the C# translator reads), rather than emitting a
   // member one half declares and the other does not (the ADR-055 contract would then fail the
   // whole build). The planner names each refused member (`nameGenericOwnerLegacyRoutes`).
+  // ADR-215: bar the Flow route, which reads the receiver erased on a generic class too.
   val allRegularMethods: List<KSFunctionDeclaration> = memberMethods.filter { method ->
     cls.forwardTypeParametersInScope().isEmpty() ||
+      method.takesGenericFlowRoute(cls) ||
       !method.isForwardLegacyRoute(classifier, legacyPairMembers)
   }
 
@@ -347,6 +351,8 @@ internal fun KSClassDeclaration.forwardClassLegacyMembers(
     // ADR-123: likewise an element this route cannot marshal, named SKIPPED_UNSUPPORTED_RETURN.
     .filter { method -> classifier.legacyRefusedParameter(method.parameters) == null }
     .filter { method -> classifier.legacyRefusedReturn(method) == null }
+    // ADR-215: a member's own type parameters route under ADR-197's rules, named otherwise.
+    .filter { method -> method.forwardMemberGenericRefusal() == null }
     // An abstract Flow member exports too: the C# owner declares it concrete over this
     // `_collect` export, and `asStableRef<Owner>().get().ticks()` dispatches to whichever subclass
     // the handle holds. A Kotlin override of it is not re-projected below the owner.
@@ -478,9 +484,15 @@ internal fun FileSpec.Builder.addClassExports(
     // (`asStableRef<Crate>()`), which does not compile for a generic class. Refused on a generic
     // owner, on BOTH halves, rather than emitting a member one half declares and the other does
     // not (the ADR-055 contract would then fail the whole build).
-    if (cls.forwardTypeParametersInScope().isNotEmpty()) return@forEach
     // Named specialized-protocol property adapters (lambda / suspend-lambda / Flow).
     val propTypeResolved: KSType = prop.type.resolve().expandAliases()
+    // ADR-215: the flow property route reads the receiver erased (`asStableRef<Brook<Any?>>()`),
+    // the spelling a generic arm's already takes (ADR-199), so a generic owner binds it too.
+    if (prop.takesGenericFlowRoute(cls)) {
+      addFlowPropertyExports(prop, cls.forwardOwnerTypeName() ?: qualifiedName, prefix, classifier)
+      return@forEach
+    }
+    if (cls.forwardTypeParametersInScope().isNotEmpty()) return@forEach
     // The planner's skip report reads the same predicate, so it names exactly what this declines.
     // An override of a lambda property a kept base binds is reached through the base's getter.
     if (prop.reProjectsKeptBaseLambdaProperty(cls, superClass)) return@forEach
@@ -528,8 +540,10 @@ internal fun FileSpec.Builder.addClassExports(
   // (the planner skips them), so catalog iteration cannot double-emit the routes above.
   callableCatalog.classMethods(qualifiedName).forEach { plan -> addForwardKotlinPlanExport(plan) }
 
+  // ADR-215: a generic owner's Flow methods read the receiver erased, as its flow properties do.
+  val flowReceiver: String = cls.forwardOwnerTypeName() ?: qualifiedName
   flowMethods.forEach { method ->
-    addFlowMethodExports(method, qualifiedName, prefix, classifier, callableCatalog)
+    addFlowMethodExports(method, flowReceiver, prefix, classifier, callableCatalog, owner = cls)
   }
 
   if (cls.modifiers.contains(Modifier.DATA)) {

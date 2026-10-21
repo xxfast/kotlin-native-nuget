@@ -345,9 +345,11 @@ class Tier1AbstractChainBackingTest {
       pets.kspWarnings.any { "SKIPPED_UNSUPPORTED_RETURN" in it && "Crate.onTreat" in it },
       "the refusal is named on Crate; kspWarnings=${pets.kspWarnings}",
     )
-    // A generic base projects no Flow or suspend member, so its subclass carries them.
+    // A generic base projects no suspend member, so its subclass carries it. ADR-215: the base
+    // does project its Flow member, over the erased receiver, and the subclass inherits it.
+    assertContains(crate, "public KotlinFlow<int> Ticks()")
     val box: String = cs.substringAfter("public class Box : Crate<int>")
-    assertContains(box, "public KotlinFlow<int> Ticks()")
+    assertFalse("Ticks()" in box, "Box inherits Ticks from Crate<int>")
     assertContains(box, "public Task<int> NapAsync(")
 
     Tier1CSharpCompile.assertCompiles(

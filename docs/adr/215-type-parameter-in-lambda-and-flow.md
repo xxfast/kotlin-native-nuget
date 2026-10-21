@@ -1,8 +1,8 @@
 # ADR-215: Forward, a type parameter inside a lambda or `Flow`: `fun <T> map(value: T, transform: (T) -> T): T` as `T Map<T>(T value, Func<T, T> transform)`
 
 ## Status
-Proposed. Lane A (lambda) lands in this change; lanes B (`Flow` out) and C (asynchronous `T` into
-Kotlin) follow in the same release.
+Proposed. Lane A (lambda) and lane B (`Flow` out of Kotlin) have landed; lane C (asynchronous `T`
+into Kotlin) follows in the same release and accepts this ADR.
 
 Extends [ADR-212](212-type-parameter-as-collection-element.md) (Deferred: "`T` in a lambda or
 `Flow`"), [ADR-147](147-generic-class-methods.md) (a generic class has no legacy route),
@@ -175,21 +175,103 @@ As built. Where this section differs from the draft, the red tests decided it (n
   `KotlinFunc<T, T> Echoer<T>()` once `isLambdaTypeArgument` admits a `TypeParameter`; `KotlinFunc`
   already `Wrap`s its argument and `FromHandle`s its result. Verified by Tier 1 and xunit.
 
-### Lane B: Flow out of Kotlin (follows in the same release)
+### Lane B: Flow out of Kotlin (this change)
 
-- A generic class takes the arm's erased receiver on the Flow route on both halves
-  (`asStableRef<Feed<Any?>>()`, first bound, `<*>` for multi-bound, exactly ADR-124/199's arm
-  spelling, verified on arms by `Tier1GenericSealedFlowPropertyTest.kt:130-160`). This binds
-  `Feed<T>.updates`, `Feed<T>.stream()` and closes ROADMAP line 237's silent drop.
-- A method's own `T` on the Flow route: a bare-`T` parameter shape on the legacy route
-  (`asStableRef<Any>().get()` cast to the bound, as `forwardBoundedRead`; C# `Wrap<T>` plus owned
-  dispose) and a method type-parameter list with `where` clauses on the C# Flow method.
-  `carriesProtocol` stops refusing a Flow return.
-- A `nullableFromBound` element boxes through `itemBoxExpr`'s null-guarded arm (pitfall 2), on arms
-  too. C# `KotlinFlow<T>`'s `FromHandle<T>` already reads `IntPtr.Zero` as `default!`.
-- `StateFlow<T>`/`SharedFlow<T>` returns of a generic member follow the same receiver spelling;
-  `MutableStateFlow<T>`'s write seam with a `T` value is **inferred** to need the `WrapOwned`
-  transfer of lane A (C# to Kotlin) and lands with it.
+Decisions, as built:
+
+1. **A plain generic class takes the legacy Flow route over its erased receiver**, on both halves:
+   `forwardOwnerTypeName()` (`asStableRef<Brook<Any?>>()`, `Pride<*>` for a multi-bound owner
+   parameter), the spelling a generic sealed arm's flow members already read (ADR-124/199). This
+   closes ROADMAP's "a generic class flow property is dropped whole with no diagnostic" line; the
+   old `Tier1FlowVarPropertySetterTest` DEFECT cell now asserts the binding.
+   - Who: `carriesGenericFlowRoute()` (`forward/ForwardScopeOwnership.kt`): own type parameters, no
+     captured owner (an `inner` class of a generic owner keeps ADR-147/196's refusal), not sealed
+     and not an arm (the arm route stays ADR-124/199's).
+   - Which members: `takesGenericFlowRoute(cls)`: a non-`suspend` Flow/StateFlow-returning method
+     or a Flow/StateFlow-typed property that overrides no interface member. An interface member
+     keeps ADR-174's explicit forwarding on a generic implementer; a `suspend` member keeps
+     ADR-147's refusal (ADR-219's lane).
+   - Every selector reads that one predicate: Kotlin `addClassExports`, C# `translateClass`, the
+     scope selectors `forwardClassFlowMethods` / `forwardClassFlowProperties` (so the generic class
+     owns the scope and is `IAsyncDisposable`), the planner's `nameGenericOwnerLegacyRoutes` and the
+     property planner's `flowCarrier` (a generic class's `var` flow property gets the ordinary
+     setter skip).
+   - `reProjectsKeptBaseMember`'s two generic-base returns flip for Flow members: a generic base now
+     projects its Flow member, so a subclass (`Box : Crate<Int>`) inherits it instead of
+     re-declaring it (CS0108).
+   - C# `nameof(Brook)` is CS0305 inside `Brook<T>`, so the disposed guard names `Brook<T>`.
+     Externs hoist into `BrookNative` by the existing ADR-147 hoist.
+2. **A member's own `T` on a Flow method** (`fun <T> stream(value: T): Flow<T>`) reuses ADR-214's
+   `ForwardLegacyParameterShape.Boxed`: a Flow-returning member takes every boxed `T` (a trampolined
+   one included), a `suspend` member every one but a trampolined one, any other legacy host
+   refuses. Kotlin reads the box in the prelude, before `collectForCSharp`, and casts at the call
+   (an out-of-bound value faults the stream); the call carries `legacyTypeArguments()`
+   (`obj.stream<Any?>(...)`). C# carries `cirMethodTypeParameters` and `where` clauses on every Flow
+   method render path; the box is `Wrap<T>` with an owned dispose or `GC.KeepAlive` in the collect
+   delegate. `forwardMemberGenericRefusal`'s protocol check opens for a **class member's** `Flow` /
+   `StateFlow` return only: the element is checked instead of the flow, and must be the own `T`
+   (or `T?`) or not mention it. A Flow member that rule refuses is named with the `GENERIC`
+   sentence (`warnRefusedLegacyRouteMembers`, ADR-214's arm extended to Flow returns).
+3. **Trampolines on the Flow route.** A trampolined own `T : Enum<T>` (ADR-198) and a multi-bound
+   owner `T` that a parameter takes (`Pride<T>.join(pet: T)`) wrap the export body in ADR-198's
+   `FunSpec.trampolined`, reading the receiver as `Pride<T>` and checking the box against each
+   bound. A multi-bound owner `T` only returned reads through `Pride<*>`. A multi-bound method `T`
+   needs no trampoline: `rally<_>(pet.let { bounded -> bounded as Furry; bounded as Tricky; bounded })`
+   infers the intersection, as ADR-214's suspend route does.
+4. **`MutableStateFlow<T>` on a generic owner** (`Brook<T>.level`): `MutableStateFlowElement.Boxed`
+   for a `T` with at most one spellable bound (a multi-bound or trampolined `T` reads through a
+   star-projected receiver and stays read-only, `KotlinStateFlow<T>`). C# writes through
+   `NugetMarshal.Wrap<T>` and disposes the minted box (or `GC.KeepAlive`) in a `finally`, both
+   `CompareAndSet` values too; Kotlin reads `value?.asStableRef<Any>()?.get()`, cast to the one
+   bound. The held method route (`returnsHeldMutableStateFlow`, `awaitsSettableMutableStateFlow`)
+   excludes a `T` element.
+5. **Element null guard.** `isFlowElementNullable()`: a type-parameter element whose every bound
+   is nullable boxes through `itemBoxExpr`'s null-guarded arm, on arms too.
+
+Fixed shipped bug (verified): `new Dish.Hot<string?>(null).Portions` faulted the stream with
+`KotlinNullReferenceException` instead of yielding null. `exports/FlowExports.kt` read
+`elementNullable` from `isMarkedNullable` only, so an unconstrained `T` element took
+`NugetHandles.retain(value as Any)`; it is now `if (value != null) NugetHandles.retain(value) else
+null`. The same rule fixes `_value` of a `StateFlow<T>` over such a `T`. Pinned by xunit
+`GenericArm_Portions_NullItem_YieldsNullElements`, Tier 1 `Tier1GenericFlowOutTest` and the leak
+row's last block.
+
+Corrections from execution:
+
+- The draft said a cancelled `await foreach ... WithCancellation` throws `OperationCanceledException`.
+  The shipped `KotlinFlow` ends the enumeration cleanly (`FlowTests.Flow_WithCancellation_ExitsCleanlyAfterFirstItem`);
+  the red runs observed no exception, so `Brook_Babble_CancelledMidStream_StopsAndDisposes`,
+  `Creek_Echo_CancelledMidStream_StopsCollecting` and the leak row assert the clean exit.
+- The draft inferred that `MutableStateFlow<T>`'s write needs lane A's `WrapOwned` transfer. It
+  does not: it is an ordinary C#-to-Kotlin call, and `Wrap<T>` plus an owned dispose suffices
+  (verified by `Brook_Level_*` and the leak row).
+- ADR-214's cell "a Flow member with its own type parameter does not take the boxed shape" flips to
+  "... takes the boxed shape". `Tier1EnumSelfBoundTest`'s `Podium<T : Enum<T>>.replay(): Flow<T>`
+  now binds; its `suspend` sibling keeps the refusal. `Tier1GenericOwnerLegacyRouteTest`'s
+  `Crate<T>.ticks(): Flow<Int>` binds; the owner's other legacy members stay named.
+
+Verified vs inferred:
+
+- Verified (run): every `MemberGenericFlowTests` fact (26) against the real pipeline; the leak row
+  `GenericClass_FlowElements_ReturnToBaseline`; no bare `StableRef.create(` in the generated
+  `CNameExports.kt`; the Tier 1 cells above; the full processor suite.
+- Verified by reading generated output: the trampoline shapes for `Creek.cheer`/`crown` and
+  `Pride.join`, the erased receivers, the boxed `Level` write and `CompareAndSet`.
+- Verified by a Tier 1 probe: the ADR-174 shape. `Bin<T> : Feed` keeps explicit `IFeed.Source` /
+  `IFeed.Ticks()` and adds public `Updates` / `Flowing()` over `Bin<Any?>`; both halves compile.
+- Inferred: that the Tier 1 null-guard cell is red on the pre-lane commit (the old emitter text is
+  the `value as Any` arm it asserts against; not re-run there).
+
+Stopped, not opened (verified by a Tier 1 probe): an object's, a companion's and a top-level
+`fun <T>` returning a `Flow`. No static owner has a Flow-return route at all: the non-generic
+`fun plainTop(): Flow<Int>`, `object Herd { fun plainObj(): Flow<Int> }` and
+`Den.Companion.plainComp(): Flow<Int>` are refused today with `SKIPPED_UNSUPPORTED_RETURN`. The
+legacy Flow route is instance-keyed (the collect export takes the owner's `handle` and a
+`scopeHandle` from `GetOrCreateScope()`, and the `IAsyncDisposable` owner cancels that scope), so a
+static owner needs a new mechanism for where the scope lives and who cancels it. The generic forms
+keep the `GENERIC` refusal, whose reason blames the type parameter although the position is the
+cause; once a static route exists, the `fun <T>` form is this lane's mechanism unchanged. ROADMAP
+Phase 6 carries the line.
 
 ### Lane C: `T` flowing into Kotlin asynchronously (after lane A, follows in the same release)
 
@@ -219,8 +301,10 @@ export, a fresh `Tabby` created in the lambda and dropped, null), `GenericClass_
   closure; `map`, `fold`, `rename`, `peek`, `fill`, `restyle` (trampolined), `deal` (a lambda
   without `T`); `Serving<T>.Each(Action<T>)` and `Helping.Seconds<T>.Each(Action<T>)`; the retain
   export on both halves only when a plan carries a `T` result; `Echoer<T>()` as `KotlinFunc<T, T>`.
-- Tier 1, lane B: `Feed<T>.Updates` as `KotlinFlow<T>` over `asStableRef<Feed<Any?>>()`;
-  `Hot<T>.items` boxes null-guarded.
+- Tier 1, lane B (`Tier1GenericFlowOutTest`): a generic class's `Flow`, `StateFlow` and
+  `MutableStateFlow` members over the erased receiver; a member's own `T` on a Flow method; an
+  unconstrained `T` element boxes null-guarded, the generic arm included. xunit
+  `MemberGenericFlowTests.cs`.
 - Fixture `test-library/.../membergeneric/`: lane A's `Decks.kt` (`Dealer`, top-level `echoer`) and
   `Feeds.kt` (`Serving<T>`, `Helping<out T>.Seconds<T>`); xunit `MemberGenericLambdaTests.cs`.
 
@@ -229,7 +313,9 @@ export, a fresh `Tabby` created in the lambda and dropped, null), `GenericClass_
 - Lane A: `Tier1MemberGenericMethodTest` (its protocol cell is now a suspend lambda),
   `Tier1GenericOwnerLegacyRouteTest` and `Tier1GenericSealedArmNamedSkipTest` (the per-call `T`
   callback binds; the stored pair keeps `GENERIC_ARM_ERASED_LAMBDA`). Lane B:
-  `Tier1GenericSealedFlowPropertyTest` (null element) and the ROADMAP line 237 DEFECT cell.
+  `Tier1GenericSealedFlowPropertyTest` (null element), the old flow-property DEFECT cell,
+  `Tier1AbstractChainBackingTest`, `Tier1ScopeOwnerChainBranchesTest`, `Tier1EnumSelfBoundTest`
+  and `Tier1GenericOwnerLegacyRouteTest`.
 - A new per-library export `<lib>__retain_handle`, generated, outside the frozen `nuget_*` ABI.
 - ADR-160's "an object LAMBDA return stays a SpecializedProtocol" is narrowed: the `WrapOwned`
   transfer is the mechanism a later concrete object lambda result (`() -> Cat`) can reuse; this ADR
@@ -237,5 +323,8 @@ export, a fresh `Tabby` created in the lambda and dropped, null), `GenericClass_
 - A trampolined `T` (ADR-198) in a lambda binds (a widening over the draft).
 - Still refused, by name: a `T` payload of a stored callback pair (`GENERIC_ARM_ERASED_LAMBDA` on an
   arm, ADR-147 on a generic class), a `var` flow property setter (ROADMAP line 232), a
-  `StateFlow`/`SharedFlow` parameter (ADR-210).
+  `StateFlow`/`SharedFlow` parameter (ADR-210), a `Flow<T>` parameter (lane C) and a `suspend` member
+  of a generic class (ADR-147; ADR-219's lane).
+- Lane B found a `Flow` return on an `object`, companion or top-level function has no route,
+  generic or not; ROADMAP Phase 6.
 - Deferred: nothing beyond those pre-existing refusals.

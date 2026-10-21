@@ -563,7 +563,7 @@ internal fun StringBuilder.renderFlowMethod(method: CirMethod, className: String
 
   appendLine(
     "        ${method.memberHead("public ")}$holder<${method.flowElementType}>$nullableSuffix " +
-        "${method.explicitName}($paramStr)",
+        "${method.explicitName}${method.typeParameterList()}($paramStr)" + method.whereClauses(),
   )
   appendLine("        {")
   appendLine("            if (_handle.IsInvalid)")
@@ -603,7 +603,9 @@ private fun StringBuilder.renderHeldSharedFlowMethod(method: CirMethod, classNam
   val shared: CirSharedFlow = requireNotNull(method.sharedFlow)
   appendLine(
     "        ${method.memberHead("public ")}KotlinMutableSharedFlow<$element>" +
-        "${if (nullable) "?" else ""} ${method.explicitName}($paramStr)",
+        "${if (nullable) "?" else ""} " +
+        "${method.explicitName}${method.typeParameterList()}($paramStr)" +
+        method.whereClauses(),
   )
   appendLine("        {")
   appendLine("            if (_handle.IsInvalid)")
@@ -691,7 +693,7 @@ internal fun StringBuilder.renderStateFlowMethod(method: CirMethod, className: S
   appendLine(
     "        ${method.memberHead("public ")}" +
         "KotlinStateFlow<${method.flowElementType}>$nullableSuffix " +
-        "${method.explicitName}($paramStr)",
+        "${method.explicitName}${method.typeParameterList()}($paramStr)" + method.whereClauses(),
   )
   appendLine("        {")
   appendLine("            if (_handle.IsInvalid)")
@@ -753,7 +755,7 @@ private fun StringBuilder.renderHeldStateFlowMethod(method: CirMethod, className
 
   appendLine(
     "        ${method.memberHead("public ")}KotlinMutableStateFlow<$element> " +
-        "${method.explicitName}($paramStr)",
+        "${method.explicitName}${method.typeParameterList()}($paramStr)" + method.whereClauses(),
   )
   appendLine("        {")
   appendLine("            if (_handle.IsInvalid)")
@@ -862,10 +864,11 @@ internal fun stateFlowCompareAndSetLambda(
     appendLine("$indent    if ($expect is null) throw new ArgumentNullException(nameof($expect));")
     appendLine("$indent    if ($update is null) throw new ArgumentNullException(nameof($update));")
   }
-  appendLine(
-    "$indent    return NugetErrorNative.Check($nativeName($receiver, ${expectSlot.arguments}, " +
-        "${updateSlot.arguments}, out IntPtr error), error);",
-  )
+  // ADR-215: a boxed `T` wraps both values first and releases them after the call.
+  val call: String = "return NugetErrorNative.Check($nativeName($receiver, " +
+      "${expectSlot.boxedArgument(expect)}, ${updateSlot.boxedArgument(update)}, " +
+      "out IntPtr error), error);"
+  write.boxedCall(listOf(expect, update), call, "$indent    ").forEach { line -> appendLine(line) }
   append("$indent}")
 }
 

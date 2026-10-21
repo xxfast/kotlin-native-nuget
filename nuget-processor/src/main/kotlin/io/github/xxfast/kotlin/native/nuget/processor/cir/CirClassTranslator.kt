@@ -118,6 +118,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCshar
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSignatureKey
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isDeclaredBy
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardScopeOwner
+import io.github.xxfast.kotlin.native.nuget.processor.forward.takesGenericFlowRoute
+import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyFlowReturn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardArmMemberProjectedByBase
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSealedBaseAsyncMethods
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSealedBaseFlowProperties
@@ -1200,6 +1202,13 @@ internal fun translateClass(
       // ADR-147: the C# half of the generic-owner refusal the Kotlin property loop makes. Every
       // legacy property arm below bakes `asStableRef<Crate>()` into its export, which does not
       // compile for a generic owner, so neither half emits one.
+      // ADR-215: bar the Flow route, which reads the receiver erased on a plain generic class.
+      if (prop.takesGenericFlowRoute(cls)) {
+        // `nameof(Brook<T>)`: the bare name does not bind inside the generic class (CS0305).
+        val owner: String = name + cls.typeParameters
+          .joinToString(", ", "<", ">") { cls.forwardCsharpTypeParameterName(it) }
+        return@mapNotNull flowProperty(prop, owner, context, classifier, tracker)
+      }
       if (cls.forwardTypeParametersInScope().isNotEmpty()) return@mapNotNull null
 
       if (propTypeResolved.isForwardFlowType()) {
@@ -1337,11 +1346,17 @@ internal fun translateClass(
         return@filter false
       }
       if (classifier.legacyRefusedReturn(method) != null) return@filter false
+      // ADR-215: the Kotlin half's own admission for a Flow member's own type parameters.
+      if (method.hasLegacyFlowReturn() && method.forwardMemberGenericRefusal() != null) {
+        return@filter false
+      }
 
       // ADR-147: the C# half of the same refusal the Kotlin export builders make for a generic
       // owner. A generic class's suspend / Flow / legacy-callback members are deferred, named; a
       // planned callback member is not legacy and comes off the catalog below (ADR-160).
+      // ADR-215: bar the Flow route, which reads the receiver erased on a plain generic class.
       if (cls.forwardTypeParametersInScope().isNotEmpty() &&
+        !method.takesGenericFlowRoute(cls) &&
         method.isForwardLegacyRoute(classifier, legacyPairMembers)
       ) {
         return@filter false
@@ -1618,6 +1633,7 @@ internal fun translateClass(
     tracker = tracker,
     callableCatalog = callableCatalog,
     context = context,
+    logger = logger,
   )
 
   val companion: KSClassDeclaration? = cls.declarations
@@ -2113,9 +2129,12 @@ internal fun flowProperty(
           if (stateFlowWrite.rejectsNull) {
             appendLine("                        if (v is null) throw new ArgumentNullException(nameof(v));")
           }
-          appendLine("                        $setValueNativeName(_handle, ${stateFlowWrite.arguments}, out IntPtr error);")
-          appendLine("                        if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
-          appendLine("                        NugetErrorNative.ClearManagedFault();")
+          // ADR-215: a boxed `T` is wrapped first and released after the call.
+          val set: String = "$setValueNativeName(_handle, ${stateFlowWrite.boxedArgument("v")}, " +
+            "out IntPtr error); if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error); " +
+            "NugetErrorNative.ClearManagedFault();"
+          stateFlowWrite.boxedCall(listOf("v"), set, "                        ")
+            .forEach { line -> appendLine(line) }
           appendLine("                    },")
           appendLine(
             stateFlowCompareAndSetLambda(
@@ -2205,6 +2224,8 @@ internal fun flowMembers(
   tracker: CollectionHelperTracker,
   callableCatalog: ForwardCallablePlanCatalog,
   context: NugetContext,
+  // ADR-215: reports a dropped builtin bound of a member's own `T`; null where no owner routes one.
+  logger: KSPLogger? = null,
 ): List<CirMember> {
   if (flowMethods.isNotEmpty()) {
     tracker.needsFlow = true
@@ -2229,6 +2250,10 @@ internal fun flowMembers(
     val csMethodName: String = method.csharpMemberName()
     val nativeStem: String =
       "Native_${methodName.asCSymbol().replaceFirstChar { it.uppercase() }}$suffix"
+    // ADR-215: the member's own `<T>`, constrained as the planned route constrains it.
+    val ownTypeParameters: List<CirTypeParameter> =
+      if (method.typeParameters.isEmpty()) emptyList()
+      else method.cirMethodTypeParameters(context, requireNotNull(logger))
     val returnType = method.returnType?.resolve()?.expandAliases()
     val returnQualified: String? = returnType?.declaration?.qualifiedName?.asString()
     val isStateFlowMethod: Boolean = returnQualified in STATE_FLOW_TYPES
@@ -2315,6 +2340,7 @@ internal fun flowMembers(
         parameters = methodParams,
         body = if (acquireArgs.isEmpty()) "_handle" else "_handle, $acquireArgs",
         isFlow = true,
+        typeParameters = ownTypeParameters,
         flowElementType = flowCsElementType,
         flowElementRead = flowElementRead,
         isStateFlowNullableMember = isNullableMember,
@@ -2371,6 +2397,7 @@ internal fun flowMembers(
         // method body, before the wrapper is constructed.
         body = if (acquireArgs.isEmpty()) "_handle" else "_handle, $acquireArgs",
         isFlow = true,
+        typeParameters = ownTypeParameters,
         isStateFlow = true,
         flowElementType = flowCsElementType,
         isMutableStateFlow = true,
@@ -2453,6 +2480,7 @@ internal fun flowMembers(
         parameters = methodParams,
         body = nativeCallArgs,
         isFlow = true,
+        typeParameters = ownTypeParameters,
         isStateFlow = true,
         flowElementType = flowCsElementType,
         flowElementRead = flowElementRead,
@@ -2496,6 +2524,7 @@ internal fun flowMembers(
       parameters = methodParams,
       body = nativeCallArgs,
       isFlow = true,
+      typeParameters = ownTypeParameters,
       flowElementType = flowCsElementType,
       flowElementRead = flowElementRead,
       // The StateFlow-named fields carry the plain-Flow probe too; `renderFlowMethod` reads them.
@@ -3140,6 +3169,7 @@ internal fun translateSealedClass(
     tracker = tracker,
     callableCatalog = callableCatalog,
     context = context,
+    logger = logger,
   )
   val baseFlowProperties: List<CirProperty> = cls.forwardSealedBaseFlowProperties(classifier)
     .mapNotNull { prop -> flowProperty(prop, name, context, classifier, tracker) }
@@ -3384,6 +3414,7 @@ internal fun translateSealedClass(
         tracker = tracker,
         callableCatalog = callableCatalog,
         context = context,
+        logger = logger,
       )
 
       // ADR-116 amendment (2026-09-11): the arm's per-call lambda-parameter methods (ADR-036),

@@ -55,7 +55,7 @@ Complete.
 
 ## Phase 4: Rich type support
 
-- [ ] A method or class `T` inside a `Flow` or a `suspend` lambda is still skipped, named ([ADR-215](docs/adr/215-type-parameter-in-lambda-and-flow.md))
+- [ ] A method or class `T` inside a `Flow` parameter or a `suspend` lambda is still skipped, named ([ADR-215](docs/adr/215-type-parameter-in-lambda-and-flow.md))
 - [ ] An open exported generic instantiation nested two or more levels deep, read through a property getter or any position outside a member's result before the consumer holds one, has no factory ([ADR-216](docs/adr/216-own-type-parameter-in-result-and-generic-class.md))
 - [ ] A trampolined `T` (a bound with no closed spelling, such as `Enum<T>`) in a collection is still skipped, named ([ADR-212](docs/adr/212-type-parameter-as-collection-element.md))
 
@@ -65,9 +65,10 @@ Complete.
 
 ## Phase 6: Async support
 
-One open item.
+Two open items.
 
 - [ ] A `suspend` member of an `object` or companion has no route, generic or not, named `SKIPPED_UNSUPPORTED_COMBINATION`; found by [ADR-214](docs/adr/214-suspend-generic-functions-on-the-suspend-route.md)
+- [ ] A `Flow` return on an `object`, companion or top-level function has no route, generic or not (a static owner has no instance coroutine scope to collect on); the generic form is named with the `GENERIC` sentence, which blames the type parameter; found by [ADR-215](docs/adr/215-type-parameter-in-lambda-and-flow.md)
 
 ## Phase 7: Bidirectional support (C# → Kotlin)
 - [ ] A generic interface (`IHolder<T>`) implemented in C# and passed to Kotlin is not bridged: [ADR-084](docs/adr/084-csharp-implemented-interface-handles.md) bridges no generic interface, so the C# side of an interface `var item: T` is out of reach ([ADR-218](docs/adr/218-type-parameter-property-setter.md))
@@ -234,7 +235,6 @@ Fallout from [ADR-053](docs/adr/053-nullable-reference-types-in-kotlin.md) (reve
 - [ ] **Consumer build break (Kotlin), not arm-specific:** an interface-bridge `add`/`remove` pair whose listener interface is generic (`fun addEar(listener: Ear<Int>)` on an ordinary class, or `Ear<T>` on a generic arm) generates Kotlin that does not compile ("One type argument expected for 'interface Ear<T>'"): `exports/InterfaceBridgeExports.kt` spells the listener interface bare while the C# half drops the member. Verified by a Tier 1 probe, found with [ADR-147](docs/adr/147-generic-class-methods.md)'s 2026-10-12 amendment. ([details](docs/backlog/generic-listener-interface-pair-kotlin-does-not-compile.md))
 - [ ] An enum arm of a generic sealed interface exports `reply_hiss_hush_async`, `reply_hiss_get_served_collect` and `reply_hiss_trills_collect` from Kotlin while the members are named as skipped and C# has no import for them: stray exports, not a build break. Verified by a Tier 1 probe, found with [ADR-147](docs/adr/147-generic-class-methods.md)'s 2026-10-12 amendment.
 - [ ] `SEALED_BASE_UNROUTED`'s hint tells the author to "declare the member on each arm of the sealed class instead" (`ForwardDiagnostic.kt` ~1445), which is now a named drop for a `suspend` member on an arm with a Kotlin type parameter. Verified by reading, found with [ADR-147](docs/adr/147-generic-class-methods.md)'s 2026-10-12 amendment.
-- [ ] A flow property declared on a generic class (`class Crate<T> { var source: Flow<Int>; val fixed: StateFlow<Int> }`) is absent from both halves with no diagnostic, `val` or `var`: a silent whole-property drop, pre-existing, pinned by the Tier 1 cell `DEFECT a generic class flow property is dropped whole with no diagnostic`. Naming it is blocked: the planner cannot tell a generic implementer's interface-carried flow property (which binds) from the class's own (which is dropped), and the first attempt broke `Tier1SharedFlowSurfaceTest`.
 - [ ] Four diagnostics still print a bare `kotlin.coroutines.SuspendFunction1` with no type arguments (the type-name leak through `BridgeType.SpecializedProtocol.name` is a model change, at `ForwardCallablePlanner.kt` ~5874), and an extension function type still reads `(Int) -> String` rather than `Int.() -> String`. Verified in Tier 1 output; a different defect from the one the [ADR-064](docs/adr/064-forward-unsupported-declaration-diagnostics.md) 2026-10-12 amendment fixed ([details](docs/backlog/bare-suspend-function-name-in-four-diagnostics.md)).
 
 ## Performance & Resource Hygiene
