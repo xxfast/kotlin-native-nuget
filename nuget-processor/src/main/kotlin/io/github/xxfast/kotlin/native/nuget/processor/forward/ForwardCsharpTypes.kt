@@ -258,6 +258,8 @@ private fun BridgeType.isLambdaTypeArgument(isResult: Boolean): Boolean = when (
   // planner mints that pair on, which it never does for a generic value class.
   is BridgeType.ValueClass -> typeArguments.isEmpty() && hasErasedCrossing()
   is BridgeType.Nullable -> type != BridgeType.Unit && type.isLambdaTypeArgument(isResult = false)
+  // ADR-215 lane A: an ADR-211 `fun <T>` own `T`, which `KotlinFunc<T, R>` boxes like any argument.
+  is BridgeType.TypeParameter -> true
   BridgeType.Instant,
   BridgeType.Duration,
   is BridgeType.Throwable,
@@ -273,7 +275,6 @@ private fun BridgeType.isLambdaTypeArgument(isResult: Boolean): Boolean = when (
   is BridgeType.RawKSType,
   is BridgeType.Unsupported,
   is BridgeType.RawCollection,
-  is BridgeType.TypeParameter,
     -> false
 }
 

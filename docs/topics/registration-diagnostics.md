@@ -451,6 +451,13 @@ element: passed wrappers stay borrowed, returned ones are disposed, and `Pad` ro
 `MemberGeneric_ResultListOfT_ReturnsToBaseline` covers a `Result<List<T>>` payload: wrapper elements
 are disposed and a failed result's error handle is released.
 
+A `T` in a non-suspend lambda mints one box per payload, consumed by the C# read (a wrapper payload is
+yours to dispose), and one owned box per result, which Kotlin releases after it reads it. A wrapper
+the lambda returns is retained first, so the lambda's own handle still ends with you.
+`MemberGeneric_LambdaPayload_ReturnToBaseline` and `MemberGeneric_LambdaResult_ReturnToBaseline`
+cover builtin, wrapper and `null` payloads, and a borrowed wrapper, a fresh one dropped inside the
+lambda and a `null` as results. All return to baseline.
+
 A [bound with no closed Kotlin spelling](generics.md#an-enum-bound) (`T : Enum<T>`, an invariant
 `T : Node<T>`) mints the handles of any other generic crossing: an enum argument is boxed per
 write and released by the call, a `T` result is released as it is read (an enum) or disposed by you

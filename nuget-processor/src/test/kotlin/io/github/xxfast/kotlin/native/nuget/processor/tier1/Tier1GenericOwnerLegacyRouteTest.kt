@@ -51,11 +51,15 @@ class Tier1GenericOwnerLegacyRouteTest {
       "expected the planned export to read the Crate<Any?> receiver; got: ${result.generated}",
     )
     val crate: String = result.generatedCSharp.typeBody("public class Crate<T>")
-    listOf("public void Each(Action<int> cb)", "public int Count(Func<int, int> cb)")
+    // ADR-215 lane A: the owner's `T` in a lambda rides the plan callback too.
+    listOf(
+      "public void Each(Action<int> cb)", "public int Count(Func<int, int> cb)",
+      "public void WithItem(Action<T> cb)",
+    )
       .forEach { member ->
         assertTrue(member in crate, "expected `$member` on Crate<T>; got:\n$crate")
       }
-    listOf("each", "count", "fetch").forEach { member ->
+    listOf("each", "count", "withItem", "fetch").forEach { member ->
       assertFalse(
         result.kspWarnings.any { warning -> "Crate.$member:" in warning },
         "a member that binds must not be reported; got: ${result.kspWarnings}",
@@ -71,14 +75,14 @@ class Tier1GenericOwnerLegacyRouteTest {
     val crate: String = result.generatedCSharp.typeBody("public class Crate<T>")
     val declarations: List<String> = crate.lines()
       .filter { line -> line.trimStart().startsWith("public ") }
-    listOf("EachChar(", "WithItem(", "AddBell(", "RemoveBell(", "Ticks(", "LoadAsync(")
+    listOf("EachChar(", "AddBell(", "RemoveBell(", "Ticks(", "LoadAsync(")
       .forEach { member ->
         assertFalse(
           declarations.any { line -> member in line },
           "expected no `$member` declared on Crate<T>; got:\n$crate",
         )
       }
-    listOf("eachChar", "withItem", "addBell", "removeBell", "ticks", "load").forEach { member ->
+    listOf("eachChar", "addBell", "removeBell", "ticks", "load").forEach { member ->
       val named: List<String> = result.kspWarnings.filter { warning -> "Crate.$member:" in warning }
       assertEquals(1, named.size, "expected `$member` named once; got: ${result.kspWarnings}")
       assertTrue(

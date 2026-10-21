@@ -28,6 +28,8 @@ import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Modifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardFlowArgumentKind
+import io.github.xxfast.kotlin.native.nuget.processor.forward.objectCallbackResultOwner
+import io.github.xxfast.kotlin.native.nuget.processor.forward.retainHandleExport
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.enumArmName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEnumArm
@@ -1014,6 +1016,8 @@ internal fun translate(
       boxers = valueClassNames(namespaces),
       enumBoxers = enumBoxers(namespaces),
       flowArgumentImports = flowArguments.flatMap { flow -> flow.imports },
+      retainHandleExport = context.symbols.retainHandleExport()
+        .takeIf { callableCatalog.objectCallbackResultOwner() != null },
     ),
   )
   if (bridgePlans.isNotEmpty()) helpers.add(CirBridgeHelper(context.libraryName, bridgePlans))

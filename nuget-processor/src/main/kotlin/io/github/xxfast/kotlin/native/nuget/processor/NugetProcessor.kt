@@ -31,6 +31,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.KOTLIN_EXCEPTION_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.KotlinExceptionRow
 import io.github.xxfast.kotlin.native.nuget.processor.cir.withMethodTypeParameterConstraints
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFlowArgumentExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addRetainHandleExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.nugetMappedTypeFunction
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirRenderer
@@ -3924,6 +3925,8 @@ internal class NugetProcessor(
     // every route above has classified its types; a sighting only the C# half makes fails the
     // forward ABI contract (an import with no export) rather than a consumer's first collect.
     builder.addFlowArgumentExports(forwardClassifier.closedFlowArguments.values, context.symbols)
+    // ADR-215 lane A: the retain a lambda's `T` result needs, when some plan carries one.
+    builder.addRetainHandleExport(callableCatalog, context.symbols)
     // ADR-210: the holder a generated `suspend` lambda captures, and the two cinterop extensions
     // its lambda and cleaner call. Last for the same reason as the line above: the legacy suspend
     // routes record their sightings on the classifier as they emit. Everything else the lambda

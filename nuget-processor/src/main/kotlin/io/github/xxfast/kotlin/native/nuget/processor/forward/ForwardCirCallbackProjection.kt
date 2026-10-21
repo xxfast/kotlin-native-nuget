@@ -102,6 +102,10 @@ internal fun forwardCallbackPrelude(
     } else {
       "return $call;"
     }
+    // ADR-215 lane A: always an OWNED box, since the thunk returns before Kotlin reads it: a
+    // borrowed wrapper handle is retained through the generated `<lib>__retain_handle`.
+    is BridgeType.TypeParameter, is BridgeType.Nullable ->
+      "return NugetMarshal.WrapOwned<${result.forwardPublicCsharpType()}>($call);"
 
     BridgeType.Char,
     BridgeType.Instant,
@@ -114,7 +118,6 @@ internal fun forwardCallbackPrelude(
     is BridgeType.ValueClass,
     BridgeType.ByteArray,
     is BridgeType.Collection,
-    is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
     is BridgeType.FlowSource,
@@ -123,7 +126,6 @@ internal fun forwardCallbackPrelude(
     is BridgeType.RawKSType,
     is BridgeType.Unsupported,
     is BridgeType.RawCollection,
-    is BridgeType.TypeParameter,
       -> error("Forward CIR callback projection has no result lowering for $result")
   }
   val declarations: List<String> = listOf(
@@ -173,6 +175,9 @@ private fun BridgeType.callbackArgumentExpression(slot: String): String = when (
   is BridgeType.Interface -> "NugetMarshal.FromHandle<$csharpType>($slot)"
   // ADR-201 amendment: the ADR-107 envelope; `BuildException` disposes it as it reads.
   is BridgeType.Throwable -> "NugetErrorNative.BuildException($slot)"
+  // ADR-215 lane A: a boxed `T`; `IntPtr.Zero` reads as null, and every box read is consumed.
+  is BridgeType.TypeParameter, is BridgeType.Nullable ->
+    "NugetMarshal.FromHandle<${forwardPublicCsharpType()}>($slot)"
   BridgeType.Unit,
   BridgeType.Char,
   BridgeType.Instant,
@@ -182,7 +187,6 @@ private fun BridgeType.callbackArgumentExpression(slot: String): String = when (
   is BridgeType.ValueClass,
   BridgeType.ByteArray,
   is BridgeType.Collection,
-  is BridgeType.Nullable,
   is BridgeType.Callback,
   is BridgeType.AsyncCallback,
   is BridgeType.FlowSource,
@@ -191,7 +195,6 @@ private fun BridgeType.callbackArgumentExpression(slot: String): String = when (
   is BridgeType.RawKSType,
   is BridgeType.Unsupported,
   is BridgeType.RawCollection,
-  is BridgeType.TypeParameter,
     -> error("Forward CIR callback projection has no payload lowering for $this")
 }
 
@@ -204,7 +207,9 @@ private fun BridgeType.callbackWireCsharpType(): String = when (this) {
 
   is BridgeType.Enum -> "int"
   BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface,
-  is BridgeType.Throwable -> "IntPtr"
+  is BridgeType.Throwable,
+  // ADR-215 lane A: a `T` or `T?` box.
+  is BridgeType.TypeParameter, is BridgeType.Nullable -> "IntPtr"
   BridgeType.Char,
   BridgeType.Instant,
   BridgeType.Duration,
@@ -213,7 +218,6 @@ private fun BridgeType.callbackWireCsharpType(): String = when (this) {
   is BridgeType.ValueClass,
   BridgeType.ByteArray,
   is BridgeType.Collection,
-  is BridgeType.Nullable,
   is BridgeType.Callback,
   is BridgeType.AsyncCallback,
   is BridgeType.FlowSource,
@@ -222,7 +226,6 @@ private fun BridgeType.callbackWireCsharpType(): String = when (this) {
   is BridgeType.RawKSType,
   is BridgeType.Unsupported,
   is BridgeType.RawCollection,
-  is BridgeType.TypeParameter,
     -> error("Forward CIR callback projection has no wire type for $this")
 }
 
@@ -239,7 +242,8 @@ private fun BridgeType.wireSuffix(): String = when (this) {
 
   is BridgeType.Enum -> "Int"
   BridgeType.String -> "String"
-  is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Throwable -> "Object"
+  is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Throwable,
+  is BridgeType.TypeParameter, is BridgeType.Nullable -> "Object"
   BridgeType.Char,
   BridgeType.Instant,
   BridgeType.Duration,
@@ -248,7 +252,6 @@ private fun BridgeType.wireSuffix(): String = when (this) {
   is BridgeType.ValueClass,
   BridgeType.ByteArray,
   is BridgeType.Collection,
-  is BridgeType.Nullable,
   is BridgeType.Callback,
   is BridgeType.AsyncCallback,
   is BridgeType.FlowSource,
@@ -257,7 +260,6 @@ private fun BridgeType.wireSuffix(): String = when (this) {
   is BridgeType.RawKSType,
   is BridgeType.Unsupported,
   is BridgeType.RawCollection,
-  is BridgeType.TypeParameter,
     -> error("Forward CIR callback projection has no delegate name segment for $this")
 }
 

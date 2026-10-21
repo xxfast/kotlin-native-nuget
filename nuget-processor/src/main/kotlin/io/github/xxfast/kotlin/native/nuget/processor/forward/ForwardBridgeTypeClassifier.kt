@@ -1034,8 +1034,11 @@ internal class ForwardBridgeTypeClassifier(
     }
     val parameters: List<BridgeType> = components.dropLast(1)
     val result: BridgeType = components.last()
-    if (!parameters.all { parameter -> parameter.isCallbackPayload() }) return null
-    if (!result.isCallbackResult()) return null
+    val payloads: Boolean = parameters.all { parameter ->
+      parameter.isCallbackPayload() || parameter.isBoxedTypeParameter()
+    }
+    if (!payloads) return null
+    if (!result.isCallbackResult() && !result.isBoxedTypeParameter()) return null
     return BridgeType.Callback(parameters, result)
   }
 
@@ -1147,6 +1150,14 @@ internal class ForwardBridgeTypeClassifier(
   /** [classify] at a parameter position: ADR-210's two asynchronous shapes first. */
   fun classifyParameter(type: KSType): BridgeType =
     asyncCallbackOrNull(type) ?: flowSourceOrNull(type) ?: classify(type)
+
+  /**
+   * ADR-215 lane A: a `T` or `T?` (explicit or from an unconstrained bound, trampolined included)
+   * as a plan callback's payload or result, on the boxed `Object` wire. Admitted by [callbackType]
+   * only: the interface-bridge listener and the suspend lambda read [isCallbackPayload] and keep
+   * their own sets (lane C widens the suspend one).
+   */
+  private fun BridgeType.isBoxedTypeParameter(): Boolean = unwrapNullable() is BridgeType.TypeParameter
 
   /** The payload shapes both callback halves lower, in. See [callbackType]. */
   internal fun BridgeType.isCallbackPayload(): Boolean = when (this) {

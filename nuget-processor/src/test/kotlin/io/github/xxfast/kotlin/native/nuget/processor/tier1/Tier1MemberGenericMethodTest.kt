@@ -360,7 +360,7 @@ class Tier1MemberGenericMethodTest {
 
     class Depot {
       fun ok(): Int = 1
-      fun <T> lambda(item: T, block: (Int) -> Unit): T = item
+      fun <T> lambda(item: T, block: suspend (Int) -> Unit): T = item
       inline fun <reified T> kind(item: Any?): Boolean = item is T
       fun <T : Enum<T>> first(item: T): T = item
       fun <T> conjure(): T? where T : Pet, T : Trainable = null
@@ -403,7 +403,8 @@ class Tier1MemberGenericMethodTest {
 
     // Each warning names the shape rule the member broke; the hint stays the general remedy.
     mapOf(
-      "tier1.membergeneric.Depot.lambda" to "(here, its signature carries a lambda or a Flow)",
+      "tier1.membergeneric.Depot.lambda" to
+        "(here, its signature carries a suspend lambda or a Flow)",
       "tier1.membergeneric.Depot.kind" to "(here, its type parameter `T` is reified)",
       "tier1.membergeneric.Depot.conjure" to
           "(here, its multi-bound type parameter `T` is mentioned by no parameter)",

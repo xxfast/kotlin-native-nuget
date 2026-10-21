@@ -463,6 +463,23 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("            return bridged;")
   appendLine("        }")
   appendLine()
+  // ADR-215 lane A: a C# lambda's `T` result has no "after the call" for C# to dispose in, so
+  // Kotlin always receives a box it owns. A borrowed wrapper handle is retained first, and the
+  // wrapper is kept alive past that retain so its finalizer cannot release the handle under it.
+  val retain: String? = helper.retainHandleExport
+  if (retain != null) {
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$retain\")]")
+    appendLine("        private static extern IntPtr Native_retain_handle(IntPtr handle);")
+    appendLine()
+    appendLine("        internal static IntPtr WrapOwned<T>(T value)")
+    appendLine("        {")
+    appendLine("            IntPtr handle = Wrap(value, out bool owned);")
+    appendLine("            if (!owned && handle != IntPtr.Zero) handle = Native_retain_handle(handle);")
+    appendLine("            GC.KeepAlive(value);")
+    appendLine("            return handle;")
+    appendLine("        }")
+    appendLine()
+  }
   // ADR-151: gated on helper.includesBytes for the same CS0103 reason as the list/map/set bodies
   // below -- NugetBytesNative only exists in a file that planned a ByteArray somewhere.
   if (helper.includesBytes) {
