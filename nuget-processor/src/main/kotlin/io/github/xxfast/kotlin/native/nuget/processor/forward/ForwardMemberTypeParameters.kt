@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.forward
 
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
+import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSTypeParameter
@@ -88,8 +89,9 @@ internal fun KSFunctionDeclaration.forwardMethodTypeParameters(): List<ForwardMe
 
 /**
  * ADR-197: why this member's own type parameters do not route, or null when they do (and always
- * null for a member that declares none). The route carries a `T` only where ADR-147's boxed wire
- * already does: a bare `T` or `T?` parameter or return, or the `T` of a `Result<T>` return. The
+ * null for a member that declares none). The route carries a `T` where ADR-147's boxed wire
+ * already does: a bare `T` or `T?` parameter or return, inside a `List`, `Set` or `Map` (ADR-212),
+ * inside an exported generic class (ADR-216), or inside a `Result` return's payload. The
  * refusal is the shipped structural `GENERIC` skip, named on its owner.
  *
  * Refused, each a shape the route cannot spell:
@@ -100,10 +102,10 @@ internal fun KSFunctionDeclaration.forwardMethodTypeParameters(): List<ForwardMe
  *  - a bound that is itself a type parameter, which no erased argument satisfies (a bound with
  *    no closed spelling, `Enum<T>`, `Node<T>`, routes through ADR-198's trampoline instead);
  *  - a multi-bound `T` no parameter mentions, since no type argument spells it and nothing infers
- *    it;
- *  - a `T` nested in another type (`Box<T>`, `Result<List<T>>`; ADR-212 admits `List<T>`,
- *    `Set<T>`, `Map<K, V>` and their nests), and a lambda or `Flow` anywhere in the
- *    signature, whose own routes are keyed to non-generic members.
+ *    it, and (ADR-216, until ADR-217) one witnessed only inside a generic class;
+ *  - a `T` nested in a type that is neither a collection nor an exported generic class (a value
+ *    class, `kotlin.Array`), and a lambda or `Flow` anywhere in the signature, whose own routes
+ *    are keyed to non-generic members.
  */
 internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
   if (typeParameters.isEmpty()) return null
@@ -148,8 +150,12 @@ internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
 
   // ADR-212: a `List`/`Set`/`Map` (or a mutable kind) whose every component is the own `T`, a
   // type that does not mention it, or such a collection again, carries `T` per element.
+  // ADR-216: so does an exported generic class (`Box<T>`, a generic sealed `Outcome<T>`); the
+  // classifier's `genericReference` owns every further refusal (a projection, an unexported
+  // class, an argument the erased wire cannot read).
   fun KSType.carriesOwn(): Boolean = ownParameter() ||
-      declaration.qualifiedName?.asString() in OWN_PARAMETER_COLLECTIONS &&
+      (declaration.qualifiedName?.asString() in OWN_PARAMETER_COLLECTIONS ||
+          declaration.isOwnParameterCarrierClass()) &&
       arguments.all { argument ->
         val type: KSType? = argument.type?.resolve()?.expandAliases()
         type != null && (!type.mentionsOwn() || type.carriesOwn())
@@ -180,22 +186,47 @@ internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
     val resultPayload: KSType? = returned
       .takeIf { type -> type.declaration.qualifiedName?.asString() == "kotlin.Result" }
       ?.arguments?.singleOrNull()?.type?.resolve()?.expandAliases()
-    if (resultPayload?.ownParameter() != true) return "its type parameter is nested in `$returned`"
+    // ADR-216: any payload the gate admits elsewhere, `List<T>` and `Box<T>` included.
+    if (resultPayload?.carriesOwn() != true) return "its type parameter is nested in `$returned`"
   }
   typeParameters
     .filter { parameter -> parameter.forwardBoundSpellings().size > 1 }
     .forEach { parameter ->
       val name: String = parameter.simpleName.asString()
+      fun KSType.isNamed(): Boolean =
+        (declaration as? KSTypeParameter)?.simpleName?.asString() == name
+      fun KSType.mentions(): Boolean = isNamed() ||
+          arguments.any { argument ->
+            argument.type?.resolve()?.expandAliases()?.mentions() == true
+          }
       // ADR-212: a collection of `T` witnesses it too; its elements carry the intersection.
-      fun KSType.witnesses(): Boolean =
-        (declaration as? KSTypeParameter)?.simpleName?.asString() == name ||
-            arguments.any { argument ->
-              argument.type?.resolve()?.expandAliases()?.witnesses() == true
-            }
-      val witnessed: Boolean = parameterTypes.any { type -> type.witnesses() }
-      if (!witnessed) return "its multi-bound type parameter `$name` is mentioned by no parameter"
+      // ADR-216: a generic class does not: an invariant `Box<A>` cannot infer `T : A, T : B`.
+      fun KSType.witnesses(): Boolean = isNamed() ||
+          declaration.qualifiedName?.asString() in OWN_PARAMETER_COLLECTIONS &&
+          arguments.any { argument ->
+            argument.type?.resolve()?.expandAliases()?.witnesses() == true
+          }
+      if (parameterTypes.any { type -> type.witnesses() }) return@forEach
+      val nesting: KSType = parameterTypes.firstOrNull { type -> type.mentions() }
+        ?: return "its multi-bound type parameter `$name` is mentioned by no parameter"
+      return "its multi-bound type parameter `$name` is witnessed only inside `$nesting`, " +
+          "which ADR-217 lifts"
     }
   return null
+}
+
+/**
+ * ADR-216: an exported generic class a member's own type parameter may sit inside: a class (a
+ * sealed one too) with type parameters, not a value class (which has no C# type when generic) and
+ * not in `kotlin` (`kotlin.Array` keeps its `GENERIC` refusal; `Result` has its own exemption).
+ */
+private fun KSDeclaration.isOwnParameterCarrierClass(): Boolean {
+  val cls: KSClassDeclaration = this as? KSClassDeclaration ?: return false
+  if (cls.typeParameters.isEmpty() || cls.classKind != ClassKind.CLASS || cls.isValueClass()) {
+    return false
+  }
+  val pkg: String = cls.packageName.asString()
+  return pkg != "kotlin" && !pkg.startsWith("kotlin.")
 }
 
 /** ADR-212: the collection kinds whose components may be a member's own type parameter. */

@@ -124,6 +124,15 @@ internal sealed interface BridgeType {
      * (`global::Ns.Nap.Deep.Backing`) while every signature still spells the arm. Null otherwise.
      */
     val constructType: kotlin.String? = null,
+    /**
+     * ADR-216 amendment: the open instantiations of an exported (non-sealed) generic class nested
+     * in this one's type arguments (`Basket<T>` inside `Basket<Basket<T>>`), at every depth. A
+     * member returning this type fills each one's `NugetFactory<T>` slot before the read, since
+     * the consumer may never have touched that instantiation. Empty otherwise.
+     */
+    val openArguments: List<ObjectHandle> = emptyList(),
+    /** ADR-216 amendment: an instantiation whose arguments mention a type parameter. */
+    val open: kotlin.Boolean = false,
   ) : BridgeType
 
   /**

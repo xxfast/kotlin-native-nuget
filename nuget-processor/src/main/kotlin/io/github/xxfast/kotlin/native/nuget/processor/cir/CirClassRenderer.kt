@@ -310,6 +310,19 @@ private fun StringBuilder.renderClassDeclaration(cls: CirClass) {
   }
   appendLine()
 
+  // ADR-216 amendment: the ADR-199 `NugetFactory<T>` slot, extended to every exported generic
+  // class, so an erased read of an instantiation the consumer has touched finds its factory.
+  if (cls.typeParameters.isNotEmpty() && !cls.isAbstract) {
+    appendLine("        static ${cls.name}()")
+    appendLine("        {")
+    appendLine(
+      "            NugetFactory<${cls.name}$typeParameters>.Create = " +
+          "static handle => new ${cls.name}$typeParameters(handle, out _);",
+    )
+    appendLine("        }")
+    appendLine()
+  }
+
   // ADR-204: this class is an arm of a sealed interface over declared arms.
   cls.handleInterfaces.forEach { iface ->
     appendLine("        NugetKotlinHandle $iface._handle => _handle;")

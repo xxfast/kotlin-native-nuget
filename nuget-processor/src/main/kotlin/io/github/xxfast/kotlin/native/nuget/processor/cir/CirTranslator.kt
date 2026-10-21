@@ -1029,7 +1029,8 @@ internal fun translate(
           } +
           flowArguments.map { flow -> flow.factory },
       includesFactorySlot = namespaces.any { namespace ->
-        namespace.declarations.any { it is CirSealedClass && it.typeParameters.isNotEmpty() }
+        // ADR-216 amendment: a generic class fills a slot too.
+        namespace.declarations.any { declaration -> declaration.fillsFactorySlot() }
       },
       boxers = valueClassNames(namespaces),
       enumBoxers = enumBoxers(namespaces),
@@ -1811,4 +1812,21 @@ private fun reportUnreadableConst(prop: KSPropertyDeclaration, logger: KSPLogger
     ),
     logger,
   )
+}
+
+/**
+ * ADR-199: a generic sealed base fills a `NugetFactory<T>` slot. ADR-216 amendment: so does a
+ * concrete generic class, at any nesting depth.
+ */
+private fun CirDeclaration.fillsFactorySlot(): Boolean {
+  if (this is CirSealedClass && typeParameters.isNotEmpty()) return true
+  if (this is CirClass && typeParameters.isNotEmpty() && !isAbstract) return true
+  val nested: List<CirDeclaration> = when (this) {
+    is CirSealedClass -> nestedDeclarations
+    is CirClass -> nestedDeclarations
+    is CirInterface -> nestedDeclarations
+    is CirObject -> nestedDeclarations
+    else -> emptyList()
+  }
+  return nested.any { declaration -> declaration.fillsFactorySlot() }
 }

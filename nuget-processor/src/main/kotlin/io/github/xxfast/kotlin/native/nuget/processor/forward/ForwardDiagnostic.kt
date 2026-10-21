@@ -918,12 +918,14 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
       // ADR-208: a closed instantiation of an exported generic class binds everywhere now, so
       // what reaches here is a generic interface, an inner class of a generic owner, or a
       // function's own type parameter out of place.
+      // ADR-216: the final sentence the Phase 4 lanes (213-216) share, so their edits agree.
       ForwardPlanSkipReason.GENERIC.name ->
         "an exported generic class binds at every position, and a function's own type " +
-            "parameter on a top-level function and on a class, object, companion or " +
-            "sealed-class member as a bare `T` or `T?` parameter or return; a " +
-            "generic interface or an inner class of a generic owner does not bind, nor does a " +
-            "type parameter at this position"
+            "parameter binds on a top-level function, including a `suspend` one, and on a " +
+            "class, object, companion or sealed-class member: as a bare `T` or `T?`, inside a " +
+            "`List`, `Set` or `Map`, inside an exported generic class or a `Result` payload, " +
+            "and inside a lambda or `Flow`; a generic interface or an inner class of a generic " +
+            "owner does not bind, nor does a type parameter at this position"
 
       else -> "no bridge route carries it at this position"
     }
@@ -1420,10 +1422,10 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
     // so a shape it refuses (an interface, an extension, a nested `T`) is not sent back to it.
     ForwardPlanSkipReason.GENERIC.name ->
       "expose a non-generic wrapper (`fun f(value: Int)` beside `fun <T> f(value: T)`), or " +
-          "declare it as a class, object, companion or sealed-class member whose own type " +
-          "parameters appear only as a bare `T` or `T?` parameter or return (not on an " +
-          "interface, enum or value class, not as an extension, and not reified, shadowing or " +
-          "Enum-bounded)"
+          "declare it as a top-level function or a class, object, companion or sealed-class " +
+          "member (not on an interface, enum or value class, and not as an extension); a `T` " +
+          "bounded by another type parameter, a `reified` member `T` and a generic value " +
+          "class still do not bind"
 
     else -> "expose an equivalent member at a position the bridge carries"
   }

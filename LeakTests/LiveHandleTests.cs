@@ -5716,4 +5716,58 @@ public class LiveHandleTests
             Assert.Equal(3, mylo.Courses);
         });
     }
+
+    // ADR-216
+    // A member's own `T` inside an exported generic class. A returned `Basket<T>` is owned by the
+    // caller and released by its `using`; a passed one is borrowed (the export reads it, the
+    // caller still owns it). `DoubleBasket(1)` returns the outer basket only; its inner basket is
+    // a fresh wrapper per `Item` read, released by its own `using`.
+    // Ledger per iteration: treats +1/-1, cat +1/-1, Unpack(treats) nothing, Unpack(cat) back
+    // +1/-1, brushed +1/-1, doubled +1/-1, inner +1/-1, unpacked +1/-1. Net zero.
+    [Fact]
+    public void MemberGeneric_BoxedTypeParameter_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var groomer = new Membergeneric.Groomer();
+            using var oreo = new Membergeneric.Tabby("Oreo", 3);
+            for (int i = 0; i < 5; i++)
+            {
+                using Membergeneric.Basket<int> treats = groomer.Basket(3);
+                Assert.Equal(3, groomer.Unpack(treats));
+                using Membergeneric.Basket<Membergeneric.Tabby> cat = groomer.Basket(oreo);
+                using (Membergeneric.Tabby back = groomer.Unpack(cat)) Assert.Equal("Oreo", back.Name);
+                using (Membergeneric.Tabby brushed = groomer.BrushBasket(cat)) Assert.Equal(3, brushed.Tricks);
+                using Membergeneric.Basket<Membergeneric.Basket<int>> doubled = groomer.DoubleBasket(1);
+                using (Membergeneric.Basket<int> inner = doubled.Item) Assert.Equal(1, inner.Item);
+                using Membergeneric.Basket<int> unpacked = groomer.NestBasket(doubled);
+                Assert.Equal(1, unpacked.Item);
+            }
+        });
+    }
+
+    // A member's own `T` inside a `Result<List<T>>` payload. Each returned `Tabby` element is a
+    // fresh wrapper the caller disposes; the list handle is released by the read. `TrySpill`
+    // takes the failure path: no list is minted and the error handle is released when the
+    // exception is built.
+    // Ledger per iteration: gathered elements +2/-2, list +1/-1, TrySpill error +1/-1. Net zero.
+    [Fact]
+    public void MemberGeneric_ResultListOfT_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var groomer = new Membergeneric.Groomer();
+            using var oreo = new Membergeneric.Tabby("Oreo", 3);
+            using var mylo = new Membergeneric.Tabby("Mylo", 5);
+            for (int i = 0; i < 5; i++)
+            {
+                foreach (Membergeneric.Tabby cat in groomer.Gather(new[] { oreo, mylo }))
+                {
+                    using (cat) Assert.NotEmpty(cat.Name);
+                }
+                Assert.False(groomer.TrySpill(new[] { oreo }, out _, out Exception? failure));
+                Assert.Contains("Mylo spilled 1", failure!.Message);
+            }
+        });
+    }
 }

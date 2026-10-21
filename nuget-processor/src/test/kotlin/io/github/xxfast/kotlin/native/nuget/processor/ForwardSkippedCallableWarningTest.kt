@@ -180,8 +180,10 @@ class ForwardSkippedCallableWarningTest {
         reason = ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED,
         detail = ForwardPlanSkipReason.GENERIC.name,
       ) to "expose a non-generic wrapper (`fun f(value: Int)` beside `fun <T> f(value: T)`), or " +
-          "declare it as a class, object, companion or sealed-class member whose own type " +
-          "parameters appear only as a bare `T` or `T?` parameter or return",
+          "declare it as a top-level function or a class, object, companion or sealed-class " +
+          "member (not on an interface, enum or value class, and not as an extension); a `T` " +
+          "bounded by another type parameter, a `reified` member `T` and a generic value " +
+          "class still do not bind",
       ForwardCallableCatalogEntry.Skipped(
         symbol = "com.example.Shape.Circle.later",
         reason = ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED,

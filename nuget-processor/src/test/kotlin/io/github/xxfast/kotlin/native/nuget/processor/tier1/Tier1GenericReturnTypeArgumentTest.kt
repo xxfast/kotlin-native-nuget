@@ -335,7 +335,8 @@ class Tier1GenericReturnTypeArgumentTest {
    * a parameter of its own type parameter it binds, spelling the return by ADR-147's bare-`T` rule
    * as `Crate<T>`: the `?` written on `T?` is not carried into C#, the instantiation says whether
    * the item holds null (`CrateOfMaybe<int?>` does, `CrateOfMaybe<int>` reads `0`). Without one it
-   * is the plan's structural own-`<T>` skip (ADR-211). Both are pinned as they stand.
+   * is the plan's (ADR-211), which since ADR-216 binds a function's own `T` inside an exported
+   * generic class and spells the `?` as written: `Crate<T?>`. Both are pinned as they stand.
    */
   @Test
   fun `a nullable type-parameter argument keeps the generic-function route's spelling`() {
@@ -348,17 +349,15 @@ class Tier1GenericReturnTypeArgumentTest {
         "${cs.lines().filter { it.contains("CrateOfMaybe<") }}",
     )
     assertTrue(
-      cs.lines().none { it.trimStart().startsWith("public static") && " EmptyCrateOfMaybe" in it },
-      "expected no EmptyCrateOfMaybe declaration; got: " +
+      cs.contains("public static global::Interop.Catcam.Crate<T?> EmptyCrateOfMaybe<T>()"),
+      "expected the plan's Crate<T?>; got: " +
         "${cs.lines().filter { it.contains("EmptyCrateOfMaybe") }}",
     )
     assertTrue(
-      result.kspWarnings.any {
-        it.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_COMBINATION.name}]") &&
-          it.contains("emptyCrateOfMaybe: ")
+      result.kspWarnings.none { warning ->
+        warning.contains("[nuget:SKIPPED_") && warning.contains("emptyCrateOfMaybe: ")
       },
-      "expected a SKIPPED_UNSUPPORTED_COMBINATION naming emptyCrateOfMaybe; " +
-        "kspWarnings=${result.kspWarnings}",
+      "expected no skip naming emptyCrateOfMaybe; kspWarnings=${result.kspWarnings}",
     )
   }
 

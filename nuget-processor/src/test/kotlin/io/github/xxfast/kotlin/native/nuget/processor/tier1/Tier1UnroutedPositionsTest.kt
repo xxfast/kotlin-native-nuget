@@ -123,9 +123,8 @@ class Tier1UnroutedPositionsTest {
     // name it as a skip and stop emitting, not to invent one.
     returns("tier1.unrouted.flowReturnOnTopLevel"),
     input("tier1.unrouted.genericParamOnTopLevel"),
-    // row 16: `fun <T> f(): Result<List<T>>`: the legacy gate refuses it, so (ADR-211) the plan
-    // names it as a structural own-`<T>` refusal (ADR-212 binds a bare `List<T>`; this nest stays
-    // refused).
+    // row 16: a structural own-`<T>` refusal on the plan (ADR-211). ADR-216 binds the old
+    // `Result<List<T>>` sentinel, so it is a `U : T` bound now, which no erased argument meets.
     structural("tier1.unrouted.structuralRefusedOnTopLevel"),
   )
 
@@ -212,7 +211,7 @@ class Tier1UnroutedPositionsTest {
     fun callbackParamOnTopLevel(cb: (Int) -> Unit): Int { cb(1); return 1 }
     fun genericParamOnTopLevel(box: ${generic.kotlin}): Int = 0
     fun <T> structuralOnTopLevel(value: T): T = value
-    fun <T> structuralRefusedOnTopLevel(): Result<List<T>> = Result.success(emptyList())
+    fun <T, U : T> structuralRefusedOnTopLevel(item: U): T = item
 
     fun Depot.flowReturnOnExtension(): Flow<Int> = flowOf(1)
     fun Depot.flowParamOnExtension(events: Flow<Int>): Int = 0

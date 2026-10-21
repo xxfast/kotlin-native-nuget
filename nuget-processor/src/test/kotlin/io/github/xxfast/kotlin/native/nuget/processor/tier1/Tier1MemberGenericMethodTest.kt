@@ -17,9 +17,9 @@ import kotlin.test.assertTrue
  * Overrides follow the two rules the C# compiler imposes: an `override` restates no `where` clause
  * (CS0460), and one with a `T?` position says `where T : default` (CS0115 without it).
  *
- * Every shape the route does not carry keeps a named skip: a `T` nested in a `Result`, a
- * shadowed owner `T`, a `reified` one, an `Enum<T>` bound, a multi-bound `T` no parameter
- * mentions, and the interface, extension, enum and value-class owners.
+ * Every shape the route does not carry keeps a named skip: a `T` nested in `kotlin.Array`, a
+ * multi-bound `T` witnessed only inside a generic class (until ADR-217), a shadowed owner `T`, a `reified` one, an `Enum<T>` bound, a multi-bound `T` no
+ * parameter mentions, and the interface, extension, enum and value-class owners.
  *
  * Rex the cat keeps whatever he is handed; Oreo knows more tricks than Mylo.
  */
@@ -365,7 +365,8 @@ class Tier1MemberGenericMethodTest {
       fun <T : Enum<T>> first(item: T): T = item
       fun <T> conjure(): T? where T : Pet, T : Trainable = null
       fun <T, U : T> narrow(item: U): T = item
-      fun <T> gather(item: T): Result<List<T>> = Result.success(listOf(item))
+      fun <T> rank(crate: Crate<T>): T where T : Pet, T : Trainable = crate.item
+      fun <T> sort(values: Array<T>): Int = values.size
     }
 
     class Crate<T>(val item: T) {
@@ -408,7 +409,12 @@ class Tier1MemberGenericMethodTest {
           "(here, its multi-bound type parameter `T` is mentioned by no parameter)",
       "tier1.membergeneric.Depot.narrow" to
           "(here, its type parameter `U` is bounded by another type parameter)",
-      "tier1.membergeneric.Depot.gather" to "(here, its type parameter is nested in `",
+      // ADR-216: an invariant `Crate<Pet>` cannot infer `T : Pet, T : Trainable`.
+      "tier1.membergeneric.Depot.rank" to
+          "(here, its multi-bound type parameter `T` is witnessed only inside " +
+          "`Crate<T>`, which ADR-217 lifts)",
+      // ADR-216: `kotlin.Array` is no exported generic class, so it keeps the GENERIC text.
+      "tier1.membergeneric.Depot.sort" to "(here, its type parameter is nested in `Array<T>`)",
       "tier1.membergeneric.Crate.shadow" to "(here, its type parameter `T` shadows its owner's)",
       "tier1.membergeneric.Kennel.structural" to "(here, it is declared on an interface)",
       "tier1.membergeneric.Weather.echo" to "(here, it is declared on an enum class)",
@@ -429,7 +435,7 @@ class Tier1MemberGenericMethodTest {
       .map(String::trim)
       .filterNot { line -> line.startsWith("//") }
     listOf(
-      "Lambda", "Kind", "Conjure", "Narrow", "Gather", "Shadow", "Structural",
+      "Lambda", "Kind", "Conjure", "Narrow", "Rank", "Sort", "Shadow", "Structural",
       "Extended",
     )
       .forEach { member ->
@@ -504,6 +510,9 @@ class Tier1MemberGenericMethodTest {
       "public int Nested<T>(IReadOnlyList<T> values)",
       "public IReadOnlyList<T> Items",
       "public IReadOnlyList<T> Fill(IReadOnlyList<T> items)",
+      // ADR-216: a `Result<List<T>>` return, with its ADR-195 `Try` twin.
+      "public IReadOnlyList<T> Gather<T>(T item)",
+      "public bool TryGather<T>(T item, ",
     ).forEach { signature ->
       assertTrue(
         result.generatedCSharp.contains(signature),
@@ -528,7 +537,7 @@ class Tier1MemberGenericMethodTest {
     assertFalse(result.generated.contains(" as T)"), "an element is never cast to the bare `T`")
   }
 
-  /** An unconstrained key, a trampolined `T` and `Result<List<T>>` keep their named refusals. */
+  /** An unconstrained key and a trampolined `T` keep their named refusals. */
   @Test
   fun `a collection of T the wire does not carry is refused by name`() {
     val result: Tier1Result = runCollections()
@@ -537,7 +546,6 @@ class Tier1MemberGenericMethodTest {
     mapOf(
       "tier1.membergeneric.Deck.loose" to "key type K",
       "tier1.membergeneric.Deck.moods" to "",
-      "tier1.membergeneric.Deck.gather" to "(here, its type parameter is nested in `",
     ).forEach { (member, refusal) ->
       val named: List<String> = result.kspWarnings.filter { warning ->
         Regex("\\b${Regex.escape(member)}\\b").containsMatchIn(warning)
@@ -548,7 +556,7 @@ class Tier1MemberGenericMethodTest {
     val declarations: List<String> = result.generatedCSharp.lines()
       .map(String::trim)
       .filterNot { line -> line.startsWith("//") }
-    listOf("Loose", "Moods", "Gather").forEach { member ->
+    listOf("Loose", "Moods").forEach { member ->
       assertFalse(
         declarations.any { line -> Regex("\\b$member\\s*[<(]").containsMatchIn(line) },
         "expected no C# member $member",
