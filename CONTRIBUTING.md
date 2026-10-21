@@ -59,7 +59,9 @@ Release commits are titled `Prepare for release <version>`.
 
 ## Pull requests
 
-Open as a **draft**. Promote it yourself once you have read it back.
+Open it **ready for review** once `scripts/verify.sh` is green on the branch and nothing is still open.
+Open a **draft** only while something is: it only compiles, a question needs an answer, or it's
+exploratory. Promote it once that's settled.
 
 Keep the body short. A few sentences and a code example, not an essay. The reviewer can read the diff;
 the body exists to say what the diff cannot.
