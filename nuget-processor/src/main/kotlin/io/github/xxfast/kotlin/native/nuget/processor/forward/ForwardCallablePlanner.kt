@@ -647,6 +647,8 @@ internal data class ForwardCallablePlanCatalog(
   // The receiver-side counterpart of droppedProperties: an extension property dropped for its
   // receiver type rather than its own type. Same diagnostic kind, different wording.
   val droppedExtensionReceivers: List<ForwardDroppedExtensionReceiver> = emptyList(),
+  // ADR-222: the generic interfaces an input position reaches, each planned as an erased bridge.
+  val genericBridgeInterfaces: List<KSClassDeclaration> = emptyList(),
 ) {
   val plans: List<ForwardCallablePlan> = entries.mapNotNull { entry ->
     (entry as? ForwardCallableCatalogEntry.Planned)?.plan
@@ -2760,7 +2762,9 @@ internal class ForwardCallablePlanner(
     val receiver: KSType = requireNotNull(function.extensionReceiver) {
       "Forward extension planner received a non-extension function ${function.simpleName.asString()}"
     }.resolve().expandAliases()
-    val receiverType: BridgeType = classifier.classify(receiver)
+    // ADR-222: a receiver is an input, so a generic interface binds there as at a parameter.
+    val receiverType: BridgeType =
+      classifier.genericInterfaceOrNull(receiver) ?: classifier.classify(receiver)
     val functionName: String = function.simpleName.asString()
     // ADR-133 amendment: the whole enclosing chain of the receiver, so an extension on
     // `Aviary.Perch` binds under `aviary_perch_` exactly as that type's own members already do.

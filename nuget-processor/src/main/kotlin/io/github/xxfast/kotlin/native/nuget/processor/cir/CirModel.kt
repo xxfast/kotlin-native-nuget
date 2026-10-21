@@ -753,6 +753,8 @@ internal data class CirBridgeHelper(
 internal data class CirBridgeInterface(
   val csNamespace: String,
   val plan: ForwardBridgeInterfacePlan,
+  // ADR-222: a generic interface's parameters, declared on its `{Iface}BridgeState<T>`.
+  val typeParameters: List<CirTypeParameter> = emptyList(),
 ) {
   val csQualifiedName: String = "$csNamespace.${plan.csName}"
 }

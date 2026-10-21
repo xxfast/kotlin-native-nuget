@@ -377,7 +377,7 @@ arity 0-2 returning `Unit`, a primitive, `Boolean`, an enum, or `String`/`String
 `Exception` or `RuntimeException` parameter or result crosses too, as a `System.Exception` (see
 [Throwable values](exceptions.md#throwable-values)); a result declared narrower than
 `RuntimeException` is named on a build warning. An interface with an object- or collection-typed
-member, a `suspend` member, a member that returns or takes a `Flow`, a generic member, or a member
+member, a `suspend` member, a member that returns or takes a `Flow`, a member with its own type parameter, or a member
 with more than two parameters has **no bridge at all**. The build warns once with
 `SKIPPED_UNIMPLEMENTABLE_INTERFACE`, naming every such member and how to fix it, and passing an
 implementation of it throws `NotSupportedException` the first time it crosses.
@@ -410,6 +410,37 @@ Retagging.Retag(collar, "OREO"); // "OREO"; collar.Tag is now "OREO"
 
 The same holds for a `var` on a [listener](lambdas-and-callbacks.md#a-listener-val) passed to an
 `add`/`remove` pair.
+
+#### A generic interface {id="implementing-a-generic-interface-in-c"}
+
+A C# class implementing a generic Kotlin interface crosses the same way, with the interface's `T`
+as a property, `var`, method parameter or result:
+
+```kotlin
+interface Keepsake<T> { var item: T }
+
+fun inspect(keepsake: Keepsake<String>): String = "curator sees ${keepsake.item}"
+fun <T> trade(keepsake: Keepsake<T>, value: T): T // returns the old item
+```
+
+```C#
+private sealed class Diary : IKeepsake<string>
+{
+    public string Item { get; set; } = "Oreo";
+    public void Dispose() { }
+}
+
+using var diary = new Diary();
+Keepsakes.Inspect(diary);       // "curator sees Oreo"
+Keepsakes.Trade(diary, "Mylo"); // "Oreo"; diary.Item is now "Mylo"
+```
+
+This works for a closed argument (`Keepsake<String>`, `Keepsake<Int>`), an open `fun <T>`, a bounded
+or self-bounded `T`, a class member, a constructor and an extension receiver. A Kotlin-backed
+`Locket<string>` binds at the same parameter. An interface member with its own type parameter
+(`fun <R> map(...)`) has no bridge. A generic interface at a return, a property getter or a class
+property, or inside a `List`, a generic class argument or a lambda, is skipped with a named
+warning: type that position with a non-generic interface, or pass the value as a direct parameter.
 
 Kotlin-backed implementations of the interface still cross as usual, and `IPet` still declares every
 member. A marker interface with no members bridges too:
@@ -1719,15 +1750,15 @@ on an ordinary class; see [A `var` flow property is read-only](coroutines-and-fl
 
 - A C#-implemented interface's bridge only supports `val` getters and arity 0-2 methods returning
   `Unit`, a primitive, `Boolean`, an enum, `String`/`String?`, or a `Throwable`/`Exception`/
-  `RuntimeException` as a `System.Exception`. Anything else (a `var` property,
-  an object- or collection-typed member, `suspend`, generics) throws `NotSupportedException` the
+  `RuntimeException` as a `System.Exception`. Anything else (an object- or collection-typed member,
+  `suspend`, a member with its own type parameter) throws `NotSupportedException` the
   first time an implementation is passed. The build names each disqualifying member on one
   `SKIPPED_UNIMPLEMENTABLE_INTERFACE` warning per interface.
 - A C#-implemented object's bridge is released on Kotlin's next garbage-collection round, not
   deterministically; there is no `IDisposable`-style prompt release for it.
 - An interface member whose own return type is another interface or a class handle (chained
-  resolution) is not supported, and neither is a generic interface type parameter at a return
-  position. A generic interface's own `suspend`/`Flow`/`StateFlow` members are a named skip too;
+  resolution) is not supported, and neither is a generic interface at a return or getter position
+  (see [A generic interface](#implementing-a-generic-interface-in-c)). A generic interface's own `suspend`/`Flow`/`StateFlow` members are a named skip too;
   see [Async members on an interface](#async-members-on-an-interface).
 - An interface's `companion object` members (functions, `val`, `const val`) are not bound: the C#
   interface has no statics. Each is skipped with a named warning; move it to a top-level

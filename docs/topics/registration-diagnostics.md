@@ -545,6 +545,15 @@ bridge with no callback slots, and comes back as the same instance. `LeakTests/L
 row 8j-marker, `InterfaceBridge_CSharpMarkerInterface_ReturnsToBaseline`, passes one repeatedly and
 returns to baseline.
 
+A C# class implementing a generic Kotlin interface (`IKeepsake<string>`) adds no handle you dispose:
+the `T` Kotlin reads or writes through a slot is released after the call, and a Kotlin-backed value
+you hold stays yours. `LeakTests/LiveHandleTests.cs` row 8j-generic,
+`InterfaceBridge_CSharpGenericKeepsake_ReturnsToBaseline`, passes closed, open, bounded and
+receiver positions repeatedly, and row 8j-generic-cat, `InterfaceBridge_GenericSlotCatPayload_ReturnsToBaseline`,
+carries a `Cat` in the `T` slot; both return to baseline. `LeakTests/CollectabilityTests.cs`
+`CSharpGenericKeepsake_ReleasedAfterKotlinGc` holds a `WeakReference` to the implementation and
+asserts Kotlin's garbage collection releases it.
+
 An exception thrown from Kotlin allocates one error handle per call, and the
 [exception mapping](exceptions.md#catching-a-specific-exception-type) reads a mapped type from it
 for the exception and each cause. `LeakTests/LiveHandleTests.cs`'s

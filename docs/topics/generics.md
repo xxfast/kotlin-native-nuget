@@ -286,7 +286,8 @@ names.Maybe = null;
 The same holds for a bounded `T` (`T : Furry`), a trampolined `T : Enum<T>`, and an interface
 `var item: T`, which declares `T Item { get; set; }` on `IKeepsake<T>`. `Playpen<int>.Maybe = null`
 does not compile, because an unconstrained `T?` is spelled `T` in C# (see [Nullable properties](#nullable-properties)).
-A generic interface implemented in C# and passed to Kotlin is not bridged.
+A generic interface implemented in C# and passed to Kotlin is bridged; see
+[A generic interface](interfaces-abstract-sealed.md#implementing-a-generic-interface-in-c).
 
 ## Methods on a generic class
 
@@ -488,8 +489,9 @@ These are skipped, named, instead of generating C# that fails to compile:
   `ByteArray`, a lambda, an `object` or `Unit`. A `Flow` or `StateFlow` argument binds; see
   [A flow as a type argument](#a-flow-as-a-type-argument).
 - A projection (`Box<*>`, `Box<out Cat>`), since C# has none for a generic class.
-- A generic interface (`Shelf<String>`) and an inner class of a generic owner
-  (`Tin<Int>.Latch`).
+- A generic interface (`Shelf<String>`) at a return, getter or element position, and an inner
+  class of a generic owner (`Tin<Int>.Latch`). A generic interface at a parameter binds; see
+  [A generic interface](interfaces-abstract-sealed.md#implementing-a-generic-interface-in-c).
 - An outer type that is not an exported class (`Pair<Int, Int>`).
 
 A refused argument is reported as `SKIPPED_UNSUPPORTED_TYPE` naming the member, for example for a

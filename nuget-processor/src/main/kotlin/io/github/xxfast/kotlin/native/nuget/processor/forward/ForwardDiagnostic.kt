@@ -924,8 +924,10 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
             "parameter binds on a top-level function, including a `suspend` one, and on a " +
             "class, object, companion or sealed-class member: as a bare `T` or `T?`, inside a " +
             "`List`, `Set` or `Map`, inside an exported generic class or a `Result` payload, " +
-            "and inside a lambda or `Flow`; a generic interface or an inner class of a generic " +
-            "owner does not bind, nor does a type parameter at this position"
+            "and inside a lambda or `Flow`; a generic interface binds only as a parameter or an " +
+            "extension receiver (ADR-222), so at a result, property or erased position type it " +
+            "with a non-generic interface or pass the value as a direct parameter; an inner " +
+            "class of a generic owner does not bind, nor does a type parameter at this position"
 
       else -> "no bridge route carries it at this position"
     }

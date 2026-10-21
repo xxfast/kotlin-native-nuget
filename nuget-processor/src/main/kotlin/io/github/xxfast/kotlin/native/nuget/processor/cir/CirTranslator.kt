@@ -165,6 +165,7 @@ internal fun translate(
       rootPackage = context.rootPackage,
       rootNamespace = context.rootNamespace,
       exportMarkers = context.exportMarkers,
+      symbols = context.symbols,
     ),
   )
 
@@ -967,12 +968,18 @@ internal fun translate(
   // parameter position) that plans cleanly gets a bridge factory, so a C# class implementing it can
   // be passed to Kotlin. An interface with an out-of-scope member plans to null and simply gets no
   // factory: `HandleOf` keeps throwing for it rather than emitting a half-supported ABI.
-  val bridgePlans: List<CirBridgeInterface> = interfaceBackingClasses.mapNotNull { iface ->
-    val plan: ForwardBridgeInterfacePlan =
-      ForwardInterfaceBridgePlanner.plan(iface, classifier, context.symbols)
-        ?: return@mapNotNull null
-    CirBridgeInterface(namespaceOf(iface.packageName.asString()), plan)
-  }
+  // ADR-222: plus each generic interface an input position reaches, whose bridge is generic.
+  val bridgePlans: List<CirBridgeInterface> =
+    (interfaceBackingClasses + callableCatalog.genericBridgeInterfaces).mapNotNull { iface ->
+      val plan: ForwardBridgeInterfacePlan =
+        ForwardInterfaceBridgePlanner.plan(iface, classifier, context.symbols)
+          ?: return@mapNotNull null
+      CirBridgeInterface(
+        namespaceOf(iface.packageName.asString()),
+        plan,
+        iface.cirBridgeTypeParameters(logger, context),
+      )
+    }
   if (bridgePlans.isNotEmpty()) {
     tracker.callbackDelegates.addAll(
       bridgeDelegates(bridgePlans).filter { delegate ->

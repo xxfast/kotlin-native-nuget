@@ -1307,6 +1307,14 @@ private fun BridgeType.readThrough(variables: Set<String>): BridgeType = when (t
       this
     }
 
+  // ADR-222: a generic interface parameter reads as a generic class reference does.
+  is BridgeType.Interface ->
+    if (open && typeVariables.isNotEmpty() && variables.containsAll(typeVariables)) {
+      copy(readsAsTypeVariable = true)
+    } else {
+      this
+    }
+
   BridgeType.Unit,
   is BridgeType.Primitive,
   BridgeType.Char,
@@ -1317,7 +1325,6 @@ private fun BridgeType.readThrough(variables: Set<String>): BridgeType = when (t
   BridgeType.Uuid,
   is BridgeType.Enum,
   is BridgeType.ValueClass,
-  is BridgeType.Interface,
   is BridgeType.BoundInterface,
   BridgeType.ByteArray,
   is BridgeType.Callback,
@@ -2069,8 +2076,7 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
     BridgeType.Duration -> "durationFromDotNetTicks(${parameter.ref})"
     is BridgeType.ObjectHandle -> type.handleRead(parameter.ref, nullable = false)
 
-    is BridgeType.Interface ->
-      "${parameter.ref}.asStableRef<${type.qualifiedName}>().get()"
+    is BridgeType.Interface -> type.handleRead(parameter.ref, nullable = false)
 
     // ADR-147: the box holds whatever `T` was instantiated to, read back as the declared bound
     // (`Any` when the parameter is unconstrained), which is the type the member's `T` accepts
@@ -2118,8 +2124,7 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
       is BridgeType.Throwable -> managedExceptionLowering(parameter.ref, nullable = true)
       is BridgeType.ObjectHandle -> inner.handleRead(parameter.ref, nullable = true)
 
-      is BridgeType.Interface ->
-        "${parameter.ref}?.asStableRef<${inner.qualifiedName}>()?.get()"
+      is BridgeType.Interface -> inner.handleRead(parameter.ref, nullable = true)
 
       // ADR-083/147: a null `T?` arrives as the null pointer and stays Kotlin null.
       is BridgeType.TypeParameter ->
@@ -2536,4 +2541,18 @@ internal fun managedExceptionLowering(ref: String, nullable: Boolean): String {
     "$NUGET_MANAGED_EXCEPTION_TYPE($text.substringBefore(\": \"), $text.substringAfter(\": \"))"
   }
   return if (nullable) "$ref?.let { ${build("it")} }" else build(ref)
+}
+
+/**
+ * ADR-222: the `asStableRef` read of an interface handle at [ref]. A generic interface reads at its
+ * applied (or erased) spelling, and through `Any` inside a trampoline, as [ObjectHandle] does.
+ */
+private fun BridgeType.Interface.handleRead(ref: String, nullable: Boolean): String {
+  if (!readsAsTypeVariable) {
+    val read: String = kotlinReadType ?: qualifiedName
+    return if (nullable) "$ref?.asStableRef<$read>()?.get()" else "$ref.asStableRef<$read>().get()"
+  }
+  val cast: String = requireNotNull(kotlinTypeVariableReadType)
+  return if (nullable) "($ref?.asStableRef<Any>()?.get() as $cast?)"
+  else "($ref.asStableRef<Any>().get() as $cast)"
 }

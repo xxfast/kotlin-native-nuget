@@ -198,11 +198,23 @@ internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
         type != null && (!type.mentionsOwn() || type.carriesOwn())
       }
 
+  // ADR-222: a generic interface PARAMETER (`Keepsake<T>`) whose arguments are the own `T` or
+  // do not mention it; its bridge reads the erased owner. Never a result (ADR-208's skip).
+  fun KSType.isOwnInsideGenericInterface(): Boolean {
+    val cls: KSClassDeclaration = declaration as? KSClassDeclaration ?: return false
+    if (cls.classKind != ClassKind.INTERFACE || cls.typeParameters.isEmpty()) return false
+    return arguments.all { argument ->
+      val type: KSType = argument.type?.resolve()?.expandAliases() ?: return false
+      type.ownParameter() || !type.mentionsOwn()
+    }
+  }
+
   val parameterTypes: List<KSType> =
     parameters.map { parameter -> parameter.type.resolve().expandAliases() }
   val returned: KSType? = returnType?.resolve()?.expandAliases()
   parameterTypes.forEach { type ->
-    if (type.mentionsOwn() && !type.carriesOwn() && !type.isOwnInsideGenericValueClass()) {
+    if (type.mentionsOwn() && !type.carriesOwn() && !type.isOwnInsideGenericValueClass() &&
+      !type.isOwnInsideGenericInterface()) {
       return "its type parameter is nested in `$type`"
     }
   }

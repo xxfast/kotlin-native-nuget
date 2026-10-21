@@ -53,4 +53,14 @@ internal fun BridgeType.boxesIntoKotlin(): Boolean = when (this) {
 internal fun ForwardCallablePlanCatalog.objectCallbackResultOwner(): String? =
   plans.firstOrNull { plan ->
     plan.publicSignature.parameters.any { parameter -> parameter.type.boxesIntoKotlin() }
-  }?.invocation?.symbol
+  }?.invocation?.symbol ?: genericBridgeOwner()
+
+/**
+ * ADR-222: a generic interface bridge's `T` slot result is a box C# hands Kotlin through
+ * `WrapOwned<T>`, so the first plan taking a generic interface owns the retain export too.
+ */
+private fun ForwardCallablePlanCatalog.genericBridgeOwner(): String? = plans.firstOrNull { plan ->
+  plan.nativeExports.flatMap { call -> call.parameters }.any { parameter ->
+    (parameter.transfer.type.unwrapNullable() as? BridgeType.Interface)?.bridgeEntry != null
+  }
+}?.invocation?.symbol

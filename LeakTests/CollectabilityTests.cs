@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using TestLibrary;
 using TestLibrary.Cat;
 using TestLibrary.Roster;
+using Playroom = TestLibrary.Playroom;
 using Stamps = TestLibrary.Stamps;
 using Treatprep = TestLibrary.Treatprep;
 using Trickle = TestLibrary.Trickle;
@@ -1073,5 +1074,47 @@ public class CollectabilityTests
         Assert.True(
             MarkerCollectedWithin(report.Hairball!, TimeSpan.FromSeconds(5)),
             "the exception a hand-written MoveNextAsync threw stayed reachable after Kotlin caught it and RecoverAsync completed: NugetAsyncMoveNextBegin stashed it in NugetErrorNative._lastManagedFault on a Kotlin dispatcher thread and nothing cleared it there");
+    }
+
+    // ADR-222: a C#-implemented generic interface releases exactly like a non-generic one. The
+    // Diary crosses once in its own frame; the call site disposes the transfer handle, so Kotlin's
+    // GC owns the bridge's only root. Once the Kotlin cleaner runs, the generic
+    // `KeepsakeBridgeState<string>` frees its pins (`ReleasedCount` moves) and nothing on either
+    // side keeps the Diary alive (its weak reference dies). A generic state that skipped `FreeAll`
+    // would keep the token `GCHandle`, and the Diary with it.
+    private sealed class GenericDiary : Playroom.IKeepsake<string>
+    {
+        public string Item { get; set; } = "Oreo";
+        public void Dispose() { }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference InspectAndDropADiary()
+    {
+        var diary = new GenericDiary();
+        Assert.Equal("curator sees Oreo", Playroom.Keepsakes.Inspect(diary));
+        return new WeakReference(diary);
+    }
+
+    [Fact]
+    public void CSharpGenericKeepsake_ReleasedAfterKotlinGc()
+    {
+        int before = NugetBridgeState.ReleasedCount;
+
+        WeakReference diary = InspectAndDropADiary();
+
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline && (diary.IsAlive || NugetBridgeState.ReleasedCount <= before))
+        {
+            NugetMarshal.GcCollect();
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            Thread.Sleep(25);
+        }
+
+        Assert.True(
+            NugetBridgeState.ReleasedCount > before,
+            $"expected the Kotlin cleaner to release the generic Keepsake bridge; ReleasedCount stayed at {before}");
+        Assert.False(diary.IsAlive, "the C# Diary stayed reachable after Kotlin collected its bridge");
     }
 }

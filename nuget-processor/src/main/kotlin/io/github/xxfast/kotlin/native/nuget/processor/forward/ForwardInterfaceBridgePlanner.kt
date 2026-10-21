@@ -10,6 +10,7 @@ import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.symbol.KSTypeParameter
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
@@ -54,6 +55,11 @@ internal data class ForwardBridgeType(
    * slot): a parameter crosses as the ADR-107 envelope, a result as the managed-exception text.
    */
   val throwable: BridgeType.Throwable? = null,
+  /**
+   * ADR-222: the interface's own `T` (or `T?`), boxed on the [ForwardBridgeWire.OBJECT] wire as
+   * ADR-215 lane A boxes a lambda's `T`: `NugetHandles.retain` out, `WrapOwned<T>` back.
+   */
+  val typeParameter: Boolean = false,
 )
 
 internal data class ForwardBridgeParameter(
@@ -267,18 +273,6 @@ internal object ForwardInterfaceBridgePlanner {
     if (iface.classKind != ClassKind.INTERFACE) return null
     val qualifiedName: String = iface.qualifiedName?.asString() ?: return null
     val simpleName: String = iface.simpleName.asString()
-    if (iface.typeParameters.isNotEmpty()) {
-      val parameters: String = iface.typeParameters.joinToString { it.name.asString() }
-      return ForwardBridgePlanOutcome.Refused(
-        listOf(
-          ForwardBridgeRefusal(
-            member = "interface $simpleName<$parameters>",
-            reason = "declares type parameters, and a bridge slot carries no type argument",
-            hint = "a C# implementation needs a non-generic interface",
-          ),
-        ),
-      )
-    }
 
     val slots: MutableList<ForwardBridgeSlot> = mutableListOf()
     val refusals: MutableList<ForwardBridgeRefusal> = mutableListOf()
@@ -294,7 +288,7 @@ internal object ForwardInterfaceBridgePlanner {
     iface.getAllProperties()
       .filter { property -> property.getVisibility() == Visibility.PUBLIC }
       .filter { property -> !property.isCompilerOwnedMember(iface) }
-      .forEach { property -> collect(slotOrRefusal(property, classifier)) { slots += it } }
+      .forEach { property -> collect(slotOrRefusal(property, classifier, iface)) { slots += it } }
     // ADR-090 amendment (2026-09-26): two same-name function slots declared `speakPtr` twice in
     // the factory signature (a Kotlin `Conflicting declarations` compile error), whether both
     // overloads are declared here or one is inherited from a super-interface.
@@ -303,7 +297,7 @@ internal object ForwardInterfaceBridgePlanner {
       .filter { function -> function.getVisibility() == Visibility.PUBLIC }
       .filter { function -> !function.isCompilerOwnedMember(iface) }
       .forEach { function ->
-        collect(slotOrRefusal(function, classifier)) { slot ->
+        collect(slotOrRefusal(function, classifier, iface)) { slot ->
           val occurrence: Int = occurrences.merge(slot.name, 1, Int::plus)!!
           slots.add(if (occurrence == 1) slot else slot.copy(overloadSuffix = "_$occurrence"))
         }
@@ -330,8 +324,7 @@ internal object ForwardInterfaceBridgePlanner {
         // ADR-163: package-qualified too. Every state class is rendered into the ROOT namespace,
         // so two same-simple-name interfaces in two packages were CS0101 there the moment their
         // entry points stopped colliding and the build got far enough to emit both.
-        stateClassName =
-          "${symbols.csharpQualifier(iface)}${iface.nestedCsName().replace(".", "")}BridgeState",
+        stateClassName = bridgeStateName(iface, symbols),
         slots = slots.withUniqueSlotPrefixes(BRIDGE_FACTORY_FIXED_NAMES),
       ),
     )
@@ -355,6 +348,7 @@ internal object ForwardInterfaceBridgePlanner {
   private fun slotOrRefusal(
     property: KSPropertyDeclaration,
     classifier: ForwardBridgeTypeClassifier,
+    owner: KSClassDeclaration? = null,
   ): ForwardBridgeSlotOutcome {
     val name: String = property.simpleName.asString()
     val type: KSType = property.type.resolve().expandAliases()
@@ -371,7 +365,7 @@ internal object ForwardInterfaceBridgePlanner {
     if (type.isFlowType()) {
       return refuse("is a Flow member, which a C# implementation cannot supply", ASYNC_HINT)
     }
-    val result: ForwardBridgeType = bridgeType(type, classifier)
+    val result: ForwardBridgeType = bridgeType(type, classifier, owner)
       ?: return refuse("has a type the bridge cannot carry", "use one of $CARRIED_TYPES")
     narrowThrowableOf(result)?.let { declared -> return refuseNarrow(member, name, declared) }
     if (result.wire == ForwardBridgeWire.UNIT) {
@@ -401,6 +395,7 @@ internal object ForwardInterfaceBridgePlanner {
   private fun slotOrRefusal(
     function: KSFunctionDeclaration,
     classifier: ForwardBridgeTypeClassifier,
+    owner: KSClassDeclaration? = null,
   ): ForwardBridgeSlotOutcome {
     val name: String = function.simpleName.asString()
     val suspend: Boolean = function.modifiers.any { modifier -> modifier.name == "SUSPEND" }
@@ -430,7 +425,7 @@ internal object ForwardInterfaceBridgePlanner {
     if (returnType.isFlowType()) {
       return refuse("returns a Flow, which a C# implementation cannot supply", ASYNC_HINT)
     }
-    val result: ForwardBridgeType = bridgeType(returnType, classifier)
+    val result: ForwardBridgeType = bridgeType(returnType, classifier, owner)
       ?: return refuse(
         "returns `${returnType.kotlinSpelling(keepProjections = true)}`, a type the bridge " +
             "cannot carry",
@@ -440,7 +435,7 @@ internal object ForwardInterfaceBridgePlanner {
     function.parameters.forEachIndexed { index, parameter ->
       val parameterName: String = parameter.name?.asString() ?: "arg$index"
       val declared: KSType = parameter.type.resolve().expandAliases()
-      val type: ForwardBridgeType = bridgeType(declared, classifier)
+      val type: ForwardBridgeType = bridgeType(declared, classifier, owner)
         ?.takeIf { it.wire != ForwardBridgeWire.UNIT }
         ?: return refuse(
           "takes `$parameterName: ${declared.kotlinSpelling(keepProjections = true)}`, a type " +
@@ -511,7 +506,23 @@ internal object ForwardInterfaceBridgePlanner {
   private fun bridgeType(
     type: KSType,
     classifier: ForwardBridgeTypeClassifier,
+    owner: KSClassDeclaration?,
   ): ForwardBridgeType? {
+    // ADR-222: the planned interface's OWN type parameter rides lane A's box. An inherited
+    // super-interface `T` is not substituted, so it stays out of the vocabulary as before.
+    val typeParameter: KSTypeParameter? = type.declaration as? KSTypeParameter
+    if (typeParameter != null) {
+      val declaredBy: String? = typeParameter.parentDeclaration?.qualifiedName?.asString()
+      if (owner == null || declaredBy != owner.qualifiedName?.asString()) return null
+      val mark: String = if (type.isMarkedNullable) "?" else ""
+      return ForwardBridgeType(
+        ForwardBridgeWire.OBJECT,
+        typeParameter.name.asString() + mark,
+        owner.forwardCsharpTypeParameterName(typeParameter) + mark,
+        nullable = type.isMarkedNullable || typeParameter.hasNullableBound(),
+        typeParameter = true,
+      )
+    }
     val qualifiedName: String = type.declaration.qualifiedName?.asString() ?: return null
     val nullable: Boolean = type.isMarkedNullable
     // ADR-201 amendment: a `Throwable` rides the OBJECT wire: the envelope out of Kotlin, the
@@ -607,3 +618,25 @@ internal fun ForwardBridgeSlot.delegateParamList(): String {
   }
   return "(${(args + "IntPtr ctx").joinToString(", ")})"
 }
+
+/**
+ * `PetBridgeState`, or `AviaryKeeperBridgeState` for a nested interface (ADR-133), package-qualified
+ * per ADR-163. Every state class is rendered into the ROOT namespace's one `CirBridgeHelper`.
+ */
+internal fun bridgeStateName(iface: KSClassDeclaration, symbols: ForwardSymbolTable?): String =
+  "${symbols?.csharpQualifier(iface).orEmpty()}${iface.nestedCsName().replace(".", "")}BridgeState"
+
+/**
+ * ADR-222: the `NugetBridge` entry a generic interface's call sites name (`KeepsakeHandleOf`). Named,
+ * never an overload of `HandleOf`: an overload loses to the erased `HandleOf<T>(T, out bool)` when
+ * the argument's static type is the implementing class (verified in the ADR-222 spike).
+ */
+internal fun genericBridgeEntryName(
+  iface: KSClassDeclaration,
+  symbols: ForwardSymbolTable?,
+): String =
+  bridgeStateName(iface, symbols).removeSuffix("BridgeState") + "HandleOf"
+
+/** ADR-222: the interface declares type parameters, so its bridge is generic on both halves. */
+internal val ForwardBridgeInterfacePlan.isGeneric: Boolean
+  get() = declaration.typeParameters.isNotEmpty()
