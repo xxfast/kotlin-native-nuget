@@ -47,6 +47,7 @@ using TestLibrary.Parcel;
 using TestLibrary.Petlist;
 using TestLibrary.Routes;
 using TestLibrary.Workshop;
+using Suspendgeneric = TestLibrary.Suspendgeneric;
 
 namespace LeakTests;
 
@@ -5786,5 +5787,34 @@ public class LiveHandleTests
                 Assert.Equal("Oreo", TestLibrary.Cat.Helpers.Identity("Oreo"));
             }
         });
+    }
+
+    // ADR-214
+    // A `suspend fun <T>` on the suspend route, in a tight loop. Each primitive or string `T` argument
+    // is an owned `Wrap<T>` box the C# `finally` disposes once the `_async` extern returns (Kotlin
+    // read it in the prelude, before `launchForCSharp`); each result is one handle `FromHandle<T>`
+    // consumes. The wrapper argument is borrowed across the suspension, as ADR-208's `Box<T>` is.
+    // The pre-cancelled call proves the owned box goes when the job never completes, since the
+    // `finally` runs after the extern, not on completion.
+    // Ledger per iteration: FetchLater(i) box +1/-1, result +1/-1; FetchLater("Oreo") the same;
+    // FetchLater(toy) result wrapper +1/-1 (toy outside the loop); HoldLater("late") box +1/-1.
+    // Net zero.
+    [Fact]
+    public async Task TopLevelSuspendGeneric_BoxedTypeParameter_ReturnsToBaseline()
+    {
+        using var toy = new Toy("Mylo's Milo Mouse", "Brown");
+        int i = 0;
+        await AssertNoLeakAsync(async () =>
+        {
+            i++;
+            Assert.Equal(i, await Suspendgeneric.SuspendGenericSample.FetchLaterAsync(i));
+            Assert.Equal("Oreo", await Suspendgeneric.SuspendGenericSample.FetchLaterAsync("Oreo"));
+            using Toy back = await Suspendgeneric.SuspendGenericSample.FetchLaterAsync(toy);
+            Assert.Equal("Mylo's Milo Mouse", back.Name);
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => Suspendgeneric.SuspendGenericSample.HoldLaterAsync("late", cts.Token));
+        }, iterations: 200);
     }
 }

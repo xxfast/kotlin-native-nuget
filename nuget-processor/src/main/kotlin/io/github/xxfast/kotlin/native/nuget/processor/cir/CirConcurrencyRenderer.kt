@@ -520,7 +520,9 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
 
   appendLine(
     "        ${method.memberHead("$visibility $static")}${method.returnType} " +
-        "${method.explicitName}($methodParams)",
+        // ADR-214: a member's own `<T>` and its `where` clauses.
+        "${method.explicitName}${method.typeParameterList()}($methodParams)" +
+        method.whereClauses(),
   )
   appendLine("        {")
   if (!method.isStatic && className.isNotEmpty()) {

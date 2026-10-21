@@ -136,6 +136,16 @@ internal sealed interface ForwardLegacyParameterShape {
   data class Async(val type: BridgeType) : ForwardLegacyParameterShape
 
   /**
+   * ADR-214: a `suspend` member's own type parameter, bare (`T` or `T?`), on ADR-147's boxed-handle
+   * wire. One nullable `COpaquePointer` slot (`NugetMarshal.Wrap<T>` sends null as the null
+   * pointer). Kotlin reads the box into a prelude local before the coroutine launches, so C# may
+   * dispose an owned box the moment the extern returns; the bound check (ADR-015) is the cast at
+   * the call, inside the launch, so an out-of-bound argument faults the `Task`.
+   */
+  data class Boxed(val type: BridgeType.TypeParameter, val nullable: Boolean) :
+    ForwardLegacyParameterShape
+
+  /**
    * Any other parameter, named so the skip diagnostic can quote it.
    *
    * [refusal] is the classifier's own [BridgeType.Unsupported] when the parameter is an
@@ -223,6 +233,18 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
     }
   }
 
+  // ADR-214: a suspend member's own `T`. A trampolined one (ADR-198) needs a type variable the
+  // launch lambda cannot declare, so it stays refused by name.
+  val typeParameter: BridgeType.TypeParameter? =
+    classified.unwrapNullable() as? BridgeType.TypeParameter
+  if (typeParameter != null) {
+    return if (typeParameter.trampolined) {
+      ForwardLegacyParameterShape.Refused(expanded.legacyDescription())
+    } else {
+      ForwardLegacyParameterShape.Boxed(typeParameter, nullable = classified is BridgeType.Nullable)
+    }
+  }
+
   if (expanded.arguments.isEmpty()) return when {
     classified.isLegacyScalar() -> ForwardLegacyParameterShape.Plain
     classified is BridgeType.ObjectHandle -> ForwardLegacyParameterShape.Handle(classified)
@@ -289,7 +311,13 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
   if (expanded.declaration.qualifiedName?.asString() in STATE_FLOW_TYPES + SHARED_FLOW_TYPES) {
     return ForwardLegacyParameterShape.Refused(expanded.legacyDescription(), hotFlow = true)
   }
-  return legacyParameterShape(type)
+  val shape: ForwardLegacyParameterShape = legacyParameterShape(type)
+  // ADR-214: only the suspend route carries a boxed `T`; a Flow-returning member keeps its refusal.
+  val suspends: Boolean = host != null && Modifier.SUSPEND in host.modifiers
+  if (shape is ForwardLegacyParameterShape.Boxed && !suspends) {
+    return ForwardLegacyParameterShape.Refused(expanded.legacyDescription())
+  }
+  return shape
 }
 
 /**
@@ -429,6 +457,8 @@ private fun legacyWidenedIndices(
     is ForwardLegacyParameterShape.NullableScalar, is ForwardLegacyParameterShape.Handle -> true
     // Only a nullable one: the `IsSet` slot rides the nullable pointer slot.
     is ForwardLegacyParameterShape.Marshalled -> shape.nullable
+    // ADR-214: a defaulted `T` stays required; its box has no unset encoding.
+    is ForwardLegacyParameterShape.Boxed,
     is ForwardLegacyParameterShape.ManagedException,
     is ForwardLegacyParameterShape.Async,
     is ForwardLegacyParameterShape.Refused -> false
@@ -490,6 +520,7 @@ internal val ForwardLegacyParameterShape.isLegacyDefaulted: Boolean
     is ForwardLegacyParameterShape.Enum,
     is ForwardLegacyParameterShape.ManagedException,
     is ForwardLegacyParameterShape.Async,
+    is ForwardLegacyParameterShape.Boxed,
     is ForwardLegacyParameterShape.Refused -> false
   }
 
@@ -525,6 +556,14 @@ internal sealed interface ForwardLegacyReturnShape {
 
   /** A non-generic return, or a `StateFlow` (ADR-068 owns that one): the shipped spelling. */
   data object Plain : ForwardLegacyReturnShape
+
+  /**
+   * ADR-214: a `suspend` member's own type parameter, bare. The export pins the result as it is
+   * (`NugetHandles.retain`, null as the null pointer when [nullable]) and C# reads it back with
+   * `NugetMarshal.FromHandle<T>`, the plan route's own read.
+   */
+  data class Boxed(val type: BridgeType.TypeParameter, val nullable: Boolean) :
+    ForwardLegacyReturnShape
 
   /**
    * A collection the ordinary route's `List`/`Set`/`Map` return already reads back. [nullable] is
@@ -651,6 +690,14 @@ internal fun ForwardLegacyReturnShape.Handle.declaredCsharpType(): String =
 internal fun ForwardLegacyReturnShape.ValueClass.declaredCsharpType(): String =
   if (nullable) "${type.csharpType}?" else type.csharpType
 
+/** ADR-214: `T`, or `T?` for an explicitly nullable `T?` result. */
+internal fun ForwardLegacyReturnShape.Boxed.declaredCsharpType(): String =
+  (if (nullable) BridgeType.Nullable(type) else type).forwardPublicCsharpType()
+
+/** ADR-214: the plan route's read of a boxed `T` result, which unwraps a builtin box. */
+internal fun ForwardLegacyReturnShape.Boxed.legacyBoxedRead(handle: String): String =
+  "NugetMarshal.FromHandle<${declaredCsharpType()}>($handle)"
+
 internal fun ForwardLegacyReturnShape.Enum.declaredCsharpType(): String =
   if (nullable) "${type.csharpType}?" else type.csharpType
 
@@ -767,6 +814,11 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
   // shipped spelling (its member is refused upstream for its own reason).
   val classified: BridgeType = classify(expanded).let {
     if (it is BridgeType.Nullable) it.type else it
+  }
+  // ADR-214: a suspend member's own `T` (no trampoline needed: the result reads erased).
+  if (classified is BridgeType.TypeParameter) {
+    val nullable: Boolean = classify(expanded) is BridgeType.Nullable
+    return ForwardLegacyReturnShape.Boxed(classified, nullable)
   }
   if (classified is BridgeType.Interface) {
     return ForwardLegacyReturnShape.Interface(classified, expanded.isMarkedNullable)
@@ -1362,8 +1414,18 @@ internal class ForwardLegacyNames(
    * (`${name}Handle` unless taken), or null.
    */
   val handleLocals: List<String?> = parameters.mapIndexed { index, name ->
-    val marshalled: Boolean = csharp && shapes[index] is ForwardLegacyParameterShape.Marshalled
-    if (marshalled) mint("${name}Handle") else null
+    val boxed: Boolean = shapes[index] is ForwardLegacyParameterShape.Boxed
+    val marshalled: Boolean = csharp &&
+      (shapes[index] is ForwardLegacyParameterShape.Marshalled || boxed)
+    if (marshalled) mint(if (boxed) "${name}Box" else "${name}Handle") else null
+  }
+
+  /**
+   * C# only, ADR-214: per parameter, the `out bool` local `NugetMarshal.Wrap<T>` reports a minted
+   * box in (`${name}Owned` unless taken), or null.
+   */
+  val ownedLocals: List<String?> = parameters.mapIndexed { index, name ->
+    if (csharp && shapes[index] is ForwardLegacyParameterShape.Boxed) mint("${name}Owned") else null
   }
 
   /** The member routes' class-scope slot. */
@@ -1445,7 +1507,8 @@ internal fun legacyHandleStatement(
  */
 internal val ForwardLegacyParameterShape.isLegacyNullableSlot: Boolean
   get() = (this is ForwardLegacyParameterShape.Handle && nullable) ||
-    (this is ForwardLegacyParameterShape.Marshalled && nullable)
+    (this is ForwardLegacyParameterShape.Marshalled && nullable) ||
+    this is ForwardLegacyParameterShape.Boxed
 
 /**
  * Whether the Kotlin export binds this parameter to an eagerly-evaluated local rather than calling
@@ -1454,7 +1517,8 @@ internal val ForwardLegacyParameterShape.isLegacyNullableSlot: Boolean
  */
 internal fun ForwardLegacyParameterShape.isLegacyLowered(): Boolean = when (this) {
   is ForwardLegacyParameterShape.Marshalled, is ForwardLegacyParameterShape.Handle,
-  is ForwardLegacyParameterShape.Async -> true
+  is ForwardLegacyParameterShape.Async,
+  is ForwardLegacyParameterShape.Boxed -> true
   ForwardLegacyParameterShape.Plain,
   is ForwardLegacyParameterShape.Enum,
   is ForwardLegacyParameterShape.NullableScalar,
@@ -1471,6 +1535,8 @@ internal fun ForwardLegacyParameterShape.isLegacyLowered(): Boolean = when (this
 internal fun ForwardLegacyNames.legacyArgument(index: Int, parameter: String): String {
   val shape: ForwardLegacyParameterShape = shapes[index]
   loweredLocals[index]?.let { local ->
+    // ADR-214: ADR-015's checked bound cast, evaluated inside the launch so it faults the Task.
+    if (shape is ForwardLegacyParameterShape.Boxed) return legacyBoxedCast(local, shape)
     // ADR-164: a widened handle's local is `T?` off its nullable slot, but it is only passed in
     // the arms that set it, where the member declares `T`.
     val widened: Boolean = shape is ForwardLegacyParameterShape.Handle && shape.widened
@@ -1495,6 +1561,28 @@ internal fun ForwardLegacyNames.legacyArgument(index: Int, parameter: String): S
     else -> parameter
   }
 }
+
+/**
+ * ADR-214: the checked cast of a boxed `T` [local] to its bounds (ADR-015), the cast half of
+ * [forwardBoundedRead]. Unconstrained, it is the local itself.
+ */
+internal fun legacyBoxedCast(local: String, shape: ForwardLegacyParameterShape.Boxed): String {
+  val bounds: List<String> = shape.type.legacyBounds()
+  val mark: String = if (shape.nullable) "?" else ""
+  return when (bounds.size) {
+    // A non-null `T` (`T : Any`) asserts here, inside the launch, so a C# null faults the Task.
+    0 -> if (shape.nullable) local else "$local!!"
+    1 -> "($local as ${bounds.single()}$mark)"
+    else -> {
+      val casts: String = bounds.joinToString("") { bound -> "bounded as $bound$mark; " }
+      "$local.let { bounded -> ${casts}bounded }"
+    }
+  }
+}
+
+/** ADR-214: the bounds a boxed `T` is checked against, in declaration order. */
+internal fun BridgeType.TypeParameter.legacyBounds(): List<String> =
+  listOfNotNull(boundQualifiedName) + additionalBounds
 
 /** ADR-080's ordinal lowering, the plan route's text: `Hunger.entries[asked]`. */
 private fun legacyEnumValue(type: BridgeType.Enum, parameter: String): String =
@@ -1592,6 +1680,9 @@ internal fun ForwardLegacyParameterShape.legacyPrelude(
     legacyLoweringStatement(parameter, requireNotNull(local), type, nullable)
   is ForwardLegacyParameterShape.Handle ->
     legacyHandleStatement(parameter, requireNotNull(local), type, nullable)
+  // ADR-214: the erased read only; the bound cast is [legacyArgument]'s, inside the launch.
+  is ForwardLegacyParameterShape.Boxed ->
+    "val ${requireNotNull(local)} = ${forwardBoundedRead(parameter, emptyList(), nullable = true)}"
   ForwardLegacyParameterShape.Plain,
   is ForwardLegacyParameterShape.Enum,
   is ForwardLegacyParameterShape.NullableScalar,

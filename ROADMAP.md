@@ -55,7 +55,6 @@ Complete.
 
 ## Phase 4: Rich type support
 
-- [ ] A top-level `suspend fun <T>` is not bound; the suspend route has its own owner rules ([ADR-211](docs/adr/211-top-level-generic-functions-on-the-plan.md))
 - [ ] A method or class `T` inside a lambda or `Flow` is still skipped, named ([ADR-212](docs/adr/212-type-parameter-as-collection-element.md))
 - [ ] An open exported generic instantiation nested two or more levels deep, read through a property getter or any position outside a member's result before the consumer holds one, has no factory ([ADR-216](docs/adr/216-own-type-parameter-in-result-and-generic-class.md))
 - [ ] A trampolined `T` (a bound with no closed spelling, such as `Enum<T>`) in a collection is still skipped, named ([ADR-212](docs/adr/212-type-parameter-as-collection-element.md))
@@ -67,7 +66,9 @@ Complete.
 
 ## Phase 6: Async support
 
-Complete.
+One open item.
+
+- [ ] A `suspend` member of an `object` or companion has no route, generic or not, named `SKIPPED_UNSUPPORTED_COMBINATION`; found by [ADR-214](docs/adr/214-suspend-generic-functions-on-the-suspend-route.md)
 
 ## Phase 7: Bidirectional support (C# → Kotlin)
 - [ ] Fold the reverse template's internal `NugetManagedException` onto the runtime class over the ADR-130 expect/actual seam ([details](docs/backlog/fold-reverse-managed-exception-onto-runtime-class.md))

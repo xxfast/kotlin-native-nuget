@@ -24,6 +24,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyHandleRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyValueClassRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyEnumRead
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBoxedRead
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMemberGenericRefusal
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardCsharpMethodTypeParameterName
 
 internal fun translateSuspendFunction(
   func: KSFunctionDeclaration,
@@ -44,6 +47,8 @@ internal fun translateSuspendFunction(
   context: NugetContext,
 ): List<CirMember> {
   if (classifier.legacyRefusedParameter(func.parameters) != null) return emptyList()
+  // ADR-214: the Kotlin half's own admission, ADR-197/211's rules for a function's own `T`.
+  if (func.forwardMemberGenericRefusal() != null) return emptyList()
   val returnType = func.returnType?.resolve()?.expandAliases()
   // ADR-119: a generic return that is not a marshallable collection skips on both halves.
   val returnShape: ForwardLegacyReturnShape = classifier.legacyReturnShape(returnType)
@@ -117,6 +122,7 @@ internal fun translateSuspendFunction(
     returnShape is ForwardLegacyReturnShape.Handle -> returnShape.declaredCsharpType()
     returnShape is ForwardLegacyReturnShape.ValueClass -> returnShape.declaredCsharpType()
     returnShape is ForwardLegacyReturnShape.Enum -> returnShape.declaredCsharpType()
+    returnShape is ForwardLegacyReturnShape.Boxed -> returnShape.declaredCsharpType()
     else -> {
       // ADR-118: same speller as the class route -- a nested sealed arm return carries its
       // enclosing base, a top-level type stays bare.
@@ -171,6 +177,7 @@ internal fun translateSuspendFunction(
     isStatic = true,
     isAsync = true,
     asyncReturnType = asyncReturnType,
+    typeParameters = func.cirMethodTypeParameters(context, logger),
     flowElementRead = stateFlowElement?.read,
     flowElementNullable = stateFlowElement?.elementNullable == true,
     acquiredFlowNullable = acquiredFlowNullable,
@@ -211,6 +218,9 @@ internal fun translateSuspendFunction(
       // The boxed ordinal, cast back to the enum (never handed back as an `int`).
       is ForwardLegacyReturnShape.Enum -> returnShape.legacyEnumRead("resultPtr")
 
+      // ADR-214: the plan route's read of a boxed `T`.
+      is ForwardLegacyReturnShape.Boxed -> returnShape.legacyBoxedRead("resultPtr")
+
       ForwardLegacyReturnShape.Plain, is ForwardLegacyReturnShape.Refused -> null
     },
   )
@@ -228,4 +238,24 @@ internal fun translateSuspendFunction(
   }
   return listOf(nativeImport, asyncMethod) + listOfNotNull(collector) + awaitedPair +
     shared?.let { flowKeyedSharedFlowImports(libraryName, cname, "${nativeName}_", it) }.orEmpty()
+}
+
+/**
+ * ADR-214: a legacy-route member's own type parameters with their C# constraints, the planned
+ * route's spelling (`withMethodTypeParameterConstraints`), for a member the plan never carries.
+ */
+internal fun KSFunctionDeclaration.cirMethodTypeParameters(
+  context: NugetContext,
+  logger: KSPLogger,
+): List<CirTypeParameter> {
+  val owner: String = parentDeclaration?.simpleName?.asString()?.let { "$it." }.orEmpty()
+  return typeParameters.map { typeParameter ->
+    CirTypeParameter(
+      forwardCsharpMethodTypeParameterName(typeParameter),
+      typeParameter.cirConstraints(
+        context, logger, this,
+        "$owner${simpleName.asString()}<${typeParameter.name.asString()}>",
+      ),
+    )
+  }
 }
