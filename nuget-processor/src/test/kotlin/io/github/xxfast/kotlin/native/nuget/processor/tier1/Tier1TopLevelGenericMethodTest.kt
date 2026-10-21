@@ -107,6 +107,9 @@ class Tier1TopLevelGenericMethodTest {
           }
       }
       """.trimIndent(),
+      // ADR-217: an interface reachable only as a `T` bound now gets its C# bridge, so a
+      // C# implementation crosses `Wrap<T>`; the bridge uses function pointers.
+      allowUnsafe = true,
     )
   }
 

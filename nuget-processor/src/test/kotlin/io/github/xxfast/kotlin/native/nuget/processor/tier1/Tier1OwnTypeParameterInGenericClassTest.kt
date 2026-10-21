@@ -14,8 +14,8 @@ import kotlin.test.assertTrue
  * class-`T` route already does, and the Kotlin read reinterprets the handle at the argument's
  * erased bound (ADR-208).
  *
- * Still refused, each by name: a multi-bound `T` witnessed only inside a generic class (lifted by
- * ADR-217) and a `Box<List<T>>` the erased wire cannot read (ADR-208's closed-argument rule).
+ * Still refused by name: a `Box<List<T>>` the erased wire cannot read (ADR-208's closed-argument
+ * rule). A multi-bound `T` witnessed only inside a generic class binds through ADR-217.
  *
  * Oreo goes in the box; Mylo is the one who knocks it over.
  */
@@ -157,10 +157,6 @@ class Tier1OwnTypeParameterInGenericClassTest {
     assertKotlinCompiles(result)
 
     mapOf(
-      "tier1.boxedown.Depot.rank" to
-        (ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_COMBINATION to
-          "(here, its multi-bound type parameter `T` is witnessed only inside `Box<T>`, " +
-          "which ADR-217 lifts)"),
       "tier1.boxedown.Depot.deep" to
         (ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE to "List<T>"),
     ).forEach { (member, expected) ->
@@ -175,7 +171,12 @@ class Tier1OwnTypeParameterInGenericClassTest {
     val declarations: List<String> = result.generatedCSharp.lines()
       .map(String::trim)
       .filterNot { line -> line.startsWith("//") }
-    listOf("Rank", "Deep").forEach { member ->
+    // ADR-217: a multi-bound `T` witnessed only inside `Box<T>` binds through the trampoline.
+    assertTrue(
+      declarations.any { line -> line.startsWith("public T Rank<T>(") },
+      "expected the ADR-217 Rank binding",
+    )
+    listOf("Deep").forEach { member ->
       assertFalse(
         declarations.any { line -> Regex("\\b$member\\s*[<(]").containsMatchIn(line) },
         "expected no C# member $member",

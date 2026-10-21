@@ -254,3 +254,10 @@ for the returned-element half.
 - Fixed in the same change: a collection parameter named `list` or `map` beside a collection return
   produced CS0136 in the generated C#, because the result's handle local reused the parameter's name.
   The result handle now takes a trailing `_` on a collision; a Tier 1 `relist` cell pins it.
+
+## Amendment (2026-10-22): ADR-217
+
+[ADR-217](217-trampoline-for-collection-and-generic-class-positions.md) reverses decision 4's
+trampolined sentence: a trampolined `T` (ADR-198) is now a collection component, its element cast
+to the trampoline's own type variable, and a nullable element under `struct, Enum` reads through
+`FromHandle<T?>`. The "a trampolined `T` in a collection" deferral in Consequences is closed.

@@ -19,10 +19,14 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.nugetHandles
  * KotlinPoet projection for planned ordinary callables. Value-class positions use a dedicated
  * path that preserves reconstruction and the shipped no-errorOut member ABI (ADR-014).
  */
-internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePlan): FileSpec.Builder {
-  if (plan.invocation.origin == ForwardCallableOrigin.VALUE_CLASS) {
-    return addForwardValueClassPlanExport(plan)
+internal fun FileSpec.Builder.addForwardKotlinPlanExport(
+  planned: ForwardCallablePlan,
+): FileSpec.Builder {
+  if (planned.invocation.origin == ForwardCallableOrigin.VALUE_CLASS) {
+    return addForwardValueClassPlanExport(planned)
   }
+  // ADR-217: every value of a type variable the trampoline declares is read as that variable.
+  val plan: ForwardCallablePlan = planned.withTypeVariables()
   plan.validate()
   require(plan.evaluation == ForwardEvaluation.EXACTLY_ONCE) {
     "Forward Kotlin plan emitter only supports exactly-once callables: ${plan.invocation.symbol}"
@@ -586,7 +590,7 @@ private fun elementKotlinTypeName(type: BridgeType): String = when (type) {
   BridgeType.String -> "kotlin.String"
   BridgeType.Char -> "kotlin.Char"
   is BridgeType.Primitive -> "kotlin.${type.kind.simpleKotlinName()}"
-  is BridgeType.ObjectHandle -> type.kotlinReadType ?: type.qualifiedName
+  is BridgeType.ObjectHandle -> type.kotlinCastType()
   is BridgeType.Enum -> type.qualifiedName
   // ADR-176: the box holds the Kotlin object itself (a Kotlin-backed instance, or the ADR-084
   // bridge object `nuget_list_add` dereferenced from a C# transfer handle).
@@ -782,15 +786,19 @@ internal fun componentLowering(
  * [forwardBoundedRead] casts a bare `T` box: `as kotlin.Any?` unconstrained, `as Bound` for one,
  * a smart-cast chain on a local for several, each nullable for a nullable element. Never `as T`
  * (unchecked) and never [elementKotlinTypeName], which has no spelling for a type parameter.
+ *
+ * ADR-217: a trampolined `T` is cast exactly as [forwardBoundedRead] casts its box: the
+ * star-projected checks, then `as T`, the type variable the enclosing trampoline declares.
  */
 private fun typeParameterElementCast(
   name: String,
   type: BridgeType.TypeParameter,
   nullable: Boolean,
 ): String {
-  check(!type.trampolined) { "A trampolined type parameter ${type.name} has no element cast" }
   val mark: String = if (nullable) "?" else ""
   val bounds: List<String> = type.bounds()
+  val typeVariable: String? = type.typeVariable()
+  if (typeVariable != null) return typeVariableCast(name, bounds, typeVariable, mark)
   return when (bounds.size) {
     0 -> "$name as kotlin.Any$mark"
     1 -> "($name as ${bounds.single()}$mark)"
@@ -1214,15 +1222,106 @@ private fun BridgeType.castsToGenericBound(): Boolean {
 private fun BridgeType.TypeParameter.typeVariable(): String? = kotlinName.takeIf { trampolined }
 
 /**
- * ADR-198: the owner's trampolined type parameters this export takes a value of, in declaration
+ * ADR-198: the owner's type parameters this export runs under a trampoline for, in declaration
  * order; empty for every export that keeps its ADR-147 shape. Only a value IN needs the
  * trampoline: a result or a property read leaves the star-projected receiver to type it.
  */
 private fun ForwardCallablePlan.trampolineParameters(): List<ForwardGenericOwnerParameter> =
   invocation.ownerType?.typeParameters.orEmpty().filter { typeParameter ->
-    typeParameter.trampolined &&
-        publicSignature.parameters.any { parameter -> parameter.mentions(typeParameter) }
+    needsTypeVariable(typeParameter)
   }
+
+/**
+ * ADR-217: the type-variable rule for an owner's `T`. An export that takes a value mentioning it,
+ * bare, at any depth of a collection or in an open generic class, needs the trampoline's own
+ * type variable when nothing else spells it: a bound with no closed spelling (ADR-198), or an
+ * intersection (ADR-147) that no bare parameter witnesses, since a `List<Pet & Trainable>` cannot type `Arena<*>.team`. A member's
+ * own `T` takes the same rule in [forwardMethodTypeParameters].
+ */
+private fun ForwardCallablePlan.needsTypeVariable(
+  typeParameter: ForwardGenericOwnerParameter,
+): Boolean {
+  val parameters: List<ForwardPublicParameter> = publicSignature.parameters
+  if (parameters.none { parameter -> parameter.type.mentionsAnywhere(typeParameter) }) return false
+  if (typeParameter.trampolined) return true
+  return typeParameter.erased == null && parameters.none { parameter ->
+    parameter.mentions(typeParameter)
+  }
+}
+
+/**
+ * ADR-217: [this] plan with every `T` the trampoline declares marked as read through it: a
+ * [BridgeType.TypeParameter] (bare, nullable or a collection component) casts to the type
+ * variable, and an open generic class over only such variables casts to its declared spelling.
+ * Kotlin-only: the C# projection and the ABI contract read the plan as planned.
+ */
+private fun ForwardCallablePlan.withTypeVariables(): ForwardCallablePlan {
+  val variables: Set<String> = trampolineParameters().map { it.kotlinName }.toSet() +
+      publicSignature.typeParameters
+        .filter { typeParameter -> typeParameter.trampolineBounds.isNotEmpty() }
+        .map { typeParameter -> typeParameter.kotlinName }
+  if (variables.isEmpty()) return this
+  val parameters: List<ForwardPublicParameter> = publicSignature.parameters.map { parameter ->
+    parameter.copy(type = parameter.type.readThrough(variables))
+  }
+  return copy(publicSignature = publicSignature.copy(parameters = parameters))
+}
+
+private fun BridgeType.readThrough(variables: Set<String>): BridgeType = when (this) {
+  is BridgeType.TypeParameter -> if (kotlinName in variables) copy(trampolined = true) else this
+  is BridgeType.Nullable -> BridgeType.Nullable(type.readThrough(variables))
+  is BridgeType.Collection -> copy(
+    element = element?.readThrough(variables),
+    key = key?.readThrough(variables),
+    value = value?.readThrough(variables),
+  )
+
+  is BridgeType.ObjectHandle ->
+    if (open && typeVariables.isNotEmpty() && variables.containsAll(typeVariables)) {
+      copy(readsAsTypeVariable = true)
+    } else {
+      this
+    }
+
+  BridgeType.Unit,
+  is BridgeType.Primitive,
+  BridgeType.Char,
+  BridgeType.String,
+  BridgeType.Instant,
+  BridgeType.Duration,
+  is BridgeType.Throwable,
+  BridgeType.Uuid,
+  is BridgeType.Enum,
+  is BridgeType.ValueClass,
+  is BridgeType.Interface,
+  is BridgeType.BoundInterface,
+  BridgeType.ByteArray,
+  is BridgeType.Callback,
+  is BridgeType.AsyncCallback,
+  is BridgeType.FlowSource,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+    -> this
+}
+
+/** ADR-217: the type a handle box is cast to; the declared spelling inside a trampoline. */
+private fun BridgeType.ObjectHandle.kotlinCastType(): String =
+  if (readsAsTypeVariable) requireNotNull(kotlinTypeVariableReadType) else
+    kotlinReadType ?: qualifiedName
+
+/** ADR-217: the `asStableRef` read of a handle at [ref], through `Any` inside a trampoline. */
+private fun BridgeType.ObjectHandle.handleRead(ref: String, nullable: Boolean): String {
+  if (!readsAsTypeVariable) {
+    val read: String = kotlinReadType ?: qualifiedName
+    return if (nullable) "$ref?.asStableRef<$read>()?.get()" else "$ref.asStableRef<$read>().get()"
+  }
+  // `asStableRef` is reified and a type variable is not: read as `Any`, cast unchecked.
+  return if (nullable) "($ref?.asStableRef<Any>()?.get() as ${kotlinCastType()}?)"
+  else "($ref.asStableRef<Any>().get() as ${kotlinCastType()})"
+}
 
 /**
  * ADR-198: [this] export re-shaped around a trampoline. The export cannot be generic, and no
@@ -1285,10 +1384,7 @@ internal fun forwardBoundedRead(
   val read: String =
     if (nullable) "$pointer?.asStableRef<Any>()?.get()" else "$pointer.asStableRef<Any>().get()"
   val mark: String = if (nullable) "?" else ""
-  if (typeVariable != null) {
-    val casts: String = bounds.joinToString("") { bound -> "bounded as $bound$mark; " }
-    return "$read.let { bounded -> ${casts}bounded as $typeVariable$mark }"
-  }
+  if (typeVariable != null) return typeVariableCast(read, bounds, typeVariable, mark)
   return when (bounds.size) {
     0 -> read
     1 -> "($read as ${bounds.single()}$mark)"
@@ -1297,6 +1393,21 @@ internal fun forwardBoundedRead(
       "$read.let { bounded -> ${casts}bounded }"
     }
   }
+}
+
+/**
+ * ADR-198 + ADR-217: [subject] checked against each of [bounds] (star-projected spellings for an
+ * unspellable bound) and then cast to [typeVariable], the trampoline's own `T`. One string for a
+ * bare box ([forwardBoundedRead]) and a collection element ([typeParameterElementCast]).
+ */
+private fun typeVariableCast(
+  subject: String,
+  bounds: List<String>,
+  typeVariable: String,
+  mark: String,
+): String {
+  val casts: String = bounds.joinToString("") { bound -> "bounded as $bound$mark; " }
+  return "$subject.let { bounded -> ${casts}bounded as $typeVariable$mark }"
 }
 
 /**
@@ -1377,9 +1488,9 @@ private fun constructorTypeName(plan: ForwardCallablePlan, owner: ForwardGeneric
     owner.typeParameters.joinToString(", ") { typeParameter ->
       val mentioned: Boolean =
         plan.publicSignature.parameters.any { parameter -> parameter.mentions(typeParameter) }
-      // ADR-198: a trampolined parameter is named by the trampoline's own type variable.
+      // ADR-198 + ADR-217: a parameter under the trampoline is named by its own type variable.
       val variable: String? =
-        typeParameter.kotlinName.takeIf { typeParameter.trampolined && mentioned }
+        typeParameter.kotlinName.takeIf { plan.needsTypeVariable(typeParameter) }
       typeParameter.erased ?: variable ?: if (mentioned) "_" else "Nothing"
     },
   )
@@ -1387,6 +1498,23 @@ private fun constructorTypeName(plan: ForwardCallablePlan, owner: ForwardGeneric
 
 private fun ForwardPublicParameter.mentions(typeParameter: ForwardGenericOwnerParameter): Boolean =
   (type.unwrapNullable() as? BridgeType.TypeParameter)?.kotlinName == typeParameter.kotlinName
+
+/**
+ * ADR-217: [this] mentions [typeParameter] bare, as a component of a collection at any depth, or
+ * as an argument of an open generic class.
+ * Only the type-variable rule reads it: the ADR-147 witness search in [ownerCall] keeps the bare
+ * [mentions], since a list is no `witness0: T?`.
+ */
+private fun BridgeType.mentionsAnywhere(typeParameter: ForwardGenericOwnerParameter): Boolean {
+  val type: BridgeType = unwrapNullable()
+  if (type is BridgeType.Collection) {
+    return listOfNotNull(type.element, type.key, type.value)
+      .any { component -> component.mentionsAnywhere(typeParameter) }
+  }
+  // An open generic class (`Box<T>`): an invariant `Box<Pet>` cannot type `Arena<*>.swap` either.
+  if (type is BridgeType.ObjectHandle) return typeParameter.kotlinName in type.typeVariables
+  return (type as? BridgeType.TypeParameter)?.kotlinName == typeParameter.kotlinName
+}
 
 /**
  * A witness's value: the parameter's own lowering, or the ADR-164 local an unset default leaves
@@ -1917,8 +2045,7 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
     BridgeType.Instant -> "instantFromDotNetTicks(${parameter.ref})"
     // ADR-103: the same, into a Duration.
     BridgeType.Duration -> "durationFromDotNetTicks(${parameter.ref})"
-    is BridgeType.ObjectHandle ->
-      "${parameter.ref}.asStableRef<${type.kotlinReadType ?: type.qualifiedName}>().get()"
+    is BridgeType.ObjectHandle -> type.handleRead(parameter.ref, nullable = false)
 
     is BridgeType.Interface ->
       "${parameter.ref}.asStableRef<${type.qualifiedName}>().get()"
@@ -1967,8 +2094,7 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
       BridgeType.Uuid -> "${parameter.ref}?.let(kotlin.uuid.Uuid::parse)"
       // ADR-201: a C# null arrives as the null string pointer and stays null.
       is BridgeType.Throwable -> managedExceptionLowering(parameter.ref, nullable = true)
-      is BridgeType.ObjectHandle ->
-        "${parameter.ref}?.asStableRef<${inner.kotlinReadType ?: inner.qualifiedName}>()?.get()"
+      is BridgeType.ObjectHandle -> inner.handleRead(parameter.ref, nullable = true)
 
       is BridgeType.Interface ->
         "${parameter.ref}?.asStableRef<${inner.qualifiedName}>()?.get()"

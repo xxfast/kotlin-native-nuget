@@ -195,6 +195,26 @@ Assert.Equal(Medal.Silver, Medals.RequirePrize(Medal.Silver));
 Assert.ThrowsAny<ArgumentException>(() => Medals.RequirePrize(Medal.Bronze));   // BRONZE is no prize
 ```
 
+A `T` with an enum or self-referencing bound also works as a collection element, a map key, and
+inside a generic class, on a function, a class member or a constructor. `T` is inferred as usual:
+
+```kotlin
+object Judge {
+  fun <T : Enum<T>> sorted(medals: List<T>): List<T> = medals.sortedDescending()
+  fun <T : Enum<T>> pad(medals: List<T?>): List<T?> = medals + null
+  fun <T : Enum<T>> scores(board: Map<T, Int>): Map<T, Int> = board.mapValues { it.value * 2 }
+}
+
+class Sash<T : Enum<T>>(val ribbons: List<T>)
+```
+
+```C#
+IReadOnlyList<Medal> podium = Judge.Sorted(new[] { Medal.Silver, Medal.Gold });
+IReadOnlyList<Medal?> padded = Judge.Pad(new Medal?[] { Medal.Gold, null });   // null stays null
+IReadOnlyDictionary<Medal, int> doubled = Judge.Scores(new Dictionary<Medal, int> { [Medal.Gold] = 1 });
+using var sash = new Sash<Medal>(new[] { Medal.Gold });
+```
+
 - `Rosette<int>`, `Rosette<string>`, a wrapper and `Rosette<Medal?>` do not compile.
 - C# cannot say "an enum generated from Kotlin", so a .NET enum such as `DayOfWeek` compiles and
   throws a catchable `NotSupportedException` at the call, before anything reaches Kotlin.
@@ -674,9 +694,22 @@ foreach (Tabby cat in deck.Shuffle(new[] { oreo })) cat.Dispose();           // 
 A passed wrapper element is borrowed, and each wrapper element Kotlin returns is yours to dispose.
 `List<List<T>>` works, and a bounded `T` keeps its `where` clause. A `Map` key must be non-null:
 `fun <K : Any, V> tally(map: Map<K, V>)` binds, while an unconstrained `K` is skipped as
-`NULLABLE_MAP_KEY`. Declare `K : Any`. A `T` inside a `Flow`
-parameter is still skipped, as is a `T` with an unspellable bound
-([An enum bound](#an-enum-bound)) in a collection. A `T` in a lambda binds; see [below](#a-type-parameter-in-a-lambda).
+`NULLABLE_MAP_KEY`. Declare `K : Any`. A `T` inside a `Flow` parameter is still skipped. A
+`T` with an enum or self-referencing bound is a valid element
+([An enum bound](#an-enum-bound)), and so is one with several bounds that no bare parameter
+mentions:
+
+```kotlin
+class Arena<T>(val champion: T) where T : Pet, T : Trainable {
+  fun team(pets: List<T>): Int = pets.sumOf { it.tricks } + champion.tricks
+}
+```
+
+```C#
+int tricks = arena.Team(new[] { mylo, cookie });   // where T : IPet, ITrainable
+```
+
+A `T` in a lambda binds; see [below](#a-type-parameter-in-a-lambda).
 
 ### A type parameter in a lambda {id="a-type-parameter-in-a-lambda"}
 
@@ -731,6 +764,8 @@ A method's own `T` can be an argument of an exported generic class (`Basket<T>`,
 `Basket<Basket<T>>`, `List<Basket<T>>`, a generic sealed `Pickup<T>`), and the payload of a
 `Result` return (`Result<List<T>>`, `Result<Set<T>>`, `Result<Map<K, V>>` with `K : Any`,
 `Result<Basket<T>>`). It binds on the same owners as a bare `T`, and `T` is inferred from the argument.
+A multi-bound `T` works here too: `fun <T> crown(basket: Basket<T>): T where T : Furry, T : Tricky`
+is `T Crown<T>(Basket<T> basket) where T : IFurry, ITricky`.
 
 ```kotlin
 class Groomer {
@@ -764,8 +799,6 @@ class-`T` member (`Basket<Basket<T>>`) and reads its inner basket without the co
 
 What still skips, named:
 
-- A multi-bound `T` (`where T : A, T : B`) that appears only inside a generic class
-  (`fun <T> rank(box: Box<T>)`). Add a bare `T` or `List<T>` parameter, or bind one bound.
 - A `T` inside a generic value class, and `kotlin.Array<T>`.
 - A nested generic class argument the wire cannot read, such as `Box<List<T>>`.
 - An open instantiation nested two or more levels deep that you read through a property getter,

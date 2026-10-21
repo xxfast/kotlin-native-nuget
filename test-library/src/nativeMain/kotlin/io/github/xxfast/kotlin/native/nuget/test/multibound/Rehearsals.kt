@@ -28,6 +28,16 @@ class Arena<T>(val champion: T) where T : Pet, T : Trainable {
 
   fun challenge(challenger: T): T =
     if (challenger.tricks > champion.tricks) challenger else champion
+
+  /**
+   * ADR-217: the owner's multi-bound `T` mentioned only inside a `List`. No bare parameter
+   * witnesses the intersection, so the call needs a type variable declaring both bounds.
+   */
+  fun team(pets: List<T>): Int = pets.sumOf { it.tricks } + champion.tricks
+
+  /** ADR-217: the same `List<T>` beside a bare `T` sibling that witnesses it. */
+  fun mix(pets: List<T>, lead: T): String =
+    (listOf(lead) + pets).joinToString { "${it.name}:${it.tricks}" }
 }
 
 /**

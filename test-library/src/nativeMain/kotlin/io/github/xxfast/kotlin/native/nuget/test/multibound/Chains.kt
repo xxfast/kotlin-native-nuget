@@ -22,7 +22,16 @@ class Chain<T>(val head: T) where T : Node<T>, T : Pet {
   val label: String get() = "chain of ${head.name}"
 
   fun attach(other: T): T = head.link(other)
+
+  /** ADR-217: the class's own trampolined `T` inside a `List`, each bead linked to the head. */
+  fun attachAll(others: List<T>): List<T> = others.map { head.link(it) }
 }
 
 /** The function route under the same bounds. */
 fun <T> lead(value: T): T where T : Node<T>, T : Pet = value
+
+/**
+ * ADR-217: a top-level `T : Node<T>` witnessed only inside a `List`, the beads linked left to
+ * right by the bound's own `link`.
+ */
+fun <T : Node<T>> braid(beads: List<T>): T = beads.reduce { braided, bead -> braided.link(bead) }

@@ -2471,24 +2471,47 @@ internal class NugetProcessor(
       return (unwrapped as? BridgeType.Interface)?.qualifiedName
     }
 
-    // ADR-214: a suspend member's bare `T` bounded by an interface
-    // (`fun <T : Snoozer> f(snoozer: T)`) is spelled `where T : ISnoozer`, so a C# implementation crosses through `Wrap<T>` and needs the bridge
-    // the interface has only once it is reachable. Found by the red integration run: an interface
-    // reachable only as a bound threw `NotSupportedException` from `NugetBridge.HandleFor`.
-    // Walked for the legacy suspend positions only ([legacyCarriedInterfaceNames]); the plan's
-    // bare `T` keeps its output.
+    // ADR-214 / ADR-217: a non-generic interface that is only the bound of a `T` IN position
+    // (`fun <T : Snoozer> tuckIn(snoozer: T)`, a suspend member's or a plan parameter's, bare or
+    // inside a collection) is spelled `where T : ISnoozer`, and a C#-implemented snoozer crosses
+    // through `Wrap<T>`'s `NugetBridge.HandleFor`, which needs that interface's bridge arm (found by
+    // the red integration runs: `NotSupportedException` from `HandleFor`). Parameters only: a `T`
+    // result reads back through `FromHandle<T>` at the caller's own type and needs no bridge.
     // A generic interface (`Node<T>`) is never bridged (ADR-084), so it is not promoted here.
     val interfaceNames: Set<String> = interfaces
       .filter { iface -> iface.typeParameters.isEmpty() }
       .mapNotNullTo(mutableSetOf()) { iface -> iface.qualifiedName?.asString() }
 
-    fun BridgeType.boundInterfaceQualifiedNames(): Set<String> {
-      val unwrapped: BridgeType = if (this is BridgeType.Nullable) type else this
-      val parameter: BridgeType.TypeParameter =
-        unwrapped as? BridgeType.TypeParameter ?: return emptySet()
-      return (listOfNotNull(parameter.boundQualifiedName) + parameter.additionalBounds)
+    fun BridgeType.boundInterfaceQualifiedNames(): Set<String> = when (this) {
+      is BridgeType.TypeParameter -> (listOfNotNull(boundQualifiedName) + additionalBounds)
         .map { bound -> bound.substringBefore('<') }
         .filterTo(mutableSetOf()) { bound -> bound in interfaceNames }
+      is BridgeType.Nullable -> type.boundInterfaceQualifiedNames()
+      is BridgeType.Collection -> listOfNotNull(element, key, value)
+        .flatMapTo(mutableSetOf()) { component -> component.boundInterfaceQualifiedNames() }
+      BridgeType.Unit,
+      is BridgeType.Primitive,
+      BridgeType.Char,
+      BridgeType.String,
+      BridgeType.Instant,
+      BridgeType.Duration,
+      is BridgeType.Throwable,
+      BridgeType.Uuid,
+      is BridgeType.Enum,
+      is BridgeType.ValueClass,
+      is BridgeType.ObjectHandle,
+      is BridgeType.Interface,
+      is BridgeType.BoundInterface,
+      BridgeType.ByteArray,
+      is BridgeType.Callback,
+      is BridgeType.AsyncCallback,
+      is BridgeType.FlowSource,
+      is BridgeType.ReturnedLambda,
+      is BridgeType.SpecializedProtocol,
+      is BridgeType.RawKSType,
+      is BridgeType.Unsupported,
+      is BridgeType.RawCollection,
+        -> emptySet()
     }
 
     // ADR-176: every interface a type carries inside a collection component (element, map key,
@@ -2676,6 +2699,7 @@ internal class NugetProcessor(
         addAll(plan.publicSignature.result.interfaceQualifiedNames())
         plan.publicSignature.parameters.forEach { parameter ->
           addAll(parameter.type.interfaceQualifiedNames())
+          addAll(parameter.type.boundInterfaceQualifiedNames())
         }
         plan.nativeExports.receiverInterfaceQualifiedNames().forEach(::add)
       }

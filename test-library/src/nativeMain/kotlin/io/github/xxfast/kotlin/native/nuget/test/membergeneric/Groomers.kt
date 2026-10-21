@@ -66,6 +66,13 @@ class Groomer {
   /** A bounded `T` witnessed only inside the basket: C# says `where T : IFurry`. */
   fun <T : Furry> brushBasket(basket: Basket<T>): T = basket.item
 
+  /**
+   * ADR-217: a multi-bound `T` witnessed only inside the basket (ADR-216 refused it by name). The
+   * body uses both bounds, so the cast inside the trampoline has to hold for each.
+   */
+  fun <T> crown(basket: Basket<T>): T where T : Furry, T : Tricky =
+    basket.item.also { require(it.tricks > 0) { "${it.name} knows no tricks" } }
+
   /** A nullable basket, in and out. Mylo hides in no basket at all. */
   fun <T> maybeBasket(basket: Basket<T>?): Basket<T>? = basket
 

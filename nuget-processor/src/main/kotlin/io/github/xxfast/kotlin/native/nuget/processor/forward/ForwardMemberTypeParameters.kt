@@ -67,8 +67,9 @@ internal fun KSFunctionDeclaration.forwardMethodTypeParameters(): List<ForwardMe
     val nullable: String = if (parameter.hasNullableBound()) "?" else ""
     val kotlinName: String = parameter.simpleName.asString()
     // ADR-198: no erased argument is within an unspellable bound; the call names the trampoline's
-    // own type variable instead, which re-declares the bounds.
-    if (parameter.hasUnspellableBound()) {
+    // own type variable instead, which re-declares the bounds. ADR-217: so does an intersection
+    // only a generic class witnesses (`crown(basket: Basket<T>) where T : Furry, T : Tricky`).
+    if (parameter.hasUnspellableBound() || needsTypeVariable(parameter)) {
       return@map ForwardMethodTypeParameter(
         name = forwardCsharpMethodTypeParameterName(parameter),
         kotlinName = kotlinName,
@@ -101,7 +102,7 @@ internal fun KSFunctionDeclaration.forwardMethodTypeParameters(): List<ForwardMe
  *  - a bound that is itself a type parameter, which no erased argument satisfies (a bound with
  *    no closed spelling, `Enum<T>`, `Node<T>`, routes through ADR-198's trampoline instead);
  *  - a multi-bound `T` no parameter mentions, since no type argument spells it and nothing infers
- *    it, and (ADR-216, until ADR-217) one witnessed only inside a generic class;
+ *    it (one witnessed only inside a generic class takes the ADR-217 trampoline);
  *  - a `T` nested in a type that is neither a collection, an exported generic class nor a
  *    non-suspend lambda (ADR-215) over them (a value class, `kotlin.Array`), and a suspend lambda
  *    or `Flow` anywhere in the signature, whose own routes are keyed to non-generic members.
@@ -211,27 +212,42 @@ internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
     .filter { parameter -> parameter.forwardBoundSpellings().size > 1 }
     .forEach { parameter ->
       val name: String = parameter.simpleName.asString()
-      fun KSType.isNamed(): Boolean =
-        (declaration as? KSTypeParameter)?.simpleName?.asString() == name
-      fun KSType.mentions(): Boolean = isNamed() ||
-          arguments.any { argument ->
-            argument.type?.resolve()?.expandAliases()?.mentions() == true
-          }
-      // ADR-212: a collection of `T` witnesses it too; its elements carry the intersection.
-      // ADR-216: a generic class does not: an invariant `Box<A>` cannot infer `T : A, T : B`.
-      fun KSType.witnesses(): Boolean = isNamed() ||
-          declaration.qualifiedName?.asString() in OWN_PARAMETER_COLLECTIONS &&
-          arguments.any { argument ->
-            argument.type?.resolve()?.expandAliases()?.witnesses() == true
-          }
-      if (parameterTypes.any { type -> type.witnesses() }) return@forEach
-      val nesting: KSType = parameterTypes.firstOrNull { type -> type.mentions() }
-        ?: return "its multi-bound type parameter `$name` is mentioned by no parameter"
-      return "its multi-bound type parameter `$name` is witnessed only inside `$nesting`, " +
-          "which ADR-217 lifts"
+      // ADR-217: one witnessed only inside a generic class runs under the trampoline.
+      if (parameterTypes.none { type -> type.mentionsTypeParameter(name) }) {
+        return "its multi-bound type parameter `$name` is mentioned by no parameter"
+      }
     }
   return null
 }
+
+/**
+ * ADR-217: the type-variable rule for a member's (or a top-level function's) own `T`: a multi-bound
+ * `T` that some parameter mentions but none witnesses runs under ADR-198's trampoline, whose type
+ * variable re-declares every bound. A bare `T` witnesses the intersection, and so (ADR-212) does a
+ * collection of it, whose elements carry it; a generic class does not, since an invariant
+ * `Box<A>` cannot infer `T : A, T : B`. An unspellable bound takes the trampoline regardless.
+ */
+private fun KSFunctionDeclaration.needsTypeVariable(parameter: KSTypeParameter): Boolean {
+  if (parameter.forwardBoundSpellings().size <= 1) return false
+  val name: String = parameter.simpleName.asString()
+  val types: List<KSType> = parameters.map { it.type.resolve().expandAliases() }
+  return types.any { type -> type.mentionsTypeParameter(name) } &&
+      types.none { type -> type.witnessesTypeParameter(name) }
+}
+
+private fun KSType.namesTypeParameter(name: String): Boolean =
+  (declaration as? KSTypeParameter)?.simpleName?.asString() == name
+
+private fun KSType.mentionsTypeParameter(name: String): Boolean = namesTypeParameter(name) ||
+    arguments.any { argument ->
+      argument.type?.resolve()?.expandAliases()?.mentionsTypeParameter(name) == true
+    }
+
+private fun KSType.witnessesTypeParameter(name: String): Boolean = namesTypeParameter(name) ||
+    declaration.qualifiedName?.asString() in OWN_PARAMETER_COLLECTIONS &&
+    arguments.any { argument ->
+      argument.type?.resolve()?.expandAliases()?.witnessesTypeParameter(name) == true
+    }
 
 /**
  * ADR-216: an exported generic class a member's own type parameter may sit inside: a class (a

@@ -150,21 +150,23 @@ class Tier1GenericNullableTypeArgumentTest {
       """
       package tier1.duovar
 
-      class Duo<A : Enum<A>, B>(var a: List<A>, val b: B)
+      class Duo<A, B>(val b: B) {
+        var a: Map<A, B> = emptyMap()
+      }
       """.trimIndent(),
     )
 
     assertTrue(result.compiledClean, "expected clean compile; got: ${result.compileErrors}")
     assertContains(result.generatedCSharp, "public class Duo<TA, TB>")
 
-    // `var a: List<A>` binds read-only (a trampolined `A` in a collection, ADR-212); the dropped-
-    // setter note names the type the author wrote, `A`, never the C# rename `TA`. (A bare
-    // `var a: A` has a setter since ADR-218.)
+    // `var a: Map<A, B>` is skipped for its nullable key; the note names the type the author wrote,
+    // `A`, never the C# rename `TA`. (A bare `var a: A` has a setter since ADR-218, and a
+    // trampolined `List<A>` one since ADR-217, so neither drops a note any more.)
     val note: String = result.kspWarnings.single { warning ->
-      "Duo" in warning && "setter" in warning
+      "Duo.a" in warning && "key type" in warning
     }
     assertFalse(note.contains("TA"), "expected the Kotlin spelling; got: $note")
-    assertContains(note, "A")
+    assertContains(note, "key type A")
   }
 
   @Test

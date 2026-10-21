@@ -819,6 +819,9 @@ internal class ForwardBridgeTypeClassifier(
       constructType = constructType,
       openArguments = openArguments.distinctBy { it.csharpType },
       open = !closed,
+      kotlinTypeVariableReadType =
+        if (closed) null else type.makeNotNullable().forwardKotlinDeclaredSpelling(),
+      typeVariables = if (closed) emptyList() else type.mentionedTypeParameterNames(),
     )
     return if (isSealed) {
       BridgeType.SpecializedProtocol("$SEALED_HELPER_PREFIX$qualifiedName", sealedHandle = handle)

@@ -148,6 +148,15 @@ internal fun KSClassDeclaration.forwardSealedArmShape(
 internal fun KSType.isNothing(): Boolean =
   declaration.qualifiedName?.asString() == "kotlin.Nothing"
 
+/** ADR-217: every type parameter [this] mentions, by declared name, in first-mention order. */
+internal fun KSType.mentionedTypeParameterNames(): List<String> {
+  val parameter: KSTypeParameter? = declaration as? KSTypeParameter
+  if (parameter != null) return listOf(parameter.name.asString())
+  return arguments
+    .flatMap { argument -> argument.type?.resolve()?.mentionedTypeParameterNames().orEmpty() }
+    .distinct()
+}
+
 internal fun KSType.mentionsAnyTypeParameter(): Boolean {
   if (declaration is KSTypeParameter) return true
   return arguments.any { argument -> argument.type?.resolve()?.mentionsAnyTypeParameter() == true }
