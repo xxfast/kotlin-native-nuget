@@ -6066,4 +6066,59 @@ public class LiveHandleTests
             }
         });
     }
+
+    // ADR-219
+    // A generic owner's suspend members on the suspend route, in a tight loop. Each primitive or
+    // string `T` argument is an owned `Wrap<T>` box the C# `finally` disposes once the `_async`
+    // extern returns; each `T` result is one handle `FromHandle<T>` consumes (a `Tabby` result is a
+    // fresh wrapper the loop `using`s). The wrapper arguments are borrowed across the suspension.
+    // The pre-cancelled calls prove nothing stays behind when the job never completes.
+    // Ledger per iteration: Platter<int> PutAsync(i) box +1/-1, TakeAsync result +1/-1; Platter<Tabby>
+    // TakeAsync wrapper +1/-1, StackAsync two wrappers +2/-2; SwapAsync("Oreo") box +1/-1, result
+    // +1/-1; RateAsync(Gold) trampolined box +1/-1, result +1/-1; Banquet<Tabby> ReplaceAsync wrapper
+    // +1/-1; Picnic<Tabby> OutshineAsync wrapper +1/-1; Buffet.Tureen<string> PourAsync box +1/-1,
+    // result +1/-1; LingerAsync and SimmerAsync pre-cancelled, zero. The owners go inside the body
+    // and the two cats outlive the loop, so net zero.
+    [Fact]
+    public async Task GenericOwner_SuspendMembers_ReturnToBaseline()
+    {
+        using var oreo = new Membergeneric.Tabby("Oreo", 3);
+        using var mylo = new Membergeneric.Tabby("Mylo", 1);
+        int i = 0;
+        await AssertNoLeakAsync(async () =>
+        {
+            i++;
+            await using (var ints = new Membergeneric.Platter<int>(0))
+            {
+                await ints.PutAsync(i);
+                Assert.Equal(i, await ints.TakeAsync());
+                Assert.Equal("Oreo", await ints.SwapAsync("Oreo"));
+                Assert.Equal(Rankings.Medal.Gold, await ints.RateAsync(Rankings.Medal.Gold));
+            }
+            await using (var cats = new Membergeneric.Platter<Membergeneric.Tabby>(oreo))
+            {
+                using (Membergeneric.Tabby back = await cats.TakeAsync()) Assert.Equal("Oreo", back.Name);
+                IReadOnlyList<Membergeneric.Tabby> stacked = await cats.StackAsync(new[] { mylo });
+                foreach (Membergeneric.Tabby cat in stacked) cat.Dispose();
+                using var cts = new CancellationTokenSource();
+                cts.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cats.LingerAsync(cts.Token));
+            }
+            await using (var banquet = new Membergeneric.Banquet<Membergeneric.Tabby>(oreo))
+            {
+                using (Membergeneric.Tabby seated = await banquet.ReplaceAsync(mylo)) Assert.Equal("Mylo", seated.Name);
+            }
+            await using (var picnic = new Membergeneric.Picnic<Membergeneric.Tabby>(oreo))
+            {
+                using (Membergeneric.Tabby host = await picnic.OutshineAsync(mylo)) Assert.Equal("Oreo", host.Name);
+            }
+            await using (var tureen = new Membergeneric.Buffet.Tureen<string>("broth"))
+            {
+                Assert.Equal("gravy", await tureen.PourAsync("gravy"));
+                using var cts = new CancellationTokenSource();
+                cts.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => tureen.SimmerAsync(cts.Token));
+            }
+        }, iterations: 200);
+    }
 }

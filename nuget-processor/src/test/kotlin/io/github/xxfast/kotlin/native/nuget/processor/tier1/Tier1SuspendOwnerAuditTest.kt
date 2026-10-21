@@ -133,9 +133,10 @@ class Tier1SuspendOwnerAuditTest {
   }
 
   @Test
-  fun `a suspend member on a generic class is named exactly once by the generic owner route`() {
-    val matches: List<String> = warningsNaming("tier1.suspendowners.Box.unbox")
-    assertEquals(1, matches.size, "kspWarnings=${result.kspWarnings}")
+  fun `a suspend member on a generic class binds over the erased receiver and is not named`() {
+    // ADR-219: the suspend route reads `Box<Any?>`, so it is no longer a generic-owner drop.
+    assertEquals(0, warningsNaming("tier1.suspendowners.Box.unbox").size, "${result.kspWarnings}")
+    assertTrue("asStableRef<tier1.suspendowners.Box<Any?>>().get()" in result.generated)
   }
 
   /**
@@ -230,13 +231,13 @@ class Tier1SuspendOwnerAuditTest {
   @Test
   fun `the suspend drops are absent from the C# and the controls still bind`() {
     val declarations: List<String> = declarations()
-    listOf("Restock", "Open", "Fetch", "Unbox", "Pace", "Hold").forEach { member ->
+    listOf("Restock", "Open", "Fetch", "Pace", "Hold").forEach { member ->
       val leaks: List<String> = declarations.filter { line ->
         Regex("\\b${member}(Async)?\\s*[(<]").containsMatchIn(line)
       }
       assertTrue(leaks.isEmpty(), "$member is skipped, so no C# may declare it; got=$leaks")
     }
-    listOf("Count(", "Size(", "Make(", "Len(", "Peek(", "SettleAsync(", "Steps(")
+    listOf("Count(", "Size(", "Make(", "Len(", "Peek(", "SettleAsync(", "Steps(", "UnboxAsync(")
       .forEach { member ->
         assertTrue(
           declarations.any { line -> member in line },

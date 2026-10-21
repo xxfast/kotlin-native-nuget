@@ -8,9 +8,9 @@ import kotlin.test.assertTrue
 /**
  * ADR-147 / ADR-160 on a GENERIC owner. A per-call lambda member the ADR-062 plan owns binds on
  * `Crate<T>` like any planned member (the export reads the `Crate<Any?>` receiver). A member only a
- * legacy route could carry (a `Char` or `T` lambda payload, a stored pair, a `Flow`, a `suspend`)
- * has no route on a generic owner, whose routes all spell the bare receiver, so it is dropped on
- * both halves and named exactly once.
+ * legacy route could carry (a `Char` or `T` lambda payload, a stored pair) has no route on a generic
+ * owner, whose routes spell the bare receiver, so it is dropped on both halves and named exactly
+ * once. The `Flow` (ADR-215) and `suspend` (ADR-219) routes read the erased receiver and bind.
  */
 class Tier1GenericOwnerLegacyRouteTest {
 
@@ -56,11 +56,13 @@ class Tier1GenericOwnerLegacyRouteTest {
     listOf(
       "public void Each(Action<int> cb)", "public int Count(Func<int, int> cb)",
       "public void WithItem(Action<T> cb)", "public KotlinFlow<int> Ticks()",
+      // ADR-219: and a suspend member on the suspend route.
+      "public Task<int> LoadAsync(CancellationToken cancellationToken = default)",
     )
       .forEach { member ->
         assertTrue(member in crate, "expected `$member` on Crate<T>; got:\n$crate")
       }
-    listOf("each", "count", "withItem", "fetch", "ticks").forEach { member ->
+    listOf("each", "count", "withItem", "fetch", "ticks", "load").forEach { member ->
       assertFalse(
         result.kspWarnings.any { warning -> "Crate.$member:" in warning },
         "a member that binds must not be reported; got: ${result.kspWarnings}",
@@ -76,14 +78,14 @@ class Tier1GenericOwnerLegacyRouteTest {
     val crate: String = result.generatedCSharp.typeBody("public class Crate<T>")
     val declarations: List<String> = crate.lines()
       .filter { line -> line.trimStart().startsWith("public ") }
-    listOf("EachChar(", "AddBell(", "RemoveBell(", "LoadAsync(")
+    listOf("EachChar(", "AddBell(", "RemoveBell(")
       .forEach { member ->
         assertFalse(
           declarations.any { line -> member in line },
           "expected no `$member` declared on Crate<T>; got:\n$crate",
         )
       }
-    listOf("eachChar", "addBell", "removeBell", "load").forEach { member ->
+    listOf("eachChar", "addBell", "removeBell").forEach { member ->
       val named: List<String> = result.kspWarnings.filter { warning -> "Crate.$member:" in warning }
       assertEquals(1, named.size, "expected `$member` named once; got: ${result.kspWarnings}")
       assertTrue(

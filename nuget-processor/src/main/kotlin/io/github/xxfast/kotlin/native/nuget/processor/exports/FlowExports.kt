@@ -1122,7 +1122,7 @@ internal data class ForwardFlowTrampoline(
   val typedReceiver: String?,
 )
 
-private fun flowTrampoline(
+internal fun flowTrampoline(
   method: KSFunctionDeclaration,
   owner: KSClassDeclaration?,
   shapes: List<ForwardLegacyParameterShape>,
@@ -1158,7 +1158,7 @@ private fun flowTrampoline(
  * ADR-215: [this] export inside [trampoline], its receiver read typed when an owner parameter
  * is re-declared (a cast: `asStableRef` is reified, and a type variable is not).
  */
-private fun FunSpec.flowTrampolined(
+internal fun FunSpec.flowTrampolined(
   trampoline: ForwardFlowTrampoline?,
   qualifiedName: String,
 ): FunSpec {

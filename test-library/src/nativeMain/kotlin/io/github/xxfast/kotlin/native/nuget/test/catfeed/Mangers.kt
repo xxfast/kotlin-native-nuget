@@ -14,8 +14,9 @@ import kotlin.time.Duration.Companion.milliseconds
  * Shape A: nothing types a position [Trough]; only [Manger] is reachable (through [makeManger]
  * and [makeNosebag]). The async members [Trough.fetch], [Trough.ticks] and [Trough.level] must
  * still be callable on an `IManger`, so `ITrough` is made reachable and declares them.
- * [Nosebag] is the generic implementer: ADR-147 refuses its own async routes, so it must get
- * explicit `ITrough` forwards and a `DisposeAsync`, or `IManger`'s `IAsyncDisposable` is CS0535.
+ * [Nosebag] is the generic implementer: an interface member keeps ADR-174's forwarding (ADR-219
+ * binds only a generic class's own suspend members), so it must get explicit `ITrough` forwards
+ * and a `DisposeAsync`, or `IManger`'s `IAsyncDisposable` is CS0535.
  *
  * Shape E: both [Chute] and [Hayrack] are reachable and [Hayrack] restates `fetch` as an identical
  * override. It must be declared once, on `IChute`, or `IHayrack.FetchAsync` hides the inherited

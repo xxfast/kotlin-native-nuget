@@ -123,11 +123,17 @@ class Tier1SuspendFlowTest {
       declarations.none { line -> Regex("\\bOwnObject(Async)?\\s*\\(").containsMatchIn(line) },
       result.generatedCSharp,
     )
-    listOf("tier1.suspendflow.Standalone.ownObject", "tier1.suspendflow.Generic.own")
-      .forEach { member ->
-        val named: List<String> = result.kspWarnings
-          .filter { warning -> "Skipping $member:" in warning }
-        assertEquals(1, named.size, "$member must be named once; kspWarnings=${result.kspWarnings}")
-      }
+    val named: List<String> = result.kspWarnings
+      .filter { warning -> "Skipping tier1.suspendflow.Standalone.ownObject:" in warning }
+    assertEquals(1, named.size, "ownObject must be named once; kspWarnings=${result.kspWarnings}")
+    // ADR-219: a generic class's suspend member binds over the erased receiver.
+    assertTrue(
+      "public Task<KotlinFlow<int>> OwnAsync(" in result.generatedCSharp,
+      result.generatedCSharp,
+    )
+    assertTrue(
+      result.kspWarnings.none { warning -> "Skipping tier1.suspendflow.Generic.own:" in warning },
+      result.kspWarnings.toString(),
+    )
   }
 }

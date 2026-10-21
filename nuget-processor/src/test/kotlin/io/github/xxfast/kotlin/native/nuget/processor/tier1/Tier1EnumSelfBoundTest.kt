@@ -277,12 +277,12 @@ class Tier1EnumSelfBoundTest {
   }
 
   /**
-   * ADR-198 decision 4: a `suspend` member on such an owner takes the generic-class route's
-   * existing named refusal (ADR-147), and the rest of the owner still compiles. ADR-215: a `Flow`
-   * member binds over the star-projected receiver (it takes no `T`).
+   * ADR-198 decision 4, superseded by ADR-219: a `suspend` member on such an owner binds on the
+   * suspend route inside the trampoline, which re-declares the owner's bound and reads the receiver
+   * typed. ADR-215: a `Flow` member binds over the star-projected receiver (it takes no `T`).
    */
   @Test
-  fun `a suspend member on an enum-bound owner keeps the generic-owner refusal, a Flow binds`() {
+  fun `a suspend member on an enum-bound owner binds through the trampoline, a Flow binds`() {
     val result: Tier1Result = Tier1Harness.run(
       """
       package tier1.enumasync
@@ -302,13 +302,18 @@ class Tier1EnumSelfBoundTest {
 
     assertTrue(result.kspSucceeded, "ksp: ${result.kspErrors}")
     assertTrue(result.compiledClean, "generated Kotlin: ${result.compileErrors}")
-    assertTrue(
-      result.kspWarnings.any { it.contains("settle") && it.contains("SKIPPED_") },
-      "${result.kspWarnings}",
+    assertFalse(result.kspWarnings.any { it.contains("settle") }, "${result.kspWarnings}")
+    assertContains(
+      result.generated,
+      "fun <T> nugetTrampoline(): kotlinx.cinterop.COpaquePointer where T : kotlin.Enum<T>",
     )
+    assertContains(result.generated, "as tier1.enumasync.Podium<T>)")
     assertFalse(result.kspWarnings.any { it.contains("replay") }, "${result.kspWarnings}")
     assertContains(result.generatedCSharp, "public KotlinFlow<T> Replay()")
-    assertFalse(result.generatedCSharp.lines().any { it.contains(" SettleAsync(") })
+    assertContains(
+      result.generatedCSharp,
+      "public Task<T> SettleAsync(T other, CancellationToken cancellationToken = default)",
+    )
     assertContains(result.generatedCSharp, "public bool Outranks(T other)")
   }
 
