@@ -138,8 +138,8 @@ message, not silent corruption.
 emitted into the consumer's `INTERNAL_PKG` by `NugetGenerateBindingsTask`, is **not** folded onto
 this one (the expect/actual-seam spike, memo spike (c), was never run in this pass): the two remain
 distinct types with the same simple name, one reached only when the reverse pipeline emits a
-runtime registration file, the other always present once any forward callback exists. Deferred, new
-ROADMAP item below.
+runtime registration file, the other always present once any forward callback exists. Decided by
+[ADR-221](221-two-managed-exception-types.md) (2026-10-22): not folded, by design.
 
 *Correction (2026-10-02):* "nameable from `nativeMain`" above is wrong. ADR-130's spike shows a declaration reachable only through a per-target `${target}MainApi` classpath is unresolved in the `nativeMain` metadata compilation; only per-target code and downstream modules can name the runtime class.
 
@@ -204,9 +204,9 @@ moment ago. That is ordinary late delivery, not a wrong-listener bug and not a u
 
 ## Residuals recorded, not fixed here
 
-1. The reverse template's `internal class NugetManagedException` (`NugetGenerateBindingsTask.kt`)
-   is not folded onto the runtime class; two types share one simple name until the ADR-130
-   expect/actual seam is spiked and applied.
+1. Closed 2026-10-22, see [ADR-221](221-two-managed-exception-types.md): the reverse template's
+   `internal class NugetManagedException` (`NugetGenerateBindingsTask.kt`) is deliberately not
+   folded onto the runtime class.
 2. Closed 2026-10-07 (see the amendment at the end): a `Flow<T>` item whose read failed no longer
    leaks its `StableRef`.
 3. A dropped late call whose payload was a handle-passed argument (`String`, an exported object)

@@ -5498,6 +5498,9 @@ private fun nugetRuntimeContent(): String = """
   | *
   | * Fork D: ONE exception type for every managed throw. Branching on [managedType] is a caller's
   | * choice, not a hierarchy this generator emits.
+  | *
+  | * ADR-221: deliberately distinct from the runtime's `NugetManagedException`, which `nativeMain`
+  | * cannot name; this one keeps the raw .NET message, that one prefixes the type.
   | */
   |internal class NugetManagedException(
   |  val managedType: String,

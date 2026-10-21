@@ -315,6 +315,12 @@ sees a new one named after the C# type. This holds at every input position. Do n
 code branching on the exception's class.</p>
 </warning>
 
+Two classes are named `NugetManagedException`. A reverse throw (a bound C# member throws) is the
+`internal` one in your module, which `nativeMain` code can catch and whose `message` is the raw .NET
+message. A fault in a C# callback you passed to Kotlin is a different class in the runtime library,
+which `nativeMain` cannot name: catch `Exception` there, or name it from a per-target source set. Its
+`message` is `"<type>: <message>"`.
+
 Because a data class's constructor and `copy` now accept an exception, a class such as
 `data class Issue56Failure(val reason: String, val error: Throwable?, val fatal: Throwable)` is
 constructible from C#:
