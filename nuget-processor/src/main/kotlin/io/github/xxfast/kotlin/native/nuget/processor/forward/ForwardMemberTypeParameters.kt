@@ -25,7 +25,8 @@ internal fun KSFunctionDeclaration.isForwardGenericMemberOwner(): Boolean {
   val suspends: Boolean = Modifier.SUSPEND in modifiers ||
     // ADR-230: so does the static flow route, through ADR-215's trampoline.
     (extensionReceiver == null && isStaticFlowCandidate())
-  if (extensionReceiver != null) return suspends
+  // ADR-226: a top-level extension binds its own `T` on the top-level route.
+  if (extensionReceiver != null) return suspends || parentDeclaration == null
   if (parentDeclaration == null) return true
   val owner: KSClassDeclaration = parentDeclaration as? KSClassDeclaration ?: return false
   return when (owner.classKind) {
@@ -159,10 +160,9 @@ internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
       arguments.any { argument -> argument.type?.resolve()?.expandAliases()?.mentionsOwn() == true }
 
   // ADR-220: a generic value class whose underlying is its own type parameter, instantiated at
-  // the member's own `T` (or `T?`) at the top of a parameter or the result, non-null outer. Not a
-  // component of [carriesOwn]: `List<Sticker<T>>` and `Sticker<T>?` keep the named refusal.
+  // the member's own `T` (or `T?`). ADR-226: under `?` too (a box handle when the underlying can
+  // be null, the null pointer otherwise), and as a collection component.
   fun KSType.isOwnInsideGenericValueClass(): Boolean {
-    if (isMarkedNullable) return false
     val cls: KSClassDeclaration = declaration as? KSClassDeclaration ?: return false
     if (!cls.isValueClass() || cls.typeParameters.isEmpty()) return false
     val underlying: KSType =
@@ -199,8 +199,7 @@ internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
         // class, lambda or `Flow` (a collection component keeps its own rule).
         type != null && (
           !type.mentionsOwn() || type.carriesOwn() ||
-            (type.isOwnInsideGenericValueClass() &&
-              declaration.qualifiedName?.asString() !in OWN_PARAMETER_COLLECTIONS)
+            type.isOwnInsideGenericValueClass()
           )
       }
 

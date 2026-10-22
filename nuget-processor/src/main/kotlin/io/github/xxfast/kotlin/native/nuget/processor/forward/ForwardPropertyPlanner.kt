@@ -1105,7 +1105,9 @@ internal class ForwardPropertyPlanner(
       )
       return null
     }
+    // ADR-226: a nullable value class over a nullable-admitting underlying is its box handle.
     val type: BridgeType = classifier.classify(typeOverride ?: prop.type.resolve()).sealedAsHandle()
+      .asValueClassBoxHandle()
     // ADR-075: getter eligibility never depended on mutability or on the collection facet — a
     // `Collection` (nullable or not) plans whenever the C# read can spell every component
     // (`isReadable`; `isPlannable` already recurses through `Nullable`). Whether a *setter* can

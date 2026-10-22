@@ -216,13 +216,15 @@ class Tier1GenericValueClassTest {
 
   @Test
   fun `a generic value class outside the ordinary wire stays a named skip`() {
-    listOf(
-      "maybeStick", "stickAll", "initial", "starred",
-    ).forEach { member ->
-      assertTrue(result.skipped(member), "expected $member named; kspWarnings=${result.kspWarnings}")
+    val warnings: String = result.kspWarnings.toString()
+    assertTrue(result.skipped("initial"), "expected initial named; kspWarnings=$warnings")
+    assertFalse(Regex("""\bInitial\(""").containsMatchIn(code))
+    // ADR-226: an own `T` under `?`, inside a collection, and a star projection bind.
+    listOf("maybeStick", "stickAll", "starred").forEach { member ->
+      assertFalse(result.skipped(member), "expected $member to bind; kspWarnings=$warnings")
     }
-    val named = Regex("""\b(MaybeStick|StickAll|Initial|Starred)\(""")
-    assertFalse(named.containsMatchIn(code))
+    assertContains(code, "Sticker<T>? MaybeStick<T>(")
+    assertContains(code, "Starred<TSticker>(")
     // ADR-228: an erased position crosses through the box pair.
     assertContains(code, "Sticker<int>> Boxed()")
     assertContains(code, "Sticker<int>> LaterAsync(")

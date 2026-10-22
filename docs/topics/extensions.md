@@ -75,7 +75,7 @@ TestLibrary.Reserved.StringExtensions.Tag("Oreo", "Mylo"); // a different packag
 | Nullable class or nullable interface | yes | yes |
 | `String`, a primitive, `Uuid`, `Instant`, `Duration` | yes | yes |
 | Value class over `String`, a primitive, an enum, or an object handle | yes | yes |
-| Nullable value class over `String` or an object handle | yes | yes |
+| Nullable value class over `String`, an object handle, or a nullable underlying (`Nick?`) | yes | yes |
 | Bare enum | yes | yes |
 | `Collection` (`List`/`Map`/`Set`) | yes | yes |
 | Nullable `String`, nullable `Uuid` | yes | yes |
@@ -328,6 +328,26 @@ new CatId("Oreo-1").OrAnonymous(); // CS1929: call it on a CatId? variable inste
 `Guid?` has the same asymmetry for the same reason: a nullable `Uuid` receiver (`val
 Uuid?.isMissing`) only binds `this Guid? receiver`, so `missing.IsMissing` needs a `Guid?`
 local, not a bare `Guid`.
+
+A value class whose underlying can be null (`value class Nick(val name: String?)`), and a generic
+one over an unconstrained `T` (`Sticker<T>`), may be a nullable receiver too. `null` and
+`Nick(null)` stay different values, and the generic receiver binds as a generic extension method:
+
+```kotlin
+fun Nick?.callName(): String = if (this == null) "no nick" else name ?: "nameless"
+fun <T> Sticker<T>?.presence(): String = if (this == null) "gap" else if (value == null) "blank" else "stuck"
+```
+
+```C#
+((Nick?)new Nick(null)).CallName();                       // "nameless"
+NickExtensions.CallName(null);                            // "no nick"
+((Sticker<sbyte?>?)new Sticker<sbyte?>(null)).Presence(); // "blank"
+StickerExtensions.Presence<sbyte?>(null);                 // "gap"
+```
+
+A top-level extension with its own type parameter (`fun <T> X.f()`) binds as a generic extension
+method like any other top-level `fun <T>`. A `Sticker<T>?` receiver needs the explicit type
+argument when you pass `null`, as in the last line.
 
 ### Nested receivers
 

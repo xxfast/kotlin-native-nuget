@@ -376,6 +376,11 @@ internal data class CirValueClassBoxing(
    * or non-generic underlying, which crosses on its own wire.
    */
   val ownUnderlying: String? = null,
+  /**
+   * ADR-226: the unbox's has-value `valueOut` slot for a nullable primitive underlying
+   * (`TreatCount(val count: Int?)`), whose export returns `bool`. Null otherwise.
+   */
+  val unboxValueOut: CirParameter? = null,
 )
 
 internal data class CirValueClassConstructor(

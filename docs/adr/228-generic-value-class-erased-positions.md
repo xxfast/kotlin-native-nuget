@@ -89,3 +89,10 @@ verified `Interop.cs`.
 - [ADR-230](230-flow-on-static-owners.md) bound a flow on a non-generic value class. A generic
   value class's `Flow` members and properties bind on the same route, and an enum-bound `T` is read
   through the ADR-198 trampoline.
+
+## Amendment 2026-10-22: the box serves `V?` at ordinary positions
+
+[ADR-226](226-generic-value-class-nullable-and-collections.md) reuses this box and unbox pair for a
+nullable value class whose underlying can be null (`Nick?`, `Sticker<T>?` over an unconstrained
+`T`) at a parameter, result, constructor, property and extension receiver, and as a collection
+element. A null pointer is `null` and a live handle is the boxed value class.

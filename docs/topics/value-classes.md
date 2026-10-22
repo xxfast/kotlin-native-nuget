@@ -85,10 +85,45 @@ Decal<Cat> decal = Stickers.OreoDecal();                // Serial stays a long
   `ArgumentException` in C#. For an unconstrained `T`, `default` carries `null`.
 - A KDoc `[Sticker]` link renders as plain `<c>Sticker</c>`, as it does for a generic class.
 - A closed instantiation works as a `List`, `Set` or `Map` component and under `?`, and at an
-  [erased position](#a-generic-value-class-at-an-erased-position). `Sticker<T>?` or `List<Sticker<T>>` over a function's own `T` skips,
-  named.
+  [erased position](#a-generic-value-class-at-an-erased-position). A function's own `T` does too:
+  see [Under `?` and inside collections](#a-generic-value-class-under-and-inside-collections).
 - A generic value class over `List<T>` or any other shape that is not `T` or a phantom stays
   refused by name.
+
+### Under `?` and inside collections {id="a-generic-value-class-under-and-inside-collections"}
+
+A function's own `T` inside a generic value class binds under `?` and as an element, key or value
+of a `List`, `Set` or `Map`, including `MutableList` and nested lists. An unconstrained `T` can be
+`null`, so `Sticker<T>?` keeps "no sticker" apart from `Sticker(null)`.
+
+```kotlin
+fun <T> maybeStick(value: T, present: Boolean): Sticker<T>? = if (present) Sticker(value) else null
+fun <T> isAbsent(sticker: Sticker<T>?): Boolean = sticker == null
+fun <T> stickAll(values: List<T>): List<Sticker<T>> = values.map { Sticker(it) }
+fun <T> gaps(stickers: List<Sticker<T>?>): List<Sticker<T>?> = stickers
+fun starred(sticker: Sticker<*>): String = "star ${sticker.value}"
+```
+
+```C#
+Sticker<uint?>? blank = StickerGaps.MaybeStick<uint?>(null, present: true);   // Sticker(null)
+Sticker<uint?>? none = StickerGaps.MaybeStick<uint?>(null, present: false);   // null
+
+bool absent = StickerGaps.IsAbsent<byte?>(new Sticker<byte?>(null));          // false
+IReadOnlyList<Sticker<ushort>> all = StickerGaps.StickAll(new ushort[] { 1, 2 });
+IReadOnlyList<Sticker<ushort?>?> back = StickerGaps.Gaps(
+    new Sticker<ushort?>?[] { null, new Sticker<ushort?>(null) });            // null, then Sticker(null)
+
+string text = StickerGaps.Starred(new Sticker<int>(3));                       // "star 3"
+```
+
+- C# cannot infer `T` through `Nullable<>`, so a `Sticker<T>?` parameter called with a
+  `Sticker<byte?>` needs the explicit `IsAbsent<byte?>(...)`. Without it the call fails with
+  `CS0411`.
+- `init` runs in Kotlin when the value crosses, so `IsAbsent<int>(new Sticker<int>(-1))` throws
+  `ArgumentException` before the call body runs. In a collection it runs per element.
+- A `T : Any` bound has no null of its own, so `Sticker<T>?` there is a plain `null`.
+- A star-projected `Sticker<*>` parameter becomes a method type parameter you pick at the call
+  (`Starred<TSticker>`), on a class member too.
 
 ### Members, properties and constructors
 
@@ -223,6 +258,36 @@ staying distinct from `null`. No extra code is needed on either side.
 
 A bare `Mood?`, not wrapped in a value class, follows the same rule; see
 [Enums: Nullable](enums.md#nullable).
+
+### A value class whose underlying can be null {id="nullable-underlying-value-classes"}
+
+`value class Nick(val name: String?)` and `value class TreatCount(val count: Int?)` bind at every
+ordinary position. `Nick?` is a `Nullable<Nick>` where `null` and `Nick(null)` stay different values,
+at a parameter, result, constructor, property, extension receiver and as a collection element.
+
+```kotlin
+value class Nick(val name: String?)
+value class TreatCount(val count: Int?)
+
+fun maybeNick(present: Boolean): Nick? = if (present) Nick(null) else null
+fun nickState(nick: Nick?): String = if (nick == null) "no nick" else nick.name ?: "nameless"
+fun nicknames(): List<Nick?> = listOf(null, Nick(null), Nick("Oreo"))
+fun Nick?.callName(): String = if (this == null) "no nick" else name ?: "nameless"
+fun treatsOr(treats: TreatCount): Int = treats.count ?: -1
+```
+
+```C#
+StickerGaps.MaybeNick(true);                // new Nick(null)
+StickerGaps.MaybeNick(false);               // null
+StickerGaps.NickState(new Nick(null));      // "nameless"
+StickerGaps.Nicknames();                    // null, Nick(null), Nick("Oreo")
+((Nick?)new Nick(null)).CallName();         // "nameless"
+NickExtensions.CallName(null);              // "no nick"
+StickerGaps.TreatsOr(new TreatCount(null)); // -1
+```
+
+- A `this Nick?` extension needs a `Nick?` receiver, so call it on a variable typed `Nick?`.
+- The closed `Sticker<String?>` and `Sticker<String?>?` behave the same way.
 
 ## Over a sealed type
 

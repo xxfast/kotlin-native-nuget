@@ -421,7 +421,6 @@ class Tier1MemberGenericMethodTest {
       "tier1.membergeneric.Crate.shadow" to "(here, its type parameter `T` shadows its owner's)",
       "tier1.membergeneric.Kennel.structural" to "(here, it is declared on an interface)",
       "tier1.membergeneric.Weather.echo" to "(here, it is declared on an enum class)",
-      "tier1.membergeneric.extended" to "(here, it is an extension function)",
     ).forEach { (member, refusal) ->
       val named: List<String> = result.kspWarnings.filter { warning ->
         Regex("\\b${Regex.escape(member)}\\b").containsMatchIn(warning)
@@ -451,7 +450,6 @@ class Tier1MemberGenericMethodTest {
     assertContains(result.generated, "tier1.membergeneric.Tag(value).echo<Any?>(")
     listOf(
       "Kind", "Conjure", "Narrow", "Sort", "Shadow", "Structural",
-      "Extended",
     )
       .forEach { member ->
         assertFalse(

@@ -215,8 +215,9 @@ public class UnroutedPositionsTests
         AssertAllAbsent(
             extensions,
             PublicStatic,
-            "FlowReturnOnExtension",
-            "StructuralOnExtension");
+            "FlowReturnOnExtension");
+        // ADR-226: an extension's own `T` binds, as a top-level function's does.
+        Assert.NotNull(extensions!.GetMethod("StructuralOnExtension", PublicStatic));
         Assert.NotNull(extensions!.GetMethod("CallbackParamOnExtension", PublicStatic));
         // ADR-210: and so does the extension's Flow parameter.
         Assert.NotNull(extensions.GetMethod("FlowParamOnExtension", PublicStatic));

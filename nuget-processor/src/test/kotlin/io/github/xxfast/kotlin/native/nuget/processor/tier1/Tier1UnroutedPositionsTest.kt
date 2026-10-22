@@ -115,7 +115,6 @@ class Tier1UnroutedPositionsTest {
     // `ForwardCallablePlanner.extensionEntry`), so these names have no `Depot.` segment.
     returns("tier1.unrouted.flowReturnOnExtension"),
     returns("tier1.unrouted.genericReturnOnExtension"),
-    structural("tier1.unrouted.structuralOnExtension"),
 
     // --- top-level owner ----------------------------------------------------------------------
     // row 4: today this is the LIE cell — both halves emit and the C# renders `Flow<int>`, a type
@@ -218,6 +217,7 @@ class Tier1UnroutedPositionsTest {
     fun Depot.flowParamOnExtension(events: Flow<Int>): Int = 0
     fun Depot.callbackParamOnExtension(cb: (Int) -> Unit): Int { cb(1); return 1 }
     fun Depot.genericReturnOnExtension(): ${generic.kotlin} = TODO()
+    // ADR-226: a top-level extension's own `T` binds now, as a top-level function's does.
     fun <T> Depot.structuralOnExtension(value: T): T = value
   """.trimIndent()
 
@@ -362,7 +362,6 @@ class Tier1UnroutedPositionsTest {
       "StructuralOnInterface(",
       "FlowReturnOnExtension(",
       "GenericReturnOnExtension(",
-      "StructuralOnExtension(",
       "GenericParamOnTopLevel(",
       "StructuralRefusedOnTopLevel(",
     ).forEach { member ->

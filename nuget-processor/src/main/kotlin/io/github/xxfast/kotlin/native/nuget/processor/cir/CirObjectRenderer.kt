@@ -217,11 +217,15 @@ private fun StringBuilder.renderValueClassBoxing(cls: CirValueClass) {
   appendLine("        internal static ${cls.name} NugetUnbox(NugetKotlinHandle boxed)")
   appendLine("        {")
   appendLine("            $wire nativeResult;")
+  // ADR-226: the has-value slot a nullable primitive underlying writes.
+  val valueOut: CirParameter? = boxing.unboxValueOut
+  if (valueOut != null) appendLine("            ${valueOut.type} ${valueOut.name};")
+  val out: String = if (valueOut == null) "" else "out ${valueOut.name}, "
   appendLine("            try")
   appendLine("            {")
   appendLine(
     "                nativeResult = ${boxing.unboxImport.name}(" +
-        "boxed.DangerousGetHandle(), out IntPtr error);",
+        "boxed.DangerousGetHandle(), ${out}out IntPtr error);",
   )
   appendLine("                if (error != IntPtr.Zero)")
   appendLine("                {")

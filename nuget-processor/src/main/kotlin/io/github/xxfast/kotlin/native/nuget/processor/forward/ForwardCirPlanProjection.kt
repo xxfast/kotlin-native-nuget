@@ -92,7 +92,15 @@ internal object ForwardCirPlanProjection {
     val type: BridgeType.ValueClass = unbox.publicSignature.result as BridgeType.ValueClass
     val boxCall: ForwardNativeCall = box.singleNativeImport()
     val unboxCall: ForwardNativeCall = unbox.singleNativeImport()
-    val unboxWire: String = valueClassUnderlyingWireCs(type.underlying)
+    // ADR-226: a nullable primitive underlying unboxes on the has-value result.
+    val hasValue: Boolean = type.underlying.isNullablePrimitive()
+    val unboxValueOut: CirParameter? = unboxCall.parameters
+      .firstOrNull { parameter -> parameter.role == ForwardAbiRole.VALUE_OUT }
+      ?.let { parameter ->
+        val outType: String = parameter.transfer.type.csharpType()
+        CirParameter(parameter.csharpName, outType, "out $outType")
+      }
+    val unboxWire: String = if (hasValue) "bool" else valueClassUnderlyingWireCs(type.underlying)
     val boxParameter: ForwardPublicParameter = box.publicSignature.parameters.single()
     return CirValueClassBoxing(
       boxImport = CirDllImport(
@@ -109,13 +117,19 @@ internal object ForwardCirPlanProjection {
         entryPoint = unboxCall.exportName,
         returnType = unboxWire,
         name = "Native_NugetUnbox",
-        parameters = unbox.nativeInCirParameters(unboxCall.parameters),
+        parameters = unbox.nativeInCirParameters(unboxCall.parameters) +
+          listOfNotNull(unboxValueOut),
         visibility = CirVisibility.PRIVATE,
         hasSyncErrorOut = unbox.errorSlot != null,
       ),
       boxParameter = boxParameter.csharpName,
       boxArguments = box.callArgument(boxParameter),
-      unboxResult = valueClassReconstructionCs(type, "nativeResult"),
+      unboxResult = if (hasValue) {
+        "new ${type.csharpType}(nativeResult ? ${unboxValueOut?.name} : null)"
+      } else {
+        valueClassReconstructionCs(type, "nativeResult")
+      },
+      unboxValueOut = unboxValueOut,
     )
   }
 
@@ -1087,6 +1101,12 @@ internal object ForwardCirPlanProjection {
         // A String or handle underlying refuses `default(V)` in the unwrap itself.
         // ADR-220: a member's own `T` inside a generic value class, the box the prelude minted.
         if (type.ownTypeParameterUnderlying() != null) return listOf("${parameter.csharpLocal}Box")
+        // ADR-226: a nullable primitive underlying crosses as its own has-value pair.
+        if (type.underlying.isNullablePrimitive()) {
+          val prop: String = type.underlyingPropertyName.replaceFirstChar { it.uppercase() }
+          val name: String = parameter.csharpName
+          return listOf("$name.$prop.HasValue", "$name.$prop.GetValueOrDefault()")
+        }
         val unwrapped: String = type.underlyingCs(parameter.csharpName, named)
         listOf(
           when (type.underlying) {
@@ -1674,6 +1694,16 @@ internal object ForwardCirPlanProjection {
       // otherwise fall through to the generic pass-through renderer, which has no wrap-in-struct
       // case. ADR-077 sub-item 4 dispatches per underlying: the wire carries the underlying's
       // representation and the reconstruction composes the underlying's own step.
+      // ADR-226: a nullable primitive underlying returns its has-value flag and `valueOut`.
+      is BridgeType.ValueClass if result.underlying.isNullablePrimitive() -> CirResultProjection(
+        returnType = result.csharpType,
+        nativeReturnType = "bool",
+        body = checkedNullableValueBody(
+          nativeName, callArguments, prelude, cleanup,
+          "new ${result.csharpType}(hasValue ? valueOut : null)", exit,
+        ),
+      )
+
       is BridgeType.ValueClass -> {
         val wire: String = valueClassUnderlyingWireCs(result.underlying)
         CirResultProjection(
@@ -1977,7 +2007,12 @@ internal object ForwardCirPlanProjection {
     val open: List<BridgeType.ObjectHandle> = result.openSlotHandles().distinctBy { it.csharpType }
     // ADR-228: and register every open generic value class instantiation it nests.
     val structs: List<String> = (result.unwrapNullable() as? BridgeType.ObjectHandle)
-      ?.openValueClasses.orEmpty()
+      ?.openValueClasses.orEmpty() +
+      // ADR-226: and an open value class box handle (`Sticker<T>?`), read through its slot.
+      listOfNotNull(
+        (result.unwrapNullable() as? BridgeType.TypeParameter)
+          ?.takeIf { parameter -> parameter.valueClass && '<' in parameter.name }?.name,
+      )
     if ((open.isEmpty() && structs.isEmpty()) || !hasCustomBody) return this
     val fills: String = open.joinToString("") { handle ->
       "            NugetFactory<${handle.csharpType}>.Create ??= " +

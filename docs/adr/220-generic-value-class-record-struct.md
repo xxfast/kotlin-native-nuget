@@ -250,3 +250,12 @@ element, a `Flow` parameter and an awaited `suspend` result or parameter bind, f
 instantiations, the phantom `Decal<T>` and a function's own `T`. One box/unbox export pair per
 generic value class serves every instantiation, and the struct registers each closed type for
 reads.
+
+## Amendment 2026-10-22: under `?` and inside collections
+
+[ADR-226](226-generic-value-class-nullable-and-collections.md) supersedes the statement that
+`Sticker<T>?` and a `List`, `Set` or `Map` of `Sticker<T>` over a function's own `T` are skipped.
+`Sticker<T>?` over an unconstrained `T` crosses as the ADR-228 box handle so `null` and
+`Sticker(null)` stay distinct, over a `T : Any` it rides the null pointer, and a collection element
+projects to its underlying and re-wraps in Kotlin. A star-projected `Sticker<*>` parameter binds as
+a synthesized method type parameter.
