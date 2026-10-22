@@ -12,6 +12,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeSlot
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeSlotKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeWire
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinWire
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isGeneric
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardKotlinDeclaredSpelling
+import com.google.devtools.ksp.symbol.KSTypeParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.managedExceptionLowering
 
 /**
@@ -54,7 +57,24 @@ internal fun FileSpec.Builder.addInterfaceBridgeFactoryExport(plan: ForwardBridg
       "  val releaseFn = releasePtr" +
           ".reinterpret<CFunction<(COpaquePointer, COpaquePointer?) -> Unit>>()"
     )
-    appendLine("  val bridge = object : ${plan.qualifiedName}, NugetCSharpBridge {")
+    // ADR-222: a generic interface's bridge is a local generic function, compiled once over the
+    // erased bounds and always instantiated at `Nothing`, which satisfies every bound (a
+    // self-referencing `T : Comparable<T>` included). Kotlin's use-site cast checks each `T`.
+    val typeParameters: List<KSTypeParameter> = plan.declaration.typeParameters
+    if (plan.isGeneric) {
+      val names: String = typeParameters.joinToString(", ") { it.name.asString() }
+      val bounds: List<String> = typeParameters.flatMap { parameter ->
+        parameter.bounds.map { it.resolve() }
+          .filter { bound ->
+            bound.declaration.qualifiedName?.asString() != "kotlin.Any" || !bound.isMarkedNullable
+          }
+          .map { bound -> "${parameter.name.asString()} : ${bound.forwardKotlinDeclaredSpelling()}" }
+      }
+      val where: String = if (bounds.isEmpty()) "" else " where ${bounds.joinToString(", ")}"
+      appendLine("  fun <$names> bridge(): ${plan.qualifiedName}<$names>$where = object : ${plan.qualifiedName}<$names>, NugetCSharpBridge {")
+    } else {
+      appendLine("  val bridge = object : ${plan.qualifiedName}, NugetCSharpBridge {")
+    }
     // ADR-084 facet 5: the token is a GCHandle to the *implementing C# object*, so the return-
     // position probe resolves the original instance without knowing any bridge-state type.
     appendLine("    override val nugetToken: COpaquePointer = token")
@@ -64,7 +84,12 @@ internal fun FileSpec.Builder.addInterfaceBridgeFactoryExport(plan: ForwardBridg
     appendLine("    }")
     appendSlotOverrides(plan.slots)
     appendLine("  }")
-    appendLine("  NugetHandles.retain(bridge)")
+    if (plan.isGeneric) {
+      val nothing: String = typeParameters.joinToString(", ") { "Nothing" }
+      appendLine("  NugetHandles.retain(bridge<$nothing>())")
+    } else {
+      appendLine("  NugetHandles.retain(bridge)")
+    }
     appendLine("} catch (e: Throwable) {")
     appendLine("  if (errorOut != null) {")
     appendLine("    errorOut.reinterpret<COpaquePointerVar>().pointed.value = NugetHandles.retain(")
@@ -85,6 +110,11 @@ internal fun FileSpec.Builder.addInterfaceBridgeFactoryExport(plan: ForwardBridg
         .build()
     )
 
+  if (plan.isGeneric) {
+    builder.addAnnotation(
+      AnnotationSpec.builder(ClassName("kotlin", "Suppress")).addMember("%S", "UNCHECKED_CAST").build(),
+    )
+  }
   plan.slots.forEach { slot ->
     builder.addParameter("${slot.slotPrefix}Ptr", cOpaquePointer)
     builder.addParameter("${slot.slotPrefix}Ctx", cOpaquePointer)
@@ -198,6 +228,18 @@ private fun StringBuilder.appendResultMarshalling(
     ForwardBridgeWire.UNIT -> appendLine("$indent$call")
 
     ForwardBridgeWire.OBJECT -> {
+      // ADR-222: a `T` result is the box `WrapOwned<T>` minted, read and released as lane A does.
+      if (slot.result.typeParameter) {
+        if (slot.result.nullable) {
+          appendLine("${indent}val ref = $call ?: return null as ${slot.result.kotlin}")
+        } else {
+          appendLine("${indent}val ref = $call!!")
+        }
+        appendLine("${indent}val value = ref.asStableRef<Any>().get() as ${slot.result.kotlin}")
+        appendLine("${indent}NugetHandles.release(ref)")
+        appendLine("${indent}return value")
+        return
+      }
       // ADR-084: the null String slot is the null pointer; `IntPtr.Zero` never means "empty".
       if (slot.result.nullable) {
         appendLine("${indent}val ref = $call ?: return null")

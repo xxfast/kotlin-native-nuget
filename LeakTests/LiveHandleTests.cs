@@ -3188,6 +3188,105 @@ public class LiveHandleTests
         });
     }
 
+    // Row 8j-generic. ADR-222: a C#-implemented generic interface at an input position. One erased
+    // bridge factory per interface serves `IKeepsake<string>` and `IKeepsake<int>` alike; each
+    // crossing mints one transfer handle the call site disposes, and every `T` slot rides ADR-215
+    // lane A's box: a Kotlin-to-C# payload is retained by Kotlin and disposed by `FromHandle<T>`,
+    // a C#-to-Kotlin result is minted by `WrapOwned<T>` and released by Kotlin after the read. The
+    // row crosses every slot kind once per iteration: getter, setter, method with `T` in and out,
+    // a `T?` setter fed null, a self-bounded owner and an extension receiver. A generic state that
+    // kept one handle more than the non-generic one shows up as +50 per slot.
+    private sealed class ProbeDiary : Playroom.IKeepsake<string>
+    {
+        public string Item { get; set; } = "Oreo";
+        public void Dispose() { }
+    }
+
+    private sealed class ProbeCounter : Playroom.IKeepsake<int>
+    {
+        public int Item { get; set; } = 41;
+        public void Dispose() { }
+    }
+
+    private sealed class ProbeScrapbook : Playroom.IAlbum<string>
+    {
+        private string page = "page 1";
+        public string Cover => "Oreo";
+        public string? Bookmark { get; set; } = "p1";
+
+        public string Turn(string next)
+        {
+            string previous = page;
+            page = next;
+            return previous;
+        }
+
+        public string Title() => "Scraps";
+        public void Dispose() { }
+    }
+
+    private sealed class ProbeMedals : Playroom.IPodium<string>
+    {
+        public string Best => "Mylo";
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void InterfaceBridge_CSharpGenericKeepsake_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var diary = new ProbeDiary();
+            using var counter = new ProbeCounter();
+            using var scrapbook = new ProbeScrapbook();
+            using var medals = new ProbeMedals();
+            using var curator = new Playroom.Curator();
+
+            Assert.Equal("curator sees Oreo", Playroom.Keepsakes.Inspect(diary));
+            Assert.Equal(42, Playroom.Keepsakes.Polish(counter));
+            Assert.Equal("Oreo", Playroom.Keepsakes.Trade(diary, "Mylo"));
+            Assert.Equal(42, Playroom.Keepsakes.Trade(counter, 7));
+            Assert.Equal("shining Mylo", Playroom.KeepsakeExtensions.Shine(diary));
+            Assert.Equal("crowned Mylo", Playroom.Keepsakes.Crown(medals));
+            Assert.Equal("Scraps: Oreo then page 1, bookmark null", curator.Leaf(scrapbook));
+        });
+    }
+
+    // Row 8j-generic-cat. The same factory with a Kotlin-backed wrapper in the `T` slot. `Trade`
+    // reads the basket's Cat (C# hands Kotlin a `WrapOwned` retain of a *borrowed* wrapper, which
+    // Kotlin releases after the read, never the consumer's own handle), writes Mylo back (Kotlin
+    // retains, C# wraps), and returns the old Cat (a fresh wrapper the caller disposes). `PetName`
+    // reads a bounded `T : Furry` the same way. Both cats the consumer passed in are disposed by
+    // the consumer, and the only extra wrappers are the two the row disposes itself.
+    private sealed class ProbeBasket<T>(T item) : Playroom.IKeepsake<T>
+    {
+        public T Item { get; set; } = item;
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void InterfaceBridge_GenericSlotCatPayload_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var oreo = new Cat("Oreo", 9);
+            using var mylo = new Cat("Mylo", 9);
+            using var basket = new ProbeBasket<Cat>(oreo);
+            using (Cat old = Playroom.Keepsakes.Trade(basket, mylo))
+            {
+                Assert.Equal("Oreo", old.Name);
+            }
+            using (Cat stored = basket.Item)
+            {
+                Assert.Equal("Mylo", stored.Name);
+            }
+
+            using var tabby = new Membergeneric.Tabby("Oreo", 3);
+            using var cradle = new ProbeBasket<Membergeneric.Tabby>(tabby);
+            Assert.Equal("Oreo", Playroom.Keepsakes.PetName(cradle));
+        });
+    }
+
     // Rows 8k and 8l. ADR-116's 2026-09-13 amendment: the same two callback families, one owner
     // kind to the left. A stored-callback pair (`StableRef.create(unregister)` on subscribe,
     // `ref.dispose()` on `Dispose`) and an interface-bridge pair (that, plus one retained handle

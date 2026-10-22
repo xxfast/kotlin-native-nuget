@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
 
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInterfacePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.bridgeImplVariable
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isGeneric
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeSlot
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeSlotKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeWire
@@ -27,6 +28,8 @@ internal fun StringBuilder.renderBridgeHelper(helper: CirBridgeHelper) {
   // transfer the call site disposes once the native call is done, which is what leaves Kotlin's own
   // reference as the bridge's only root; caching it would hand out a disposed StableRef next time.
   // C#-side identity does not depend on the reuse: it comes from the token (facet 5).
+  // ADR-222: a generic interface never reaches `HandleFor`: its call sites name its own entry.
+  val plain: List<CirBridgeInterface> = helper.interfaces.filter { entry -> !entry.plan.isGeneric }
   appendLine("        internal static IntPtr HandleFor(object impl, Type declared)")
   appendLine("        {")
   // Interface super-interfaces: the declared parameter type selects the bridge first. A C# class
@@ -34,7 +37,7 @@ internal fun StringBuilder.renderBridgeHelper(helper: CirBridgeHelper) {
   // generation order; at an `INamed` parameter it must be the `INamed` bridge (and a class
   // implementing two unrelated bridged interfaces must get the one the parameter names). No
   // pattern variable here: the compiler already guarantees `impl` is the declared type.
-  helper.interfaces.forEach { entry ->
+  plain.forEach { entry ->
     val plan: ForwardBridgeInterfacePlan = entry.plan
     val implCast: String = "(${entry.csQualifiedName})impl"
     appendLine("            if (declared == typeof(${entry.csQualifiedName}))")
@@ -44,7 +47,7 @@ internal fun StringBuilder.renderBridgeHelper(helper: CirBridgeHelper) {
   }
   // Fallback for a static type that names no bridgeable interface directly (`object`, a class
   // type): the runtime type, in generation order.
-  helper.interfaces.forEach { entry ->
+  plain.forEach { entry ->
     val plan: ForwardBridgeInterfacePlan = entry.plan
     // ADR-133: spelled off the state class, not off the simple name -- every arm of this one
     // block declares its pattern variable in the same scope, so two owners' nested `Keeper`s
@@ -63,6 +66,8 @@ internal fun StringBuilder.renderBridgeHelper(helper: CirBridgeHelper) {
   appendLine("                \"the Kotlin build names the members that keep it out \" +")
   appendLine("                \"(SKIPPED_* in NugetDiagnostics.json).\");")
   appendLine("        }")
+  helper.interfaces.filter { entry -> entry.plan.isGeneric }
+    .forEach { entry -> renderGenericEntry(helper.libraryName, entry) }
   // ADR-186: the `nuget_gc_collect` import lives on `NugetMarshal` (CirMarshalRenderer), which
   // every library renders, not here behind the bridge-plan gate.
   appendLine()
@@ -138,17 +143,18 @@ internal fun StringBuilder.renderBridgeHelper(helper: CirBridgeHelper) {
 
 private fun StringBuilder.renderBridgeState(libraryName: String, entry: CirBridgeInterface) {
   val plan: ForwardBridgeInterfacePlan = entry.plan
-  appendLine("    internal sealed class ${plan.stateClassName} : NugetBridgeState")
+  // ADR-222: a P/Invoke cannot live in a generic class, so a generic state's import sits on
+  // `NugetBridge` beside its entry.
+  val generic: Boolean = plan.isGeneric
+  val state: String = plan.stateClassName + entry.typeArgumentList()
+  appendLine("    internal sealed class $state : NugetBridgeState${entry.whereClauses()}")
   appendLine("    {")
-  val nativeParams: List<String> = plan.slots.flatMap { slot ->
-    listOf("IntPtr ${slot.slotPrefix}Ptr", "IntPtr ${slot.slotPrefix}Ctx")
-  } + listOf("IntPtr releasePtr", "IntPtr releaseCtx", "IntPtr token", "out IntPtr error")
-  appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${plan.exportName}\")]")
-  appendLine("        private static extern IntPtr Native_Create(${nativeParams.joinToString(", ")});")
-  appendLine()
-  appendLine("        internal static ${plan.stateClassName} Create(${entry.csQualifiedName} impl)")
+  if (!generic) renderBridgeImport(libraryName, plan, "private", "Native_Create")
+  val native: String =
+    if (generic) "NugetBridge.Native_${plan.stateClassName}Create" else "Native_Create"
+  appendLine("        internal static $state Create(${entry.csQualifiedName}${entry.typeArgumentList()} impl)")
   appendLine("        {")
-  appendLine("            var state = new ${plan.stateClassName}();")
+  appendLine("            var state = new $state();")
   // Root() still allocates the strong self handle that keeps this state (and the implementing
   // object it closes over) alive for as long as the Kotlin bridge lives; it is no longer the
   // slots' ctx, because each slot's thunk dispatches through its own delegate handle.
@@ -166,7 +172,7 @@ private fun StringBuilder.renderBridgeState(libraryName: String, entry: CirBridg
   } + listOf(
     "NugetThunks.NugetBridgeVoidCallbackPtr", "releaseCtx", "token", "out IntPtr error",
   )
-  appendLine("            state.KotlinHandle = Native_Create(")
+  appendLine("            state.KotlinHandle = $native(")
   appendLine("                ${callArgs.joinToString(", ")});")
   appendLine("            if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
   appendLine("            NugetErrorNative.ClearManagedFault();")
@@ -244,6 +250,11 @@ internal fun slotBody(slot: ForwardBridgeSlot, receiver: String): String {
     ForwardBridgeWire.UNIT -> body.append("$access;")
     ForwardBridgeWire.OBJECT -> {
       body.append("${slot.result.csharp} result = $access; ")
+      // ADR-222: a `T` result is a box Kotlin owns, minted by lane A's `WrapOwned<T>`.
+      if (slot.result.typeParameter) {
+        body.append("return NugetMarshal.WrapOwned<${slot.result.csharp.removeSuffix("?")}>(result!);")
+        return body.toString()
+      }
       // ADR-201 amendment: a Throwable result crosses as its managed-exception text.
       val text: String = if (slot.result.throwable != null) {
         managedExceptionTextCs("result", nullable = false)
@@ -281,3 +292,54 @@ internal fun bridgeDelegates(interfaces: List<CirBridgeInterface>): List<CirCall
   val release = CirCallbackDelegate("NugetBridgeVoidCallback", "(IntPtr ctx)", "void")
   return (slotDelegates + release).distinctBy { delegate -> delegate.name }
 }
+
+/** The bridge factory's `[DllImport]`, under [name] with [visibility]. */
+private fun StringBuilder.renderBridgeImport(
+  libraryName: String,
+  plan: ForwardBridgeInterfacePlan,
+  visibility: String,
+  name: String,
+) {
+  val nativeParams: List<String> = plan.slots.flatMap { slot ->
+    listOf("IntPtr ${slot.slotPrefix}Ptr", "IntPtr ${slot.slotPrefix}Ctx")
+  } + listOf("IntPtr releasePtr", "IntPtr releaseCtx", "IntPtr token", "out IntPtr error")
+  appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${plan.exportName}\")]")
+  appendLine("        $visibility static extern IntPtr $name(${nativeParams.joinToString(", ")});")
+  appendLine()
+}
+
+/**
+ * ADR-222: a generic interface's named entry (`KeepsakeHandleOf<T>`), inferring `T` from the call
+ * site's declared `IKeepsake<T>`, plus its factory import. A Kotlin-backed value hands over its own
+ * handle; a C# implementation mints a one-crossing transfer handle through `KeepsakeBridgeState<T>`.
+ */
+private fun StringBuilder.renderGenericEntry(libraryName: String, entry: CirBridgeInterface) {
+  val plan: ForwardBridgeInterfacePlan = entry.plan
+  val types: String = entry.typeArgumentList()
+  val entryName: String = plan.stateClassName.removeSuffix("BridgeState") + "HandleOf"
+  appendLine()
+  renderBridgeImport(libraryName, plan, "internal", "Native_${plan.stateClassName}Create")
+  appendLine("        internal static IntPtr $entryName$types(${entry.csQualifiedName}$types value, out bool owned)${entry.whereClauses()}")
+  appendLine("        {")
+  appendLine("            if (value is INugetHandle wrapper)")
+  appendLine("            {")
+  appendLine("                owned = false;")
+  appendLine("                return wrapper.Handle;")
+  appendLine("            }")
+  // ADR-135: `owned` only after the mint, so a throwing mint never disposes IntPtr.Zero.
+  appendLine("            IntPtr handle = ${plan.stateClassName}$types.Create(value).KotlinHandle;")
+  appendLine("            owned = true;")
+  appendLine("            return handle;")
+  appendLine("        }")
+}
+
+/** `<T, U>` for a generic bridge, empty otherwise. */
+private fun CirBridgeInterface.typeArgumentList(): String =
+  if (typeParameters.isEmpty()) "" else typeParameters.joinToString(", ", "<", ">") { it.name }
+
+/** Each constrained type parameter as ` where T : ...`, the interface's own constraints. */
+private fun CirBridgeInterface.whereClauses(): String = typeParameters
+  .filter { parameter -> parameter.bounds.isNotEmpty() }
+  .joinToString("") { parameter ->
+    " where ${parameter.name} : ${parameter.bounds.joinToString(", ")}"
+  }

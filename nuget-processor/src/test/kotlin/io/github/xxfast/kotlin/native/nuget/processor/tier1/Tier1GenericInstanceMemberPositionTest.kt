@@ -228,7 +228,18 @@ class Tier1GenericInstanceMemberPositionTest {
           }
       }
       """.trimIndent(),
+      // ADR-222: `Refusals.shelf(Shelf<String>)` binds now, so the module carries a bridge
+      // factory, and its thunks are `unsafe` as the packaged `.csproj` allows.
+      allowUnsafe = true,
     )
+  }
+
+  /** ADR-222 amends ADR-208's generic-interface row for an input position only. */
+  @Test
+  fun `a generic interface parameter binds, its return keeps the skip`() {
+    val cs: String = result.generatedCSharp.withoutDocComments()
+    assertContains(cs, "public int Shelf(global::Interop.Declined.IShelf<string> shelf)")
+    assertContains(cs, "NugetBridge.DeclinedShelfHandleOf(shelf, out shelfOwned)")
   }
 
   @Test
@@ -241,7 +252,6 @@ class Tier1GenericInstanceMemberPositionTest {
       "lambda" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
       "star" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
       "projected" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
-      "shelf" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
       "latchOf" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
       "pairOf" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
       // The four shapes the deleted legacy generic-return route still rendered, each as C# that

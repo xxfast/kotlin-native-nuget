@@ -142,7 +142,7 @@ class Tier1UnroutedPositionsTest {
   )
 
   /** The generic reference the generic rows are typed with: one no route carries (ADR-208). */
-  private val generic: Tier1GenericCandidate = Tier1UnwrappableWitness.unroutedGeneric
+  private val generic: Tier1GenericCandidate = Tier1UnwrappableWitness.unroutedGenericInput
 
   /**
    * Mirrors `test-library/.../test/unrouted/UnroutedPositionsSample.kt` and

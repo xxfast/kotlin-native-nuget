@@ -60,6 +60,7 @@ Complete.
 - [ ] A generic value class at an erased position (`Box<Sticker<Int>>`, a lambda payload or result, a `Flow` element, an awaited `suspend` result) is skipped, named: it needs a per-instantiation box/unbox pair, which has no design ([ADR-220](docs/adr/220-generic-value-class-record-struct.md))
 - [ ] A generic value class's own members and secondary constructors are skipped, named: they need a substituted receiver per instantiation ([ADR-220](docs/adr/220-generic-value-class-record-struct.md))
 - [ ] A function's own `T` inside a generic value class whose bound needs the ADR-198 trampoline (`T : Comparable<T>`, an intersection) is skipped, named: the re-wrap sits outside the trampoline ([ADR-220](docs/adr/220-generic-value-class-record-struct.md))
+- [ ] A generic interface reference at an output position (return, property getter, or a class property, `fun keep(): Keepsake<String>`) keeps ADR-208's named skip: it needs a generic C# backing wrapper over an erased receiver. Consequence: a C#-implemented `IKeepsake<string>` Kotlin stores cannot be read back ([ADR-222](docs/adr/222-csharp-implemented-generic-interfaces.md))
 
 ## Phase 5: Exception handling
 
@@ -74,7 +75,8 @@ Three open items.
 - [ ] A plain (non-suspend) lambda parameter on a `suspend` member has no route for any payload, `T` or not: the per-call callback context would have to outlive the P/Invoke until the `Task` completes; found by [ADR-215](docs/adr/215-type-parameter-in-lambda-and-flow.md)
 
 ## Phase 7: Bidirectional support (C# → Kotlin)
-- [ ] A generic interface (`IHolder<T>`) implemented in C# and passed to Kotlin is not bridged: [ADR-084](docs/adr/084-csharp-implemented-interface-handles.md) bridges no generic interface, so the C# side of an interface `var item: T` is out of reach ([ADR-218](docs/adr/218-type-parameter-property-setter.md))
+
+Complete.
 
 ## Phase 8: Ecosystem – consuming NuGet packages from Kotlin
 

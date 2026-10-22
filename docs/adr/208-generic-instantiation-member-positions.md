@@ -227,3 +227,11 @@ arguments (`Box<Flow<Initial>>`, `Box<StateFlow<Nick>>`). This narrows the earli
 value class element stays refused" cell, which was a read-only holder, to a skip. The rule is in the
 2026-10-10 amendment to ADR-077. Verified by `Tier1ValueClassWithoutStructSharedFlowAndGenericTest`
 with a real `dotnet build`.
+
+## Amendment (2026-10-22): a generic interface at an input position binds
+
+The table row "a generic interface reference (`Shelf<String>`) keeps its `generic declaration`
+skip" no longer holds at a parameter or extension receiver: it binds as the C#-implementable
+`IShelf<string>` ([ADR-222](222-csharp-implemented-generic-interfaces.md)). Output positions (a
+return, a getter, a class property) and erased positions (a `List` element, a `Box` argument, a
+lambda payload) keep the named skip.

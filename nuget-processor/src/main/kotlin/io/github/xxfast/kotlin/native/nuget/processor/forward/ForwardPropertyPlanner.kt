@@ -69,6 +69,8 @@ internal data class ForwardDroppedProperty(
    *  `SKIPPED_BOUND_TYPE_POSITION` kind instead of the generic unsupported-property one, whose
    *  "expose a property whose type is not IFeedable" hint would be actively misleading. */
   val boundInterface: Boolean = false,
+  /** ADR-222: the declared type is a generic interface, which binds only at an input position. */
+  val genericInterface: Boolean = false,
   /** ADR-115: the fully-qualified name of the `@RequiresOptIn` marker on the property or its
    *  setter. Routes the diagnostic to `SKIPPED_OPT_IN_MARKER`, whose message names the marker
    *  rather than blaming the property's (perfectly bridgeable) type. */
@@ -1460,6 +1462,7 @@ internal class ForwardPropertyPlanner(
       ForwardDroppedProperty(
         symbol, prop, description,
         boundInterface = type.unwrapNullable() is BridgeType.BoundInterface,
+        genericInterface = classifier.genericInterfaceOrNull(prop.type.resolve()) != null,
         // The classification is the callable planner's, unchanged: this is the same BridgeType a
         // parameter or return position would have been skipped on, so it takes the same reason.
         reason = type.skipReason(),

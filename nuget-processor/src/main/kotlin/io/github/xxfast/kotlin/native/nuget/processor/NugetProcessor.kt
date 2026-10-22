@@ -135,6 +135,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgePlanOutcome
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceBridgePlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.unimplementableInterfaceDiagnostic
+import io.github.xxfast.kotlin.native.nuget.processor.forward.unwrapNullable
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardReachabilityBucket
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isArmOfIneligibleSealedInterface
@@ -664,6 +665,19 @@ internal fun warnDroppedForwardProperties(
         declaration = dropped.symbol,
         reason = dropped.reason.diagnosticReason(dropped.detail),
         hint = dropped.reason.diagnosticHint(dropped.detail, excludeEntries = excludeEntries),
+        owner = dropped.owner,
+        member = dropped.memberName,
+      )
+    } else if (dropped.genericInterface) {
+      // ADR-222: ADR-208's skip, unchanged, with the remedy a generic interface has.
+      ForwardDiagnostic(
+        kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
+        symbol = dropped.node,
+        declaration = dropped.symbol,
+        reason = "its type is a generic interface, which binds only as a parameter or an " +
+            "extension receiver; a property getter would need a generic C# backing wrapper",
+        hint = "type the property with a non-generic interface, or pass the value as a direct " +
+            "parameter",
         owner = dropped.owner,
         member = dropped.memberName,
       )
@@ -2409,6 +2423,7 @@ internal class NugetProcessor(
         boundInterfaces = context.boundInterfaces,
         refusedDependencyTypes = reachability.refused,
         exportMarkers = context.exportMarkers,
+        symbols = context.symbols,
       ),
     )
     // A value class whose underlying neither wire implements (`Char`, a plain interface,
@@ -2477,7 +2492,8 @@ internal class NugetProcessor(
     // interface's own members never mention that same interface as their receiver's result type.
     fun BridgeType.interfaceQualifiedNameOrNull(): String? {
       val unwrapped: BridgeType = if (this is BridgeType.Nullable) type else this
-      return (unwrapped as? BridgeType.Interface)?.qualifiedName
+      // ADR-222: a generic interface has no backing wrapper or dispatch exports, only its bridge.
+      return (unwrapped as? BridgeType.Interface)?.takeIf { it.bridgeEntry == null }?.qualifiedName
     }
 
     // ADR-214 / ADR-217: a non-generic interface that is only the bound of a `T` IN position
@@ -2789,6 +2805,21 @@ internal class NugetProcessor(
     }
     val reachableInterfaces: List<KSClassDeclaration> = interfaces
       .filter { iface -> iface.qualifiedName?.asString() in closedInterfaceNames }
+    // ADR-222: a generic interface at a parameter or receiver gets an erased bridge factory only.
+    val genericBridgeNames: Set<String> = buildSet {
+      fun BridgeType.genericBridgeName(): String? =
+        (unwrapNullable() as? BridgeType.Interface)
+          ?.takeIf { it.bridgeEntry != null }
+          ?.qualifiedName
+      ordinaryCatalog.plans.forEach { plan ->
+        plan.publicSignature.parameters.mapNotNullTo(this) { it.type.genericBridgeName() }
+        plan.nativeExports.flatMap { call -> call.parameters }
+          .filter { parameter -> parameter.role == ForwardAbiRole.RECEIVER }
+          .mapNotNullTo(this) { parameter -> parameter.transfer.type.genericBridgeName() }
+      }
+    }
+    val genericBridgeInterfaces: List<KSClassDeclaration> = interfaces
+      .filter { iface -> iface.qualifiedName?.asString() in genericBridgeNames }
     // ADR-174: the reachable set is the one that carries interface async members; every selector
     // (Kotlin exports, `I<Name>`, the backing wrapper, a generic implementer's forwards) reads it.
     ForwardAsyncInterfaces.reset(reachableInterfaces)
@@ -2828,6 +2859,7 @@ internal class NugetProcessor(
       // second producer does not silently lose its drops.
       droppedExtensionReceivers = ordinaryCatalog.droppedExtensionReceivers +
           forwardPropertyPlanner.droppedExtensionReceivers,
+      genericBridgeInterfaces = genericBridgeInterfaces,
     )
 
     // ADR-113: a SECOND catalog, planned over every exported interface rather than the reachable
@@ -3453,7 +3485,7 @@ internal class NugetProcessor(
     // The one guarded planner walk per interface: its outcome feeds both the factory below and the
     // named skip after it, so a refusal is never re-derived (and never re-guarded).
     val bridgeOutcomes: List<Pair<KSClassDeclaration, ForwardBridgePlanOutcome>> =
-      reachableInterfaces.mapNotNull { iface ->
+      (reachableInterfaces + callableCatalog.genericBridgeInterfaces).mapNotNull { iface ->
         guardDeclaration(iface) {
           ForwardInterfaceBridgePlanner.planOrRefuse(iface, forwardClassifier, context.symbols)
         }?.let { outcome -> iface to outcome }

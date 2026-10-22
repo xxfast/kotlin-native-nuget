@@ -1287,6 +1287,26 @@ internal object ForwardCirPlanProjection {
   ): ForwardCirHandleStep? {
     val nullable: Boolean = parameter.type is BridgeType.Nullable
     if (!parameter.type.isInterfaceInput()) return null
+    // ADR-222: a generic interface names its own `NugetBridge` entry, which infers `T` from the
+    // parameter's declared `IKeepsake<T>` type; a null guard stands in for `HandleOfOrZero`.
+    val entry: String? = (parameter.type.unwrapNullable() as BridgeType.Interface).bridgeEntry
+    if (entry != null) {
+      val name: String = parameter.csharpName
+      val local: String = parameter.csharpLocal
+      val mint: String = if (nullable) {
+        "$name is null ? IntPtr.Zero : $entry($name, out ${local}Owned)"
+      } else {
+        "$entry($name, out ${local}Owned)"
+      }
+      return ForwardCirHandleStep(
+        flat = "bool ${local}Owned = false; IntPtr ${local}Handle = $mint;",
+        declarations = listOf(
+          "IntPtr ${local}Handle = IntPtr.Zero;",
+          "bool ${local}Owned = false;",
+        ),
+        statement = "${local}Handle = $mint;",
+      )
+    }
     val helper: String = if (nullable) "HandleOfOrZero" else "HandleOf"
     return ForwardCirHandleStep(
       flat = "IntPtr ${parameter.csharpLocal}Handle = " +

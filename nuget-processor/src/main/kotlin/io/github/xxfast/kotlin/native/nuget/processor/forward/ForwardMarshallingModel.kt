@@ -163,6 +163,17 @@ internal sealed interface BridgeType {
     val qualifiedName: kotlin.String,
     val csharpType: kotlin.String = "I${qualifiedName.substringAfterLast('.')}",
     val backingType: kotlin.String = qualifiedName.substringAfterLast('.'),
+    /**
+     * ADR-222: a generic interface reference at an input position (`Keepsake<String>`) names the
+     * C# entry its call site mints a bridge through (`NugetBridge.KeepsakeHandleOf`). Null for a
+     * non-generic interface. The read fields below follow [ObjectHandle]'s rules (ADR-208/217).
+     */
+    val bridgeEntry: kotlin.String? = null,
+    val kotlinReadType: kotlin.String? = null,
+    val open: kotlin.Boolean = false,
+    val kotlinTypeVariableReadType: kotlin.String? = null,
+    val typeVariables: List<kotlin.String> = emptyList(),
+    val readsAsTypeVariable: kotlin.Boolean = false,
   ) : BridgeType
 
   /**

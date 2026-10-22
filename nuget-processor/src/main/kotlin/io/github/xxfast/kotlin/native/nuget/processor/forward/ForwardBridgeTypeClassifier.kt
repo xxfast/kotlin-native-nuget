@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
 import com.google.devtools.ksp.getAllSuperTypes
+import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
@@ -51,6 +52,8 @@ internal data class ForwardBridgeTypeContext(
    *  Carried here rather than read from a process-global set so two publishers in one Gradle
    *  daemon cannot see each other's list (the ADR-054 lesson). */
   val exportMarkers: Set<String> = emptySet(),
+  /** ADR-222: names a generic interface's `NugetBridge` entry, the bridge planner's own rule. */
+  val symbols: ForwardSymbolTable? = null,
 )
 
 /**
@@ -705,6 +708,9 @@ internal class ForwardBridgeTypeClassifier(
     type: KSType,
     declaration: KSClassDeclaration,
     qualifiedName: String,
+    // ADR-222: a generic interface spells its `I` name and has no `new` to register.
+    path: String = csharpTypeNameFor(declaration),
+    register: Boolean = true,
   ): BridgeType {
     val isSealed: Boolean = declaration.isGenericSealedType()
     // The C# arm's parameters, each with the Kotlin type it is instantiated at and the Kotlin
@@ -797,7 +803,6 @@ internal class ForwardBridgeTypeClassifier(
       }
       classified.forwardPublicCsharpType()
     }
-    val path: String = csharpTypeNameFor(declaration)
     val csharpType: String =
       if (spelled.isEmpty()) path else "$path<${spelled.joinToString(", ")}>"
     val kotlinReadType: String? = if (declaration.typeParameters.isEmpty()) {
@@ -809,7 +814,7 @@ internal class ForwardBridgeTypeClassifier(
     val constructType: String? = backing?.let { name ->
       if (spelled.isEmpty()) "$path.$name" else "$path.$name<${spelled.joinToString(", ")}>"
     }
-    if (closed) {
+    if (closed && register) {
       val key: String = csharpType.removePrefix("global::")
       closedInstantiations[key] = if (isSealed) {
         "$csharpType.FromHandle(handle)"
@@ -1247,7 +1252,68 @@ internal class ForwardBridgeTypeClassifier(
 
   /** [classify] at a parameter position: ADR-210's two asynchronous shapes first. */
   fun classifyParameter(type: KSType): BridgeType =
-    asyncCallbackOrNull(type) ?: flowSourceOrNull(type) ?: classify(type)
+    asyncCallbackOrNull(type)
+      ?: flowSourceOrNull(type)
+      ?: genericInterfaceOrNull(type)
+      ?: classify(type)
+
+  /**
+   * ADR-222: a generic interface reference (`Keepsake<String>`, `Keepsake<T>`) at an INPUT position
+   * (a parameter or an extension receiver), spelled as ADR-208 spells a generic class reference and
+   * read through the interface's erased bridge. Every other position keeps [classify]'s
+   * `"generic declaration"` skip (ADR-208): an output needs a generic backing wrapper, and an
+   * erased position could build the generic bridge state only by reflection. Null when [type] is
+   * not an exported, non-sealed generic interface.
+   */
+  private val genericBridgeOutcomes: MutableMap<String, ForwardBridgePlanOutcome?> = mutableMapOf()
+
+  fun genericInterfaceOrNull(type: KSType): BridgeType? {
+    val expanded: KSType = type.expandAliases()
+    val declaration: KSClassDeclaration = expanded.declaration as? KSClassDeclaration ?: return null
+    val isGenericInterface: Boolean = declaration.classKind == ClassKind.INTERFACE &&
+        declaration.typeParameters.isNotEmpty() && Modifier.SEALED !in declaration.modifiers
+    if (!isGenericInterface) return null
+    val qualifiedName: String = declaration.qualifiedName?.asString() ?: return null
+    if (qualifiedName !in context.exportedObjectHandles) return null
+    val path: String = (interfaceType(declaration, qualifiedName) as? BridgeType.Interface)
+      ?.csharpType ?: return null
+    val reference: BridgeType = genericReference(
+      expanded.makeNotNullable(),
+      declaration,
+      qualifiedName,
+      path,
+      register = false,
+    )
+    val handle: BridgeType.ObjectHandle = reference as? BridgeType.ObjectHandle ?: return reference
+    // A C# implementation the bridge cannot carry (a member's own `<R>`, a suspend member) skips
+    // the position by name, rather than binding an entry nothing declares.
+    val symbols: ForwardSymbolTable = requireNotNull(context.symbols) {
+      "ADR-222: classifying generic interface $qualifiedName needs the symbol table"
+    }
+    val outcome: ForwardBridgePlanOutcome? = genericBridgeOutcomes.getOrPut(qualifiedName) {
+      ForwardInterfaceBridgePlanner.planOrRefuse(declaration, this, symbols)
+    }
+    if (outcome is ForwardBridgePlanOutcome.Refused) {
+      val members: String = outcome.refusals.joinToString("; ") { "`${it.member}` ${it.reason}" }
+      return BridgeType.Unsupported(
+        expanded.kotlinSpelling(keepProjections = true),
+        "a C# implementation of `${path.substringAfterLast('.')}` cannot cross to Kotlin, because $members",
+        isGenericRefusal = true,
+      )
+    }
+    val entry: String = genericBridgeEntryName(declaration, context.symbols)
+    val bridged = BridgeType.Interface(
+      qualifiedName,
+      csharpType = handle.csharpType,
+      backingType = handle.csharpType,
+      bridgeEntry = "NugetBridge.$entry",
+      kotlinReadType = handle.kotlinReadType,
+      open = handle.open,
+      kotlinTypeVariableReadType = handle.kotlinTypeVariableReadType,
+      typeVariables = handle.typeVariables,
+    )
+    return if (expanded.isMarkedNullable) BridgeType.Nullable(bridged) else bridged
+  }
 
   /**
    * ADR-215 lane A: a `T` or `T?` (explicit or from an unconstrained bound, trampolined included)

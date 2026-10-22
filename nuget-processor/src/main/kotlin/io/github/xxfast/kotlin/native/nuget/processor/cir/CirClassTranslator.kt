@@ -952,6 +952,13 @@ internal fun KSClassDeclaration.cirTypeParameters(
     cirTypeParameter(param, logger, context, reportVariance = true)
   }
 
+/** ADR-222: a generic interface's parameters for its bridge state, with no variance note. */
+internal fun KSClassDeclaration.cirBridgeTypeParameters(
+  logger: KSPLogger,
+  context: NugetContext,
+): List<CirTypeParameter> =
+  typeParameters.map { param -> cirTypeParameter(param, logger, context, reportVariance = false) }
+
 private fun KSClassDeclaration.cirTypeParameter(
   param: KSTypeParameter,
   logger: KSPLogger,

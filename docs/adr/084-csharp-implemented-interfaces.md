@@ -695,3 +695,10 @@ refused, named, for an inherited property or a type outside the vocabulary.
 Evidence: `Tier1InterfaceBridgeFactoryTest` and `Tier1InterfaceBridgeListenerPropertyTest` (the
 `var` cells flipped from refusals to bridged), `InterfaceParameterTests` cell (e) and
 `ListenerPropertyTests` on the native pipeline, and LeakTests rows 8j-var and 8j-listener-var.
+
+## Amendment (2026-10-22): generic interfaces bridge
+
+A generic Kotlin interface (`Keepsake<T>`) implemented in C# now crosses at a parameter or extension
+receiver, with one erased factory export per interface and a generic C# state class. The "generic
+interfaces" deferral above is lifted for those positions. A member's own type parameter
+(`fun <R> map(...)`) stays refused. See [ADR-222](222-csharp-implemented-generic-interfaces.md).
