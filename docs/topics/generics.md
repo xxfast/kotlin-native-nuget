@@ -591,8 +591,8 @@ What differs from a generic class:
 
 These stay a named skip, with the specific reason in the warning: a generic method on an interface,
 an `enum class`, a value class, or an extension function; a `reified` type parameter; a bound that
-is itself a type parameter; a `T` nested in a type other than a `List`, `Set` or `Map` (`Box<T>`, `Result<List<T>>`);
-a lambda or `Flow` anywhere in the signature; a multi-bound `T` that no parameter mentions; and a
+is itself a type parameter; a `T` nested in a generic value class or in a type that is not an exported generic class
+(`List`, `Set`, `Map` and `Result` aside); a lambda or `Flow` anywhere in the signature; a multi-bound `T` that no parameter mentions; and a
 `T` that shadows a type parameter in scope (the owner's, or one an `inner` class captures). A
 generic method on an `inner` class or a type nested in a generic owner binds like any other.
 Expose a non-generic wrapper for any of the refused shapes. The warning
@@ -638,9 +638,56 @@ foreach (Tabby cat in deck.Shuffle(new[] { oreo })) cat.Dispose();           // 
 A passed wrapper element is borrowed, and each wrapper element Kotlin returns is yours to dispose.
 `List<List<T>>` works, and a bounded `T` keeps its `where` clause. A `Map` key must be non-null:
 `fun <K : Any, V> tally(map: Map<K, V>)` binds, while an unconstrained `K` is skipped as
-`NULLABLE_MAP_KEY`. Declare `K : Any`. A `T` inside `Box<T>`, `Result<List<T>>`, a lambda or a
+`NULLABLE_MAP_KEY`. Declare `K : Any`. A `T` inside a lambda or a
 `Flow` is still skipped, as is a `T` with an unspellable bound
 ([An enum bound](#an-enum-bound)) in a collection.
+
+### A type parameter inside a generic class or a Result {id="a-type-parameter-inside-a-generic-class"}
+
+A method's own `T` can be an argument of an exported generic class (`Basket<T>`, `Basket<T>?`,
+`Basket<Basket<T>>`, `List<Basket<T>>`, a generic sealed `Pickup<T>`), and the payload of a
+`Result` return (`Result<List<T>>`, `Result<Set<T>>`, `Result<Map<K, V>>` with `K : Any`,
+`Result<Basket<T>>`). It binds on the same owners as a bare `T`, and `T` is inferred from the argument.
+
+```kotlin
+class Groomer {
+  fun <T> basket(item: T): Basket<T> = Basket(item)
+  fun <T> unpack(basket: Basket<T>): T = basket.item
+  fun <T : Furry> brushBasket(basket: Basket<T>): T = basket.item
+  fun <T> gather(items: List<T>): Result<List<T>> = Result.success(items)
+}
+```
+
+```C#
+Basket<T> Basket<T>(T item)
+T BrushBasket<T>(Basket<T> basket) where T : IFurry
+IReadOnlyList<T> Gather<T>(IReadOnlyList<T> items)
+bool TryGather<T>(IReadOnlyList<T> items, out IReadOnlyList<T> value, out Exception? failure)
+```
+
+```C#
+using var groomer = new Groomer();
+using Basket<int> treats = groomer.Basket(3);
+int three = groomer.Unpack(treats);                  // treats is borrowed, still usable
+using var oreo = new Tabby("Oreo", 3);
+using Tabby brushed = groomer.BrushBasket(groomer.Basket(oreo));   // a bound is witnessed through the basket
+IReadOnlyList<string> names = groomer.Gather(new List<string> { "Oreo", "Mylo" });
+```
+
+A returned basket is yours to dispose, and a passed one is borrowed. A `Result` payload gains the
+`Try` twin of any other [`Result` return](exceptions.md). A `Basket<T>` also works inside a
+class-`T` member (`Basket<Basket<T>>`) and reads its inner basket without the consumer touching
+`Basket<int>` first.
+
+What still skips, named:
+
+- A multi-bound `T` (`where T : A, T : B`) that appears only inside a generic class
+  (`fun <T> rank(box: Box<T>)`). Add a bare `T` or `List<T>` parameter, or bind one bound.
+- A `T` inside a generic value class, and `kotlin.Array<T>`.
+- A nested generic class argument the wire cannot read, such as `Box<List<T>>`.
+- An open instantiation nested two or more levels deep that you read through a property getter,
+  or any position outside a member's result, before you hold one yourself. It throws
+  `NotSupportedException` on the read.
 
 ## Type aliases
 

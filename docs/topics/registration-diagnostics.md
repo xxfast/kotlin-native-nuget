@@ -439,6 +439,10 @@ still releases the box. `LeakTests/LiveHandleTests.cs`'s
 paths, and `TopLevelGenericMethod_BoxedTypeParameter_ReturnsToBaseline` covers the top-level success
 path, also driving `Shuffle`. `MemberGeneric_CollectionElements_ReturnToBaseline` covers a `T` as a list
 element: passed wrappers stay borrowed, returned ones are disposed, and `Pad` round-trips a null element.
+`MemberGeneric_BoxedTypeParameter_ReturnsToBaseline` covers a `T` inside a generic class: a returned
+`Basket<T>` is yours to dispose, a passed one is borrowed, and `Basket(Basket(1))` disposes both.
+`MemberGeneric_ResultListOfT_ReturnsToBaseline` covers a `Result<List<T>>` payload: wrapper elements
+are disposed and a failed result's error handle is released.
 
 A [bound with no closed Kotlin spelling](generics.md#an-enum-bound) (`T : Enum<T>`, an invariant
 `T : Node<T>`) mints the handles of any other generic crossing: an enum argument is boxed per

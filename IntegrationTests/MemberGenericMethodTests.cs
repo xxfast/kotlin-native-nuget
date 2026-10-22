@@ -250,4 +250,207 @@ public class MemberGenericMethodTests
         // `fun <K, V> loose(map: Map<K, V>)`: K may be null, so it stays a NULLABLE_MAP_KEY refusal.
         Assert.Null(typeof(Deck).GetMethod("Loose"));
     }
+
+    // ADR-216: a member's own T inside an exported generic class. A returned `Basket<T>` is owned
+    // by the caller; a passed one is borrowed, so Oreo's basket is still usable after `Unpack`.
+    [Fact]
+    public void BoxedTypeParameter_BuiltinBaskets_RoundTrip()
+    {
+        using var groomer = new Groomer();
+
+        using Basket<int> treats = groomer.Basket(3);
+        Assert.Equal(3, treats.Item);
+        Assert.Equal(3, groomer.Unpack(treats));
+        Assert.Equal(3, treats.Item);
+
+        using Basket<string> toy = groomer.Basket("Mylo's Milo Mouse");
+        Assert.Equal("Mylo's Milo Mouse", groomer.Unpack(toy));
+        Assert.Equal("Mylo's Milo Mouse", toy.Item);
+
+        using var handMade = new Basket<double>(2.5);
+        Assert.Equal(2.5, groomer.Unpack(handMade));
+    }
+
+    [Fact]
+    public void BoxedTypeParameter_WrapperBasket_ComesBackAsTheSameKotlinObject()
+    {
+        using var groomer = new Groomer();
+        using var oreo = new Tabby("Oreo", 3);
+
+        using Basket<Tabby> cat = groomer.Basket(oreo);
+        using (Tabby inside = cat.Item) Assert.Equal("Oreo", inside.Name);
+        using (Tabby back = groomer.Unpack(cat)) Assert.Equal(3, back.Tricks);
+        using Tabby brushed = groomer.BrushBasket(cat);
+        Assert.Equal("Oreo", brushed.Name);
+    }
+
+    [Fact]
+    public void BoxedTypeParameter_Bound_SpellsTheKotlinBound()
+    {
+        MethodInfo brush = typeof(Groomer).GetMethod("BrushBasket")!;
+        Type t = brush.GetGenericArguments()[0];
+        Assert.Equal(new[] { typeof(IFurry) }, t.GetGenericParameterConstraints());
+        Assert.Equal(typeof(Basket<>).MakeGenericType(t), brush.GetParameters()[0].ParameterType);
+        Assert.Equal(t, brush.ReturnType);
+
+        MethodInfo basket = typeof(Groomer).GetMethod("Basket")!;
+        Type u = basket.GetGenericArguments()[0];
+        Assert.Equal(typeof(Basket<>).MakeGenericType(u), basket.ReturnType);
+        Assert.Empty(u.GetGenericParameterConstraints());
+    }
+
+    [Fact]
+    public void BoxedTypeParameter_NullableBasket_PassesNullThrough()
+    {
+        using var groomer = new Groomer();
+
+        Assert.Null(groomer.MaybeBasket<int>(null));
+        using Basket<string> yarn = groomer.Basket("yarn");
+        using Basket<string>? same = groomer.MaybeBasket(yarn);
+        Assert.NotNull(same);
+        Assert.Equal("yarn", same!.Item);
+    }
+
+    [Fact]
+    public void BoxedTypeParameter_NestedBaskets_PackAndUnpack()
+    {
+        using var groomer = new Groomer();
+
+        using Basket<Basket<int>> doubled = groomer.DoubleBasket(1);
+        using (Basket<int> inner = doubled.Item) Assert.Equal(1, inner.Item);
+        using Basket<int> unpacked = groomer.NestBasket(doubled);
+        Assert.Equal(1, unpacked.Item);
+
+        using var oreo = new Tabby("Oreo", 3);
+        using Basket<Basket<Tabby>> nested = groomer.DoubleBasket(oreo);
+        using Basket<Tabby> once = groomer.NestBasket(nested);
+        using (Tabby inside = once.Item) Assert.Equal("Oreo", inside.Name);
+    }
+
+    [Fact]
+    public void BoxedTypeParameter_ListOfBaskets_RoundTrips()
+    {
+        using var groomer = new Groomer();
+
+        IReadOnlyList<Basket<int>> treats = groomer.Baskets(new[] { 1, 2, 3 });
+        Assert.Equal(3, treats.Count);
+        Assert.Equal(new[] { 3, 2, 1 }, groomer.UnpackAll(treats));
+        Assert.Equal(new[] { 1, 2, 3 }, treats.Select(b => b.Item));
+        foreach (Basket<int> b in treats) b.Dispose();
+
+        using var oreo = new Tabby("Oreo", 3);
+        using var mylo = new Tabby("Mylo", 5);
+        IReadOnlyList<Basket<Tabby>> cats = groomer.Baskets(new[] { oreo, mylo });
+        IReadOnlyList<Tabby> unpacked = groomer.UnpackAll(cats);
+        Assert.Equal(new[] { "Mylo", "Oreo" }, unpacked.Select(c => c.Name));
+        foreach (Tabby c in unpacked) c.Dispose();
+        foreach (Basket<Tabby> b in cats) b.Dispose();
+    }
+
+    [Fact]
+    public void BoxedTypeParameter_GenericSealedReturn_PicksTheArm()
+    {
+        using var groomer = new Groomer();
+        using var oreo = new Tabby("Oreo", 3);
+
+        using Pickup<Tabby> ready = groomer.PickUp(oreo, true);
+        using (Tabby pet = Assert.IsType<Pickup.Fluffed<Tabby>>(ready).Pet)
+        {
+            Assert.Equal("Oreo", pet.Name);
+        }
+
+        using Pickup<int> waiting = groomer.PickUp(5, false);
+        Assert.Equal("not yet: 5", Assert.IsType<Pickup.Waitlisted<int>>(waiting).Note);
+    }
+
+    [Fact]
+    public void BoxedTypeParameter_EveryOwner_ReturnsABasket()
+    {
+        using (Basket<int> first = Groomer.FirstBasket(7)) Assert.Equal(7, first.Item);
+        using (Basket<string> shown = Salon.Exhibit("Oreo")) Assert.Equal("Oreo", shown.Item);
+
+        using var fetch = new Chore.Fetch("ball");
+        using (Basket<long> stowed = fetch.Stow(9L)) Assert.Equal(9L, stowed.Item);
+
+        using var yarn = new Basket<string>("yarn");
+        using (Basket<int> regifted = yarn.Regift(3)) Assert.Equal(3, regifted.Item);
+        using var oreo = new Tabby("Oreo", 3);
+        using Basket<Tabby> gift = yarn.Regift(oreo);
+        using (Tabby inside = gift.Item) Assert.Equal("Oreo", inside.Name);
+    }
+
+    // ADR-216: a member's own T inside a `Result` payload, with ADR-195's `Try` twin.
+    [Fact]
+    public void ResultPayload_ListOfT_ThrowsAndTries()
+    {
+        using var groomer = new Groomer();
+
+        Assert.Equal(new[] { "Oreo", "Mylo" }, groomer.Gather(new List<string> { "Oreo", "Mylo" }));
+        Assert.True(groomer.TryGather(new List<int> { 1, 2 }, out IReadOnlyList<int>? value, out Exception? none));
+        Assert.Equal(new[] { 1, 2 }, value);
+        Assert.Null(none);
+
+        Exception thrown = Assert.ThrowsAny<Exception>(() => groomer.Spill(new List<string> { "Oreo" }));
+        Assert.Contains("Mylo spilled 1", thrown.Message);
+        Assert.False(groomer.TrySpill(new List<int> { 1 }, out _, out Exception? failure));
+        Assert.Contains("Mylo spilled 1", failure!.Message);
+    }
+
+    [Fact]
+    public void ResultPayload_WrapperList_ComesBackAsTheSameKotlinObjects()
+    {
+        using var groomer = new Groomer();
+        using var oreo = new Tabby("Oreo", 3);
+        using var mylo = new Tabby("Mylo", 5);
+
+        IReadOnlyList<Tabby> gathered = groomer.Gather(new[] { oreo, mylo });
+        Assert.Equal(new[] { "Oreo", "Mylo" }, gathered.Select(c => c.Name));
+        foreach (Tabby c in gathered) c.Dispose();
+    }
+
+    [Fact]
+    public void ResultPayload_NullableSetMapAndNestedList_RoundTrip()
+    {
+        using var groomer = new Groomer();
+
+        Assert.Equal(new int?[] { 1, null, null }, groomer.Queue(new int?[] { 1, null }));
+        Assert.True(groomer.TryQueue(new string?[] { "Oreo" }, out IReadOnlyList<string?>? seats, out _));
+        Assert.Equal(new string?[] { "Oreo", null }, seats);
+
+        IReadOnlySet<string> herd = groomer.Herd(new HashSet<string> { "Oreo", "Mylo" });
+        Assert.True(herd.SetEquals(new[] { "Mylo", "Oreo" }));
+
+        var treats = new Dictionary<string, int> { ["Oreo"] = 2, ["Mylo"] = 3 };
+        IReadOnlyDictionary<string, int> ledger = groomer.Ledger(treats);
+        Assert.Equal(2, ledger["Oreo"]);
+        Assert.Equal(3, ledger["Mylo"]);
+
+        IReadOnlyList<IReadOnlyList<int>> litters = groomer.Litters(new[] { new[] { 1, 2 }, new[] { 3 } });
+        Assert.Equal(new[] { 2, 1 }, litters[0]);
+        Assert.Equal(new[] { 3 }, litters[1]);
+    }
+
+    [Fact]
+    public void ResultPayload_Basket_ThrowsAndTries()
+    {
+        using var groomer = new Groomer();
+
+        using (Basket<int> stashed = groomer.Stash(4)) Assert.Equal(4, stashed.Item);
+        Assert.ThrowsAny<Exception>(() => groomer.Stash("knot"));
+        Assert.False(groomer.TryStash("knot", out _, out Exception? failure));
+        Assert.Contains("a knot in the basket", failure!.Message);
+        Assert.True(groomer.TryStash("comb", out Basket<string>? comb, out _));
+        using (comb) Assert.Equal("comb", comb!.Item);
+    }
+
+    // ADR-216 amendment: a class `T` inside a basket in a basket. Pre-existing on main: the inner
+    // `Basket<int>` had no factory, so reading `.Item` threw `NotSupportedException`.
+    [Fact]
+    public void BoxedTypeParameter_ClassTypeParameterRebasket_ReadsTheInnerBasket()
+    {
+        using var treats = new Basket<int>(4);
+        using Basket<Basket<int>> twice = treats.Rebasket();
+        using Basket<int> inner = twice.Item;
+        Assert.Equal(4, inner.Item);
+    }
 }

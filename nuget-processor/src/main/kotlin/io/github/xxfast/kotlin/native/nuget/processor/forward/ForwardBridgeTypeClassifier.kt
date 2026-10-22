@@ -742,6 +742,7 @@ internal class ForwardBridgeTypeClassifier(
       }
     }
     var closed = true
+    val openArguments: MutableList<BridgeType.ObjectHandle> = mutableListOf()
     val spelled: List<String> = slots.map { (argument, parameter) ->
       if (argument.isNothing()) {
         // C6: the marker is a plain class, so it fails any bound but `notnull`.
@@ -778,7 +779,16 @@ internal class ForwardBridgeTypeClassifier(
         return refused("the erased wire cannot read its type argument " +
             "`${argument.kotlinSpelling(keepProjections = true)}`")
       }
-      if (argument.mentionsAnyTypeParameter()) closed = false
+      if (argument.mentionsAnyTypeParameter()) {
+        closed = false
+        // ADR-216 amendment: an open nested instantiation the member fills the slot for.
+        val nested: BridgeType =
+          if (classified is BridgeType.Nullable) classified.type else classified
+        if (nested is BridgeType.ObjectHandle && !nested.viaDiscriminator) {
+          openArguments += nested.openArguments
+          if (nested.open) openArguments += nested
+        }
+      }
       classified.forwardPublicCsharpType()
     }
     val path: String = csharpTypeNameFor(declaration)
@@ -807,6 +817,8 @@ internal class ForwardBridgeTypeClassifier(
       viaDiscriminator = isSealed,
       kotlinReadType = kotlinReadType,
       constructType = constructType,
+      openArguments = openArguments.distinctBy { it.csharpType },
+      open = !closed,
     )
     return if (isSealed) {
       BridgeType.SpecializedProtocol("$SEALED_HELPER_PREFIX$qualifiedName", sealedHandle = handle)
