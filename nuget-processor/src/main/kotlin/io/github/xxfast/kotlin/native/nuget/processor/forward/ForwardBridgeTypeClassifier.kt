@@ -1150,8 +1150,25 @@ internal class ForwardBridgeTypeClassifier(
   fun returnedLambdaOrNull(type: KSType): BridgeType.ReturnedLambda? {
     val expanded: KSType = type.expandAliases()
     if (type.isMarkedNullable || expanded.isMarkedNullable) return null
+    return lambdaHandleOrNull(expanded)?.takeUnless { lambda -> lambda.suspend }
+  }
+
+  /**
+   * ADR-236: the lambda handle a PROPERTY of function type crosses as, on every owner: the
+   * [returnedLambdaOrNull] wire, a `suspend` function type included, and a nullable one wrapped in
+   * [BridgeType.Nullable] (the null pointer is the null). Null for any other type.
+   */
+  fun lambdaPropertyOrNull(type: KSType): BridgeType? {
+    val expanded: KSType = type.expandAliases()
+    val lambda: BridgeType.ReturnedLambda = lambdaHandleOrNull(expanded) ?: return null
+    return if (type.isMarkedNullable || expanded.isMarkedNullable) BridgeType.Nullable(lambda)
+    else lambda
+  }
+
+  private fun lambdaHandleOrNull(expanded: KSType): BridgeType.ReturnedLambda? {
     val qualifiedName: String = expanded.declaration.qualifiedName?.asString() ?: return null
-    if (qualifiedName !in LAMBDA_TYPES) return null
+    val suspend: Boolean = qualifiedName in SUSPEND_LAMBDA_TYPES
+    if (qualifiedName !in LAMBDA_TYPES && !suspend) return null
     val resolved: List<KSType?> = expanded.arguments.map { argument -> argument.type?.resolve() }
     if (resolved.isEmpty()) return null
     val typeArguments: List<BridgeType> = resolved.map { argument ->
@@ -1162,6 +1179,9 @@ internal class ForwardBridgeTypeClassifier(
           is BridgeType.SpecializedProtocol -> classified.sealedHandle ?: classified
           is BridgeType.Nullable -> (classified.type as? BridgeType.SpecializedProtocol)
             ?.sealedHandle?.let(BridgeType::Nullable) ?: classified
+          // ADR-236: a value class over an exported sealed class crosses through its box pair, the
+          // handle its underlying's classification carries (ADR-171).
+          is BridgeType.ValueClass -> classified.sealedAsHandle()
 
           BridgeType.Unit,
           is BridgeType.Primitive,
@@ -1175,7 +1195,6 @@ internal class ForwardBridgeTypeClassifier(
           is BridgeType.ObjectHandle,
           is BridgeType.Interface,
           is BridgeType.BoundInterface,
-          is BridgeType.ValueClass,
           BridgeType.ByteArray,
           is BridgeType.Collection,
           is BridgeType.Callback,
@@ -1195,7 +1214,7 @@ internal class ForwardBridgeTypeClassifier(
       declaration?.qualifiedName?.asString() ?: declaration?.simpleName?.asString()
       ?: "an unresolved type argument"
     }
-    return BridgeType.ReturnedLambda(typeArguments, kotlinTypeArguments)
+    return BridgeType.ReturnedLambda(typeArguments, kotlinTypeArguments, suspend)
   }
 
   /**

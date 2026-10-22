@@ -102,10 +102,10 @@ class CatFeeder(val catName: String) {
 
 ```C#
 using var feeder = new CatFeeder("Oreo");
-using var onSplitBag = feeder.OnSplitBag;
+var onSplitBag = feeder.OnSplitBag;
 try
 {
-    await onSplitBag.InvokeAsync();
+    await onSplitBag.Invoke(CancellationToken.None);
 }
 catch (KotlinIOException ex)
 {

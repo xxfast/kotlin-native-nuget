@@ -55,9 +55,9 @@ class Tier1DeadImportTest {
 
   /**
    * Same shape one declaration over: a top-level `val` whose type has no plan is skipped by
-   * `addPropertyExports`, and the loop imported it anyway. A function type is the skip here:
-   * a property type is refused on different grounds than an input, so the function fixture's
-   * unsupported *input* is not reused as an unsupported property type.
+   * `addPropertyExports`, and the loop imported it anyway. A `Sequence` is the skip here (a
+   * function type was, until ADR-236 bound it): a property type is refused on different grounds
+   * than an input, so the function fixture's unsupported *input* is not reused as a property type.
    */
   @Test
   fun `skipped top-level property leaves no import behind`() {
@@ -65,7 +65,7 @@ class Tier1DeadImportTest {
       """
       package tier1.deadval
 
-      val handler: (Int) -> Int = { it }
+      val handler: Sequence<Int> = emptySequence()
 
       val count: Int = 1
       """.trimIndent(),

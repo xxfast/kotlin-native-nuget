@@ -12,6 +12,8 @@ import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSTypeParameter
 import com.google.devtools.ksp.symbol.Visibility
+import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.SUSPEND_LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedCsName
@@ -60,6 +62,12 @@ internal data class ForwardBridgeType(
    * ADR-215 lane A boxes a lambda's `T`: `NugetHandles.retain` out, `WrapOwned<T>` back.
    */
   val typeParameter: Boolean = false,
+  /**
+   * ADR-236: a lambda-typed property's slot, on the [ForwardBridgeWire.OBJECT] wire: the C# getter
+   * hands Kotlin an owned handle to the lambda its `KotlinFunc` carries, and the setter wraps the
+   * handle Kotlin retained in a fresh one.
+   */
+  val lambda: BridgeType.ReturnedLambda? = null,
 )
 
 internal data class ForwardBridgeParameter(
@@ -365,7 +373,8 @@ internal object ForwardInterfaceBridgePlanner {
     if (type.isFlowType()) {
       return refuse("is a Flow member, which a C# implementation cannot supply", ASYNC_HINT)
     }
-    val result: ForwardBridgeType = bridgeType(type, classifier, owner)
+    val result: ForwardBridgeType = lambdaSlotType(type, classifier)
+      ?: bridgeType(type, classifier, owner)
       ?: return refuse("has a type the bridge cannot carry", "use one of $CARRIED_TYPES")
     narrowThrowableOf(result)?.let { declared -> return refuseNarrow(member, name, declared) }
     if (result.wire == ForwardBridgeWire.UNIT) {
@@ -501,6 +510,27 @@ internal object ForwardInterfaceBridgePlanner {
     if (refused.refusals.any { refusal -> refusal.narrowThrowable == null }) return null
     val first: ForwardBridgeRefusal = refused.refusals.first()
     return first.name to requireNotNull(first.narrowThrowable)
+  }
+
+  /**
+   * ADR-236: a lambda-typed property crosses as the lambda handle, under the same BCL delegate
+   * spelling the Kotlin-backed half declares, on the bridge factory and the ADR-039 listener alike. Property positions only: a lambda
+   * PARAMETER keeps the per-call callback route.
+   */
+  private fun lambdaSlotType(
+    type: KSType,
+    classifier: ForwardBridgeTypeClassifier,
+  ): ForwardBridgeType? {
+    val classified: BridgeType = classifier.lambdaPropertyOrNull(type) ?: return null
+    val lambda: BridgeType.ReturnedLambda = classified.unwrapNullable() as BridgeType.ReturnedLambda
+    if (lambda.unnameableTypeArgument() != null) return null
+    return ForwardBridgeType(
+      ForwardBridgeWire.OBJECT,
+      type.kotlinQualifiedSpelling(),
+      classified.forwardPropertyCsharpType(),
+      nullable = classified is BridgeType.Nullable,
+      lambda = lambda,
+    )
   }
 
   private fun bridgeType(
@@ -640,3 +670,31 @@ internal fun genericBridgeEntryName(
 /** ADR-222: the interface declares type parameters, so its bridge is generic on both halves. */
 internal val ForwardBridgeInterfacePlan.isGeneric: Boolean
   get() = declaration.typeParameters.isNotEmpty()
+
+/**
+ * ADR-236: the Kotlin source spelling of [this] type for a generated `override`, every class named
+ * by its qualified name (the generated file imports none of them) and a function type in arrow
+ * syntax (`(kotlin.Int) -> kotlin.String`, `suspend (kotlin.Int) -> kotlin.Int`). A type
+ * parameter keeps its declared name; `*` stays a star.
+ */
+internal fun KSType.kotlinQualifiedSpelling(): String {
+  val type: KSType = expandAliases()
+  val nullable: String = if (type.isMarkedNullable) "?" else ""
+  val declaration = type.declaration
+  if (declaration is KSTypeParameter) return declaration.name.asString() + nullable
+  val qualified: String = declaration.qualifiedName?.asString() ?: declaration.simpleName.asString()
+  val arguments: List<String> = type.arguments.map { argument ->
+    argument.type?.resolve()?.kotlinQualifiedSpelling() ?: "*"
+  }
+  val keyword: String? = when {
+    qualified in LAMBDA_TYPES -> ""
+    qualified in SUSPEND_LAMBDA_TYPES -> "suspend "
+    else -> null
+  }
+  if (keyword != null && arguments.isNotEmpty()) {
+    val lambda = "$keyword(${arguments.dropLast(1).joinToString(", ")}) -> ${arguments.last()}"
+    return if (type.isMarkedNullable) "($lambda)?" else lambda
+  }
+  val generic: String = if (arguments.isEmpty()) "" else arguments.joinToString(", ", "<", ">")
+  return "$qualified$generic$nullable"
+}

@@ -298,6 +298,9 @@ internal data class ForwardPropertyPlan(
       // setter, so a plan carrying one never reaches here).
       is BridgeType.TypeParameter -> Unit
 
+      // ADR-236: valid at a property on every owner, getter and setter, over the lambda handle.
+      is BridgeType.ReturnedLambda -> Unit
+
       // ADR-077 sub-item 2: a value-class property is valid exactly when its underlying is.
       is BridgeType.ValueClass -> validateType(type.underlying)
       is BridgeType.Nullable -> validateType(type.type)
@@ -305,7 +308,6 @@ internal data class ForwardPropertyPlan(
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
       is BridgeType.FlowSource,
-      is BridgeType.ReturnedLambda,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,
       is BridgeType.Unsupported,

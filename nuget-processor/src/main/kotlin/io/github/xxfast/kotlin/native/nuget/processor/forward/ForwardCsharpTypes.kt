@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
 import io.github.xxfast.kotlin.native.nuget.processor.cir.csLambdaType
+import io.github.xxfast.kotlin.native.nuget.processor.cir.csSuspendLambdaType
 
 /**
  * The public C# spelling of a [BridgeType], i.e. what a caller writes at a call site, as opposed
@@ -75,8 +76,9 @@ internal fun BridgeType.forwardPublicCsharpType(): String = when (this) {
       if (nullable) "?" else ""
   // ADR-160 amendment: ADR-012's consumer type, `KotlinFunc<...>`, or `KotlinAction<...>` for a
   // `Unit` result (issue #114). Only reached once [unnameableTypeArgument] found nothing.
-  is BridgeType.ReturnedLambda ->
-    csLambdaType(typeArguments.map { argument -> argument.forwardPublicCsharpType() })
+  is BridgeType.ReturnedLambda -> typeArguments
+    .map { argument -> argument.forwardPublicCsharpType() }
+    .let { spelled -> if (suspend) csSuspendLambdaType(spelled) else csLambdaType(spelled) }
 
   // ADR-147 amendment: a nullable-bounded bare `T` is `T`, not `T?`; the instantiation says
   // whether it holds null.
@@ -291,3 +293,40 @@ internal fun managedExceptionTextCs(name: String, nullable: Boolean): String {
   val text = "($name.GetType().FullName ?? \"System.Exception\") + \": \" + $name.Message"
   return if (nullable) "$name == null ? null : $text" else text
 }
+
+/**
+ * ADR-236: the public C# type of a lambda-typed PROPERTY, the BCL delegate a C# lambda converts
+ * to: `Func<..., R>` / `Action<...>`, or the ADR-210 `Func<..., CancellationToken, Task<R>>` /
+ * `Func<..., CancellationToken, Task>` for a `suspend` one, `?` when nullable. Every other type is
+ * its [forwardPublicCsharpType]. The getter binds the delegate to the lambda's `KotlinFunc`
+ * wrapper ([lambdaWrapperCsharpType]), whose own handle a setter passes straight back.
+ */
+internal fun BridgeType.forwardPropertyCsharpType(): String {
+  val lambda: BridgeType.ReturnedLambda =
+    (if (this is BridgeType.Nullable) type else this) as? BridgeType.ReturnedLambda
+      ?: return forwardPublicCsharpType()
+  val mark: String = if (this is BridgeType.Nullable) "?" else ""
+  return lambda.lambdaDelegateCsharpType() + mark
+}
+
+/** ADR-236: the BCL delegate spelling of [this] lambda; see [forwardPropertyCsharpType]. */
+internal fun BridgeType.ReturnedLambda.lambdaDelegateCsharpType(): String {
+  val spelled: List<String> = typeArguments.map { argument -> argument.forwardPublicCsharpType() }
+  val parameters: List<String> = spelled.dropLast(1)
+  val result: String = spelled.last()
+  if (suspend) {
+    val task: String = if (result == "void") "global::System.Threading.Tasks.Task"
+    else "global::System.Threading.Tasks.Task<$result>"
+    return (parameters + "global::System.Threading.CancellationToken" + task)
+      .joinToString(", ", "Func<", ">")
+  }
+  if (result != "void") return (parameters + result).joinToString(", ", "Func<", ">")
+  return if (parameters.isEmpty()) "Action" else parameters.joinToString(", ", "Action<", ">")
+}
+
+/** ADR-236: the `KotlinFunc` (or sibling) wrapper that owns [this] lambda's handle. */
+internal fun BridgeType.ReturnedLambda.lambdaWrapperCsharpType(): String = forwardPublicCsharpType()
+
+/** ADR-236: the wrapper method a property getter binds its delegate to. */
+internal fun BridgeType.ReturnedLambda.lambdaInvokeMethod(): String =
+  if (suspend) "InvokeAsync" else "Invoke"

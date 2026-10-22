@@ -738,3 +738,10 @@ writing `listener.tag = value` lands on the C# object the listener was subscribe
 read sees it. The gate stays whole-pair and keeps refusing an inherited property
 (`SKIPPED_UNSUPPORTED_INPUT`) and a type outside the slot vocabulary (`SKIPPED_UNSUPPORTED_RETURN`).
 Evidence: `NameTagBoard` in `test-library`, `ListenerPropertyTests`, LeakTests row 8j-listener-var.
+
+## Amendment (2026-10-23): a lambda-typed listener property
+
+A listener's `val`/`var` of a lambda type, nullable and `suspend` included, is in the property
+vocabulary. The C# property is the BCL delegate; Kotlin reads it through the subscription's bridge,
+calls it, and writes a `var` back to your object ([ADR-236](236-lambda-properties-on-every-owner.md)).
+Evidence: `Stopwatch`/`LapListener` in `test-library`, `LambdaPropertyOwnerTests`.

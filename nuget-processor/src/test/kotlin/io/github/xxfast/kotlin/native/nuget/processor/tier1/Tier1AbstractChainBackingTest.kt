@@ -610,17 +610,24 @@ class Tier1AbstractChainBackingTest {
     assertTrue(lambdas.compiledClean, "expected a clean compile; got: ${lambdas.compileErrors}")
     val cs: String = lambdas.generatedCSharp
     val kotlin: String = lambdas.generated
-    assertEquals(1, Regex("""KotlinFunc<string, string> OnSniff\b""").findAll(cs).count(), cs)
-    assertEquals(1, Regex("""KotlinFunc<string, string> OnPet\b""").findAll(cs).count(), cs)
-    assertEquals(1, Regex("""KotlinFunc<string, string> OnOpen\b""").findAll(cs).count(), cs)
-    assertFalse("library_abstractsniff__dog_get_onSniff" in kotlin, kotlin)
-    assertFalse("library_abstractsniff__kitten_get_onPet" in kotlin, kotlin)
+    // ADR-236: the property plan binds every one, the base abstract or virtual and each subclass
+    // (and backing wrapper) an `override`, so no declaration hides another (CS0108). The generic
+    // base binds its own now too.
+    listOf("OnSniff", "OnPet", "OnOpen").forEach { name ->
+      val declared: List<String> = cs.lines().filter { line ->
+        Regex("""Func<string, string> $name\b""").containsMatchIn(line)
+      }
+      assertTrue(declared.size >= 2, "expected $name on the base and its subclass; got $declared")
+      declared.forEach { line ->
+        assertTrue(
+          listOf("abstract ", "virtual ", "override ").any { modifier -> modifier in line },
+          "a re-declared $name hides the base's (CS0108): $line",
+        )
+      }
+    }
     assertContains(kotlin, "@CName(\"library_abstractsniff__box_get_onOpen\")")
-    // Bound, so never reported as skipped (the lambda-property rule, ADR-064); only the generic
-    // base's, which carries none (ADR-147), is named, and `Box` binds its own.
     val skipped: List<String> = lambdas.kspWarnings.filter { "SKIPPED_UNSUPPORTED_PROPERTY" in it }
-    assertEquals(1, skipped.size, "only Crate.onOpen is reported; ${lambdas.kspWarnings}")
-    assertContains(skipped.single(), "Crate.onOpen")
+    assertEquals(emptyList(), skipped, "every lambda property binds; ${lambdas.kspWarnings}")
 
     Tier1CSharpCompile.assertCompiles(
       lambdas,
@@ -636,14 +643,17 @@ class Tier1AbstractChainBackingTest {
                   using Dog dog = new Dog();
                   using Kitten kitten = new Kitten();
                   using Box box = new Box();
-                  using var sniff = dog.OnSniff;
-                  using var pet = kitten.OnPet;
-                  using var open = box.OnOpen;
+                  var sniff = dog.OnSniff;
+                  var pet = kitten.OnPet;
+                  var open = box.OnOpen;
                   return sniff.Invoke("a") + pet.Invoke("b") + open.Invoke("c");
               }
           }
       }
       """.trimIndent(),
+      // ADR-236: the lambda wrappers' delegate conversions are `unsafe`, as every packaged
+      // library allows.
+      allowUnsafe = true,
     )
   }
 

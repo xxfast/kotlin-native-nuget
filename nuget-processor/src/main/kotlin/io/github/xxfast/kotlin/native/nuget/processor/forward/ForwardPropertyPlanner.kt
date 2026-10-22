@@ -258,10 +258,9 @@ internal class ForwardPropertyPlanner(
     // that would spell one of them takes the `ext` role word instead (`ForwardSymbolTable`): an
     // unshadowed `val Leash?.x` beside a member `Leash.x` in ONE package both derive `leash_get_x`.
     // Plus every entry point the callable catalog minted ([callableExports]: a member function
-    // spelled `get_x` derives the same `leash_get_x`) and the hand-written getter of every member
-    // lambda property (`leash_get_onTap`), which no plan owns.
+    // spelled `get_x` derives the same `leash_get_x`).
     val taken: Set<String> = flatMap { plan -> plan.calls().map { call -> call.exportName } }
-      .toSet() + callableExports + legacyLambdaPropertyGetters(classes, sealed)
+      .toSet() + callableExports
     // ADR-132 amendment (2026-10-04): a nullable VALUE-type receiver (`val Int?.x`,
     // `val Uuid?.x`) plans after every other extension property, against their accessors too, so
     // beside a non-null twin it is the one that takes the `ext` role word, whichever of the two the
@@ -325,36 +324,6 @@ internal class ForwardPropertyPlanner(
     return classifier.classify(receiver).sealedAsHandle().isNullableValueTypeReceiver()
   }
 
-  /**
-   * The `<owner>_get_<name>` entry point the hand-written legacy getter of every member lambda
-   * property exports, on a class (`addClassExports`) and on a sealed arm (`addSealedClassExports`).
-   * No plan owns it, so neither planner's name set held it. Inherited properties are walked too,
-   * as the emitters walk them.
-   */
-  private fun legacyLambdaPropertyGetters(
-    classes: List<KSClassDeclaration>,
-    sealed: List<KSClassDeclaration>,
-  ): Set<String> = buildSet {
-    // The emitters' own rule (`carriesLegacyLambdaProperty`), so this set names exactly the getters
-    // `ClassExports` and `SealedClassExports` emit and no parallel predicate can drift from them.
-    fun addFrom(owner: KSClassDeclaration, prefix: String, carrier: ForwardLambdaPropertyCarrier) {
-      owner.getAllProperties()
-        .filter { prop -> prop.getVisibility() == Visibility.PUBLIC }
-        .filter { prop -> prop.carriesLegacyLambdaProperty(carrier) }
-        .forEach { prop -> add("${prefix}_get_${prop.simpleName.asString()}") }
-    }
-    classes.forEach { cls ->
-      addFrom(cls, cls.nativePrefix(symbols), cls.classLambdaPropertyCarrier())
-    }
-    sealed.forEach { base ->
-      base.getSealedSubclasses().forEach { arm ->
-        val prefix: String =
-          "${base.nativePrefix(symbols)}_${arm.simpleName.asString().lowercase()}"
-        addFrom(arm, prefix, ForwardLambdaPropertyCarrier.SEALED_ARM)
-      }
-    }
-  }
-
   /** `val Cat?.x`, as the author wrote the declaration's head. */
   private fun KSPropertyDeclaration.kotlinSpelling(): String {
     val keyword: String = if (isMutable) "var" else "val"
@@ -398,7 +367,6 @@ internal class ForwardPropertyPlanner(
           getExport = "${prefix}_get_${prop.simpleName.asString()}",
           setExport = "${prefix}_set_${prop.simpleName.asString()}",
           superClass = keptBase,
-          lambdaCarrier = ForwardLambdaPropertyCarrier.SEALED_BASE,
         )
       }
       .toList()
@@ -454,7 +422,6 @@ internal class ForwardPropertyPlanner(
           // would be CS0540.
           implementer = subclass,
           carriedInterfaces = sealed.forwardSupertypeNames(),
-          lambdaCarrier = ForwardLambdaPropertyCarrier.SEALED_ARM,
         )
       }
       .toList()
@@ -525,7 +492,6 @@ internal class ForwardPropertyPlanner(
           setExport = "${cls.nativePrefix(symbols)}_set_${prop.simpleName.asString()}",
           superClass = superClass,
           implementer = cls,
-          lambdaCarrier = cls.classLambdaPropertyCarrier(),
           // ADR-215: a plain generic class renders its own flow property now, over the erased receiver.
           flowCarrier = cls.typeParameters.isEmpty() || prop.takesGenericFlowRoute(cls),
         )
@@ -1071,9 +1037,6 @@ internal class ForwardPropertyPlanner(
     implementer: KSClassDeclaration? = null,
     // ADR-168 on an arm: the interfaces [implementer]'s C# base already carries, never explicit.
     carriedInterfaces: Set<String> = emptySet(),
-    // Which legacy lambda-property route re-emits this owner's lambda property, if any. NONE for
-    // every owner without one (a sealed base, an interface, every static owner).
-    lambdaCarrier: ForwardLambdaPropertyCarrier = ForwardLambdaPropertyCarrier.NONE,
     // Whether the legacy flow route renders this owner's flow property as a public C# property.
     // False for a generic class, which binds one only as an explicit interface member (ADR-174)
     // and renders none of its own, so no setter skip can say its C# property is read-only.
@@ -1105,7 +1068,10 @@ internal class ForwardPropertyPlanner(
       )
       return null
     }
-    val type: BridgeType = classifier.classify(typeOverride ?: prop.type.resolve()).sealedAsHandle()
+    // ADR-236: a function-type property crosses as the lambda handle on every owner.
+    val declaredType: KSType = typeOverride ?: prop.type.resolve()
+    val type: BridgeType = classifier.lambdaPropertyOrNull(declaredType)
+      ?: classifier.classify(declaredType).sealedAsHandle()
     // ADR-075: getter eligibility never depended on mutability or on the collection facet — a
     // `Collection` (nullable or not) plans whenever the C# read can spell every component
     // (`isReadable`; `isPlannable` already recurses through `Nullable`). Whether a *setter* can
@@ -1119,7 +1085,7 @@ internal class ForwardPropertyPlanner(
         }
         return null
       }
-      recordDropped(symbol, position, prop, type, lambdaCarrier, flowCarrier)
+      recordDropped(symbol, position, prop, type, flowCarrier)
       return null
     }
     val name: String = prop.simpleName.asString()
@@ -1404,52 +1370,15 @@ internal class ForwardPropertyPlanner(
    * (`CirTranslator`) project planned properties only, and neither has a flow adapter. Only the
    * class route (which the sealed base and arm positions share) genuinely re-emits them.
    *
-   * ROADMAP Phase 4 (2026-10-04): a lambda property is no longer decided by its [BridgeType]
-   * here. Since ADR-160 an admissible `(Int) -> Unit` classifies as [BridgeType.Callback], not as
-   * a `lambda` protocol, so the class and sealed-arm routes emitted it while this warned it was
-   * skipped; and the shared CLASS position kept a sealed base's or an interface's lambda silent
-   * though neither has a route. The answer is now the emitters' own predicate,
-   * [carriesLegacyLambdaProperty], for the owner's [lambdaCarrier].
-   *
-   * A carried lambda binds get-only, so a public `var` names its setter once, the ADR-075 /
-   * ADR-107 partial skip. A nullable lambda whose non-null form the owner carries is named for
-   * its nullability ([ForwardDroppedProperty.nullableFunctionType]), not for its type.
+   * ADR-236: a lambda property never lands here; the property plan binds one on every owner.
    */
   private fun recordDropped(
     symbol: String,
     position: ForwardPropertyPosition,
     prop: KSPropertyDeclaration,
     type: BridgeType,
-    lambdaCarrier: ForwardLambdaPropertyCarrier,
     flowCarrier: Boolean,
   ) {
-    if (prop.carriesLegacyLambdaProperty(lambdaCarrier)) {
-      if (prop.isMutable && prop.hasPublicSetter()) {
-        droppedSetters.add(
-          ForwardDroppedPropertySetter(
-            symbol = symbol,
-            node = prop,
-            publicName = prop.csharpMemberName(),
-            owner = ownerScope,
-            componentDescription = type.diagnosticTypeName(),
-            reason = "a function-type property binds read-only: its getter hands out the Kotlin " +
-                "lambda, and no setter route turns a C# value back into one",
-          ),
-        )
-      }
-      return
-    }
-    val nullableFunctionType: String? = prop.refusesNullableLambdaProperty(lambdaCarrier)
-    if (nullableFunctionType != null) {
-      dropped.add(
-        ForwardDroppedProperty(
-          symbol, prop, type.diagnosticTypeName(),
-          nullableFunctionType = nullableFunctionType,
-          owner = ownerScope,
-        ),
-      )
-      return
-    }
     val protocol: BridgeType.SpecializedProtocol? =
       type.unwrapNullable() as? BridgeType.SpecializedProtocol
     val isLegacyRouted: Boolean = position == ForwardPropertyPosition.CLASS &&
@@ -1589,6 +1518,9 @@ internal class ForwardPropertyPlanner(
   )
 
   private fun isPlannable(type: BridgeType): Boolean = when (type) {
+    // ADR-236: a lambda property plans when C# can name every type argument (issue #111).
+    is BridgeType.ReturnedLambda -> type.unnameableTypeArgument() == null
+
     BridgeType.Unit, BridgeType.Char, BridgeType.String, BridgeType.Instant, BridgeType.Duration,
     is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,
     is BridgeType.Interface -> true
@@ -1654,7 +1586,6 @@ internal class ForwardPropertyPlanner(
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
     is BridgeType.FlowSource,
-    is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
     is BridgeType.Unsupported,
@@ -1737,6 +1668,9 @@ internal class ForwardPropertyPlanner(
     is BridgeType.Collection, BridgeType.ByteArray,
     is BridgeType.TypeParameter -> ForwardAbiWireType.POINTER
 
+    // ADR-236: the lambda handle, minted by the getter and borrowed by the setter.
+    is BridgeType.ReturnedLambda -> ForwardAbiWireType.POINTER
+
     // ADR-107: the pointer to the `StableRef<NugetError>` envelope `buildError` produced, exactly
     // the value an `errorOut` slot carries.
     is BridgeType.Throwable -> ForwardAbiWireType.POINTER
@@ -1778,7 +1712,6 @@ internal class ForwardPropertyPlanner(
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
     is BridgeType.FlowSource,
-    is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
     is BridgeType.Unsupported,
@@ -1818,8 +1751,7 @@ internal class ForwardPropertyPlanner(
   private companion object {
     /** The [BridgeType.SpecializedProtocol] name prefixes whose *class* properties a legacy route
      *  still re-emits, so [recordDropped] must stay silent about them there. Matches the prefixes
-     *  `ForwardBridgeTypeClassifier` mints and `ForwardCallablePlanner.skipReason` routes. The
-     *  lambda prefixes are not here: [carriesLegacyLambdaProperty] answers for those. */
+     *  `ForwardBridgeTypeClassifier` mints and `ForwardCallablePlanner.skipReason` routes. */
     val LEGACY_ROUTED_PROTOCOLS: List<String> = listOf("flow ", "state flow ")
   }
 }

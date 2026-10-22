@@ -228,6 +228,18 @@ private fun StringBuilder.appendResultMarshalling(
     ForwardBridgeWire.UNIT -> appendLine("$indent$call")
 
     ForwardBridgeWire.OBJECT -> {
+      // ADR-236: a lambda result is the owned handle C# retained over its `KotlinFunc`'s lambda.
+      if (slot.result.lambda != null) {
+        if (slot.result.nullable) {
+          appendLine("${indent}val ref = $call ?: return null")
+        } else {
+          appendLine("${indent}val ref = $call!!")
+        }
+        appendLine("${indent}val value: ${slot.result.kotlin} = nugetUncheckedCast(ref.asStableRef<Any>().get())")
+        appendLine("${indent}NugetHandles.release(ref)")
+        appendLine("${indent}return value")
+        return
+      }
       // ADR-222: a `T` result is the box `WrapOwned<T>` minted, read and released as lane A does.
       if (slot.result.typeParameter) {
         if (slot.result.nullable) {

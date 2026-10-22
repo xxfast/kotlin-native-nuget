@@ -14,7 +14,7 @@ namespace IntegrationTests;
 /// Two outcomes, never one:
 /// <list type="bullet">
 /// <item>a type argument C# can name (an exported class, in any namespace) is <b>qualified</b>, so
-/// <c>CatCam.OnPick</c> is a real, callable <c>KotlinFunc&lt;CamId, Snapshot&gt;</c> even though
+/// <c>CatCam.OnPick</c> is a real, callable <c>Func&lt;CamId, Snapshot&gt;</c> even though
 /// both arguments live in <c>TestLibrary.Catcam.Lens</c> and the property lives in
 /// <c>TestLibrary.Catcam</c>;</item>
 /// <item>a type argument it cannot name (<c>Flow&lt;T&gt;</c>, an unexported dependency type) makes
@@ -37,7 +37,7 @@ public class LambdaTypeArgumentTests
         // that qualified only the result would still not compile.
         using var cam = new CatCam("Oreo");
         using var id = new CamId("oreo-front");
-        using KotlinFunc<CamId, Snapshot> pick = cam.OnPick;
+        Func<CamId, Snapshot> pick = cam.OnPick;
 
         using Snapshot snapshot = pick.Invoke(id);
 
@@ -51,7 +51,7 @@ public class LambdaTypeArgumentTests
         // on. A same-simple-name type in the wrong namespace would pass the compile and fail here.
         PropertyInfo onPick = typeof(CatCam).GetProperty("OnPick")!;
 
-        Assert.Equal(typeof(KotlinFunc<CamId, Snapshot>), onPick.PropertyType);
+        Assert.Equal(typeof(Func<CamId, Snapshot>), onPick.PropertyType);
         Assert.Equal("TestLibrary.Catcam.Lens", typeof(CamId).Namespace);
         Assert.Equal("TestLibrary.Catcam.Lens", typeof(Snapshot).Namespace);
         Assert.Equal("TestLibrary.Catcam", typeof(CatCam).Namespace);
@@ -86,12 +86,11 @@ public class LambdaTypeArgumentTests
     public void SealedSubclass_OnPick_QualifiesItsTypeArguments()
     {
         // The third copy of the arm (CirClassTranslator.kt:1118). A sealed subclass property is
-        // the one position where the residual legacy lambda route still runs after ADR-111, so it
         // has to be crossed on its own. No instance needed: the property's declared type is the
         // assertion.
         PropertyInfo onPick = typeof(CamFeed.Live).GetProperty("OnPick")!;
 
-        Assert.Equal(typeof(KotlinFunc<CamId, Snapshot>), onPick.PropertyType);
+        Assert.Equal(typeof(Func<CamId, Snapshot>), onPick.PropertyType);
     }
 
     [Fact]

@@ -172,11 +172,10 @@ class Tier1CallbackParameterPlanTest {
    * freed handle on the first later invocation -- a use-after-free, not a compile error. Storing a
    * callback handed IN is ADR-037's route, not this one.
    *
-   * A function-typed PROPERTY is the control: it is untouched by ADR-160 and keeps its own
-   * pre-existing route, which hands the Kotlin lambda OUT as a `KotlinAction`/`KotlinFunc` handle
-   * (getter only, so nothing on the C# side is ever stored into Kotlin). Pinned here because the
-   * classifier now answers `Callback` for that property's type too, and the property planner has to
-   * keep declining it for the legacy route to see it at all.
+   * A function-typed PROPERTY is the control: it is untouched by ADR-160. ADR-236 plans it as the
+   * lambda handle, which hands the Kotlin lambda OUT as a `KotlinAction`/`KotlinFunc` and takes a
+   * C# delegate IN only through the wrapper's conversion, whose Kotlin lambda owns the delegate's
+   * key (released by its cleaner), never through a per-call ctx freed at the end of a call.
    */
   @Test
   fun `a stored callback position is refused while a lambda property keeps its own route`() {
@@ -207,13 +206,17 @@ class Tier1CallbackParameterPlanTest {
     // ...and no `GCHandle` is allocated anywhere in this module, which is the shape that would go
     // wrong: the plan's callback prelude frees its ctx at the end of the call.
     assertFalse(interop.contains("Ctx = default;"), "no callback ctx may be minted here")
-    // The control: the lambda-valued properties still bind, on their own route, getter-only.
+    // The control: the lambda-valued properties still bind, on the lambda handle route.
     assertTrue(
-      interop.contains("public KotlinAction<int> OnRing =>"),
+      interop.contains("public Action<int> OnRing"),
       "a function-typed property keeps its own handle-out route; got:\n$interop",
     )
     assertTrue(
-      interop.contains("public KotlinFunc<int, global::Interop.Bell> Make =>"),
+      interop.contains("Native_Set_onRing("),
+      "ADR-236: a function-typed `var` takes a C# delegate through its setter; got:\n$interop",
+    )
+    assertTrue(
+      interop.contains("public Func<int, global::Interop.Bell> Make"),
       "...including one whose lambda returns an exported object; got:\n$interop",
     )
   }

@@ -52,6 +52,7 @@ using TestLibrary.Workshop;
 using Suspendgeneric = TestLibrary.Suspendgeneric;
 using TestLibrary.Catnap;
 using Dash = TestLibrary.Dash;
+using Zoomrun = TestLibrary.Zoomrun;
 using Purrclock = TestLibrary.Purrclock;
 
 namespace LeakTests;
@@ -5256,7 +5257,7 @@ public class LiveHandleTests
     private static async Task DropUndisposedKotlinSuspendFunc()
     {
         await using var feeder = new CatFeeder("Oreo");
-        Assert.Equal("Oreo devoured 30g of tuna!", await feeder.OnFeedPortion.InvokeAsync("tuna", 30));
+        Assert.Equal("Oreo devoured 30g of tuna!", await feeder.OnFeedPortion.Invoke("tuna", 30, CancellationToken.None));
     }
 
     [Fact]
@@ -6942,5 +6943,131 @@ public class LiveHandleTests
             Assert.Null(await bowl.MaybeFeedAsync(false, _ => bites++));
             using (KotlinFlow<int> laps = await Dash.Sprint.WarmUpLapsAsync(1, _ => bites++)) Assert.Equal([0], await DrainFlow(laps));
         }, iterations: 100);
+    }
+
+    // ADR-236
+    // Lambda-typed properties on every owner the class route did not reach. A read of a `val`
+    // hands C# a delegate bound to the Kotlin lambda; a write hands Kotlin a lambda minted over a C#
+    // delegate, whose `GCHandle` key the lambda's cleaner frees (not counted, the collectability
+    // rows pin it). Ledger per iteration: each read +1, released once the wrapper is collected -1;
+    // each write of a C# delegate +1 (the minted lambda the temporary wrapper owns), released once
+    // that wrapper is collected -1; the replaced or cleared lambda is Kotlin's to drop;
+    // Relay<Skein>.OnPass: the borrowed argument wrapper +1/-1, the result wrapper +1/-1; YarnBin
+    // Unwind: three result wrappers +1/-1 each. relay, bin and the skeins outlive the loop. Net zero.
+    // Oreo laps the landing, Mylo resets the stopwatch.
+    [Fact]
+    public void LambdaProperty_EveryOwner_ReadAndWrite_ReturnsToBaseline()
+    {
+        using var red = new Zoomrun.Skein("red");
+        using var relay = new Zoomrun.Relay<Zoomrun.Skein>(red);
+        using var bin = new Zoomrun.YarnBin("Oreo");
+        Func<double, string> format = Zoomrun.Landing.Format;
+        Func<string, string> announce = Zoomrun.Racetrack.Announce;
+        Func<int, string> measure = Zoomrun.Burrow.Measure;
+        Func<string, string> cheer = Zoomrun.StrideExtensions.Cheer(Zoomrun.Stride.Trot);
+        AssertNoLeak(() =>
+        {
+            Zoomrun.Landing.OnLap.Invoke(1);
+            Zoomrun.Landing.Format = metres => $"Mylo timed {metres}";
+            Assert.Equal("Mylo timed 2", Zoomrun.Landing.Describe(2.0));
+            Zoomrun.Landing.Format = format;
+            Zoomrun.Landing.OnBump = who => who;
+            Assert.Equal("Oreo", Zoomrun.Landing.Bump("Oreo"));
+            Zoomrun.Landing.OnBump = null;
+            Zoomrun.ZoomrunSample.OnZoom.Invoke(1);
+            Zoomrun.ZoomrunSample.OnZoomOut = who => who;
+            Assert.Equal("Mylo", Zoomrun.ZoomrunSample.ZoomOut("Mylo"));
+            Zoomrun.ZoomrunSample.OnZoomOut = null;
+            Assert.Equal("on your marks", Zoomrun.Racetrack.OnStart.Invoke());
+            Zoomrun.Racetrack.Announce = runner => runner;
+            Assert.Equal("Oreo", Zoomrun.Racetrack.Call("Oreo"));
+            Zoomrun.Racetrack.Announce = announce;
+            Assert.Equal(3, Zoomrun.Burrow.OnDig.Invoke(1));
+            Zoomrun.Burrow.Measure = depth => $"{depth}";
+            Assert.Equal("1", Zoomrun.Burrow.Survey(1));
+            Zoomrun.Burrow.Measure = measure;
+            Assert.Equal(2, Zoomrun.StrideExtensions.OnStride(Zoomrun.Stride.Trot).Invoke(1));
+            Zoomrun.StrideExtensions.SetCheer(Zoomrun.Stride.Trot, who => who);
+            Assert.Equal("Mylo", Zoomrun.StrideExtensions.Shout(Zoomrun.Stride.Trot, "Mylo"));
+            Zoomrun.StrideExtensions.SetCheer(Zoomrun.Stride.Trot, cheer);
+            Zoomrun.StrideExtensions.Fallback = stride => $"{stride}";
+            Assert.Equal("Gallop", Zoomrun.StrideExtensions.Recover(Zoomrun.Stride.Gallop));
+            Zoomrun.StrideExtensions.Fallback = null;
+            using (Zoomrun.Skein previous = relay.OnPass.Invoke(red)) Assert.Equal("red", previous.Colour);
+            relay.Inspect = held => held.Colour;
+            Assert.Equal("red", relay.Describe());
+            relay.OnDrop = _ => { };
+            Assert.Equal("dropped", relay.Drop());
+            relay.OnDrop = null;
+            Assert.Equal("Oreo's red", bin.Unravel());
+            using (Zoomrun.Tote<Zoomrun.Tote<Zoomrun.Skein>> outer = bin.Unwind.Invoke())
+            using (Zoomrun.Tote<Zoomrun.Skein> inner = outer.Item)
+            using (Zoomrun.Skein skein = inner.Item)
+            {
+                Assert.Equal("Oreo's red", skein.Colour);
+            }
+        }, iterations: 200);
+    }
+
+    // ADR-236
+    // The interface halves. Ledger per iteration: LaserDot() wrapper +1/-1 (disposed); its
+    // OnPounce read +1/-1; Teach writes a Kotlin lambda into the C# Cue, handing C# a delegate over
+    // it +1, released when the wand drops it -1; the wand itself crosses into Kotlin as a bridge
+    // handle +1/-1 per call. Net zero.
+    private sealed class LeakyWand : Zoomrun.IPouncer
+    {
+        public Func<int, string> OnPounce { get; } = times => $"{times}";
+
+        public Func<string, string>? Cue { get; set; }
+
+        public Func<int, CancellationToken, Task<int>> OnLeap { get; } = (height, _) => Task.FromResult(height);
+
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void LambdaProperty_Interface_BothHalves_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            Zoomrun.IPouncer dot = Zoomrun.ZoomrunSample.LaserDot();
+            Assert.Equal("Mylo pounced 1 times", dot.OnPounce.Invoke(1));
+            dot.Cue = word => word;
+            Assert.Equal("treats", Zoomrun.ZoomrunSample.Cue(dot, "treats"));
+            dot.Cue = null;
+            (dot as IDisposable)?.Dispose();
+            var wand = new LeakyWand();
+            Assert.Equal("2", Zoomrun.ZoomrunSample.Pounce(wand, 2));
+            Zoomrun.ZoomrunSample.Teach(wand, "Oreo");
+            Assert.Equal("Oreo sit", wand.Cue!.Invoke("sit"));
+            wand.Cue = null;
+        }, iterations: 200);
+    }
+
+    // ADR-236
+    // A suspend member returning a StateFlow/SharedFlow with a plain lambda. Ledger per iteration:
+    // the job +1/-1, the returned flow +1, released on Dispose -1; the delegate is a context key
+    // released with the flow; the tower +1/-1 and the coroutine scope its first suspend call mints
+    // +1, released with the tower -1. Net zero.
+    [Fact]
+    public async Task LambdaProperty_SuspendStateAndSharedFlowResult_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var tower = new Zoomrun.LaserTower("Oreo");
+            using (KotlinStateFlow<int> glow = await tower.BeamAsync(level => level + 1))
+            {
+                Assert.Equal(3, tower.Pulse(2));
+                Assert.Equal(3, glow.Value);
+            }
+            using (KotlinSharedFlow<string> flashes = await tower.FlashAsync(times => $"{times}"))
+            {
+                Assert.True(tower.Flick(1));
+            }
+            using (KotlinStateFlow<int> beam = await Zoomrun.Lighthouse.ShineAsync(angle => angle))
+            {
+                Assert.Equal(5, Zoomrun.Lighthouse.Turn(5));
+            }
+        }, iterations: 50);
     }
 }

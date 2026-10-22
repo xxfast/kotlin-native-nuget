@@ -158,7 +158,9 @@ internal fun CirProperty.usesLegacyNativeImport(): Boolean {
   val isLambda: Boolean = type.startsWith("KotlinFunc<") || type.startsWith("KotlinAction")
   val isSuspendLambda: Boolean = type.startsWith("KotlinSuspendFunc<") ||
       type.startsWith("KotlinSuspendAction")
-  return isFlow || isLambda || isSuspendLambda
+  // ADR-236: a planned lambda property (every owner but a sealed arm) carries the error slot and
+  // imports through the ordinary rule; only the sealed arm's hand-written getter has none.
+  return isFlow || ((isLambda || isSuspendLambda) && !hasSyncErrorOut)
 }
 
 internal fun CirClass.methodNativeImport(method: CirMethod): CirDllImport =

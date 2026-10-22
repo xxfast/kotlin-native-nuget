@@ -80,12 +80,13 @@ class Tier1WrapValueClassTest {
     val result = run()
     val cs: String = result.generatedCSharp
 
-    assertContains(cs, "KotlinFunc<global::Tier1.ChartId, string> OnChart =>")
-    assertContains(cs, "KotlinFunc<global::Tier1.Finding, string> OnFinding =>")
+    // ADR-236: the property plan renders the header alone on its line.
+    assertContains(cs, "Func<global::Tier1.ChartId, string> OnChart\n")
+    assertContains(cs, "Func<global::Tier1.Finding, string> OnFinding\n")
 
     listOf("OnMaybe" to "tier1.wrap.MaybeId")
       .forEach { (member, valueClass) ->
-        assertFalse(cs.contains(" $member =>"), "expected no $member; a $valueClass has no box pair")
+        assertFalse(cs.contains(" $member\n"), "expected no $member; a $valueClass has no box pair")
         val diagnostic: String? = result.kspWarnings.firstOrNull { warning ->
           warning.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name}]") &&
             warning.contains("Courier.${member.replaceFirstChar { it.lowercase() }}")

@@ -26,6 +26,9 @@ import kotlin.test.assertTrue
  * A lambda declared on a sealed base (Toy Y) binds on every arm, whose getter reads the inherited
  * property off the arm; the base has no route of its own, and naming it skipped there was false.
  * A `var` lambda (Cat D, Pet.Dog R, Toy Yy) binds get-only and names its setter once.
+ *
+ * ADR-236: the property plan binds a lambda property on every owner, sealed ones included,
+ * nullable, `suspend` and `var` alike, so every cell binds and no setter is dropped.
  */
 class Tier1LambdaPropertyReportTest {
 
@@ -106,37 +109,37 @@ class Tier1LambdaPropertyReportTest {
   /** Qualified Kotlin symbol (minus the package) to its C# member name and whether it binds. */
   private val cells: Map<String, Pair<String, Boolean>> = mapOf(
     "Cat.onPurrA" to ("OnPurrA" to true),
-    "Cat.onPurrB" to ("OnPurrB" to false),
-    "Cat.onPurrC" to ("OnPurrC" to false),
+    "Cat.onPurrB" to ("OnPurrB" to true),
+    "Cat.onPurrC" to ("OnPurrC" to true),
     "Cat.onPurrD" to ("OnPurrD" to true),
     "Cat.onPurrE" to ("OnPurrE" to true),
     "Cat.onPurrF" to ("Renamed" to true),
-    "Cat.Companion.onPurrG" to ("OnPurrG" to false),
-    "Cat.Companion.onPurrH" to ("OnPurrH" to false),
-    "Kennel.onPurrI" to ("OnPurrI" to false),
-    "Kennel.onPurrJ" to ("OnPurrJ" to false),
-    "Kennel.onPurrK" to ("OnPurrK" to false),
-    "onPurrL" to ("OnPurrL" to false),
-    "onPurrM" to ("OnPurrM" to false),
-    "onPurrN" to ("OnPurrN" to false),
+    "Cat.Companion.onPurrG" to ("OnPurrG" to true),
+    "Cat.Companion.onPurrH" to ("OnPurrH" to true),
+    "Kennel.onPurrI" to ("OnPurrI" to true),
+    "Kennel.onPurrJ" to ("OnPurrJ" to true),
+    "Kennel.onPurrK" to ("OnPurrK" to true),
+    "onPurrL" to ("OnPurrL" to true),
+    "onPurrM" to ("OnPurrM" to true),
+    "onPurrN" to ("OnPurrN" to true),
     "Pet.Dog.onPurrO" to ("OnPurrO" to true),
-    "Pet.Dog.onPurrP" to ("OnPurrP" to false),
-    "Pet.Dog.onPurrQ" to ("OnPurrQ" to false),
+    "Pet.Dog.onPurrP" to ("OnPurrP" to true),
+    "Pet.Dog.onPurrQ" to ("OnPurrQ" to true),
     "Pet.Dog.onPurrR" to ("OnPurrR" to true),
-    "Groomer.onPurrS" to ("OnPurrS" to false),
-    "Groomer.onPurrT" to ("OnPurrT" to false),
-    "Groomer.onPurrU" to ("OnPurrU" to false),
-    "Groomer.onPurrV" to ("OnPurrV" to false),
+    "Groomer.onPurrS" to ("OnPurrS" to true),
+    "Groomer.onPurrT" to ("OnPurrT" to true),
+    "Groomer.onPurrU" to ("OnPurrU" to true),
+    "Groomer.onPurrV" to ("OnPurrV" to true),
     "Salon.onPurrW" to ("OnPurrW" to true),
-    "Salon.onPurrX" to ("OnPurrX" to false),
+    "Salon.onPurrX" to ("OnPurrX" to true),
     // Declared on the sealed base, bound on every arm (the base has no lambda route).
     "Toy.onPurrY" to ("OnPurrY" to true),
     "Toy.onPurrYy" to ("OnPurrYy" to true),
-    "Toy.onPurrZ" to ("OnPurrZ" to false),
+    "Toy.onPurrZ" to ("OnPurrZ" to true),
     // A sealed interface with a class arm and an enum arm: bound on the class arm, so the base is
     // silent; the enum arm's own override is named on the enum (asserted separately below).
     "Shape.onPurrSh" to ("OnPurrSh" to true),
-    "Crate.onPurrGen" to ("OnPurrGen" to false),
+    "Crate.onPurrGen" to ("OnPurrGen" to true),
   )
 
   private fun run(): Tier1Result {
@@ -149,7 +152,7 @@ class Tier1LambdaPropertyReportTest {
   /** A C# member declaration, never a `///` remark that names a skipped member. */
   private fun declares(csharp: String, member: String): Boolean = csharp.lines()
     .filterNot { line -> line.trimStart().startsWith("///") }
-    .any { line -> Regex("""\bKotlin\w*(<[^>]*>)? $member\b""").containsMatchIn(line) }
+    .any { line -> Regex("""\b(Func|Action)(<.*>)?\?? $member\b""").containsMatchIn(line) }
 
   private fun warningsFor(result: Tier1Result, symbol: String): List<String> =
     result.kspWarnings.filter { warning ->
@@ -169,8 +172,8 @@ class Tier1LambdaPropertyReportTest {
       if (actual == wanted) null else "$symbol: wanted $wanted, got $actual"
     }
     assertTrue(wrong.isEmpty(), wrong.joinToString("\n") + "\n${result.kspWarnings}")
-    // The enum arm has no lambda route; its override is named once, on the enum.
-    assertEquals(1, warningsFor(result, "Shape.Flat.onPurrSh").size, "${result.kspWarnings}")
+    // ADR-236: the enum arm's own override binds as an enum member property, named nowhere.
+    assertEquals(0, warningsFor(result, "Shape.Flat.onPurrSh").size, "${result.kspWarnings}")
   }
 
   /** The class route's getter and C# member agree on the rename and on the unrenamed extern. */
@@ -186,68 +189,37 @@ class Tier1LambdaPropertyReportTest {
   }
 
   /**
-   * A `var` lambda binds get-only, as every other refused setter does (ADR-075, ADR-107): the
-   * property survives and its setter is named once. A refused nullable `var` is named once as a
-   * whole and never again for its setter.
+   * ADR-236: a `var` lambda binds its setter on every owner, sealed ones included, so no setter is
+   * named dropped, and each renders a `set` accessor.
    */
   @Test
-  fun `a var lambda property names its dropped setter once`() {
+  fun `a var lambda property binds its setter on every owner`() {
     val result: Tier1Result = run()
-    fun setterWarnings(symbol: String): Int = result.kspWarnings.count { warning ->
+    val dropped: List<String> = result.kspWarnings.filter { warning ->
       warning.contains("SKIPPED_UNSUPPORTED_INPUT") &&
-          warning.contains("tier1.lambdaprop.$symbol:") &&
+          warning.contains("tier1.lambdaprop.") &&
           warning.contains("its setter is not generated")
     }
-    val counts: Map<String, Int> =
-      listOf("Cat.onPurrD", "Pet.Dog.onPurrR", "Toy.onPurrYy", "Cat.onPurrB", "Pet.Dog.onPurrP")
-        .associateWith(::setterWarnings)
-    assertEquals(
-      mapOf(
-        "Cat.onPurrD" to 1, "Pet.Dog.onPurrR" to 1, "Toy.onPurrYy" to 1,
-        "Cat.onPurrB" to 0, "Pet.Dog.onPurrP" to 0,
-      ),
-      counts,
-      result.kspWarnings.joinToString("\n"),
-    )
-    listOf("OnPurrD", "OnPurrR", "OnPurrYy").forEach { member ->
+    assertEquals(emptyList(), dropped, result.kspWarnings.joinToString("\n"))
+    listOf("OnPurrB", "OnPurrD", "OnPurrP", "OnPurrR", "OnPurrYy").forEach { member ->
       assertTrue(
-        result.generatedCSharp.lines()
-          .filterNot { line -> line.trimStart().startsWith("///") }
-          .none { line -> Regex("""\b$member\b""").containsMatchIn(line) && line.contains("set") },
-        "expected $member get-only",
+        Regex("""_set_${member.replaceFirstChar { it.lowercase() }}\b""")
+          .containsMatchIn(result.generated),
+        "expected a Kotlin setter export for $member",
       )
     }
   }
 
-  /**
-   * Where the non-null function type binds (an ordinary class, a sealed arm), the nullable one is
-   * refused for its nullability, and the hint says so instead of "expose a property whose type is
-   * not (Int) -> Unit?", which reads as if no lambda property could bind.
-   */
+  /** ADR-236: no lambda property is refused for its nullability, on any owner. */
   @Test
-  fun `a nullable lambda property names its nullability as the reason`() {
+  fun `a nullable lambda property binds and is named nowhere`() {
     val result: Tier1Result = run()
-    listOf("Cat.onPurrB", "Cat.onPurrC", "Salon.onPurrX", "Pet.Dog.onPurrP").forEach { symbol ->
-      val warning: String = warningsFor(result, symbol).single()
-      assertTrue(warning.contains("nullable function type"), warning)
-      assertTrue(!warning.contains("whose type is not"), warning)
-    }
-    val suspendWarning: String = warningsFor(result, "Salon.onPurrX").single()
-    assertTrue(suspendWarning.contains("suspend (Int) -> Unit"), suspendWarning)
-  }
-
-  /** A refused nullable lambda reaches neither half, so the Kotlin export cannot outlive it. */
-  @Test
-  fun `a nullable class or arm lambda property has no export on either half`() {
-    val result: Tier1Result = run()
-    listOf(
-      "cat_get_onPurrB", "cat_get_onPurrC", "salon_get_onPurrX", "pet_dog_get_onPurrP",
-    ).forEach { export ->
-      assertTrue(export !in result.generated, "unexpected Kotlin export $export")
-      assertTrue(
-        "Native_Get_${export.substringAfterLast("_get_")}" !in result.generatedCSharp,
-        "unexpected DllImport for $export",
-      )
-    }
+    val nullability: List<String> =
+      result.kspWarnings.filter { warning -> warning.contains("nullable function type") }
+    assertEquals(emptyList(), nullability, result.kspWarnings.joinToString("\n"))
+    listOf("cat_get_onPurrB", "cat_get_onPurrC", "salon_get_onPurrX", "pet_dog_get_onPurrP")
+      .forEach { export ->
+        assertTrue(export in result.generated, "expected Kotlin export $export")
+      }
   }
 }

@@ -113,10 +113,22 @@ class Tier1NullableLambdaTypeArgumentTest {
     )
 
     val cs: String = result.generatedCSharp
-    assertTrue("KotlinSuspendFunc<string?, string> OnFeed" in cs, "nullable payload; cs=$cs")
-    assertTrue("KotlinSuspendFunc<int, string?> OnNote" in cs, "nullable result; cs=$cs")
+    assertTrue(
+      "Func<string?, global::System.Threading.CancellationToken, " +
+        "global::System.Threading.Tasks.Task<string>> OnFeed" in cs,
+      "nullable payload; cs=$cs",
+    )
+    assertTrue(
+      "Func<int, global::System.Threading.CancellationToken, " +
+        "global::System.Threading.Tasks.Task<string?>> OnNote" in cs,
+      "nullable result; cs=$cs",
+    )
     // The control, unchanged.
-    assertTrue("KotlinSuspendFunc<string, string> OnPlain" in cs, "non-null is unchanged; cs=$cs")
+    assertTrue(
+      "Func<string, global::System.Threading.CancellationToken, " +
+        "global::System.Threading.Tasks.Task<string>> OnPlain" in cs,
+      "non-null is unchanged; cs=$cs",
+    )
     assertFalse("WrapArg<" in cs, "the suspend helper's own WrapArg<T> copy must be gone too")
     assertTrue(
       "Wrap<T1>(arg0, out owned0);" in cs,
@@ -177,19 +189,19 @@ class Tier1NullableLambdaTypeArgumentTest {
 
     val cs: String = result.generatedCSharp
     listOf(
-      "KotlinFunc<int?, string> OnFeed",
-      "KotlinFunc<string?, string?> OnName",
-      "KotlinAction<global::Interop.Toy?> OnToy",
-      "KotlinFunc<global::Interop.Mood?, string> OnMood",
-      "KotlinFunc<int, string> OnPlain",
-      "KotlinAction<string?> OnTick",
-      "KotlinFunc<int?, global::Interop.Toy?> OnWake",
-      "KotlinAction<string> OnPlain",
+      "Func<int?, string> OnFeed",
+      "Func<string?, string?> OnName",
+      "Action<global::Interop.Toy?> OnToy",
+      "Func<global::Interop.Mood?, string> OnMood",
+      "Func<int, string> OnPlain",
+      "Action<string?> OnTick",
+      "Func<int?, global::Interop.Toy?> OnWake",
+      "Action<string> OnPlain",
     ).forEach { spelled ->
       assertTrue(spelled in cs, "expected `$spelled`; got: ${lambdaLines(cs)}")
     }
   }
 
   private fun lambdaLines(cs: String): List<String> =
-    cs.lines().filter { "KotlinFunc<" in it || "KotlinAction<" in it }.map { it.trim() }
+    cs.lines().filter { "Func<" in it || "Action<" in it }.map { it.trim() }
 }

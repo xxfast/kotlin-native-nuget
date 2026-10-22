@@ -319,19 +319,23 @@ class Tier1SkipRemarksTest {
    * `parentDeclaration`. An object flattens its inherited members (a C# static class cannot extend
    * anything), so the hole an inherited function-type property leaves is on the OBJECT.
    *
-   * The base is the asymmetry that proves it: at a CLASS position a function-type property binds
-   * (`KotlinAction<int>`), while a static owner has no lambda-property route, so `Shed` keeps the
-   * member and says nothing. (A `StateFlow` was this cell's type until ADR-230 bound it on an
-   * object too.)
+   * Since ADR-236 no property type binds on a class and not on an object (a function type was the
+   * last; a `StateFlow` was this cell's type until ADR-230), so the inherited `gauge` binds on the
+   * object it flattens into and neither type names it. The method twin below keeps the ownership
+   * rule pinned.
    */
   @Test
   fun `an inherited dropped member of an object is owned by the object, not by its supertype`() {
     val csharp: String = staticPositions().generatedCSharp
 
     val onObject: String = csharp.docCommentsAbove("public static class Annexe")
+    assertFalse(
+      "`gauge`" in onObject,
+      "expected the inherited lambda property bound on the object; remarks=$onObject",
+    )
     assertTrue(
-      "SKIPPED_UNSUPPORTED_PROPERTY" in onObject && "`gauge`" in onObject,
-      "expected the inherited drop named on the object that flattened it; remarks=$onObject",
+      "public static Action<int> Gauge" in csharp,
+      "expected Annexe.Gauge; generatedCSharp=$csharp",
     )
     assertFalse(
       "gauge" in csharp.docCommentsAbove("public class Shed"),

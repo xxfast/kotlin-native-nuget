@@ -409,3 +409,11 @@ releases, so the "a callback can return `Unit`, a primitive or a `String`" refus
 to a class. The call-scoped unregister in this ADR still holds for an ordinary member. On a `suspend`
 or `Flow`-returning member the key is handed over to Kotlin once the native call returns and released
 by a `finally` around the coroutine body; late use behaves as described here.
+
+## Amendment (2026-10-23): lambda properties bind on every owner
+
+[ADR-236](236-lambda-properties-on-every-owner.md) removes the per-owner rule for a lambda-typed
+property: it binds on every owner, nullable included, and a `var` has a setter. The property type is
+now the BCL delegate (`Func<>`, `Action<>`), not `KotlinFunc`/`KotlinAction`. This is a breaking
+change for a lambda property that bound under this ADR. The "read-only `var`" and "refused nullable
+lambda property" rules above no longer hold.

@@ -23,9 +23,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
-import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLambdaPropertyCarrier
-import io.github.xxfast.kotlin.native.nuget.processor.forward.carriesLegacyLambdaProperty
-import io.github.xxfast.kotlin.native.nuget.processor.forward.reProjectsKeptBaseLambdaProperty
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpAsyncMemberName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpMemberName
 import io.github.xxfast.kotlin.native.nuget.processor.kotlinConstantToPascalCase
@@ -132,7 +129,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSupertypeNa
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedSubclass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardArmSealedParent
-import io.github.xxfast.kotlin.native.nuget.processor.forward.isOpenForOverride
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOpenForOverrideOn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardExtensible
 import io.github.xxfast.kotlin.native.nuget.processor.forward.admits
@@ -1225,111 +1221,9 @@ internal fun translateClass(
         return@mapNotNull flowProperty(prop, name, context, classifier, tracker)
       }
 
-      // The Kotlin half and the planner's skip report read the same predicate, so a lambda this
-      // declines (a nullable one) is named once and emitted by neither half.
-      if (!prop.carriesLegacyLambdaProperty(ForwardLambdaPropertyCarrier.CLASS)) {
-        return@mapNotNull null
-      }
-      // A kept base already declares it, over a getter Kotlin dispatches to this override; a
-      // second declaration here only hides it (CS0108). The Kotlin half reads the same rule.
-      if (prop.reProjectsKeptBaseLambdaProperty(cls, superClassDeclaration)) {
-        return@mapNotNull null
-      }
-
-      val isLambdaType: Boolean = qualifiedTypeName in LAMBDA_TYPES
-      val lambdaArity: Int = if (isLambdaType) propTypeResolved.arguments.size - 1 else -1
-      if (isLambdaType) tracker.lambdaArities.add(lambdaArity)
-
-      val isSuspendLambdaType: Boolean = qualifiedTypeName in SUSPEND_LAMBDA_TYPES
-      val suspendLambdaArity: Int =
-        if (isSuspendLambdaType) propTypeResolved.arguments.size - 1 else -1
-      if (isSuspendLambdaType) {
-        tracker.suspendLambdaArities.add(suspendLambdaArity)
-        tracker.needsAsync = true
-      }
-
-      if (!isLambdaType && !isSuspendLambdaType) return@mapNotNull null
-
-      // Issue #111: one type argument C# cannot name (`Flow<Snapshot>`, an unexported dependency
-      // type, a nested class) makes the whole property unspellable, so it is skipped named rather
-      // than emitted as `KotlinFunc<CamId, Flow>` for the consumer's compiler to reject.
-      // ADR-171: a value class with a box/unbox pair is nameable too; `Wrap<T>`/`FromHandle<T>`
-      // carry it. One without a pair stays unnameable, so the lambda is refused by name here
-      // rather than bound and left to throw at the first `Invoke`.
-      val nameableTypes: Set<String> = exportedTypes + callableCatalog.boxedValueClasses
-      val unnameableTypeArgument: CsTypeArgument.Unnameable? =
-        if (isLambdaType || isSuspendLambdaType) {
-          csTypeArguments(propTypeResolved.arguments, nameableTypes, context, classifier)
-        } else null
-      if (unnameableTypeArgument != null) {
-        ForwardDiagnosticSink.emit(
-          listOf(
-            lambdaTypeArgumentDiagnostic(
-              kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
-              symbol = prop,
-              declaration = "$name.$propName",
-              typeArgument = unnameableTypeArgument.typeArgument,
-              owner = cls.forwardDiagnosticOwner(),
-              member = propName,
-            ),
-          ),
-          logger,
-        )
-        return@mapNotNull null
-      }
-
-      val lambdaTypeArgs: List<String> = if (isLambdaType) {
-        csTypeArgumentNames(propTypeResolved.arguments, nameableTypes, context, classifier)
-      } else emptyList()
-
-      val lambdaCsType: String = if (isLambdaType) csLambdaType(lambdaTypeArgs) else ""
-
-      val suspendLambdaTypeArgs: List<String> = if (isSuspendLambdaType) {
-        csTypeArgumentNames(propTypeResolved.arguments, nameableTypes, context, classifier)
-      } else emptyList()
-
-      val suspendLambdaIsUnit: Boolean = isSuspendLambdaType &&
-          (suspendLambdaTypeArgs.lastOrNull() == "void" ||
-              propTypeResolved.arguments.lastOrNull()?.type?.resolve()?.declaration?.qualifiedName?.asString() == "kotlin.Unit")
-
-      val suspendLambdaCsType: String = if (isSuspendLambdaType) {
-        if (suspendLambdaIsUnit) {
-          if (suspendLambdaArity == 0) "KotlinSuspendAction"
-          else {
-            val typeParams: String = suspendLambdaTypeArgs.dropLast(1).joinToString(", ")
-            "KotlinSuspendAction<$typeParams>"
-          }
-        } else {
-          val typeParams: String = suspendLambdaTypeArgs.joinToString(", ")
-          "KotlinSuspendFunc<$typeParams>"
-        }
-      } else ""
-
-      val nativeReturnType: String = "IntPtr"
-      val type: String = when {
-        isLambdaType -> lambdaCsType
-        isSuspendLambdaType -> suspendLambdaCsType
-        else -> error("unreachable specialized property branch")
-      }
-
-      val getter: String = when {
-        isLambdaType -> "new $lambdaCsType(Native_Get_${propName.asCSymbol()}(_handle))"
-        isSuspendLambdaType ->
-          "new $suspendLambdaCsType(Native_Get_${propName.asCSymbol()}(_handle))"
-        else -> error("unreachable specialized property getter")
-      }
-
-      CirProperty(
-        name = csPropName,
-        type = type,
-        nativeReturnType = nativeReturnType,
-        nativeSetterType = nativeReturnType,
-        nativeName = propName.asCSymbol(),
-        getter = getter,
-        setter = null,
-        extraNatives = emptyList(),
-        hasSyncErrorOut = false,
-      )
+      // ADR-236: every other specialized property here was a lambda, which the property plan owns
+      // on this owner now, so nothing else reaches a legacy arm.
+      null
     }.toList()
 
   val allMethods = cls.getAllFunctions().toList()
@@ -3373,49 +3267,9 @@ internal fun translateSealedClass(
             )
           }
 
-          // Residual legacy route: a lambda-typed property, whose Kotlin half is still
-          // hand-spelled in `SealedClassExports` too. It swallows the error slot (`out _`) until
-          // lambda properties migrate for ordinary classes.
-          val propTypeResolved: KSType = prop.type.resolve().expandAliases()
-          if (!prop.carriesLegacyLambdaProperty(ForwardLambdaPropertyCarrier.SEALED_ARM)) {
-            return@mapNotNull null
-          }
-          val lambdaArity: Int = propTypeResolved.arguments.size - 1
-          tracker.lambdaArities.add(lambdaArity)
-          // Issue #111, the sealed-subclass copy of the same rule as the ordinary-class arm.
-          // ADR-171: a value class with a box/unbox pair is nameable here too.
-          val nameableTypes: Set<String> = exportedTypes + callableCatalog.boxedValueClasses
-          val unnameableTypeArgument: CsTypeArgument.Unnameable? =
-            csTypeArguments(propTypeResolved.arguments, nameableTypes, context, classifier)
-          if (unnameableTypeArgument != null) {
-            ForwardDiagnosticSink.emit(
-              listOf(
-                lambdaTypeArgumentDiagnostic(
-                  kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
-                  symbol = prop,
-                  declaration = "$subName.$propName",
-                  typeArgument = unnameableTypeArgument.typeArgument,
-                  // ADR-009: the arm is its own C# declaration, so the hole is on the arm.
-                  owner = subclass.forwardDiagnosticOwner(),
-                  member = propName,
-                ),
-              ),
-              logger,
-            )
-            return@mapNotNull null
-          }
-          val lambdaTypeArgs: List<String> =
-            csTypeArgumentNames(propTypeResolved.arguments, nameableTypes, context, classifier)
-          val lambdaCsType: String = csLambdaType(lambdaTypeArgs)
-          CirProperty(
-            name = prop.csharpMemberName(),
-            type = lambdaCsType,
-            nativeReturnType = "IntPtr",
-            nativeName = propName.asCSymbol(),
-            getter = "new $lambdaCsType(Native_Get_${propName.asCSymbol()}(_handle, out _))",
-            setter = null,
-            hasSyncErrorOut = true,
-          )
+          // ADR-236: a lambda-typed property is planned like any other, so nothing the planner
+          // declined has a route here.
+          null
         }
         .toList()
 

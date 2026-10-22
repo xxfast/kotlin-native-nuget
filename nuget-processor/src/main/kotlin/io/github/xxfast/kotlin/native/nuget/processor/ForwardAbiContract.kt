@@ -667,7 +667,10 @@ internal val NUGET_RUNTIME_EXPORTS: Set<String> = setOf(
   "nuget_func1_invoke",
   "nuget_func2_invoke",
   "nuget_func3_invoke",
+  // ADR-236: a C# delegate set into a Kotlin lambda property, plain and suspend.
+  "nuget_func_from_managed",
   "nuget_gc_collect",
+  "nuget_handle_retain",
   "nuget_job_cancel",
   "nuget_job_dispose",
   "nuget_list_add",
@@ -700,6 +703,7 @@ internal val NUGET_RUNTIME_EXPORTS: Set<String> = setOf(
   "nuget_suspend_func1_invoke",
   "nuget_suspend_func2_invoke",
   "nuget_suspend_func3_invoke",
+  "nuget_suspend_func_from_managed",
   "nuget_unwrap_bool",
   "nuget_unwrap_byte",
   "nuget_unwrap_char",

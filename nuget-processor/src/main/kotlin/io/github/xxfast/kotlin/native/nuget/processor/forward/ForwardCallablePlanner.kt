@@ -6200,6 +6200,8 @@ internal fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
  * ("Collection (element type ...)") for that case.
  */
 internal fun BridgeType.skipDetail(): String? = optInMarkerDetail()
+  // ADR-236: a lambda property names the one type argument C# cannot spell (issue #111).
+  ?: (unwrapNullable() as? BridgeType.ReturnedLambda)?.unnameableTypeArgument()
   // ADR-083 amendment (boundary nullability part B): ahead of the generic arms so the property
   // route's NULLABLE_MAP_KEY sentence names the key slot, matching the callable route's.
   ?: nullableMapKeyDetail()

@@ -8,7 +8,7 @@ started. `Flow<T>` becomes `IAsyncEnumerable<T>`, and `StateFlow<T>` adds a sync
 | Kotlin | C# |
 |---|---|
 | `suspend fun` | `async Task<T>`, suffixed `Async` |
-| `suspend (A) -> R` lambda | `KotlinSuspendFunc<A, R>` with `InvokeAsync` |
+| `suspend (A) -> R` lambda property | `Func<A, CancellationToken, Task<R>>`, see [below](#suspend-lambda-property) |
 | `suspend (A) -> R` as a parameter | `Func<A, CancellationToken, Task<R>>`, see [below](#suspend-lambda-parameter) |
 | `Flow<T>` as a parameter | `IAsyncEnumerable<T>`, see [below](#flow-parameter) |
 | `Flow<T>` | `KotlinFlow<T> : IAsyncEnumerable<T>` |
@@ -504,7 +504,7 @@ await Assert.ThrowsAnyAsync<ArgumentException>(() => platter.RateAsync(Medal.Bro
 - An inner class of a generic owner and a `suspend` member of a generic sealed *base* are still skipped,
   named. A generic sealed arm binds them itself, so declare the member on the arm.
 
-## `suspend () -> R` lambdas
+## `suspend () -> R` lambda properties {id="suspend-lambda-property"}
 
 ```kotlin
 val onFeedWith: suspend (String) -> String = { food ->
@@ -515,12 +515,14 @@ val onFeedWith: suspend (String) -> String = { food ->
 
 ```C#
 using var feeder = new CatFeeder("Mylo");
-using var onFeedWith = feeder.OnFeedWith;
-string result = await onFeedWith.InvokeAsync("salmon");
+Func<string, CancellationToken, Task<string>> onFeedWith = feeder.OnFeedWith;
+string result = await onFeedWith("salmon", CancellationToken.None);
 ```
 
-`InvokeAsync` optionally accepts a `CancellationToken`; cancelling it throws
-`TaskCanceledException` from the awaited call.
+The property is `Func<A, CancellationToken, Task<R>>` (`Task` for `Unit`), nullable when the Kotlin type
+is, on every owner. Cancelling the token throws `TaskCanceledException` from the awaited call. A `var`
+takes your own async delegate, and Kotlin awaits it; see
+[Lambdas and callbacks](lambdas-and-callbacks.md#kotlin-c-lambda-properties-and-returns).
 
 ## A `suspend` lambda as a parameter {id="suspend-lambda-parameter"}
 

@@ -4,6 +4,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticK
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -137,10 +138,9 @@ class Tier1FunctionTypeDiagnosticSpellingTest {
     listOf(
       "`fun handsOut` returns `suspend (Int) -> String`,",
       "`fun handsOutNullable` returns `(suspend (Int) -> String)?`,",
-      "`val held: suspend (Int) -> String` has a type the bridge cannot carry",
-      "`val heldNullable: (suspend (Int) -> String)?` has a type the bridge cannot carry",
-      "For `val held: suspend (Int) -> String`, use one of",
     ).forEach { expected -> assertContains(line, expected) }
+    // ADR-236: a lambda-typed property is a bridge slot now, so the refusal names none of them.
+    assertFalse("`val held" in line, line)
   }
 
   /** A plain function type was printed `Function1<Int, String>` by the same three sites. */
@@ -153,7 +153,6 @@ class Tier1FunctionTypeDiagnosticSpellingTest {
       "`fun plain` takes `prepare: (Int) -> String`,",
       "`fun plainNullable` takes `prepare: ((Int) -> String)?`,",
       "`fun handsOutPlain` returns `(Int) -> String`,",
-      "`val heldPlain: (Int) -> String` has a type the bridge cannot carry",
     ).forEach { expected -> assertContains(line, expected) }
   }
 
@@ -224,14 +223,15 @@ class Tier1FunctionTypeDiagnosticSpellingTest {
   }
 
   @Test
-  fun `a refused flow element and listener property name a suspend lambda the same way`() {
+  fun `a refused flow element names a suspend lambda as the source spells it`() {
     assertContains(
       diagnostic(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY, "Chef.heldFlow"),
       "but not the generic type suspend (Int) -> String. ",
     )
-    assertContains(
-      diagnostic(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN, "Bus.addListener"),
-      "its listener property `Listener.val held: suspend (Int) -> String` has a type",
+    // ADR-236: a listener's lambda property is a bridge slot now, so `Bus.addListener` binds.
+    assertTrue(
+      result.kspWarnings.none { line -> "Skipping tier1.spelling.Bus.addListener" in line },
+      "Bus.addListener binds",
     )
   }
 

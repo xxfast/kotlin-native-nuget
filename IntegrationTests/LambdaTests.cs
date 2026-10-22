@@ -15,7 +15,7 @@ public class LambdaTests
     public void Cat_OnNap_InvokeHasEffect()
     {
         using var cat = new Cat("Oreo", 9);
-        using var onNap = cat.OnNap;
+        var onNap = cat.OnNap;
         Assert.Equal(0, cat.Naps);
         onNap.Invoke();
         Assert.Equal(1, cat.Naps);
@@ -32,7 +32,7 @@ public class LambdaTests
     public void Cat_OnNapFor_InvokeWithArgument()
     {
         using var cat = new Cat("Oreo", 9);
-        using var onNapFor = cat.OnNapFor;
+        var onNapFor = cat.OnNapFor;
         onNapFor.Invoke(3);
         Assert.Equal(3, cat.Naps);
     }
@@ -41,7 +41,7 @@ public class LambdaTests
     public void Cat_OnMeow_Invoke()
     {
         using var cat = new Cat("Oreo", 9);
-        using var onMeow = cat.OnMeow;
+        var onMeow = cat.OnMeow;
         string result = onMeow.Invoke();
         Assert.Equal("Meow! My name is Oreo", result);
     }
@@ -50,7 +50,7 @@ public class LambdaTests
     public void Cat_OnPet_Invoke()
     {
         using var cat = new Cat("Oreo", 9);
-        using var onPet = cat.OnPet;
+        var onPet = cat.OnPet;
         string result = onPet.Invoke("purrs");
         Assert.Equal("Oreo purrs contentedly", result);
     }
@@ -59,7 +59,7 @@ public class LambdaTests
     public void Cat_OnMeow_MultipleInvocations()
     {
         using var cat = new Cat("Oreo", 9);
-        using var onMeow = cat.OnMeow;
+        var onMeow = cat.OnMeow;
         Assert.Equal("Meow! My name is Oreo", onMeow.Invoke());
         Assert.Equal("Meow! My name is Oreo", onMeow.Invoke());
     }
@@ -68,7 +68,7 @@ public class LambdaTests
     public void Cat_CountLives_ReturnsInt()
     {
         using var cat = new Cat("Oreo", 9);
-        using var countLives = cat.CountLives;
+        var countLives = cat.CountLives;
         int result = countLives.Invoke();
         Assert.Equal(9, result);
     }
@@ -77,7 +77,7 @@ public class LambdaTests
     public void Cat_IsAlive_ReturnsBool()
     {
         using var cat = new Cat("Oreo", 9);
-        using var isAlive = cat.IsAlive;
+        var isAlive = cat.IsAlive;
         bool result = isAlive.Invoke();
         Assert.True(result);
     }
@@ -86,7 +86,7 @@ public class LambdaTests
     public void Cat_FavoriteToy_ReturnsObject()
     {
         using var cat = new Cat("Oreo", 9);
-        using var favoriteToy = cat.FavoriteToy;
+        var favoriteToy = cat.FavoriteToy;
         using var toy = favoriteToy.Invoke();
         Assert.Equal("Mouse", toy.Name);
         Assert.Equal("Gray", toy.Color);

@@ -773,3 +773,9 @@ MultiPackage 9, SharedException 2, all six NativeAOT smoke cases); the real pipe
 the full JVM processor suite (1537 passed); `IntegrationTests/AbstractRedeclarationTests.cs` checks the
 accessors' base slot and `NewSlot` by reflection, the `Dispose` slot, and native dispatch. No new export,
 handle kind or release path, so no `LiveHandleTests` row.
+
+## Amendment (2026-10-23): lambda-typed object properties bind
+
+The "lambda-typed object property is a named `SKIPPED_UNSUPPORTED_PROPERTY` skip" rule no longer holds.
+A lambda property binds on an `object`, a companion, the top level and an enum, and its `var` setter
+binds ([ADR-236](236-lambda-properties-on-every-owner.md)).

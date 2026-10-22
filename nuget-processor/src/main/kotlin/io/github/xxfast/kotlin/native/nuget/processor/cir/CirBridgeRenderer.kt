@@ -1,5 +1,8 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.lambdaInvokeMethod
+import io.github.xxfast.kotlin.native.nuget.processor.forward.lambdaWrapperCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInterfacePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.bridgeImplVariable
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isGeneric
@@ -215,7 +218,15 @@ internal fun slotBody(slot: ForwardBridgeSlot, receiver: String): String {
       // ADR-201 amendment: the ADR-107 envelope, rebuilt (and disposed) by `BuildException`; a
       // null argument is the null pointer.
       // FromHandle disposes the StableRef the Kotlin side minted; that side deliberately does not.
-      ForwardBridgeWire.OBJECT -> if (parameter.type.throwable != null) {
+      // ADR-236: a lambda argument is a handle Kotlin retained, which the wrapper owns from here.
+      ForwardBridgeWire.OBJECT -> if (parameter.type.lambda != null) {
+        val lambda: BridgeType.ReturnedLambda = parameter.type.lambda
+        val wrapper: String = lambda.lambdaWrapperCsharpType()
+        val read = "new $wrapper(arg$index).${lambda.lambdaInvokeMethod()}"
+        val value: String =
+          if (parameter.type.nullable) "arg$index == IntPtr.Zero ? null : $read" else read
+        body.append("${parameter.type.csharp} value$index = $value; ")
+      } else if (parameter.type.throwable != null) {
         val read = "NugetErrorNative.BuildException(arg$index)"
         val value: String =
           if (parameter.type.nullable) "arg$index == IntPtr.Zero ? null : $read" else read
@@ -250,6 +261,15 @@ internal fun slotBody(slot: ForwardBridgeSlot, receiver: String): String {
     ForwardBridgeWire.UNIT -> body.append("$access;")
     ForwardBridgeWire.OBJECT -> {
       body.append("${slot.result.csharp} result = $access; ")
+      // ADR-236: the lambda handle the wrapper carries, retained so Kotlin owns its own.
+      val lambda: BridgeType.ReturnedLambda? = slot.result.lambda
+      if (lambda != null) {
+        val owner: String =
+          if (lambda.suspend) "NugetManagedSuspendLambda" else "NugetManagedLambda"
+        val wrapper: String = lambda.lambdaWrapperCsharpType()
+        body.append("return result is null ? IntPtr.Zero : $owner.Result(($wrapper)result);")
+        return body.toString()
+      }
       // ADR-222: a `T` result is a box Kotlin owns, minted by lane A's `WrapOwned<T>`.
       if (slot.result.typeParameter) {
         body.append("return NugetMarshal.WrapOwned<${slot.result.csharp.removeSuffix("?")}>(result!);")
