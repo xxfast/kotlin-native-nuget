@@ -463,8 +463,8 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
       // ADR-068 (2026-09-27 amendment): a static (top-level) member has no parent scope. It passes
       // null and `nuget_stateflow_collect` launches on the runtime's ad-hoc scope, as the
       // top-level suspend call itself does; the enumerator's job is still the cancellation handle.
-      val collectScope: String =
-        if (method.isStatic) "NugetKotlinHandle.Null" else "GetOrCreateScope()"
+      val adHoc: Boolean = method.isStatic || method.asyncReceiver != null
+      val collectScope: String = if (adHoc) "NugetKotlinHandle.Null" else "GetOrCreateScope()"
       appendLine("$indent                    NugetKotlinHandle collectScope = $collectScope;")
       appendLine("$indent                    t.SetResult(new $holderType(")
       appendLine("$indent                        (flowOnNext, flowOnComplete, flowOnError, flowUserData) =>")
@@ -537,7 +537,8 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
     appendLine("                throw new ObjectDisposedException(nameof($className));")
   }
   if (acquiredFlow) {
-    val scope = if (method.isStatic) "NugetKotlinHandle.Null" else "GetOrCreateScope()"
+    val adHoc: Boolean = method.isStatic || method.asyncReceiver != null
+    val scope = if (adHoc) "NugetKotlinHandle.Null" else "GetOrCreateScope()"
     appendLine("            NugetKotlinHandle ${locals.collectScope} = $scope;")
   }
   val (tcs, callback, callbackHandle, job, jobHandle, reg) = locals

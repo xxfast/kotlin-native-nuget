@@ -22,7 +22,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 internal fun KSFunctionDeclaration.isForwardGenericMemberOwner(): Boolean {
   // ADR-229: the static suspend route boxes a member's own `T` on every owner it reaches, an
   // extension, an enum body and a value class included, as the top-level route does.
-  val suspends: Boolean = Modifier.SUSPEND in modifiers
+  val suspends: Boolean = Modifier.SUSPEND in modifiers ||
+    // ADR-230: so does the static flow route, through ADR-215's trampoline.
+    (extensionReceiver == null && isStaticFlowCandidate())
   if (extensionReceiver != null) return suspends
   if (parentDeclaration == null) return true
   val owner: KSClassDeclaration = parentDeclaration as? KSClassDeclaration ?: return false

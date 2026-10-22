@@ -12,6 +12,7 @@ started. `Flow<T>` becomes `IAsyncEnumerable<T>`, and `StateFlow<T>` adds a sync
 | `suspend (A) -> R` as a parameter | `Func<A, CancellationToken, Task<R>>`, see [below](#suspend-lambda-parameter) |
 | `Flow<T>` as a parameter | `IAsyncEnumerable<T>`, see [below](#flow-parameter) |
 | `Flow<T>` | `KotlinFlow<T> : IAsyncEnumerable<T>` |
+| `Flow` family member of an `object`, companion, top level, enum or value class | the same wrapper, static or extension, see [below](#flow-static-owners) |
 | `SharedFlow<T>` | `KotlinSharedFlow<T> : KotlinFlow<T>`, replays the Kotlin replay cache first, never completes, adds `ReplayCache` |
 | `MutableSharedFlow<T>` (declared, not narrowed to `SharedFlow<T>`) | `KotlinMutableSharedFlow<T> : KotlinSharedFlow<T>`, adds `SubscriptionCount`, `EmitAsync` and `TryEmit` |
 | `Flow<T?>` | `KotlinFlow<T?>`, a `null` emission is a genuine item |
@@ -227,7 +228,8 @@ using KotlinMutableStateFlow<int> jar = await tracker.AwaitTreatJarAsync();
 jar.Value = 4;
 ```
 
-A top-level `suspend fun` returning `MutableStateFlow<T>` still awaits to a read-only holder.
+A top-level `suspend fun` returning `MutableStateFlow<T>` awaits to a settable holder as well, and so
+does one on an `object`, a companion, an enum or a value class.
 
 ### `StateFlow<T>` element type is an interface {id="suspend-stateflow-interface-element"}
 
@@ -405,6 +407,56 @@ public static Task<T> RateLaterAsync<T>(T medal, CancellationToken cancellationT
 ```
 
 An out-of-bound value faults the `Task` instead of throwing at the call.
+
+## `Flow` on an object, companion, top level, enum or value class {id="flow-static-owners"}
+
+A `Flow`, `StateFlow`, `SharedFlow`, `MutableStateFlow` or `MutableSharedFlow` return or property
+binds as the matching `KotlinFlow<T>` wrapper on every owner that has no instance to dispose: the top
+level, an `object`, a companion (default or named), an enum body and enum companion, and a
+non-generic value class. A member's own `T` binds as on a class member.
+
+```kotlin
+fun purrs(count: Int): Flow<Int>
+val bedtime: MutableStateFlow<Int>
+
+object PurrClock {
+  val beats: Flow<Int>
+  fun <T> echo(value: T, times: Int): Flow<T>
+}
+class Cuckoo { companion object { fun calls(): Flow<String> } }
+class Hourglass { companion object Sand { val level: StateFlow<Int> } }
+enum class Chime { WESTMINSTER, CUCKOO; fun play(): Flow<Int>; val echo: Flow<String> }
+value class Pendulum(val millis: Int) { fun beats(count: Int): Flow<Int> }
+```
+
+```C#
+await foreach (int n in Chimes.Purrs(3)) { }              // top level: the file's static class
+await foreach (int n in PurrClock.Beats) { }
+await foreach (string s in PurrClock.Echo("Mylo", 2)) { }
+await foreach (string s in Cuckoo.Calls()) { }            // companion: static on the owner
+using KotlinStateFlow<int> level = Hourglass.Level;       // named companion: still static on Hourglass
+await foreach (int n in Chime.Westminster.Play()) { }     // enum body: an extension member
+await foreach (string s in Chime.Cuckoo.Echo) { }         // extension property (C# 14)
+await foreach (int n in new Pendulum(250).Beats(3)) { }   // value class: a struct member
+using KotlinMutableStateFlow<int> bedtime = Chimes.Bedtime;
+bedtime.Value = 22;
+```
+
+Differences from a class member:
+
+- There is no owner to dispose, so each `await foreach` runs on its own scope and only its
+  enumerator ends it: finish the loop, `break`, or pass a token to `WithCancellation`.
+- A cold `Flow<T>` re-runs the Kotlin function or re-reads the property on every enumeration. Enumerating one
+  `KotlinFlow<int>` twice starts from the top both times.
+- A cold flow holds nothing until you enumerate it, so it needs no `Dispose()`. A returned or read
+  `MutableStateFlow` or `MutableSharedFlow` holds the Kotlin flow itself, so `using` it. Writes
+  through it, and through a second holder of the same Kotlin flow, are shared Kotlin storage:
+  setting `PurrClock.Hour` is visible through `PurrClock.Alarm()`.
+- A property read mints a new holder each time, so `Chimes.Bedtime` read twice gives two holders over
+  one flow.
+- A `var` flow property binds get-only and its setter is skipped, named, as on a class.
+- A `suspend` member with a flow result awaits to the same wrapper
+  (`await PurrClock.WinderAsync()` is a settable `KotlinMutableStateFlow<int>`, the top level included).
 
 ## `suspend` members of a generic class {id="suspend-generic-owner"}
 
@@ -1411,8 +1463,6 @@ await foreach (int n in creek.Stream(4)) { /* 4 */ }
 Not every shape binds:
 
 - A `var` flow property's setter is skipped, named, as on any class.
-- A `Flow` return on an `object`, a companion or a top-level function has no route at all, generic
-  or not. The generic form is named with the sentence that blames the type parameter.
 - A `Flow<T>` or `suspend` lambda *parameter* that mentions `T` [binds too](#flow-and-suspend-lambda-type-parameter).
 
 ## A type parameter in a `Flow` or `suspend` lambda parameter {id="flow-and-suspend-lambda-type-parameter"}

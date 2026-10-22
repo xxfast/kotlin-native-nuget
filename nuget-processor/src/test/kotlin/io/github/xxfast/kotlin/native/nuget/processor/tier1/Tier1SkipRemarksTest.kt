@@ -317,10 +317,12 @@ class Tier1SkipRemarksTest {
   /**
    * The inherited case, which is why the owner is stamped per WALK rather than read off
    * `parentDeclaration`. An object flattens its inherited members (a C# static class cannot extend
-   * anything), so the hole an inherited `StateFlow` leaves is on the OBJECT.
+   * anything), so the hole an inherited function-type property leaves is on the OBJECT.
    *
-   * The base is the asymmetry that proves it: at a CLASS position a Flow property is legacy-routed
-   * and genuinely re-emitted by the flow adapter, so `Shed` keeps the member and says nothing.
+   * The base is the asymmetry that proves it: at a CLASS position a function-type property binds
+   * (`KotlinAction<int>`), while a static owner has no lambda-property route, so `Shed` keeps the
+   * member and says nothing. (A `StateFlow` was this cell's type until ADR-230 bound it on an
+   * object too.)
    */
   @Test
   fun `an inherited dropped member of an object is owned by the object, not by its supertype`() {
@@ -341,26 +343,21 @@ class Tier1SkipRemarksTest {
   /**
    * The method-route twin of the cell above. An object flattens its inherited METHODS on the same
    * predicate its properties use (`isForwardPlannableMemberOf(obj, superClass = null)`), so an
-   * inherited `Flow`-returning method is dropped by the OBJECT and named on it.
+   * inherited method the object cannot bind is named on the OBJECT.
    *
-   * `Shed` is the control: at a CLASS position the same method is legacy-routed and genuinely
-   * re-emitted by the flow adapter, so the base keeps it and says nothing about it. That is the
-   * asymmetry that distinguishes "owned by the walk" from "owned by `parentDeclaration`".
+   * Since ADR-230 no method type binds on a class and not on an object (a Flow return was the
+   * last), so the base no longer keeps it: a lambda return is dropped on BOTH. The ownership rule
+   * is what stays pinned: each walk names its own hole on its own type, exactly once, so the
+   * inherited drop lands on `Annexe` and the declared one on `Shed`, neither borrowing the other's.
    */
   @Test
   fun `an inherited dropped method of an object is owned by the object, not by its supertype`() {
     val csharp: String = staticPositions().generatedCSharp
 
     val onObject: String = csharp.docCommentsAbove("public static class Annexe")
-    assertTrue(
-      "`readings`" in onObject,
-      "expected the inherited dropped method named on the object; remarks=$onObject",
-    )
-    assertFalse(
-      "readings" in csharp.docCommentsAbove("public class Shed"),
-      "expected the supertype -- which still binds the method through the flow adapter -- to " +
-          "stay clean; generatedCSharp=$csharp",
-    )
+    val onBase: String = csharp.docCommentsAbove("public class Shed")
+    assertEquals(1, onObject.split("`readings`").size - 1, "remarks=$onObject")
+    assertEquals(1, onBase.split("`readings`").size - 1, "remarks=$onBase")
   }
 
   /**
@@ -402,38 +399,34 @@ class Tier1SkipRemarksTest {
 
   /**
    * The static-position drops in one module: an object's own property, an inherited property, an
-   * inherited method, a companion's property and a top-level one. `Flow`/`StateFlow` throughout,
-   * which is stably unsupported at every static position -- no adapter exists for a flow on a
-   * static owner.
+   * inherited method, a companion's property and a top-level one. `Sequence` for the owners' own
+   * members, stably unsupported at every position (a flow on a static owner binds since ADR-230).
+   * The inherited property is a function type, which the class route binds and a static owner
+   * does not; the inherited method returns a lambda, which neither owner binds.
    */
   private fun staticPositions(): Tier1Result = Tier1Harness.run(
     """
     package tier1.statics
 
-    import kotlinx.coroutines.flow.Flow
-    import kotlinx.coroutines.flow.MutableStateFlow
-    import kotlinx.coroutines.flow.StateFlow
-    import kotlinx.coroutines.flow.flow
-
     object Pantry {
       var count: Int = 4
-      val level: StateFlow<Int> = MutableStateFlow(0)
+      val level: Sequence<Int> = emptySequence()
     }
 
     open class Shed(val origin: String) {
-      val gauge: StateFlow<Int> = MutableStateFlow(1)
-      fun readings(): Flow<Int> = flow { emit(1) }
+      val gauge: (Int) -> Unit = {}
+      fun readings(): (Int) -> Int = { it }
     }
 
     object Annexe : Shed("garden")
 
     class Hutch(val name: String) {
       companion object {
-        val wattage: StateFlow<Int> = MutableStateFlow(2)
+        val wattage: Sequence<Int> = emptySequence()
       }
     }
 
-    val ambient: StateFlow<Int> = MutableStateFlow(3)
+    val ambient: Sequence<Int> = emptySequence()
     """.trimIndent(),
     fileName = "Statics.kt",
     libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),

@@ -509,3 +509,11 @@ C#-side replay buffer is retired: replay is a Kotlin-side property of `SharedFlo
 bridge sees replayed items as ordinary `onNext` callbacks. The exact-`qualifiedName` ordering rule
 here is unchanged: a `StateFlow` is checked before the Flow set, and `SharedFlow` is only in the
 Flow set. **Verified** by the 2026-10-09 integration tests.
+
+## Amendment (2026-10-22): the hot kinds bind on owners with no instance scope
+
+A `StateFlow`, `MutableStateFlow`, `SharedFlow` or `MutableSharedFlow` return or property on the top
+level, an `object`, a companion, an enum body and enum companion or a value class was a named skip.
+[ADR-230](230-flow-on-static-owners.md) binds it as the same wrapper, static or as an extension, with
+the held `Mutable*` kinds taking a null collection scope. The `.Value` write, `CompareAndSet`,
+`Update`, `EmitAsync` and `TryEmit` are unchanged.

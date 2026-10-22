@@ -347,7 +347,8 @@ class Tier1MutableStateFlowReadOnlyElementTest {
       "public KotlinStateFlow<int>? MaybeDial()",
       "public Task<KotlinStateFlow<int?>> AwaitMaybeAsync(",
       "public Task<KotlinStateFlow<int>?> AwaitMemberAsync(",
-      "public static Task<KotlinStateFlow<int>> TopAwaitAsync(",
+      // ADR-230: the top-level route writes an awaited MutableStateFlow too.
+      "public static Task<KotlinMutableStateFlow<int>> TopAwaitAsync(",
       "public KotlinMutableStateFlow<int> Dial()",
       "public Task<KotlinMutableStateFlow<int>> AwaitDialAsync(",
     ).forEach { signature ->
@@ -357,7 +358,6 @@ class Tier1MutableStateFlowReadOnlyElementTest {
       "Journal.maybeDial:" to "a nullable MutableStateFlow method return has no write arm",
       "Journal.awaitMaybe:" to "an awaited MutableStateFlow of a nullable element has no write arm",
       "Journal.awaitMember:" to "an awaited nullable MutableStateFlow has no write arm",
-      "topAwait:" to "a top-level suspend function's MutableStateFlow has no write arm",
     ).forEach { (member, route) ->
       val named: List<String> =
         routes.kspWarnings.filter { it.contains("[nuget:") && it.contains(" $member") }
@@ -366,7 +366,7 @@ class Tier1MutableStateFlowReadOnlyElementTest {
       assertContains(named.single(), "setter is not generated because $route")
       assertContains(named.single(), "read-only KotlinStateFlow")
     }
-    listOf("Journal.dial:", "Journal.awaitDial:").forEach { member ->
+    listOf("Journal.dial:", "Journal.awaitDial:", "topAwait:").forEach { member ->
       assertTrue(
         routes.kspWarnings.none { it.contains("[nuget:") && it.contains(" $member") },
         "expected no diagnostic for $member kspWarnings=${routes.kspWarnings}",

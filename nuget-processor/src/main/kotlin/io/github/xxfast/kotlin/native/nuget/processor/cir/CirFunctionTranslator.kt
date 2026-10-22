@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import com.google.devtools.ksp.symbol.KSType
+import io.github.xxfast.kotlin.native.nuget.processor.exports.awaitsSettableMutableStateFlow
 import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
 import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.symbol.KSClassDeclaration
@@ -121,8 +123,21 @@ internal fun translateSuspendFunction(
 
   // Issue #108: a nullable Kotlin return has to reach C# as `Task<T?>`, otherwise a null result
   // is read back as a `0` primitive or as a live wrapper over `IntPtr.Zero`.
+  // ADR-230: the class route's settable awaited `MutableStateFlow<T>` (ADR-071 held-route
+  // amendment), written through the flow-keyed `_set_value` the static route now exports too.
+  val settable: Boolean = func.awaitsSettableMutableStateFlow() &&
+    stateFlowElement != null && !stateFlowElement.acquiredFlow
+  val write: CirStateFlowWrite? = if (settable) {
+    tracker.needsMutableStateFlow = true
+    val elementType: KSType? =
+      returnType?.arguments?.firstOrNull()?.type?.resolve()?.expandAliases()
+    mutableStateFlowWrite(elementType, requireNotNull(stateFlowElement).elementType)
+  } else {
+    null
+  }
   val asyncReturnType: String = when {
     isUnit -> ""
+    write != null -> "KotlinMutableStateFlow<${requireNotNull(stateFlowElement).elementType}>"
     stateFlowElement != null -> stateFlowElement.asyncReturnType
     returnShape is ForwardLegacyReturnShape.Marshalled -> returnShape.declaredCsharpType()
     // ROADMAP Phase 4: `Task<byte[]>`, the class route's own line.
@@ -206,6 +221,9 @@ internal fun translateSuspendFunction(
       if (stateFlowElement?.acquiredFlow == true) "${nativeName}_collect" else null,
     isAwaitedStateFlow = stateFlowElement != null && !stateFlowElement.acquiredFlow,
     sharedFlow = shared,
+    stateFlowWrite = write,
+    stateFlowSetValueNativeName = if (write != null) "${nativeName}_SetValue" else "",
+    stateFlowCompareAndSetNativeName = if (write != null) "${nativeName}_CompareAndSet" else "",
     awaitedStateFlowCollectNativeName =
       if (stateFlowElement?.collection != null) "${nativeName}_collect" else null,
     awaitedStateFlowValueNativeName =
@@ -257,7 +275,21 @@ internal fun translateSuspendFunction(
   } else {
     emptyList()
   }
-  return listOf(nativeImport, asyncMethod) + listOfNotNull(collector) + awaitedPair +
+  val writeImports: List<CirDllImport> = write?.let {
+    listOf(
+      CirDllImport(
+        libraryName = libraryName,
+        entryPoint = "${cname}_set_value",
+        returnType = "void",
+        name = "${nativeName}_SetValue",
+        parameters = listOf(CirParameter("flowHandle", KOTLIN_HANDLE)) + it.parameters,
+        visibility = CirVisibility.PRIVATE,
+        hasSyncErrorOut = true,
+      ),
+      heldStateFlowCompareAndSetImport(libraryName, cname, "${nativeName}_CompareAndSet", it),
+    )
+  }.orEmpty()
+  return listOf(nativeImport, asyncMethod) + listOfNotNull(collector) + awaitedPair + writeImports +
     shared?.let { flowKeyedSharedFlowImports(libraryName, cname, "${nativeName}_", it) }.orEmpty()
 }
 

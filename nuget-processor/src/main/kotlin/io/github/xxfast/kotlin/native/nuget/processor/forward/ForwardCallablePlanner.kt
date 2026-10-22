@@ -401,6 +401,11 @@ internal sealed interface ForwardCallableCatalogEntry {
      * included (that one rides the class's own scope).
      */
     val staticSuspend: ForwardStaticSuspendOwner? = null,
+    /**
+     * ADR-230: the static owner a `Flow` family member binds through on the static flow route,
+     * read back by [staticFlowCandidates]. Null on every other skip.
+     */
+    val staticFlow: ForwardStaticFlowOwner? = null,
   ) : ForwardCallableCatalogEntry {
 
     /** The Kotlin simple name of the dropped member, never the overload-suffixed [symbol]. */
@@ -656,6 +661,8 @@ internal data class ForwardCallablePlanCatalog(
   val droppedExtensionReceivers: List<ForwardDroppedExtensionReceiver> = emptyList(),
   // ADR-222: the generic interfaces an input position reaches, each planned as an erased bridge.
   val genericBridgeInterfaces: List<KSClassDeclaration> = emptyList(),
+  // ADR-230: the static flow properties the property planner handed the static flow route.
+  val staticFlowProperties: List<ForwardStaticFlowMember.Property> = emptyList(),
 ) {
   val plans: List<ForwardCallablePlan> = entries.mapNotNull { entry ->
     (entry as? ForwardCallableCatalogEntry.Planned)?.plan
@@ -842,13 +849,13 @@ internal data class ForwardCallablePlanCatalog(
   fun enumCompanionProperties(owner: String): List<ForwardPropertyPlan> =
     propertyPlans.filter { plan ->
       plan.position == ForwardPropertyPosition.COMPANION &&
-          plan.symbol.substringBeforeLast('.') == "$owner.Companion"
+          plan.symbol.substringBeforeLast('.').substringBeforeLast('.') == owner
     }
 
   /** ADR-095: the planned companion members of class [owner], in planning order. See above. */
   fun companionMethods(owner: String): List<ForwardCallablePlan> = plans.filter { plan ->
     plan.invocation.origin == ForwardCallableOrigin.COMPANION &&
-        plan.invocation.symbol.substringBeforeLast('.') == "$owner.Companion"
+        plan.invocation.symbol.substringBeforeLast('.').substringBeforeLast('.') == owner
   }
 
   /**
@@ -1129,6 +1136,7 @@ internal class ForwardCallablePlanner(
       propertyPlans, planner.droppedPropertySetters,
       planner.droppedProperties + carrierless.flatMap { companion -> companion.properties },
       planner.droppedExtensionReceivers,
+      staticFlowProperties = planner.staticFlowProperties,
     )
   }
 
@@ -1414,6 +1422,20 @@ internal class ForwardCallablePlanner(
         doc = prop.forwardKdoc(expects),
       )
     }
+    // ADR-230: a `Flow` family property binds on the static flow route, the underlying crossing
+    // as the receiver slot, as the value class's flow-returning methods do.
+    .map { entry ->
+      val prop: KSPropertyDeclaration = entry.node as? KSPropertyDeclaration ?: return@map entry
+      val underlying: ForwardStaticSuspendReceiver? = cls.primaryConstructor?.parameters
+        ?.firstOrNull()?.type?.resolve()?.let(classifier::staticSuspendReceiver)
+        ?.takeIf { cls.typeParameters.isEmpty() }
+      entry.onStaticFlowProperty(
+        prop,
+        underlying?.let {
+          ForwardStaticFlowOwner.ValueClass("${prefix}_get_${prop.simpleName.asString()}", cls, it)
+        },
+      )
+    }
     .toList()
 
   private fun valueClassMethodEntries(
@@ -1490,12 +1512,15 @@ internal class ForwardCallablePlanner(
         val underlying: ForwardStaticSuspendReceiver? = cls.primaryConstructor?.parameters
           ?.firstOrNull()?.type?.resolve()?.let(classifier::staticSuspendReceiver)
           ?.takeIf { cls.typeParameters.isEmpty() }
-        entry.onStaticSuspendRoute(
-          underlying?.let { ForwardStaticSuspendOwner.ValueClass(stem, cls, it) },
-        )
+        // ADR-230: a `Flow` family return binds on the static flow route, the same receiver slot.
+        entry
+          .onStaticSuspendRoute(
+            underlying?.let { ForwardStaticSuspendOwner.ValueClass(stem, cls, it) },
+          )
+          .onStaticFlowRoute(underlying?.let { ForwardStaticFlowOwner.ValueClass(stem, cls, it) })
       }
       .toList()
-      .nameUnroutedPositions()
+      .nameUnroutedPositions { skipped -> skipped.staticFlow != null }
   }
 
   /**
@@ -2475,16 +2500,17 @@ internal class ForwardCallablePlanner(
     target = null,
     member = function.simpleName.asString(),
     defaults = expectDefaultFlags(function),
-  ).nameUnroutedPosition {
+  ).onStaticFlowRoute(ForwardStaticFlowOwner.TopLevel("${symbols.topLevel(function)}$suffix"))
+    .nameUnroutedPosition { skipped ->
     // ADR-208: the top-level owner has no legacy route left for these reasons. Its one route (a
     // generic-class return, `fun f(): Box<Int>`) moved onto the plan, so every deferral that
-    // reaches here (a generic interface or an inner generic class at a return, a Flow, a
-    // lambda the plan does not carry) is named.
+    // reaches here (a generic interface or an inner generic class at a return, a lambda the plan
+    // does not carry) is named. ADR-230: but a Flow return binds on the static flow route.
     //
     // ADR-213: every top-level `fun <T>` but the ADR-198 reified unspellable case reaches the
     // catalog and names its own GENERIC skip. A `suspend` one does arrive (ROADMAP line 29) and
     // leaves `staticEntry` as a structural SUSPEND skip, which is not an unrouted candidate.
-    false
+    skipped.staticFlow != null
   }
 
   private fun objectEntries(obj: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
@@ -2528,7 +2554,8 @@ internal class ForwardCallablePlanner(
       val stem: String =
         "${prefix}_${toCName(member.simpleName.asString())}${entry.overloadTail(member)}"
       entry.onStaticSuspendRoute(ForwardStaticSuspendOwner.Object(stem, obj))
-    }.nameUnroutedPositions()
+        .onStaticFlowRoute(ForwardStaticFlowOwner.Object(stem, obj).takeIf { !obj.isSealedArm() })
+    }.nameUnroutedPositions { skipped -> skipped.staticFlow != null }
   }
 
   /**
@@ -2621,7 +2648,18 @@ internal class ForwardCallablePlanner(
         doc = function.forwardKdoc(expects).forParameters(function.parameters),
       )
     }
-    return members.map { member -> entryFor(member) }.nameUnroutedPositions()
+    // ADR-230: a `Flow` family return binds on the static flow route, by ordinal.
+    return members.map { member ->
+      val entry: ForwardCallableCatalogEntry = entryFor(member)
+      val stem: String =
+        "${prefix}_${toCName(member.simpleName.asString())}${entry.overloadTail(member)}"
+      entry.onStaticFlowRoute(
+        ForwardStaticFlowOwner.EnumMember(
+          stem, enum, ForwardStaticSuspendReceiver.Enum(type, owner),
+        )
+          .takeIf { !enum.isSealedArm() },
+      )
+    }.nameUnroutedPositions { skipped -> skipped.staticFlow != null }
   }
 
   /**
@@ -2632,8 +2670,8 @@ internal class ForwardCallablePlanner(
    */
   /**
    * ADR-229: a SUSPEND deferral on a static [owner] stays a SUSPEND skip carrying that owner, which
-   * the static suspend route binds. A null [owner] (a receiver the route has no slot for) and a
-   * `Flow`-returning member keep the named drop of [namedSuspend].
+   * the static suspend route binds. A null [owner] (a receiver the route has no slot for) keeps the
+   * named drop of [namedSuspend]. ADR-230: a `Flow` family result binds too, collected statically.
    */
   private fun ForwardCallableCatalogEntry.onStaticSuspendRoute(
     owner: ForwardStaticSuspendOwner?,
@@ -2642,10 +2680,41 @@ internal class ForwardCallablePlanner(
       return this
     }
     val function: KSFunctionDeclaration? = node as? KSFunctionDeclaration
-    if (owner == null || function == null || function.returnsStaticSuspendFlow()) {
+    if (owner == null || function == null) {
       return namedSuspend()
     }
     return copy(staticSuspend = owner)
+  }
+
+  /**
+   * ADR-230: a legacy-route deferral of a non-suspend `Flow` family return on a static [owner]
+   * carries that owner, which the static flow route binds (and `nameUnroutedPositions` leaves
+   * routed). Every other entry passes through unchanged.
+   */
+  private fun ForwardCallableCatalogEntry.onStaticFlowRoute(
+    owner: ForwardStaticFlowOwner?,
+  ): ForwardCallableCatalogEntry {
+    if (this !is ForwardCallableCatalogEntry.Skipped || reason !in UNROUTED_CANDIDATE_REASONS) {
+      return this
+    }
+    val function: KSFunctionDeclaration = node as? KSFunctionDeclaration ?: return this
+    if (owner == null || !function.isStaticFlowCandidate()) return this
+    return copy(staticFlow = owner)
+  }
+
+  /**
+   * ADR-230: [onStaticFlowRoute]'s property twin, for an owner whose properties the callable
+   * planner walks (a value class): a deferred `Flow` family [prop] carries its static owner.
+   */
+  private fun ForwardCallableCatalogEntry.onStaticFlowProperty(
+    prop: KSPropertyDeclaration,
+    owner: ForwardStaticFlowOwner?,
+  ): ForwardCallableCatalogEntry {
+    if (this !is ForwardCallableCatalogEntry.Skipped || reason !in UNROUTED_CANDIDATE_REASONS) {
+      return this
+    }
+    if (owner == null || !classifier.isStaticFlowProperty(prop)) return this
+    return copy(staticFlow = owner)
   }
 
   /** The `_n` overload tail of [this] entry's symbol, empty for the first of a name. */
@@ -2683,7 +2752,7 @@ internal class ForwardCallablePlanner(
       val suffix: String = if (occurrence == 1) "" else "_$occurrence"
       return staticEntry(
         function = function,
-        symbol = "$owner.Companion.$name$suffix",
+        symbol = "$owner.${companion.simpleName.asString()}.$name$suffix",
         publicName = function.csharpMemberName(),
         exportName = "${prefix}_companion_${toCName(name)}$suffix",
         origin = ForwardCallableOrigin.COMPANION,
@@ -2705,7 +2774,8 @@ internal class ForwardCallablePlanner(
       val stem: String =
         "${prefix}_companion_${toCName(member.simpleName.asString())}${entry.overloadTail(member)}"
       entry.onStaticSuspendRoute(ForwardStaticSuspendOwner.Companion(stem, cls))
-    }.nameUnroutedPositions()
+        .onStaticFlowRoute(ForwardStaticFlowOwner.Companion(stem, cls))
+    }.nameUnroutedPositions { skipped -> skipped.staticFlow != null }
   }
 
   private fun staticEntry(

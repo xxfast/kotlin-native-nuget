@@ -99,8 +99,10 @@ class Tier1SuspendFlowTest {
   @Test fun `refused combinations name their refusal and emit neither half`() {
     val refused: List<String> = listOf(
       "nullableCollection", "unsupported",
-      "mutableStateCollection", "extensionFlow",
+      "mutableStateCollection",
     )
+    // ADR-230: a `suspend` extension's flow result binds on the static suspend route.
+    assertTrue("ExtensionFlowAsync(this string " in result.generatedCSharp, result.generatedCSharp)
     // ADR-210: `suspend fun input(flow: Flow<Int>)` binds now, as `IAsyncEnumerable<int>`.
     assertTrue(
       "InputAsync(global::System.Collections.Generic.IAsyncEnumerable<int> flow, " in
@@ -116,16 +118,18 @@ class Tier1SuspendFlowTest {
     assertFalse("Generic_own_collect" in result.generated, result.generated)
   }
 
-  @Test fun `a suspend member on an object is absent and named exactly once`() {
-    val declarations: List<String> = result.generatedCSharp.lines()
-      .filterNot { line -> line.trimStart().startsWith("//") }
+  @Test fun `a suspend member on an object binds and is not named`() {
+    // ADR-230: an object's `suspend` member with a flow result binds on the static suspend route.
     assertTrue(
-      declarations.none { line -> Regex("\\bOwnObject(Async)?\\s*\\(").containsMatchIn(line) },
+      "public static Task<KotlinFlow<int>> OwnObjectAsync(" in result.generatedCSharp,
       result.generatedCSharp,
     )
-    val named: List<String> = result.kspWarnings
-      .filter { warning -> "Skipping tier1.suspendflow.Standalone.ownObject:" in warning }
-    assertEquals(1, named.size, "ownObject must be named once; kspWarnings=${result.kspWarnings}")
+    assertTrue(
+      result.kspWarnings.none { warning ->
+        "Skipping tier1.suspendflow.Standalone.ownObject:" in warning
+      },
+      result.kspWarnings.toString(),
+    )
     // ADR-219: a generic class's suspend member binds over the erased receiver.
     assertTrue(
       "public Task<KotlinFlow<int>> OwnAsync(" in result.generatedCSharp,

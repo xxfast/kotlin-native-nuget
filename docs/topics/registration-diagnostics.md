@@ -787,6 +787,16 @@ holds a `WeakReference` to the call's state in `StaticSuspend_ObjectCallComplete
 `StaticSuspend_ExtensionCallCompletes_ItsStateAndReceiverAreCollected` and
 `StaticSuspend_ArgumentFailsItsNullGuard_ItsStateIsCollected`.
 
+A [static flow](coroutines-and-flow.md#flow-static-owners) (the top level, an `object`, a companion,
+an enum or a value class) collects on its own scope, so a cold one mints only its job handle, which
+completion releases. `LeakTests/LiveHandleTests.cs` pins the count after the enumeration ends:
+`StaticFlow_EveryOwner_Completion_ReturnsToBaseline`, `StaticFlow_Fault_ReturnsToBaseline`,
+`StaticFlow_Cancellation_ReturnsToBaseline`, `StaticFlow_TightLoop_SynchronousCompletion_ReturnsToBaseline`
+and, for the held `MutableStateFlow` and `MutableSharedFlow` holders, `StaticFlow_HotHolders_ReturnToBaseline`.
+`LeakTests/CollectabilityTests.cs` holds a `WeakReference` to an undisposed flow and to the token
+source in `StaticFlow_CollectedToCompletion_TheFlowAndTokenAreCollected` and
+`StaticFlow_CancelledByTheToken_TheFlowAndTokenAreCollected`.
+
 <seealso>
     <category ref="related">
         <a href="reverse-overview.md">Consuming C# in Kotlin</a>

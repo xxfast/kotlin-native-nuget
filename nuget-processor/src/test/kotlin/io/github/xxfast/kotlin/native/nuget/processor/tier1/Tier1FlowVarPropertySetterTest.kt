@@ -21,7 +21,8 @@ import kotlin.test.assertTrue
  * hot-flow parameter's own remedy (`stateIn` / `shareIn` over a `Flow<T>` parameter).
  *
  * Owners: the skip fires wherever the flow route binds the getter, which is a class, an
- * interface, a sealed base and a sealed arm. An object, a companion and a top-level property have
+ * interface, a sealed base and a sealed arm. ADR-230: so do an object, a companion and the top
+ * level now. Before it, an object, a companion and a top-level property had
  * no flow route, so the whole property was already a named `SKIPPED_UNSUPPORTED_PROPERTY`. A
  * generic class is the owner left pinned as a `DEFECT`: it renders no flow property of its own
  * and nothing names that, which is a silent whole-property drop rather than a setter one.
@@ -327,24 +328,20 @@ class Tier1FlowVarPropertySetterTest {
   }
 
   /**
-   * No flow route serves these owners, so the whole property was already named and no setter
-   * skip is added beside it: there is no C# property for "is read-only" to be true of.
+   * ADR-230: the static flow route serves these owners, so each binds its getter and names
+   * its dropped setter once, like every other owner the flow route serves.
    */
   @Test
-  fun `an object, a companion and a top-level flow var stay a named whole-property skip`() {
-    val wording: String = "its type flow kotlinx.coroutines.flow.Flow has no property getter or " +
-        "setter shape. expose a bridgeable property (or a getter function) whose type is not " +
-        "flow kotlinx.coroutines.flow.Flow, and export that instead"
-
+  fun `an object, a companion and a top-level flow var bind get-only and name the setter`() {
+    // ADR-230: the static flow route binds the getter, so the setter is the one named skip.
     listOf(
       "tier1.flowvar.Kennel.source",
       "tier1.flowvar.Yard.Companion.source",
       "tier1.flowvar.topSource",
     ).forEach { declaration ->
-      assertEquals(
-        listOf("[nuget:$propertyCode] Skipping $declaration: $wording"),
-        diagnostics.filter { line -> "Skipping $declaration: " in line },
-      )
+      val lines: List<String> = diagnostics.filter { line -> "Skipping $declaration: " in line }
+      assertEquals(1, lines.size, "$declaration: $lines")
+      assertTrue(lines.single().startsWith("[nuget:$setterCode] "), lines.single())
     }
   }
 
@@ -408,10 +405,13 @@ class Tier1FlowVarPropertySetterTest {
         "tier1.flowvar.Feeder.shared",
         "tier1.flowvar.Feeder.source",
         "tier1.flowvar.Gauge.source",
+        "tier1.flowvar.Kennel.source",
         "tier1.flowvar.Meal.Wet.source",
         "tier1.flowvar.Meal.portions",
         "tier1.flowvar.TimedFeed.source",
         "tier1.flowvar.Trough.source",
+        "tier1.flowvar.Yard.Companion.source",
+        "tier1.flowvar.topSource",
       ),
       diagnostics
         .filter { line -> line.startsWith("[nuget:$setterCode] ") }

@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticFlowGetter
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.getConstructors
 import com.google.devtools.ksp.getDeclaredFunctions
@@ -1660,7 +1661,9 @@ internal fun translateClass(
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { !it.modifiers.contains(Modifier.CONST) }
       .flatMap { prop ->
-        val symbol: String = "${cls.qualifiedName?.asString() ?: name}.Companion.${prop.simpleName.asString()}"
+        val owner: String = cls.qualifiedName?.asString() ?: name
+        val symbol: String =
+          "$owner.${companion.simpleName.asString()}.${prop.simpleName.asString()}"
         val planned = callableCatalog.propertyFor(symbol)
         if (planned != null) {
           tracker.trackProperty(planned)
@@ -2235,7 +2238,26 @@ internal fun flowMembers(
   context: NugetContext,
   // ADR-215: reports a dropped builtin bound of a member's own `T`; null where no owner routes one.
   logger: KSPLogger? = null,
+  // ADR-230: the members are on an owner with no C# instance scope: no `_handle`, no scope, and
+  // [staticReceiver] (an enum's ordinal, a value class's underlying) first when the owner has one.
+  staticFlow: Boolean = false,
+  staticReceiver: CirParameter? = null,
+  // ADR-230: the planner's export stem of a static member, in place of the owner prefix and name.
+  staticStem: String? = null,
+  // ADR-230: an enum member's ordinal, the C# `this` parameter ahead of the declared ones.
+  extensionReceiver: CirParameter? = null,
 ): List<CirMember> {
+  // ADR-230: the owner slots every extern of these members starts with.
+  val ownerSlots: List<CirParameter> =
+    if (staticFlow) listOfNotNull(staticReceiver).nativeImportParameters()
+    else listOf(CirParameter("handle", KOTLIN_HANDLE))
+  // A struct receiver is read into this local first: a struct's lambdas cannot capture `this`.
+  val receiverLocal: String? = staticReceiver?.let { "receiverValue" }
+  fun ownerArgs(args: String): String =
+    listOfNotNull(
+      if (staticFlow) receiverLocal else "_handle",
+      args.ifEmpty { null },
+    ).joinToString(", ")
   if (flowMethods.isNotEmpty()) {
     tracker.needsFlow = true
     tracker.needsAsync = true
@@ -2255,6 +2277,7 @@ internal fun flowMembers(
     // the same two places the plan projection puts it (ADR-090).
     val suffix: String = callableCatalog.overloadSuffix(method)
     val cname: String = toCName(methodName) + suffix
+    val stem: String = staticStem ?: "${prefix}_$cname"
     // ADR-179: the public name takes `@CSharpName`; the extern stem keeps the Kotlin name.
     val csMethodName: String = method.csharpMemberName()
     val nativeStem: String =
@@ -2315,7 +2338,7 @@ internal fun flowMembers(
 
     // ADR-114: a collection parameter takes the public collection type with an IntPtr native
     // slot; every other parameter keeps mapParamType's shipped spelling.
-    val methodParams: List<CirParameter> =
+    val methodParams: List<CirParameter> = listOfNotNull(extensionReceiver) +
       legacyRouteParameters(
         method.parameters, classifier, tracker,
         callableCatalog.legacyDefaultFlags(method),
@@ -2331,10 +2354,10 @@ internal fun flowMembers(
       val acquireArgs: String = methodParams.joinToString(", ") { it.nativeArgument }
       val acquireImport = CirDllImport(
         libraryName = libraryName,
-        entryPoint = "${prefix}_$cname",
+        entryPoint = stem,
         returnType = "IntPtr",
         name = nativeStem,
-        parameters = listOf(CirParameter("handle", KOTLIN_HANDLE)) +
+        parameters = ownerSlots +
             methodParams.nativeImportParameters(),
         visibility = CirVisibility.PRIVATE,
       )
@@ -2347,8 +2370,14 @@ internal fun flowMembers(
             if (isNullableMember) "?" else "",
         nativeName = nativeStem,
         parameters = methodParams,
-        body = if (acquireArgs.isEmpty()) "_handle" else "_handle, $acquireArgs",
+        body = ownerArgs(acquireArgs),
         isFlow = true,
+        isExtension = extensionReceiver != null,
+        isStaticFlow = staticFlow,
+        isStatic = staticFlow && staticReceiver == null,
+        isFlowProperty = method is ForwardStaticFlowGetter,
+        flowReceiverArgument = staticReceiver?.nativeArgument,
+        flowReceiverLocal = receiverLocal,
         typeParameters = ownTypeParameters,
         flowElementType = flowCsElementType,
         flowElementRead = flowElementRead,
@@ -2358,8 +2387,8 @@ internal fun flowMembers(
       )
       return@flatMap listOf(
         acquireImport,
-        acquiredFlowCollectImport(libraryName, "${prefix}_$cname", "${nativeStem}Collect"),
-      ) + flowKeyedSharedFlowImports(libraryName, "${prefix}_$cname", nativeStem, shared) +
+        acquiredFlowCollectImport(libraryName, stem, "${nativeStem}Collect"),
+      ) + flowKeyedSharedFlowImports(libraryName, stem, nativeStem, shared) +
           heldMethod
     }
 
@@ -2374,10 +2403,10 @@ internal fun flowMembers(
       val acquireArgs: String = methodParams.joinToString(", ") { it.nativeArgument }
       val acquireImport = CirDllImport(
         libraryName = libraryName,
-        entryPoint = "${prefix}_$cname",
+        entryPoint = stem,
         returnType = "IntPtr",
         name = nativeStem,
-        parameters = listOf(CirParameter("handle", KOTLIN_HANDLE)) +
+        parameters = ownerSlots +
             methodParams.nativeImportParameters(),
         visibility = CirVisibility.PRIVATE,
       )
@@ -2389,7 +2418,7 @@ internal fun flowMembers(
         mutableStateFlowWrite(flowElementTypeResolved, flowCsElementType)
       val heldSetValueImport = CirDllImport(
         libraryName = libraryName,
-        entryPoint = "${prefix}_${cname}_set_value",
+        entryPoint = "${stem}_set_value",
         returnType = "void",
         name = "${nativeStem}SetValue",
         parameters = listOf(CirParameter("flowHandle", KOTLIN_HANDLE)) + heldWrite.parameters,
@@ -2404,8 +2433,14 @@ internal fun flowMembers(
         parameters = methodParams,
         // The acquire call's arguments, not the collect delegate's: the call happens once, in the
         // method body, before the wrapper is constructed.
-        body = if (acquireArgs.isEmpty()) "_handle" else "_handle, $acquireArgs",
+        body = ownerArgs(acquireArgs),
         isFlow = true,
+        isExtension = extensionReceiver != null,
+        isStaticFlow = staticFlow,
+        isStatic = staticFlow && staticReceiver == null,
+        isFlowProperty = method is ForwardStaticFlowGetter,
+        flowReceiverArgument = staticReceiver?.nativeArgument,
+        flowReceiverLocal = receiverLocal,
         typeParameters = ownTypeParameters,
         isStateFlow = true,
         flowElementType = flowCsElementType,
@@ -2417,7 +2452,7 @@ internal fun flowMembers(
         stateFlowCompareAndSetNativeName = "${nativeStem}CompareAndSet",
       )
       val heldCompareAndSetImport: CirDllImport = heldStateFlowCompareAndSetImport(
-        libraryName, "${prefix}_$cname", "${nativeStem}CompareAndSet", heldWrite,
+        libraryName, stem, "${nativeStem}CompareAndSet", heldWrite,
       )
 
       return@flatMap listOf(acquireImport, heldSetValueImport, heldCompareAndSetImport, heldMethod)
@@ -2429,15 +2464,18 @@ internal fun flowMembers(
       legacyCsharpNames(method.parameters, classifier, callableCatalog.legacyDefaultFlags(method))
     val callbackNames: List<String> =
       listOf(flowNames.onNext, flowNames.onComplete, flowNames.onError, flowNames.userData)
-    val nativeParams: List<CirParameter> = listOf(
-      CirParameter("handle", KOTLIN_HANDLE),
-      CirParameter(flowNames.scopeHandle, KOTLIN_HANDLE),
+    val nativeParams: List<CirParameter> = (
+      if (staticFlow) ownerSlots
+      else listOf(
+        CirParameter("handle", KOTLIN_HANDLE),
+        CirParameter(flowNames.scopeHandle, KOTLIN_HANDLE),
+      )
     ) + methodParams.nativeImportParameters() +
         callbackNames.map { name -> CirParameter(name, "IntPtr") }
 
     val nativeImport = CirDllImport(
       libraryName = libraryName,
-      entryPoint = "${prefix}_${cname}_collect",
+      entryPoint = "${stem}_collect",
       returnType = "IntPtr",
       name = "${nativeStem}Collect",
       parameters = nativeParams,
@@ -2446,7 +2484,10 @@ internal fun flowMembers(
 
     val paramNames: String = methodParams.joinToString(", ") { it.nativeArgument }
     val callbackArgs: String = callbackNames.joinToString(", ")
-    val nativeCallArgs: String = if (paramNames.isEmpty()) {
+    val nativeCallArgs: String = if (staticFlow) {
+      listOfNotNull(receiverLocal, paramNames.ifEmpty { null }, callbackArgs)
+        .joinToString(", ")
+    } else if (paramNames.isEmpty()) {
       "_handle, GetOrCreateScope(), $callbackArgs"
     } else {
       "_handle, GetOrCreateScope(), $paramNames, $callbackArgs"
@@ -2458,10 +2499,10 @@ internal fun flowMembers(
     val hasValueNativeImport: CirDllImport? = if (isNullableMember) {
       CirDllImport(
         libraryName = libraryName,
-        entryPoint = "${prefix}_${cname}_has_value",
+        entryPoint = "${stem}_has_value",
         returnType = "bool",
         name = "${nativeStem}HasValue",
-        parameters = listOf(CirParameter("handle", KOTLIN_HANDLE)) +
+        parameters = ownerSlots +
             methodParams.nativeImportParameters(),
         visibility = CirVisibility.PRIVATE,
       )
@@ -2472,10 +2513,10 @@ internal fun flowMembers(
       // parameters (no scope, no callbacks, no errorOut; StateFlow.value cannot throw).
       val valueNativeImport = CirDllImport(
         libraryName = libraryName,
-        entryPoint = "${prefix}_${cname}_value",
+        entryPoint = "${stem}_value",
         returnType = "IntPtr",
         name = "${nativeStem}Value",
-        parameters = listOf(CirParameter("handle", KOTLIN_HANDLE)) +
+        parameters = ownerSlots +
             methodParams.nativeImportParameters(),
         visibility = CirVisibility.PRIVATE,
       )
@@ -2489,6 +2530,12 @@ internal fun flowMembers(
         parameters = methodParams,
         body = nativeCallArgs,
         isFlow = true,
+        isExtension = extensionReceiver != null,
+        isStaticFlow = staticFlow,
+        isStatic = staticFlow && staticReceiver == null,
+        isFlowProperty = method is ForwardStaticFlowGetter,
+        flowReceiverArgument = staticReceiver?.nativeArgument,
+        flowReceiverLocal = receiverLocal,
         typeParameters = ownTypeParameters,
         isStateFlow = true,
         flowElementType = flowCsElementType,
@@ -2515,10 +2562,10 @@ internal fun flowMembers(
     } else {
       CirDllImport(
         libraryName = libraryName,
-        entryPoint = "${prefix}_${cname}_replay_cache",
+        entryPoint = "${stem}_replay_cache",
         returnType = "IntPtr",
         name = "${nativeStem}ReplayCache",
-        parameters = listOf(CirParameter("handle", KOTLIN_HANDLE)) +
+        parameters = ownerSlots +
             methodParams.nativeImportParameters(),
         visibility = CirVisibility.PRIVATE,
         hasSyncErrorOut = true,
@@ -2533,6 +2580,12 @@ internal fun flowMembers(
       parameters = methodParams,
       body = nativeCallArgs,
       isFlow = true,
+      isExtension = extensionReceiver != null,
+      isStaticFlow = staticFlow,
+      isStatic = staticFlow && staticReceiver == null,
+      isFlowProperty = method is ForwardStaticFlowGetter,
+      flowReceiverArgument = staticReceiver?.nativeArgument,
+      flowReceiverLocal = receiverLocal,
       typeParameters = ownTypeParameters,
       flowElementType = flowCsElementType,
       flowElementRead = flowElementRead,

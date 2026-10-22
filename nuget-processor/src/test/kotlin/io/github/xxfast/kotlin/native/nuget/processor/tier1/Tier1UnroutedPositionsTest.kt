@@ -3,6 +3,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.tier1
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertContains
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -95,7 +96,7 @@ class Tier1UnroutedPositionsTest {
     // generic shapes that bind on a class vanish here. Row 13a (the per-call lambda parameter) is
     // no longer one of them: it is on the ADR-062 plan since ADR-160, which is keyed to the
     // position rather than to the owner kind.
-    returns("tier1.unrouted.DepotRegistry.flowReturnOnObject"),
+    // ADR-230: `flowReturnOnObject` binds on the static flow route now; see the test below.
     returns("tier1.unrouted.DepotRegistry.callbackReturnOnObject"),
     returns("tier1.unrouted.DepotRegistry.genericReturnOnObject"),
     input("tier1.unrouted.DepotRegistry.genericParamOnObject"),
@@ -121,7 +122,7 @@ class Tier1UnroutedPositionsTest {
     // that exists nowhere in `Interop.cs` (the class route spells the same thing `KotlinFlow<int>`)
     // -> `CS0246` in `GeneratedBindingsCheck`. There is no top-level Flow route, so the fix is to
     // name it as a skip and stop emitting, not to invent one.
-    returns("tier1.unrouted.flowReturnOnTopLevel"),
+    // ADR-230: `flowReturnOnTopLevel` binds on the static flow route now; see the test below.
     input("tier1.unrouted.genericParamOnTopLevel"),
     // row 16: a structural own-`<T>` refusal on the plan (ADR-211). ADR-216 binds the old
     // `Result<List<T>>` sentinel, so it is a `U : T` bound now, which no erased argument meets.
@@ -354,7 +355,6 @@ class Tier1UnroutedPositionsTest {
       "FlowElementOnClass(",
       "CallbackElementOnClass(",
       "GenericElementOnClass(",
-      "FlowReturnOnObject(",
       "CallbackReturnOnObject(",
       "GenericReturnOnObject(",
       "GenericParamOnObject(",
@@ -363,7 +363,6 @@ class Tier1UnroutedPositionsTest {
       "FlowReturnOnExtension(",
       "GenericReturnOnExtension(",
       "StructuralOnExtension(",
-      "FlowReturnOnTopLevel(",
       "GenericParamOnTopLevel(",
       "StructuralRefusedOnTopLevel(",
     ).forEach { member ->
@@ -374,6 +373,19 @@ class Tier1UnroutedPositionsTest {
             "FlowReturnOnTopLevel()` renders against a type that does not exist)",
       )
     }
+  }
+
+  /** ADR-230: a Flow return on an object and at the top level binds as a static `KotlinFlow`. */
+  @Test
+  fun `the static Flow returns bind and are not named as a skip`() {
+    val result: Tier1Result = run()
+
+    assertContains(result.generatedCSharp, "public static KotlinFlow<int> FlowReturnOnObject()")
+    assertContains(result.generatedCSharp, "public static KotlinFlow<int> FlowReturnOnTopLevel()")
+    assertFalse(
+      result.kspWarnings.any { "flowReturnOnObject" in it || "flowReturnOnTopLevel" in it },
+      "kspWarnings=${result.kspWarnings}",
+    )
   }
 
   @Test

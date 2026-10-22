@@ -541,6 +541,66 @@ internal fun StringBuilder.renderStateFlowHandleHelper(helper: CirStateFlowHandl
   appendLine()
 }
 
+/** ADR-230: the head line of a flow member: a method, or a get-only property for a static one. */
+private fun CirMethod.flowHead(type: String, paramStr: String): String {
+  val modifiers: String = memberHead(if (isStatic) "public static " else "public ")
+  // An enum member's flow property is a C# 14 extension property over the entry (ADR-188's shape).
+  if (isFlowProperty && isExtension) {
+    return "        extension(${parameters.first().declaration})\n        {\n" +
+        "        public $type $explicitName"
+  }
+  if (isFlowProperty) return "        $modifiers$type $explicitName"
+  return "        $modifiers$type $explicitName${typeParameterList()}($paramStr)" + whereClauses()
+}
+
+/** The declared parameters; an enum member's static flow takes its ordinal as `this`. */
+private fun CirMethod.flowParameterList(): String =
+  parameters.mapIndexed { index, parameter ->
+    if (isExtension && index == 0) "this ${parameter.declaration}" else parameter.declaration
+  }.joinToString(", ")
+
+/** ADR-230: opens the member body, and the getter of a static flow property. */
+private fun StringBuilder.openFlowBody(method: CirMethod) {
+  appendLine("        {")
+  if (method.isFlowProperty) appendLine("        get {")
+  // A struct's lambdas cannot capture `this` (CS1673), so the underlying is read once, here.
+  if (method.flowReceiverLocal != null) {
+    appendLine("            var ${method.flowReceiverLocal} = ${method.flowReceiverArgument};")
+  }
+}
+
+/** ADR-230: the [openFlowBody] twin. */
+private fun StringBuilder.closeFlowBody(method: CirMethod) {
+  if (method.isFlowProperty) appendLine("        }")
+  appendLine("        }")
+  if (method.isFlowProperty && method.isExtension) appendLine("        }")
+}
+
+/** The owner's disposed check ahead of the body; a static flow member has no owner to check. */
+private fun StringBuilder.appendOwnerCheck(method: CirMethod, className: String) {
+  if (method.isStaticFlow) return
+  appendLine("            if (_handle.IsInvalid)")
+  appendLine("                throw new ObjectDisposedException(nameof($className));")
+}
+
+/** [disposedOwnerGuard] for an instance member; nothing for a static flow member. */
+private fun CirMethod.flowOwnerGuard(className: String): String =
+  if (isStaticFlow) "" else disposedOwnerGuard(className)
+
+/**
+ * The leading extern arguments before a re-invoked member's own: the owner's `_handle`, or a
+ * static flow member's receiver slot (none for an owner without one).
+ */
+internal fun CirMethod.flowOwnerArguments(paramNames: String): String {
+  val receiver: String? = if (isStaticFlow) flowReceiverLocal else "_handle"
+  return listOfNotNull(receiver, paramNames.ifEmpty { null }).joinToString(", ")
+}
+
+/** The scope a held flow's collect passes: the owner's, or null for a static flow member. */
+private fun CirMethod.heldCollectScope(): Pair<String, String> =
+  if (isStaticFlow) "NugetKotlinHandle" to "NugetKotlinHandle.Null"
+  else "NugetScopeHandle" to "GetOrCreateScope()"
+
 internal fun StringBuilder.renderFlowMethod(method: CirMethod, className: String) {
   if (method.isStateFlow) {
     renderStateFlowMethod(method, className)
@@ -553,7 +613,7 @@ internal fun StringBuilder.renderFlowMethod(method: CirMethod, className: String
     return
   }
 
-  val paramStr: String = method.parameters.joinToString(", ") { it.declaration }
+  val paramStr: String = method.flowParameterList()
   val nativeName: String = method.nativeName
   // ADR-026 amendment (2026-10-09): a nullable member (`Flow<T>?` return) is `KotlinFlow<T>?`,
   // probed exactly as ADR-067's `StateFlow<T>?` return is.
@@ -561,13 +621,9 @@ internal fun StringBuilder.renderFlowMethod(method: CirMethod, className: String
   // ADR-209: a read-only SharedFlow return is `KotlinSharedFlow<T>`, re-invoked like the collect.
   val holder: String = method.sharedFlow?.surface?.csharpHolder() ?: "KotlinFlow"
 
-  appendLine(
-    "        ${method.memberHead("public ")}$holder<${method.flowElementType}>$nullableSuffix " +
-        "${method.explicitName}${method.typeParameterList()}($paramStr)" + method.whereClauses(),
-  )
-  appendLine("        {")
-  appendLine("            if (_handle.IsInvalid)")
-  appendLine("                throw new ObjectDisposedException(nameof($className));")
+  appendLine(method.flowHead("$holder<${method.flowElementType}>$nullableSuffix", paramStr))
+  openFlowBody(method)
+  appendOwnerCheck(method, className)
   appendHasValueProbe(method)
   appendLine("            return new $holder<${method.flowElementType}>((${method.flowCallbackNames.joinToString(", ")}) =>")
   // ADR-114: the collect delegate runs per subscription, so the wire container is built inside it
@@ -576,7 +632,7 @@ internal fun StringBuilder.renderFlowMethod(method: CirMethod, className: String
   // element passes nothing and keeps the shipped single-argument construction.
   val read: String? = method.flowElementRead
   // The delegates read the owner's `_handle` on each use, long after the check above.
-  val ownerGuard: String = disposedOwnerGuard(className)
+  val ownerGuard: String = method.flowOwnerGuard(className)
   val replay: String? = method.sharedFlow?.let { shared ->
     reinvokedReplayArgument(method, shared.replayCache, "                ", ownerGuard)
   }
@@ -586,7 +642,7 @@ internal fun StringBuilder.renderFlowMethod(method: CirMethod, className: String
     if (trailing.isEmpty()) ");" else ",", ownerGuard,
   )
   if (trailing.isNotEmpty()) appendLine(trailing.joinToString(",\n") + ");")
-  appendLine("        }")
+  closeFlowBody(method)
   appendLine()
 }
 
@@ -597,19 +653,15 @@ internal fun StringBuilder.renderFlowMethod(method: CirMethod, className: String
  * on the parent's scope captured here. A nullable return answers null for a null flow.
  */
 private fun StringBuilder.renderHeldSharedFlowMethod(method: CirMethod, className: String) {
-  val paramStr: String = method.parameters.joinToString(", ") { it.declaration }
+  val paramStr: String = method.flowParameterList()
   val element: String = method.flowElementType
   val nullable: Boolean = method.isStateFlowNullableMember
   val shared: CirSharedFlow = requireNotNull(method.sharedFlow)
   appendLine(
-    "        ${method.memberHead("public ")}KotlinMutableSharedFlow<$element>" +
-        "${if (nullable) "?" else ""} " +
-        "${method.explicitName}${method.typeParameterList()}($paramStr)" +
-        method.whereClauses(),
+    method.flowHead("KotlinMutableSharedFlow<$element>${if (nullable) "?" else ""}", paramStr),
   )
-  appendLine("        {")
-  appendLine("            if (_handle.IsInvalid)")
-  appendLine("                throw new ObjectDisposedException(nameof($className));")
+  openFlowBody(method)
+  appendOwnerCheck(method, className)
   val acquire: String = "${method.nativeName}(${method.body})"
   val taken: MutableSet<String> = method.parameters.localScopeNames()
   val flow: String = freshName("flow", taken).also { taken += it }
@@ -628,7 +680,8 @@ private fun StringBuilder.renderHeldSharedFlowMethod(method: CirMethod, classNam
     appendLine("                return null;")
   }
   appendLine("            var $owned = new NugetKotlinHandle($flow);")
-  appendLine("            NugetScopeHandle $collectScope = GetOrCreateScope();")
+  val (scopeType: String, scopeValue: String) = method.heldCollectScope()
+  appendLine("            $scopeType $collectScope = $scopeValue;")
   appendLine("            return new KotlinMutableSharedFlow<$element>(")
   appendLine("                (onNext, onComplete, onError, userData) =>")
   appendLine("                    ${method.acquiredFlowCollectNativeName}($owned, $collectScope, onNext, onComplete, onError, userData),")
@@ -638,7 +691,7 @@ private fun StringBuilder.renderHeldSharedFlowMethod(method: CirMethod, classNam
         listOfNotNull(method.flowElementRead?.let { "$indent$it" }) +
         "${indent}ownedHandle: $owned"
   appendLine(arguments.joinToString(",\n") + ");")
-  appendLine("        }")
+  closeFlowBody(method)
   appendLine()
 }
 
@@ -682,26 +735,23 @@ internal fun StringBuilder.renderStateFlowMethod(method: CirMethod, className: S
     return
   }
 
-  val paramStr: String = method.parameters.joinToString(", ") { it.declaration }
+  val paramStr: String = method.flowParameterList()
   // ADR-114: the native call passes the wire handle, not the public collection.
   val paramNames: String = method.parameters.joinToString(", ") { it.nativeArgument }
   val nativeName: String = method.nativeName
   val valueNativeName: String = method.stateFlowValueNativeName
-  val valueCallArgs: String = if (paramNames.isEmpty()) "_handle" else "_handle, $paramNames"
+  val valueCallArgs: String = method.flowOwnerArguments(paramNames)
   val nullableSuffix: String = if (method.isStateFlowNullableMember) "?" else ""
 
   appendLine(
-    "        ${method.memberHead("public ")}" +
-        "KotlinStateFlow<${method.flowElementType}>$nullableSuffix " +
-        "${method.explicitName}${method.typeParameterList()}($paramStr)" + method.whereClauses(),
+    method.flowHead("KotlinStateFlow<${method.flowElementType}>$nullableSuffix", paramStr),
   )
-  appendLine("        {")
-  appendLine("            if (_handle.IsInvalid)")
-  appendLine("                throw new ObjectDisposedException(nameof($className));")
+  openFlowBody(method)
+  appendOwnerCheck(method, className)
   appendHasValueProbe(method)
   appendLine("            return new KotlinStateFlow<${method.flowElementType}>((${method.flowCallbackNames.joinToString(", ")}) =>")
   // The delegates read the owner's `_handle` on each use, long after the check above.
-  val ownerGuard: String = disposedOwnerGuard(className)
+  val ownerGuard: String = method.flowOwnerGuard(className)
   appendScopedNativeCall(
     method, "                ", "$nativeName(${method.body})", ",", ownerGuard,
   )
@@ -712,7 +762,7 @@ internal fun StringBuilder.renderStateFlowMethod(method: CirMethod, className: S
     method, valueNativeName, valueCallArgs, if (read == null) ");" else ",", ownerGuard,
   )
   if (read != null) appendLine("                $read);")
-  appendLine("        }")
+  closeFlowBody(method)
   appendLine()
 }
 
@@ -723,7 +773,7 @@ private fun StringBuilder.appendHasValueProbe(method: CirMethod) {
   if (!method.isStateFlowNullableMember) return
   // ADR-114: the native call passes the wire handle, not the public collection.
   val paramNames: String = method.parameters.joinToString(", ") { it.nativeArgument }
-  val callArgs: String = if (paramNames.isEmpty()) "_handle" else "_handle, $paramNames"
+  val callArgs: String = method.flowOwnerArguments(paramNames)
   val probe: String = "${method.stateFlowHasValueNativeName}($callArgs)"
   // ADR-114: the presence probe is a synchronous call like any other, so it gets its own
   // call-scoped handle rather than sharing one with the collect delegate below.
@@ -750,16 +800,12 @@ private fun StringBuilder.appendHasValueProbe(method: CirMethod) {
  * another.
  */
 private fun StringBuilder.renderHeldStateFlowMethod(method: CirMethod, className: String) {
-  val paramStr: String = method.parameters.joinToString(", ") { it.declaration }
+  val paramStr: String = method.flowParameterList()
   val element: String = method.flowElementType
 
-  appendLine(
-    "        ${method.memberHead("public ")}KotlinMutableStateFlow<$element> " +
-        "${method.explicitName}${method.typeParameterList()}($paramStr)" + method.whereClauses(),
-  )
-  appendLine("        {")
-  appendLine("            if (_handle.IsInvalid)")
-  appendLine("                throw new ObjectDisposedException(nameof($className));")
+  appendLine(method.flowHead("KotlinMutableStateFlow<$element>", paramStr))
+  openFlowBody(method)
+  appendOwnerCheck(method, className)
   // ADR-114: a collection argument's wire handle lives only for the acquire call, which is the
   // one call that reads it; the flow the call returns owns nothing of it.
   val acquire: String = "${method.nativeName}(${method.body})"
@@ -782,7 +828,8 @@ private fun StringBuilder.renderHeldStateFlowMethod(method: CirMethod, className
   // one it passes alive. A parent disposed first leaves a closed scope, which the collect call
   // rejects (`ObjectDisposedException`) instead of handing Kotlin a released pointer.
   appendLine("            var $owned = new NugetKotlinHandle($flow);")
-  appendLine("            NugetScopeHandle $collectScope = GetOrCreateScope();")
+  val (scopeType: String, scopeValue: String) = method.heldCollectScope()
+  appendLine("            $scopeType $collectScope = $scopeValue;")
   appendLine("            return new KotlinMutableStateFlow<$element>(")
   appendLine("                (onNext, onComplete, onError, userData) =>")
   appendLine("                    NugetStateFlowNative.Collect($owned, $collectScope, onNext, onComplete, onError, userData),")
@@ -807,7 +854,7 @@ private fun StringBuilder.renderHeldStateFlowMethod(method: CirMethod, className
     ) + ",",
   )
   appendLine("                $owned);")
-  appendLine("        }")
+  closeFlowBody(method)
   appendLine()
 }
 

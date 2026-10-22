@@ -3,8 +3,6 @@ package io.github.xxfast.kotlin.native.nuget.processor.forward
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
-import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
-import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 
 /**
@@ -122,16 +120,6 @@ internal fun ForwardBridgeTypeClassifier.staticSuspendReceiver(
     is BridgeType.TypeParameter,
       -> null
   }
-}
-
-/**
- * ADR-229: whether [this] suspend member returns a `Flow` family type. Those keep their named skip
- * on a static owner: the awaited flow needs a static collect route of its own (ADR-230).
- */
-internal fun KSFunctionDeclaration.returnsStaticSuspendFlow(): Boolean {
-  val returned: String? =
-    returnType?.resolve()?.expandAliases()?.declaration?.qualifiedName?.asString()
-  return returned in FLOW_TYPES || returned in STATE_FLOW_TYPES
 }
 
 /**

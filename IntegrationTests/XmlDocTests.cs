@@ -393,8 +393,8 @@ public class XmlDocTests
     public void TreatPantry_DroppedStateFlowProperty_IsNamedOnTheObjectsStaticClass()
     {
         // The PROPERTY twin of KibbleBin's dropped method, and the seam where two features meet:
-        // an object's properties bind as statics (ROADMAP Phase 4), a StateFlow among them is a
-        // named skip because no adapter exists on a static owner, and issue #249 says that skip is
+        // an object's properties bind as statics (ROADMAP Phase 4), a `Sequence` among them is a
+        // named skip because it has no bridge shape, and issue #249 says that skip is
         // named on the type that lost it. The object walk was the one walk added without an owner
         // scope, so this paragraph was recorded and never attached.
         Assert.Equal(4, TreatPantry.Count);
@@ -409,10 +409,10 @@ public class XmlDocTests
             $"expected author prose plus the generated paragraph, got {paras.Length}");
         Assert.DoesNotContain("SKIPPED_", paras[0].Value);
         Assert.Contains("SKIPPED_UNSUPPORTED_PROPERTY", paras[^1].Value);
-        Assert.Contains("level", paras[^1].Value);
+        Assert.Contains("shelves", paras[^1].Value);
 
         // The honest-skip pair: named as dropped AND genuinely absent, beside a survivor.
-        Assert.Null(typeof(TreatPantry).GetProperty("Level"));
+        Assert.Null(typeof(TreatPantry).GetProperty("Shelves"));
         Assert.NotNull(typeof(TreatPantry).GetProperty("Count"));
     }
 

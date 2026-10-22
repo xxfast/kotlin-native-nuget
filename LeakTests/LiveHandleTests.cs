@@ -51,6 +51,7 @@ using TestLibrary.Routes;
 using TestLibrary.Workshop;
 using Suspendgeneric = TestLibrary.Suspendgeneric;
 using TestLibrary.Catnap;
+using Purrclock = TestLibrary.Purrclock;
 
 namespace LeakTests;
 
@@ -6559,5 +6560,141 @@ public class LiveHandleTests
             Assert.Equal(1, await Siesta.NowAsync());
             Assert.Equal(2, await Swing.ReadyAsync());
         }, iterations: 1000);
+    }
+
+    // ADR-230
+    // A flow on an owner with no instance scope: the file facade, an `object`, a default-named
+    // and a named companion. Each collection runs on its own ad-hoc root scope, so the only handle
+    // a cold collection mints is its job, which completion releases. A generic `T` argument is an
+    // owned box the call disposes, a class element is one handle per item the consumer disposes,
+    // and a returned or read `KotlinFlow` holder is disposed by its `using`.
+    // Ledger per iteration: Purrs, Beats, Chorus, Calls, Chirps, Grains, Ticks(0) job +1/-1 each;
+    // Echo("Mylo") and Repeat(i) box +1/-1, job +1/-1, items boxed +1/-1 each; ClockCats job +1/-1,
+    // two cat handles +1/-1; WarmUp suspend job +1/-1, collection job +1/-1. Net zero.
+    [Fact]
+    public async Task StaticFlow_EveryOwner_Completion_ReturnsToBaseline()
+    {
+        int i = 0;
+        await AssertNoLeakAsync(async () =>
+        {
+            i++;
+            using (KotlinFlow<int> purrs = Purrclock.Chimes.Purrs(3)) Assert.Equal([0, 1, 2], await DrainFlow(purrs));
+            using (KotlinFlow<string> echo = Purrclock.PurrClock.Echo("Mylo", 2)) Assert.Equal(["Mylo", "Mylo"], await DrainFlow(echo));
+            Assert.Equal([1, 2], await DrainFlow(Purrclock.PurrClock.Beats));
+            Assert.Equal(["Oreo", "Mylo"], await DrainFlow(Purrclock.Chimes.Chorus));
+            foreach (Purrclock.ClockCat cat in await DrainFlow(Purrclock.PurrClock.ClockCats()))
+            {
+                using (cat) Assert.False(string.IsNullOrEmpty(cat.Name));
+            }
+            Assert.Equal(["cuckoo", "cuckoo"], await DrainFlow(Purrclock.Cuckoo.Calls()));
+            Assert.Equal([i, i], await DrainFlow(Purrclock.Cuckoo.Repeat(i)));
+            Assert.Equal([3, 2, 1], await DrainFlow(Purrclock.Cuckoo.Chirps));
+            Assert.Equal([1, 2], await DrainFlow(Purrclock.Hourglass.Grains(2)));
+            using (KotlinFlow<int> warm = await Purrclock.PurrClock.WarmUpAsync(2)) Assert.Equal([0, 10], await DrainFlow(warm));
+        }, iterations: 200);
+    }
+
+    // ADR-230
+    // `Ticks(0)` and `Purrs(0)` are empty: `onComplete` can fire on a Kotlin worker before the
+    // `_collect` P/Invoke has returned its job handle (the ADR-161 ordering window), and the
+    // enumerator has to release the job on either ordering. Ledger per iteration: two jobs +1/-1.
+    [Fact]
+    public async Task StaticFlow_TightLoop_SynchronousCompletion_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            Assert.Empty(await DrainFlow(Purrclock.PurrClock.Ticks(0)));
+            Assert.Empty(await DrainFlow(Purrclock.Chimes.Purrs(0)));
+        }, iterations: 1000);
+    }
+
+    // ADR-230
+    // A fault mid-stream on every static owner: the job is released on the faulted arm and the
+    // Kotlin throwable crosses as one ADR-107 envelope the C# exception owns.
+    // Ledger per iteration: Broken, DroppedPurrs, Jammed: job +1/-1, envelope +1/-1. Net zero.
+    [Fact]
+    public async Task StaticFlow_Fault_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await Assert.ThrowsAnyAsync<InvalidOperationException>(() => DrainFlow(Purrclock.PurrClock.Broken()));
+            await Assert.ThrowsAnyAsync<InvalidOperationException>(() => DrainFlow(Purrclock.Chimes.DroppedPurrs()));
+            await Assert.ThrowsAnyAsync<ArgumentException>(() => DrainFlow(Purrclock.Cuckoo.Jammed()));
+        }, iterations: 200);
+    }
+
+    // ADR-230
+    // Cancellation on every static owner, two ways: `break` (the enumerator's `DisposeAsync`
+    // cancels the job) and a token cancelled mid-stream. Each enumeration is awaited to its end
+    // before the count. Ledger per iteration: Forever, EndlessPurrs, Endless: job +1/-1 on each
+    // path. Net zero.
+    [Fact]
+    public async Task StaticFlow_Cancellation_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await foreach (int _ in Purrclock.PurrClock.Forever()) break;
+            await foreach (int _ in Purrclock.Chimes.EndlessPurrs()) break;
+            await foreach (string _ in Purrclock.Cuckoo.Endless()) break;
+
+            using var cts = new CancellationTokenSource();
+            int seen = 0;
+            await foreach (int _ in Purrclock.PurrClock.Forever().WithCancellation(cts.Token))
+            {
+                if (++seen == 2) cts.Cancel();
+            }
+            using var later = new CancellationTokenSource();
+            await foreach (string _ in Purrclock.Cuckoo.Endless().WithCancellation(later.Token))
+            {
+                later.Cancel();
+            }
+        }, iterations: 200);
+    }
+
+    // ADR-230
+    // The held hot flows: each `MutableStateFlow` / `MutableSharedFlow` read or return is a fresh
+    // holder over the Kotlin flow's own handle, which its `using` releases; a `.Value` read of a
+    // read-only `StateFlow` mints nothing. Ledger per iteration: Hour, Alarm, Bedtime, Perch,
+    // Gossip, Sightings, Yowls holder +1/-1 each; Pose, Stance, Bulletin, News, DinnerBell, Level,
+    // Perched holder +1/-1 each if one is minted; Dial, Winder, LatestNews, Roost and Warble suspend
+    // job +1/-1 and holder +1/-1 each. Net zero.
+    [Fact]
+    public async Task StaticFlow_HotHolders_ReturnToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using (KotlinMutableStateFlow<int> hour = Purrclock.PurrClock.Hour)
+            using (KotlinMutableStateFlow<int> alarm = Purrclock.PurrClock.Alarm())
+            {
+                alarm.Value = hour.Value;
+            }
+            using (KotlinMutableStateFlow<int> bedtime = Purrclock.Chimes.Bedtime) bedtime.Value = 21;
+            using (KotlinMutableStateFlow<string> perch = Purrclock.Cuckoo.Perch()) perch.Value = "Oreo";
+            using (KotlinMutableSharedFlow<string> gossip = Purrclock.PurrClock.Gossip()) gossip.TryEmit("Mylo");
+            using (KotlinMutableSharedFlow<string> sightings = Purrclock.PurrClock.Sightings) Assert.NotEmpty(sightings.ReplayCache);
+            using (KotlinMutableSharedFlow<string> yowls = Purrclock.Chimes.Yowls) yowls.TryEmit("Oreo");
+            using (KotlinStateFlow<Purrclock.Posture> pose = Purrclock.PurrClock.Pose) Assert.Equal(Purrclock.Posture.Loaf, pose.Value);
+            using (KotlinStateFlow<Purrclock.Posture> stance = Purrclock.PurrClock.Stance()) Assert.Equal(Purrclock.Posture.Loaf, stance.Value);
+            using (KotlinSharedFlow<int> bulletin = Purrclock.PurrClock.Bulletin) Assert.Equal(7, Assert.Single(bulletin.ReplayCache));
+            using (KotlinSharedFlow<int> news = Purrclock.PurrClock.News()) Assert.Equal(7, Assert.Single(news.ReplayCache));
+            using (KotlinStateFlow<string> bell = Purrclock.Chimes.DinnerBell()) Assert.Equal("Oreo, dinner", bell.Value);
+            using (KotlinStateFlow<int> level = Purrclock.Hourglass.Level) Assert.Equal(100, level.Value);
+            using (KotlinStateFlow<string> perched = Purrclock.Cuckoo.Perched) Assert.Equal("Oreo", perched.Value);
+            using (KotlinStateFlow<int> dial = await Purrclock.PurrClock.DialAsync())
+            using (KotlinMutableStateFlow<int> winder = await Purrclock.PurrClock.WinderAsync())
+            {
+                winder.Value = dial.Value;
+            }
+            using (KotlinMutableStateFlow<string> roost = await Purrclock.Cuckoo.RoostAsync()) roost.Value = "Oreo";
+            using (KotlinSharedFlow<int> latest = await Purrclock.PurrClock.LatestNewsAsync()) Assert.Equal(7, Assert.Single(latest.ReplayCache));
+            using (KotlinFlow<string> warble = await Purrclock.Cuckoo.WarbleAsync()) Assert.Equal(["warble"], await DrainFlow(warble));
+        }, iterations: 200);
+    }
+
+    private static async Task<List<T>> DrainFlow<T>(IAsyncEnumerable<T> flow)
+    {
+        var seen = new List<T>();
+        await foreach (T item in flow) seen.Add(item);
+        return seen;
     }
 }

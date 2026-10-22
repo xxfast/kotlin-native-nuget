@@ -384,3 +384,9 @@ export, a fresh `Tabby` created in the lambda and dropped, null), `GenericClass_
 - Lane B found a `Flow` return on an `object`, companion or top-level function has no route,
   generic or not; ROADMAP Phase 6.
 - Deferred: nothing beyond those pre-existing refusals.
+
+## Amendment (2026-10-22): the static `Flow` return binds
+
+The "Stopped, not opened" paragraph in lane B and the line in Consequences are superseded by
+[ADR-230](230-flow-on-static-owners.md): a `Flow` return on an `object`, a companion or the top
+level binds, generic or not, and a member's own `T` uses this ADR's trampoline with no owner.

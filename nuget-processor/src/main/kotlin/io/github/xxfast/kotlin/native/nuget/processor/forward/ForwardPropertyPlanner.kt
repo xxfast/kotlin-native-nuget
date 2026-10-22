@@ -152,6 +152,10 @@ internal class ForwardPropertyPlanner(
   private val droppedSetters: MutableList<ForwardDroppedPropertySetter> = mutableListOf()
   private val dropped: MutableList<ForwardDroppedProperty> = mutableListOf()
   private val droppedReceivers: MutableList<ForwardDroppedExtensionReceiver> = mutableListOf()
+  private val staticFlows: MutableList<ForwardStaticFlowMember.Property> = mutableListOf()
+
+  /** ADR-230: every static flow property the static flow route binds, in planning order. */
+  val staticFlowProperties: List<ForwardStaticFlowMember.Property> get() = staticFlows
 
   // ADR-188: (extension namespace, receiver declaration, C# name) -> the diagnostic spelling
   // (`extension function `name``) of every exported extension function, set by [catalog] before
@@ -646,12 +650,13 @@ internal class ForwardPropertyPlanner(
       .mapNotNull { prop ->
         val name: String = prop.simpleName.asString()
         propertyPlan(
-          symbol = "$owner.Companion.$name",
+          symbol = "$owner.${companion.simpleName.asString()}.$name",
           position = ForwardPropertyPosition.COMPANION,
           receiver = ForwardPropertyReceiver.Static(owner),
           prop = prop,
           getExport = "${prefix}_companion_get_$name",
           setExport = "${prefix}_companion_set_$name",
+          staticFlow = ForwardStaticFlowOwner.Companion("${prefix}_companion_get_$name", cls),
         )
       }
       .toList()
@@ -689,6 +694,8 @@ internal class ForwardPropertyPlanner(
           prop = prop,
           getExport = "${prefix}_get_${toCName(name)}",
           setExport = "${prefix}_set_${toCName(name)}",
+          staticFlow = ForwardStaticFlowOwner.Object("${prefix}_get_${toCName(name)}", obj)
+            .takeIf { !obj.isSealedArm() },
         )
       }
       .toList()
@@ -723,6 +730,9 @@ internal class ForwardPropertyPlanner(
           prop = prop,
           getExport = "${prefix}_get_$name",
           setExport = "${prefix}_set_$name",
+          staticFlow = ForwardStaticFlowOwner.EnumMember(
+            "${prefix}_get_$name", enum, ForwardStaticSuspendReceiver.Enum(type, owner),
+          ).takeIf { !enum.isSealedArm() },
         )
       }
       .toList()
@@ -745,6 +755,7 @@ internal class ForwardPropertyPlanner(
       // one name in two packages no longer derive one getter symbol.
       getExport = "${symbols.qualifier(prop)}get_$cname",
       setExport = "${symbols.qualifier(prop)}set_$cname",
+      staticFlow = ForwardStaticFlowOwner.TopLevel("${symbols.qualifier(prop)}get_$cname"),
     )
   }
 
@@ -1067,6 +1078,8 @@ internal class ForwardPropertyPlanner(
     // False for a generic class, which binds one only as an explicit interface member (ADR-174)
     // and renders none of its own, so no setter skip can say its C# property is read-only.
     flowCarrier: Boolean = true,
+    // ADR-230: the static owner a `Flow` family property binds through, for a static position.
+    staticFlow: ForwardStaticFlowOwner? = null,
   ): ForwardPropertyPlan? {
     // ADR-115: the author's own signal, ahead of any type question -- nothing about the property
     // is unsupported. `@set:Marker` on a `var` skips the whole property rather than exporting it
@@ -1098,6 +1111,14 @@ internal class ForwardPropertyPlanner(
     // (`isReadable`; `isPlannable` already recurses through `Nullable`). Whether a *setter* can
     // also be built is a wholly separate question, decided below, independent of the getter.
     if (!isPlannable(type)) {
+      // ADR-230: a static flow property binds on the static flow route, get-only.
+      if (staticFlow != null && classifier.isStaticFlowProperty(prop)) {
+        staticFlows.add(ForwardStaticFlowMember.Property(prop, staticFlow))
+        if (prop.isMutable && prop.hasPublicSetter()) {
+          droppedSetters.add(prop.droppedFlowSetter(symbol, type))
+        }
+        return null
+      }
       recordDropped(symbol, position, prop, type, lambdaCarrier, flowCarrier)
       return null
     }

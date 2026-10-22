@@ -191,13 +191,14 @@ internal fun reinvokedReplayArgument(
   val names: MutableSet<String> = method.parameters.localScopeNames()
   val error: String = freshName("error", names)
   val paramNames: String = method.parameters.joinToString(", ") { it.nativeArgument }
-  val args: String = if (paramNames.isEmpty()) "_handle" else "_handle, $paramNames"
+  val args: String = method.flowOwnerArguments(paramNames)
   if (!method.parameters.hasCollectionHandles()) {
+    val leading: String = if (args.isEmpty()) "" else "$args, "
     return "$indent() => { $ownerGuard return NugetErrorNative.Check(" +
-        "$replayCache($args, out IntPtr $error), $error); }"
+        "$replayCache(${leading}out IntPtr $error), $error); }"
   }
   val result: String = freshName("replay", names)
-  val call = "$result = $replayCache($args, out $error)"
+  val call = "$result = $replayCache(${if (args.isEmpty()) "" else "$args, "}out $error)"
   val scoped: List<String> =
     requireNotNull(method.parameters.collectionScopedCall("$indent    ", call, returns = false))
   return buildString {

@@ -68,9 +68,8 @@ Complete.
 
 ## Phase 6: Async support
 
-Two open items.
+One open item.
 
-- [ ] A `Flow` return on an `object`, companion or top-level function has no route, generic or not (a static owner has no instance coroutine scope to collect on); the generic form gets the Flow route's own `SKIPPED_UNSUPPORTED_RETURN`; found by [ADR-215](docs/adr/215-type-parameter-in-lambda-and-flow.md)
 - [ ] A plain (non-suspend) lambda parameter on a `suspend` member has no route for any payload, `T` or not: the per-call callback context would have to outlive the P/Invoke until the `Task` completes; found by [ADR-215](docs/adr/215-type-parameter-in-lambda-and-flow.md)
 
 ## Phase 7: Bidirectional support (C# → Kotlin)

@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using TestLibrary;
 using TestLibrary.Cat;
 using TestLibrary.Catnap;
+using Purrclock = TestLibrary.Purrclock;
 using TestLibrary.Roster;
 using Playroom = TestLibrary.Playroom;
 using Stamps = TestLibrary.Stamps;
@@ -1207,5 +1208,69 @@ public class CollectabilityTests
         Assert.True(
             MarkerCollectedWithin(leash, TimeSpan.FromSeconds(5)),
             "the CancellationTokenSource passed to Siesta.MinutesForAsync stayed reachable after the call threw ArgumentNullException: the completion callback's GCHandle was never freed");
+    }
+
+    // ADR-230: a flow on an owner with no instance scope. No owner scope tracks the collection, so
+    // once the enumeration ends (by completion or by the token) nothing may keep the returned
+    // `KotlinFlow` or the token's source reachable: the job's completion callback is the only
+    // thing that held them. Neither flow is disposed, on purpose: a static flow owns no scope, so
+    // an undisposed one must not pin anything.
+    // Oreo listens to the purrs to the end; Mylo stops the clock with the token.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<(WeakReference Flow, WeakReference Leash)> PurrToTheEndAndDrop()
+    {
+        var leash = new CancellationTokenSource();
+        KotlinFlow<int> purrs = Purrclock.Chimes.Purrs(3);
+        var seen = new List<int>();
+        await foreach (int n in purrs.WithCancellation(leash.Token)) seen.Add(n);
+        Assert.Equal([0, 1, 2], seen);
+        var refs = (new WeakReference(purrs), new WeakReference(leash));
+        purrs = null!;
+        leash = null!;
+        await Task.Yield();
+        return refs;
+    }
+
+    [Fact]
+    public async Task StaticFlow_CollectedToCompletion_TheFlowAndTokenAreCollected()
+    {
+        (WeakReference flow, WeakReference leash) = await PurrToTheEndAndDrop();
+
+        Assert.True(
+            MarkerCollectedWithin(flow, TimeSpan.FromSeconds(5)),
+            "the KotlinFlow returned by Chimes.Purrs stayed reachable after its enumeration completed");
+        Assert.True(
+            MarkerCollectedWithin(leash, TimeSpan.FromSeconds(5)),
+            "the CancellationTokenSource passed to Chimes.Purrs stayed reachable after its enumeration completed");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<(WeakReference Flow, WeakReference Leash)> StopTheClockAndDrop()
+    {
+        var leash = new CancellationTokenSource();
+        KotlinFlow<int> forever = Purrclock.PurrClock.Forever();
+        int seen = 0;
+        await foreach (int _ in forever.WithCancellation(leash.Token))
+        {
+            if (++seen == 2) leash.Cancel();
+        }
+        var refs = (new WeakReference(forever), new WeakReference(leash));
+        forever = null!;
+        leash = null!;
+        await Task.Yield();
+        return refs;
+    }
+
+    [Fact]
+    public async Task StaticFlow_CancelledByTheToken_TheFlowAndTokenAreCollected()
+    {
+        (WeakReference flow, WeakReference leash) = await StopTheClockAndDrop();
+
+        Assert.True(
+            MarkerCollectedWithin(flow, TimeSpan.FromSeconds(5)),
+            "the KotlinFlow returned by PurrClock.Forever stayed reachable after its token cancelled the enumeration");
+        Assert.True(
+            MarkerCollectedWithin(leash, TimeSpan.FromSeconds(5)),
+            "the CancellationTokenSource passed to PurrClock.Forever stayed reachable after it cancelled the enumeration");
     }
 }

@@ -94,11 +94,8 @@ class Tier1SuspendMutableStateFlowTest {
       kotlin.contains("jar_awaitSpareJar_set_value"),
       "expected no setter for a suspend MutableStateFlow<T>?; generated=$kotlin",
     )
-    // The top-level route stays read-only in v1.
-    assertContains(csharp, "Task<KotlinStateFlow<int>> AwaitLooseTreatsAsync(")
-    assertFalse(
-      kotlin.contains("awaitLooseTreats_set_value"),
-      "expected no setter on the top-level suspend route; generated=$kotlin",
-    )
+    // ADR-230: the top-level route writes an awaited MutableStateFlow through the same seam.
+    assertContains(csharp, "Task<KotlinMutableStateFlow<int>> AwaitLooseTreatsAsync(")
+    assertContains(kotlin, "awaitLooseTreats_set_value")
   }
 }
