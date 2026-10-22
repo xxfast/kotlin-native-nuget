@@ -1081,6 +1081,12 @@ internal data class CirMethod(
    */
   val asyncReceiver: CirParameter? = null,
   val asyncReturnType: String = "",
+  /**
+   * ADR-216 (second amendment): the `NugetFactory<T>` fills a `suspend` or `Flow` member's body
+   * opens with, for every open instantiation its signature nests. The ordinary routes fill through
+   * their own body; these two render theirs from this model.
+   */
+  val openSlotFills: String = "",
   // ADR-119: the C# expression turning the awaited `resultPtr` into [asyncReturnType], for a
   // suspend member returning a collection (`NugetMarshal.ReadList<T>(resultPtr, ...)`). Null keeps
   // the shipped `new T(resultPtr)` / `FromHandle<T>(resultPtr)` selection in `renderAsyncMethod`.

@@ -2002,11 +2002,14 @@ private fun reportUnreadableConst(prop: KSPropertyDeclaration, logger: KSPLogger
 
 /**
  * ADR-199: a generic sealed base fills a `NugetFactory<T>` slot. ADR-216 amendment: so does a
- * concrete generic class, at any nesting depth.
+ * concrete generic class, at any nesting depth, and (second amendment) an abstract one with a
+ * backing wrapper.
  */
 private fun CirDeclaration.fillsFactorySlot(): Boolean {
   if (this is CirSealedClass && typeParameters.isNotEmpty()) return true
-  if (this is CirClass && typeParameters.isNotEmpty() && !isAbstract) return true
+  if (this is CirClass && typeParameters.isNotEmpty() && (!isAbstract || backingName != null)) {
+    return true
+  }
   val nested: List<CirDeclaration> = when (this) {
     is CirSealedClass -> nestedDeclarations
     is CirClass -> nestedDeclarations
