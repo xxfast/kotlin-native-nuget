@@ -1406,7 +1406,41 @@ internal class ForwardBridgeTypeClassifier(
       ?: asyncCallbackOrNull(type)
       ?: flowSourceOrNull(type)
       ?: genericInterfaceOrNull(type)
+      ?: starProjectedValueClassOrNull(type)
       ?: classify(type)
+
+  /**
+   * ADR-226: a star-projected generic value class PARAMETER (`Sticker<*>`) over its own `T`
+   * underlying, as a C# method type parameter the caller picks
+   * (`string Starred<TSticker>(Sticker<TSticker> sticker)`), named
+   * [STAR_TYPE_PARAMETER_PREFIX] plus the class. Kotlin re-wraps the boxed underlying as
+   * `Sticker<Any?>`, which is a `Sticker<*>`. The planner declares the synthesized parameter on
+   * the C# method. Null for anything else.
+   */
+  private fun starProjectedValueClassOrNull(type: KSType): BridgeType? {
+    val expanded: KSType = type.expandAliases()
+    val declaration: KSClassDeclaration = expanded.declaration as? KSClassDeclaration ?: return null
+    if (!declaration.isValueClass() || declaration.typeParameters.size != 1) return null
+    val argument: KSTypeArgument = expanded.arguments.singleOrNull() ?: return null
+    if (argument.variance != Variance.STAR) return null
+    val qualifiedName: String = declaration.qualifiedName?.asString() ?: return null
+    if (qualifiedName !in context.exportedValueClasses) return null
+    val underlying = declaration.primaryConstructor?.parameters?.singleOrNull() ?: return null
+    val underlyingType: KSType = underlying.type.resolve()
+    if (underlyingType.declaration !is KSTypeParameter) return null
+    val name: String = STAR_TYPE_PARAMETER_PREFIX + declaration.simpleName.asString()
+    val parameter = BridgeType.Nullable(
+      BridgeType.TypeParameter(name, nullableFromBound = true, kotlinName = STAR_KOTLIN_NAME),
+    )
+    val valueClass = BridgeType.ValueClass(
+      qualifiedName,
+      parameter,
+      underlying.name?.asString() ?: return null,
+      csharpType = "${csharpTypeNameFor(declaration)}<$name>",
+      typeArguments = listOf(parameter),
+    )
+    return if (expanded.isMarkedNullable) BridgeType.Nullable(valueClass) else valueClass
+  }
 
   /**
    * ADR-224 (open question 2): an input type that hands Kotlin a C# implementation of a generic
@@ -2049,3 +2083,9 @@ private fun unmappedStdlibType(qualifiedName: String): BridgeType.Unsupported =
 /** ADR-224: a non-sealed generic interface, whose members plan over the erased receiver. */
 private fun KSClassDeclaration.isPlannableGenericInterface(): Boolean =
   classKind == ClassKind.INTERFACE && typeParameters.isNotEmpty() && Modifier.SEALED !in modifiers
+
+/** ADR-226: the prefix of a star projection's synthesized C# method type parameter (`TSticker`). */
+internal const val STAR_TYPE_PARAMETER_PREFIX: String = "T"
+
+/** ADR-226: the Kotlin name a synthesized star-projection type parameter carries. */
+internal const val STAR_KOTLIN_NAME: String = "*"

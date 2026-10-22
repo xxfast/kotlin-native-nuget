@@ -209,7 +209,9 @@ internal fun BridgeType.valueClassWithoutStruct(): BridgeType.Unsupported? =
 internal fun BridgeType.ValueClass.hasErasedCrossing(): Boolean = underlying.isErasedUnderlying() ||
     (underlying as? BridgeType.Nullable)?.type?.let { inner ->
       // ADR-228: a nullable String, primitive or own `T` underlying (`Nick(val name: String?)`).
-      inner == BridgeType.String || inner is BridgeType.TypeParameter
+      inner == BridgeType.String || inner is BridgeType.TypeParameter ||
+          // ADR-226: and a nullable primitive (`TreatCount(val count: Int?)`).
+          inner is BridgeType.Primitive
     } == true
 
 private fun BridgeType.isErasedUnderlying(): Boolean =

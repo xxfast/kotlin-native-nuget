@@ -3148,14 +3148,16 @@ internal class ForwardCallablePlanner(
     method: KSFunctionDeclaration,
   ): ForwardCallableCatalogEntry {
     if (this !is ForwardCallableCatalogEntry.Planned) return this
-    if (method.typeParameters.isEmpty()) return this
+    // ADR-226: and one per star-projected value class parameter, which the Kotlin call never names.
+    val starred: List<ForwardMethodTypeParameter> = plan.starTypeParameters()
+    if (method.typeParameters.isEmpty() && starred.isEmpty()) return this
     val signature: ForwardPublicSignature = plan.publicSignature
     // ADR-237: an interface member's own type parameters are erased.
     val typeParameters: List<ForwardMethodTypeParameter> =
       if (method.isErasedInterfaceMember()) method.forwardErasedTypeParameters()
       else method.forwardMethodTypeParameters()
     return copy(
-      plan = plan.copy(publicSignature = signature.copy(typeParameters = typeParameters)),
+      plan = plan.copy(publicSignature = signature.copy(typeParameters = typeParameters + starred)),
     )
   }
 
@@ -3230,7 +3232,9 @@ internal class ForwardCallablePlanner(
 
     val structuralReason: ForwardPlanSkipReason? = when {
       function.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
-      function.typeParameters.isNotEmpty() -> ForwardPlanSkipReason.GENERIC
+      // ADR-226: a top-level extension's own `T` binds as a top-level function's does.
+      function.typeParameters.isNotEmpty() && function.forwardMemberGenericRefusal() != null ->
+        ForwardPlanSkipReason.GENERIC
       else -> null
     }
     if (structuralReason != null) {
@@ -3276,7 +3280,8 @@ internal class ForwardCallablePlanner(
       // only one that can hand it a protocol receiver (every other route builds a bare
       // `ObjectHandle` already). An eligible sealed base then plans as an ordinary handle
       // receiver; an ineligible or out-of-scope one carries no `sealedHandle` and still skips.
-      receiver = ForwardReceiver.Value(receiverType.sealedAsHandle()),
+      // ADR-226: and a nullable value class receiver over a nullable underlying is its box handle.
+      receiver = ForwardReceiver.Value(receiverType.sealedAsHandle().asValueClassBoxHandle()),
       parameters = function.parameters.map { parameter ->
         parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
       },
@@ -3291,7 +3296,7 @@ internal class ForwardCallablePlanner(
       doc = function.forwardKdoc(expects).forParameters(function.parameters),
       extensionImportAlias =
         forwardExtensionImportAlias(function.packageName.asString(), functionName),
-    )
+    ).withMethodTypeParameters(function)
       // ADR-064 amendment (2026-09-13): no legacy route is keyed to an extension for any of these
       // reasons (measured cells 6a/6b/13c/18c/22c; there is no legacy extension translator at
       // all, and `genericFunctions` excludes extensions outright), so every deferral here is a
@@ -3595,17 +3600,79 @@ internal class ForwardCallablePlanner(
     extensionImportAlias: String? = null,
     isAbstract: Boolean = false,
   ): ForwardCallableCatalogEntry = try {
-    planOrSkipUnguarded(
+    planOrSkipBoxed(
       symbol, publicName, exportName, receiver, parameters, result, origin, target, ownerType,
       invocationReceiver, includeError, valueClassProperty, member, isOverride, isVirtual, node,
       defaults, doc, extensionImportAlias, isAbstract,
-    )
+    ).withStarTypeParameters()
   } catch (failure: Exception) {
     ForwardCallableCatalogEntry.Skipped(
       symbol,
       ForwardPlanSkipReason.INTERNAL_FAILURE,
       node = node,
       detail = internalFailureDetail(failure),
+    )
+  }
+
+  /**
+   * ADR-226: a star-projected value class parameter's synthesized C# method type parameters, on
+   * every route; one that also declares its own is restated by [withMethodTypeParameters].
+   */
+  private fun ForwardCallableCatalogEntry.withStarTypeParameters(): ForwardCallableCatalogEntry {
+    if (this !is ForwardCallableCatalogEntry.Planned) return this
+    val starred: List<ForwardMethodTypeParameter> = plan.starTypeParameters()
+    if (starred.isEmpty()) return this
+    val signature: ForwardPublicSignature = plan.publicSignature
+    return copy(
+      plan = plan.copy(
+        publicSignature = signature.copy(typeParameters = signature.typeParameters + starred),
+      ),
+    )
+  }
+
+  private fun ForwardCallablePlan.starTypeParameters(): List<ForwardMethodTypeParameter> =
+    publicSignature.parameters
+      .mapNotNull { parameter -> parameter.type.unwrapNullable() as? BridgeType.ValueClass }
+      .flatMap { valueClass -> valueClass.typeArguments }
+      .mapNotNull { argument -> argument.unwrapNullable() as? BridgeType.TypeParameter }
+      .filter { argument -> argument.kotlinName == STAR_KOTLIN_NAME }
+      .map { argument -> argument.name }
+      .distinct()
+      .map { name -> ForwardMethodTypeParameter(name, STAR_KOTLIN_NAME, kotlinTypeArgument = "") }
+
+  private fun planOrSkipBoxed(
+    symbol: String,
+    publicName: String,
+    exportName: String,
+    receiver: ForwardReceiver,
+    parameters: List<Pair<String, BridgeType>>,
+    result: BridgeType,
+    origin: ForwardCallableOrigin,
+    target: String?,
+    ownerType: ForwardGenericOwner?,
+    invocationReceiver: String?,
+    includeError: Boolean,
+    valueClassProperty: Boolean,
+    member: String?,
+    isOverride: Boolean,
+    isVirtual: Boolean,
+    node: KSNode?,
+    defaults: ForwardDeclaredDefaults?,
+    doc: ForwardKdoc?,
+    extensionImportAlias: String?,
+    isAbstract: Boolean,
+  ): ForwardCallableCatalogEntry {
+    // ADR-226: a nullable value class over a nullable-admitting underlying is its box handle; the
+    // box pair itself carries the value class bare.
+    val boxed: Boolean = origin != ForwardCallableOrigin.VALUE_CLASS_BOX
+    return planOrSkipUnguarded(
+      symbol, publicName, exportName, receiver,
+      if (boxed) parameters.map { (name, type) -> name to type.asValueClassBoxHandle() }
+      else parameters,
+      if (boxed) result.asValueClassBoxHandle() else result,
+      origin, target, ownerType,
+      invocationReceiver, includeError, valueClassProperty, member, isOverride, isVirtual, node,
+      defaults, doc, extensionImportAlias, isAbstract,
     )
   }
 
@@ -4145,6 +4212,30 @@ internal class ForwardCallablePlanner(
     // the *value class* as its type and tags BOX_VALUE_CLASS, which is what
     // `ForwardCallablePlanValidator.requiredConversion` demands; the underlying's own step
     // composes inside the emitted expression rather than stacking a conversion.
+    // ADR-226: a nullable primitive underlying fans out to the has-value pair it already has.
+    is BridgeType.ValueClass if type.underlying.isNullablePrimitive() -> listOf(
+      ForwardAbiParameter(
+        name = hasValueSlot,
+        wireType = ForwardAbiWireType.BOOLEAN,
+        direction = ForwardAbiDirection.IN,
+        transfer = ForwardTransfer(
+          hasValueSlot, BridgeType.Primitive(PrimitiveKind.BOOLEAN),
+          ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE, ForwardOwnership.BORROWED,
+          ForwardConversion.DIRECT,
+        ),
+      ),
+      ForwardAbiParameter(
+        name = name,
+        wireType = (type.underlying as BridgeType.Nullable).type.underlyingWireType(),
+        direction = ForwardAbiDirection.IN,
+        transfer = ForwardTransfer(
+          name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+          ForwardOwnership.BORROWED, ForwardConversion.BOX_VALUE_CLASS,
+        ),
+        role = role,
+      ),
+    )
+
     is BridgeType.ValueClass -> listOf(
       ForwardAbiParameter(
         name = name,
@@ -4996,7 +5087,10 @@ internal class ForwardCallablePlanner(
         this is BridgeType.Enum || this is BridgeType.ObjectHandle ||
         isOwnTypeParameterUnderlying() ||
         // ADR-228: a nullable String underlying (`Nick(val name: String?)`), null in-band.
-        (this is BridgeType.Nullable && type == BridgeType.String)
+        (this is BridgeType.Nullable && type == BridgeType.String) ||
+        // ADR-226: a nullable primitive underlying (`TreatCount(val count: Int?)`) rides ADR-061's
+        // has-value pair as its own wire, so its only null is the underlying's.
+        (this is BridgeType.Nullable && type is BridgeType.Primitive)
 
   /**
    * ADR-220: a member's own `T` substituted into a generic value class (`Sticker<T>`), either
@@ -5022,6 +5116,7 @@ internal class ForwardCallablePlanner(
    * extension-receiver position, where a two-slot input cannot be expressed today.
    */
   private fun BridgeType.isHasValueFanOutInput(): Boolean {
+    if ((this as? BridgeType.ValueClass)?.underlying?.isNullablePrimitive() == true) return true
     val inner: BridgeType = (this as? BridgeType.Nullable)?.type ?: return false
     return inner.isHasValueFanOutUnderlying() ||
         // ADR-098 amendment (boundary nullability part C): `Char?` fans out too.

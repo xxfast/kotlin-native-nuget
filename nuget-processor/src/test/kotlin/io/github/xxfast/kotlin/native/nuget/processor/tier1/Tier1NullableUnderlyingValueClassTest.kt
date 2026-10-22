@@ -89,7 +89,7 @@ class Tier1NullableUnderlyingValueClassTest {
     assertContains(
       result.generated,
       "tier1.gaps.countNicks(nicks.asStableRef<MutableList<Any?>>().get().map " +
-          "{ it as tier1.gaps.Nick? })",
+          "{ (it as tier1.gaps.Nick?) })",
     )
     assertContains(result.generated, "(v as tier1.gaps.Nick?)")
     assertContains(

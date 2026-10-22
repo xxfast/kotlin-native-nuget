@@ -1064,6 +1064,9 @@ internal fun ForwardCallablePlanCatalog.withMethodTypeParameterConstraints(
           ),
         )
       }
+      // ADR-226: a star projection's synthesized parameters follow the declared ones,
+      // unconstrained.
+      .plus(declared.drop(function.typeParameters.size))
     entry.copy(
       plan = entry.plan.copy(
         publicSignature = entry.plan.publicSignature.copy(typeParameters = spelled),

@@ -8332,6 +8332,60 @@ public class LiveHandleTests
         });
     }
 
+    // ADR-226
+    // A nullable value class over a nullable underlying crosses as one box handle per present
+    // value, and a generic value class element inside a collection crosses as its underlying on the
+    // bare-`T` box. Ledger per iteration: MaybeStick result box +1/-1; IsAbsent and PassGap
+    // argument boxes +1/-1, PassGap result +1/-1; StickAll list handle +1/-1 and its element boxes
+    // +1/-1; PeelAll set handle and element boxes +1/-1; Gaps list handle +1/-1, two present
+    // element boxes +1/-1 each, the result's two +1/-1; Nicknames list +1/-1, two present boxes
+    // +1/-1; CountNicks list and boxes +1/-1; MaybeNick and MaybeTreats result +1/-1; the album
+    // +1/-1, its getter and setter boxes +1/-1. Net zero.
+    [Fact]
+    public void GenericValueClass_NullableAndCollections_ReturnToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            Assert.Null(TestLibrary.Stickers.StickerGaps.MaybeStick<uint?>(null, present: true)!.Value.Value);
+            Assert.False(TestLibrary.Stickers.StickerGaps.IsAbsent<byte?>(new TestLibrary.Stickers.Sticker<byte?>(null)));
+            Assert.NotNull(TestLibrary.Stickers.StickerGaps.PassGap<sbyte?>(new TestLibrary.Stickers.Sticker<sbyte?>(null)));
+            Assert.Equal(2, TestLibrary.Stickers.StickerGaps.StickAll(new ushort[] { 1, 2 }).Count);
+            Assert.Single(TestLibrary.Stickers.StickerGaps.PeelAll(
+                new HashSet<TestLibrary.Stickers.Sticker<byte>> { new(4) }));
+            Assert.Equal(3, TestLibrary.Stickers.StickerGaps.Gaps(new TestLibrary.Stickers.Sticker<ushort?>?[]
+            {
+                null, new TestLibrary.Stickers.Sticker<ushort?>(null), new TestLibrary.Stickers.Sticker<ushort?>(5),
+            }).Count);
+            Assert.Equal(3, TestLibrary.Stickers.StickerGaps.Nicknames().Count);
+            Assert.Equal("1 missing, 1 nameless", TestLibrary.Stickers.StickerGaps.CountNicks(
+                new TestLibrary.Stickers.Nick?[] { null, new TestLibrary.Stickers.Nick(null) }));
+            Assert.NotNull(TestLibrary.Stickers.StickerGaps.MaybeNick(true));
+            Assert.NotNull(TestLibrary.Stickers.StickerGaps.MaybeTreats(true));
+            using var album = new TestLibrary.Stickers.GapAlbum(
+                new TestLibrary.Stickers.Nick(null), new TestLibrary.Stickers.Sticker<string?>(null));
+            Assert.NotNull(album.Spare);
+            album.Cover = new TestLibrary.Stickers.Sticker<string?>("Oreo");
+            Assert.NotNull(album.Cover);
+        });
+    }
+
+    // ADR-226
+    // The fault paths: Sticker's `init` refuses -1. A `Sticker<int>?` argument throws when its box
+    // is minted, before the call; a `Set<Sticker<int>>` element throws when Kotlin re-wraps it,
+    // after the set handle was minted, so the set handle and every element box minted before the
+    // throw must be released. Net zero.
+    [Fact]
+    public void GenericValueClass_NullableAndCollectionInitThrows_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            Assert.ThrowsAny<ArgumentException>(() =>
+                TestLibrary.Stickers.StickerGaps.IsAbsent<int>(new TestLibrary.Stickers.Sticker<int>(-1)));
+            Assert.ThrowsAny<ArgumentException>(() => TestLibrary.Stickers.StickerGaps.PeelAll(
+                new HashSet<TestLibrary.Stickers.Sticker<int>> { new(2), new(-1) }));
+        });
+    }
+
     private static async IAsyncEnumerable<TestLibrary.Stickers.Sticker<int>> StickerDrip(params int[] values)
     {
         foreach (int value in values)
