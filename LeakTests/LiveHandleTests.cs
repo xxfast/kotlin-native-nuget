@@ -163,16 +163,47 @@ public class LiveHandleTests
         }
     }
 
+    // The async twin of `Settle`, for crossings that end on .NET thread-pool work. A reverse await's
+    // ctx is released by the completion callback, a `ContinueWith` work item queued at the same
+    // instant the crossing's own continuation is (row 18d: the pending pull's completion runs the
+    // enumerator's `DisposeAsync`, and so the iterator's `finally`, inline). `Thread.Sleep` would
+    // park the very worker holding that item in its local queue, and with every worker busy the
+    // pool only injects another after the settle window has already read the count as stable.
+    // Awaiting the delay hands the worker back to the pool between rounds, so the item runs.
+    private static async Task SettleAsync()
+    {
+        long previous = long.MinValue;
+        int stable = 0;
+        for (int round = 0; round < MaxSettleRounds; round++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            NugetMarshal.GcCollect();
+            await Task.Delay(50);
+
+            long current = NugetMarshal.LiveHandles;
+            if (current == previous)
+            {
+                if (++stable >= RequiredStableRounds) return;
+            }
+            else
+            {
+                stable = 1;
+                previous = current;
+            }
+        }
+    }
+
     private static async Task AssertNoLeakAsync(Func<Task> crossing, int iterations = 10)
     {
         for (int attempt = 1; ; attempt++)
         {
-            Settle();
+            await SettleAsync();
             long before = NugetMarshal.LiveHandles;
 
             for (int i = 0; i < iterations; i++) await crossing();
 
-            Settle();
+            await SettleAsync();
             long after = NugetMarshal.LiveHandles;
             if (after == before) return;
             if (after < before && attempt < MeasurementAttempts) continue;
@@ -5697,7 +5728,9 @@ public class LiveHandleTests
     // that pending pull has finished (ADR-210: queue cancel, await pending, then DisposeAsync). So
     // handles stay held until the iterator really completes: a bounded hold, not a leak. The
     // crossing therefore releases the iterator and awaits its `finally` before it returns, and
-    // only then may the baseline be asserted.
+    // only then may the baseline be asserted. Even then the pull's ctx can still be held: its
+    // completion callback is a thread-pool item queued as the `finally` runs, which is why
+    // `AssertNoLeakAsync` settles without parking a worker (`SettleAsync`).
     [Fact]
     public async Task FlowParameter_OuterTokenCancelledMidStep_ReturnsToBaseline()
     {
