@@ -6,6 +6,7 @@ import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMember
+import io.github.xxfast.kotlin.native.nuget.processor.exports.returnsForwardFlow
 import io.github.xxfast.kotlin.native.nuget.processor.freshName
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
@@ -233,16 +234,15 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
     }
   }
 
-  // ADR-214: a suspend member's own `T`. A trampolined one (ADR-198) needs a type variable the
-  // launch lambda cannot declare, so it stays refused by name.
+  // ADR-214: a suspend member's own `T`; ADR-215: and a Flow-returning member's, or its generic
+  // owner's. Which host takes which (a trampolined one included) is the declared-parameter rule.
   val typeParameter: BridgeType.TypeParameter? =
     classified.unwrapNullable() as? BridgeType.TypeParameter
   if (typeParameter != null) {
-    return if (typeParameter.trampolined) {
-      ForwardLegacyParameterShape.Refused(expanded.legacyDescription())
-    } else {
-      ForwardLegacyParameterShape.Boxed(typeParameter, nullable = classified is BridgeType.Nullable)
-    }
+    return ForwardLegacyParameterShape.Boxed(
+      typeParameter,
+      nullable = classified is BridgeType.Nullable,
+    )
   }
 
   if (expanded.arguments.isEmpty()) return when {
@@ -312,10 +312,15 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
     return ForwardLegacyParameterShape.Refused(expanded.legacyDescription(), hotFlow = true)
   }
   val shape: ForwardLegacyParameterShape = legacyParameterShape(type)
-  // ADR-214: only the suspend route carries a boxed `T`; a Flow-returning member keeps its refusal.
-  val suspends: Boolean = host != null && Modifier.SUSPEND in host.modifiers
-  if (shape is ForwardLegacyParameterShape.Boxed && !suspends) {
-    return ForwardLegacyParameterShape.Refused(expanded.legacyDescription())
+  // ADR-214: the suspend route carries a boxed `T`, bar a trampolined one (ADR-198), which needs a
+  // type variable the launch lambda cannot declare. ADR-215: a Flow-returning member carries every
+  // boxed `T`; its export wraps the whole body in the ADR-198 trampoline when one needs it.
+  // Every other legacy host keeps the refusal.
+  if (shape is ForwardLegacyParameterShape.Boxed) {
+    val suspends: Boolean = host != null && Modifier.SUSPEND in host.modifiers
+    val returnsFlow: Boolean = host?.returnsForwardFlow() == true && !suspends
+    val admitted: Boolean = returnsFlow || (suspends && !shape.type.trampolined)
+    if (!admitted) return ForwardLegacyParameterShape.Refused(expanded.legacyDescription())
   }
   return shape
 }
@@ -1355,6 +1360,13 @@ internal class ForwardLegacyNames(
 ) {
   private val taken: MutableSet<String> = parameters.toMutableSet()
 
+  /**
+   * ADR-215: the type variables a Flow export's trampoline re-declares for a multi-bound owner
+   * `T` (`Pride<T> where T : Furry, T : Tricky`), whose boxed arguments are cast to that variable.
+   * Empty everywhere else.
+   */
+  var trampolineVariables: Set<String> = emptySet()
+
   private fun mint(base: String): String = freshName(base, taken).also { taken += it }
 
   /**
@@ -1536,7 +1548,11 @@ internal fun ForwardLegacyNames.legacyArgument(index: Int, parameter: String): S
   val shape: ForwardLegacyParameterShape = shapes[index]
   loweredLocals[index]?.let { local ->
     // ADR-214: ADR-015's checked bound cast, evaluated inside the launch so it faults the Task.
-    if (shape is ForwardLegacyParameterShape.Boxed) return legacyBoxedCast(local, shape)
+    if (shape is ForwardLegacyParameterShape.Boxed) {
+      val variable: String? = shape.type.kotlinName
+        .takeIf { name -> shape.type.trampolined || name in trampolineVariables }
+      return legacyBoxedCast(local, shape, variable)
+    }
     // ADR-164: a widened handle's local is `T?` off its nullable slot, but it is only passed in
     // the arms that set it, where the member declares `T`.
     val widened: Boolean = shape is ForwardLegacyParameterShape.Handle && shape.widened
@@ -1566,9 +1582,19 @@ internal fun ForwardLegacyNames.legacyArgument(index: Int, parameter: String): S
  * ADR-214: the checked cast of a boxed `T` [local] to its bounds (ADR-015), the cast half of
  * [forwardBoundedRead]. Unconstrained, it is the local itself.
  */
-internal fun legacyBoxedCast(local: String, shape: ForwardLegacyParameterShape.Boxed): String {
+internal fun legacyBoxedCast(
+  local: String,
+  shape: ForwardLegacyParameterShape.Boxed,
+  // ADR-215: inside a trampoline (ADR-198), the type variable the checked value is finally cast
+  // to: a trampolined `T`'s own, or a multi-bound owner `T` the trampoline re-declares.
+  typeVariable: String? = null,
+): String {
   val bounds: List<String> = shape.type.legacyBounds()
   val mark: String = if (shape.nullable) "?" else ""
+  if (typeVariable != null) {
+    val casts: String = bounds.joinToString("") { bound -> "bounded as $bound$mark; " }
+    return "$local.let { bounded -> ${casts}bounded as $typeVariable$mark }"
+  }
   return when (bounds.size) {
     // A non-null `T` (`T : Any`) asserts here, inside the launch, so a C# null faults the Task.
     0 -> if (shape.nullable) local else "$local!!"

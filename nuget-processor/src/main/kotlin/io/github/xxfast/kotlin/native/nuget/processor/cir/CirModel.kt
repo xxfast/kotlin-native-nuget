@@ -1162,7 +1162,48 @@ internal data class CirStateFlowWrite(
   val parameters: List<CirParameter>,
   val arguments: String,
   val rejectsNull: Boolean = false,
+  /**
+   * ADR-215: the C# `T` of a boxed element (`Brook<T>.Level`). [arguments] is then the bare
+   * variable, which the lambda wraps with `NugetMarshal.Wrap<T>` before the call and releases in a
+   * `finally` (a minted box disposed, a borrowed wrapper kept alive). Null for every other element.
+   */
+  val boxedType: String? = null,
 )
+
+/**
+ * ADR-215: [call] (which spells each boxed [variables] as `<variable>Box`) between the boxes'
+ * `Wrap<T>` and their release, one line per entry, at [indent]. [call] alone when nothing is boxed.
+ */
+internal fun CirStateFlowWrite.boxedCall(
+  variables: List<String>,
+  call: String,
+  indent: String,
+): List<String> {
+  val type: String = boxedType ?: return listOf("$indent$call")
+  return buildList {
+    variables.forEach { variable ->
+      add(
+        "${indent}IntPtr ${variable}Box = " +
+          "NugetMarshal.Wrap<$type>($variable!, out bool ${variable}Owned);",
+      )
+    }
+    add("${indent}try")
+    add("${indent}{")
+    add("$indent    $call")
+    add("${indent}}")
+    add("${indent}finally")
+    add("${indent}{")
+    variables.forEach { variable ->
+      add("$indent    if (${variable}Owned) NugetMarshal.Dispose(${variable}Box);")
+      add("$indent    else GC.KeepAlive($variable);")
+    }
+    add("${indent}}")
+  }
+}
+
+/** ADR-215: the argument a boxed write passes for [variable], else [arguments] as they are. */
+internal fun CirStateFlowWrite.boxedArgument(variable: String): String =
+  if (boxedType == null) arguments else "${variable}Box"
 
 /**
  * ADR-209: the externs a `KotlinSharedFlow<T>` / `KotlinMutableSharedFlow<T>` member's delegates

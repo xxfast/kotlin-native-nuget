@@ -269,9 +269,9 @@ class Tier1TopLevelSuspendGenericTest {
     assertContains(result.generated, "_snoozer_bridge_create")
   }
 
-  /** The `Boxed` shape is the suspend route's alone; a Flow-returning member keeps its refusal. */
+  /** ADR-215: a Flow-returning member takes the `Boxed` shape too, on the legacy Flow route. */
   @Test
-  fun `a Flow member with its own type parameter does not take the boxed shape`() {
+  fun `a Flow member with its own type parameter takes the boxed shape`() {
     val result: Tier1Result = Tier1Harness.run(
       """
       package tier1.suspendgenericflow
@@ -288,9 +288,7 @@ class Tier1TopLevelSuspendGenericTest {
       libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
     )
     assertKotlinCompiles(result)
-    assertFalse(
-      result.generatedCSharp.contains("Echo<T>"),
-      "flow member bound: ${result.generatedCSharp}",
-    )
+    assertContains(result.generatedCSharp, "public KotlinFlow<string> Echo<T>(T value)")
+    assertContains(result.generated, "obj.echo<Any?>(")
   }
 }

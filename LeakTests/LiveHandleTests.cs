@@ -5957,4 +5957,70 @@ public class LiveHandleTests
             Assert.StartsWith("locket holds ", locket.Peek());
         });
     }
+
+    // ADR-215 lane B
+    // A type parameter as a Flow element Kotlin hands to C#. Each element is one boxed handle
+    // `FromHandle<T>` consumes (a `Tabby` element is a fresh wrapper the loop `using`s); a null
+    // element of an unconstrained `T` is no handle at all. The `Level` write is a `Wrap<T>` box C#
+    // disposes after the setter returns, the member's own `T` argument the same. The endless
+    // `Babble` is cancelled mid-stream, so the in-flight element and the producer go with it.
+    // Ledger per iteration: Brook<Tabby> Updates 2 wrappers +2/-2, Level write box +1/-1, Level read
+    // wrapper +1/-1; Brook<string?> Updates two nulls, zero; Gaps 2 boxes and a null; Babble
+    // cancelled after 3; Creek Stream(oreo) box +1/-1 and wrapper +1/-1; Hush one box and a null;
+    // Pride Join(mylo) box +1/-1, 2 wrappers +2/-2; Dish.Hot<string?> null Portions, zero. The
+    // owners go inside the body and the two cats outlive the loop, so net zero.
+    [Fact]
+    public async Task GenericClass_FlowElements_ReturnToBaseline()
+    {
+        using var oreo = new Membergeneric.Tabby("Oreo", 3);
+        using var mylo = new Membergeneric.Tabby("Mylo", 1);
+        await AssertNoLeakAsync(async () =>
+        {
+            await using (var brook = new Membergeneric.Brook<Membergeneric.Tabby>(oreo))
+            {
+                await foreach (Membergeneric.Tabby cat in brook.Updates)
+                {
+                    using (cat) Assert.Equal("Oreo", cat.Name);
+                }
+                brook.Level.Value = mylo;
+                using (Membergeneric.Tabby current = brook.Level.Value) Assert.Equal("Mylo", current.Name);
+            }
+            await using (var hush = new Membergeneric.Brook<string?>(null))
+            {
+                await foreach (string? gap in hush.Updates) Assert.Null(gap);
+            }
+            await using (var brook = new Membergeneric.Brook<string>("splash"))
+            {
+                int gaps = 0;
+                await foreach (string? gap in brook.Gaps) if (gap is null) gaps++;
+                Assert.Equal(1, gaps);
+                using var cts = new CancellationTokenSource();
+                int splashes = 0;
+                // A cancelled KotlinFlow ends the enumeration cleanly, as every shipped flow does.
+                await foreach (string splash in brook.Babble().WithCancellation(cts.Token))
+                {
+                    if (++splashes == 3) cts.Cancel();
+                }
+            }
+            using (var creek = new Membergeneric.Creek())
+            {
+                await foreach (Membergeneric.Tabby cat in creek.Stream(oreo))
+                {
+                    using (cat) Assert.Equal("Oreo", cat.Name);
+                }
+                await foreach (string? name in creek.Hush("Mylo")) Assert.True(name is null or "Mylo");
+            }
+            await using (var pride = new Membergeneric.Pride<Membergeneric.Tabby>(oreo))
+            {
+                await foreach (Membergeneric.Tabby cat in pride.Join(mylo))
+                {
+                    using (cat) Assert.NotNull(cat.Name);
+                }
+            }
+            await using (var plate = new Outcomes.Dish.Hot<string?>(null))
+            {
+                await foreach (string? portion in plate.Portions) Assert.Null(portion);
+            }
+        });
+    }
 }

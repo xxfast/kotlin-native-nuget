@@ -16,6 +16,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowProp
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMember
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardFlowType
 import io.github.xxfast.kotlin.native.nuget.processor.exports.returnsForwardFlow
+import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyFlowReturn
 
 /**
  * ADR-159: who owns the coroutine scope in an inheritance chain.
@@ -89,14 +90,19 @@ internal fun KSClassDeclaration.forwardClassFlowMethods(
   classifier: ForwardBridgeTypeClassifier,
   superClass: KSClassDeclaration?,
 ): List<KSFunctionDeclaration> {
-  if (forwardTypeParametersInScope().isNotEmpty()) return emptyList()
+  // ADR-215: a generic class reads its receiver erased on this route; any other generic owner
+  // (an inner class of one, a generic sealed base) still has no spelling here.
+  if (forwardTypeParametersInScope().isNotEmpty() && !carriesGenericFlowRoute()) return emptyList()
   return getAllFunctions()
     .filter { it.getVisibility() == Visibility.PUBLIC }
+    .filter { method -> typeParameters.isEmpty() || method.takesGenericFlowRoute(this) }
     .filter { !it.modifiers.contains(Modifier.SUSPEND) }
     .filter { method -> !method.isCompilerOwnedMember(this) }
     .filter { it.returnsForwardFlow() }
     .filter { method -> classifier.legacyRefusedParameter(method.parameters) == null }
     .filter { method -> classifier.legacyRefusedReturn(method) == null }
+    // ADR-215: a member's own type parameters route under ADR-197's rules, named otherwise.
+    .filter { method -> method.forwardMemberGenericRefusal() == null }
     .filter { method -> method.isForwardMemberOf(this, superClass) }
     .filter { method -> !method.reProjectsKeptBaseMember(this, superClass) }
     .toList()
@@ -110,7 +116,7 @@ internal fun KSClassDeclaration.forwardClassFlowProperties(
   // ADR-174: the generic-owner guard its two siblings above always had. The C# property half
   // refuses a generic owner (`CirClassTranslator`'s flow-property branch), so without it `Crate<T>`
   // owned a scope for a StateFlow property it never projected (ADR-159's rule, broken).
-  .filter { forwardTypeParametersInScope().isEmpty() }
+  .filter { prop -> forwardTypeParametersInScope().isEmpty() || prop.takesGenericFlowRoute(this) }
   .filter { it.getVisibility() == Visibility.PUBLIC }
   .filter { prop -> prop.type.resolve().expandAliases().isForwardFlowType() }
   .filter { prop -> !prop.isOptInRefused(classifier.exportMarkers) }
@@ -243,9 +249,12 @@ internal fun KSFunctionDeclaration.reProjectsKeptBaseMember(
 ): Boolean {
   val overridee: KSClassDeclaration = (baseClassOverridee(superClass)?.parentDeclaration)
       as? KSClassDeclaration ?: return false
-  // A generic base projects no suspend or Flow member at all (ADR-147 refuses the legacy routes on
-  // a generic owner), so this class is the only carrier there is, as for a dropped base.
-  if (overridee.forwardTypeParametersInScope().isNotEmpty()) return false
+  // A generic base projects no suspend member (ADR-147 refuses that legacy route on a generic
+  // owner), so this class is the only carrier there is, as for a dropped base. ADR-215: it does
+  // project a Flow member over its erased receiver, which then dispatches to this override.
+  if (overridee.forwardTypeParametersInScope().isNotEmpty() && !takesGenericFlowRoute(overridee)) {
+    return false
+  }
   val qualified: String = overridee.qualifiedName?.asString() ?: return false
   if (cls.droppedBaseChain(superClass).none { it.qualifiedName?.asString() == qualified }) {
     return true
@@ -254,7 +263,9 @@ internal fun KSFunctionDeclaration.reProjectsKeptBaseMember(
   // the kept base already carries (`Dinghy : Skiff(dropped) : Vessel(kept)`, all three declaring
   // it). Then the kept base projects it and this class must not (CS0108); only when the kept base
   // has no such member is this class the only carrier.
-  if (superClass == null || superClass.forwardTypeParametersInScope().isNotEmpty()) return false
+  if (superClass == null) return false
+  val genericOwner: Boolean = superClass.forwardTypeParametersInScope().isNotEmpty()
+  if (genericOwner && !takesGenericFlowRoute(superClass)) return false
   val key: List<String> = forwardSignatureKey()
   return superClass.getAllFunctions()
     .any { inherited -> inherited.forwardInheritedSignatureKey().admits(key) }
@@ -418,3 +429,28 @@ internal fun ForwardInterfaceHierarchy.asyncPlacement(
   is KSPropertyDeclaration -> placement(member)
   else -> null
 }
+
+/**
+ * ADR-215: whether this generic class takes the legacy Flow route over its erased receiver
+ * (`asStableRef<Brook<Any?>>()`, a multi-bound parameter star-projected), the spelling a generic
+ * sealed arm's flow members already read (ADR-199). A plain generic class only: an inner class of
+ * a generic owner and a sealed type keep ADR-147's refusal (the sealed arms take their own route).
+ */
+internal fun KSClassDeclaration.carriesGenericFlowRoute(): Boolean =
+  typeParameters.isNotEmpty() && capturedTypeParameterOwners().isEmpty() &&
+    Modifier.SEALED !in modifiers && !isSealedSubclass()
+
+/**
+ * ADR-215: whether [cls] binds this member on the legacy Flow route over its erased receiver: a
+ * non-suspend Flow-returning member of a [carriesGenericFlowRoute] class that overrides no
+ * interface member. An interface member keeps ADR-174's explicit forwarding (or its naming),
+ * and a `suspend` one ADR-147's refusal (the suspend route spells the bare owner).
+ */
+internal fun KSFunctionDeclaration.takesGenericFlowRoute(cls: KSClassDeclaration): Boolean =
+  Modifier.SUSPEND !in modifiers && hasLegacyFlowReturn() && cls.carriesGenericFlowRoute() &&
+    (findOverridee()?.parentDeclaration as? KSClassDeclaration)?.classKind != ClassKind.INTERFACE
+
+/** ADR-215: [takesGenericFlowRoute] for a Flow/StateFlow-typed property. */
+internal fun KSPropertyDeclaration.takesGenericFlowRoute(cls: KSClassDeclaration): Boolean =
+  type.resolve().expandAliases().isForwardFlowType() && cls.carriesGenericFlowRoute() &&
+    (findOverridee()?.parentDeclaration as? KSClassDeclaration)?.classKind != ClassKind.INTERFACE

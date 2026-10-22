@@ -372,8 +372,12 @@ private fun StringBuilder.renderClassDeclaration(cls: CirClass) {
     renderInterfaceBridgeMethod(ibMethod)
   }
 
+  // ADR-215: a generic class's Flow member names its owner applied (`nameof(Brook<T>)`), since
+  // `nameof(Brook)` does not bind inside `Brook<T>` (CS0305).
+  val flowOwner: String = if (cls.typeParameters.isEmpty()) cls.name
+  else cls.name + cls.typeParameters.joinToString(", ", "<", ">") { it.name }
   for (member in cls.companionMembers) {
-    renderMember(member, cls.name)
+    renderMember(member, if (member is CirMethod && member.isFlow) flowOwner else cls.name)
   }
 
   if (cls.isDataClass) {

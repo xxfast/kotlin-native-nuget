@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementEnvelope
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMemberGenericRefusal
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinIdentifier
 import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
 import io.github.xxfast.kotlin.native.nuget.processor.freshName
@@ -11,11 +12,21 @@ import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.symbol.KSTypeParameter
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardGenericOwner
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardGenericOwner
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMethodTypeParameters
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardUncheckedCastSuppression
+import io.github.xxfast.kotlin.native.nuget.processor.forward.hasNullableBound
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBounds
+import io.github.xxfast.kotlin.native.nuget.processor.forward.trampolined
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardBoundedRead
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.BOOLEAN
 import com.squareup.kotlinpoet.INT
 import com.squareup.kotlinpoet.ClassName
+import com.squareup.kotlinpoet.CodeBlock
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.TypeName
@@ -115,6 +126,8 @@ internal fun KSClassDeclaration.forwardArmFlowMethods(
   // projection. Both halves must agree, or a C# import arrives with no Kotlin export behind it.
   .filter { method -> classifier.legacyRefusedParameter(method.parameters) == null }
   .filter { method -> classifier.legacyRefusedReturn(method) == null }
+  // ADR-215: a member's own type parameters route under ADR-197's rules, named otherwise.
+  .filter { method -> method.forwardMemberGenericRefusal() == null }
   // ADR-175: an override of a Flow member the sealed base projects stays on the base.
   .filter { method -> !forwardArmMemberProjectedByBase(method, classifier) }
   .toList()
@@ -136,6 +149,9 @@ internal fun KSFunctionDeclaration.returnsHeldMutableStateFlow(): Boolean {
   if (resolved.isMarkedNullable) return false
   // ADR-071 amendment: a nullable element is held and settable (bar `Boolean?`/`Char?`).
   val element: KSType? = resolved.arguments.firstOrNull()?.type?.resolve()?.expandAliases()
+  // ADR-215: a `T` element is written only through an owner's property; the held route's
+  // flow-keyed exports spell the element closed.
+  if (element?.declaration is KSTypeParameter) return false
   return isMutableStateFlowElementWritable(element)
 }
 
@@ -152,6 +168,7 @@ internal fun KSFunctionDeclaration.awaitsSettableMutableStateFlow(): Boolean {
   if (resolved.declaration.qualifiedName?.asString() !in MUTABLE_STATE_FLOW_TYPES) return false
   if (resolved.isMarkedNullable) return false
   val element: KSType? = resolved.arguments.firstOrNull()?.type?.resolve()?.expandAliases()
+  if (element?.declaration is KSTypeParameter) return false
   if (element?.isMarkedNullable == true) return false
   return isMutableStateFlowElementWritable(element)
 }
@@ -201,7 +218,7 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
   // null. Null now crosses as a null item pointer, the encoding `StateFlow<T?>` already used.
   // A nullable MEMBER (`StateFlow<T>?` and, since 2026-10-09, `Flow<T>?`) is the `_has_value`
   // probe pair.
-  val elementNullable: Boolean = flowElementType?.isMarkedNullable == true
+  val elementNullable: Boolean = flowElementType.isFlowElementNullable()
   val memberNullable: Boolean = propTypeResolved.isMarkedNullable
   // ADR-123: a collection element crosses as the ordinary route's boxed wire container, so a
   // component that projects at the seam (a value class to its underlying, an enum to its
@@ -312,6 +329,9 @@ internal fun FileSpec.Builder.addFlowMethodExports(
   prefix: String,
   classifier: ForwardBridgeTypeClassifier,
   callableCatalog: ForwardCallablePlanCatalog,
+  // ADR-215: the generic class whose own multi-bound `T` a parameter takes, so the export can
+  // re-declare it on a trampoline; null for an arm and for every non-generic owner.
+  owner: KSClassDeclaration? = null,
 ) {
   val methodName: String = method.simpleName.asString()
   // Issue #97: carry the planner's overload number, as the C# side does (ADR-090).
@@ -325,7 +345,7 @@ internal fun FileSpec.Builder.addFlowMethodExports(
     flowElementType?.declaration?.qualifiedName?.asString() ?: "kotlin.Any"
   // ADR-067 (widened 2026-09-20): nullable ELEMENT threading on both flow shapes, mirroring the
   // property half above, and (2026-10-09) the nullable MEMBER on both shapes too.
-  val elementNullable: Boolean = flowElementType?.isMarkedNullable == true
+  val elementNullable: Boolean = flowElementType.isFlowElementNullable()
   val memberNullable: Boolean = returnType?.isMarkedNullable == true
   // ADR-123: the element-side twin of the parameter lowering below -- a collection element
   // leaves per-element projected, exactly as the ordinary route's collection result does.
@@ -343,11 +363,17 @@ internal fun FileSpec.Builder.addFlowMethodExports(
     method.parameters, callableCatalog.legacyDefaultFlags(method),
   )
   val names: ForwardLegacyNames = legacyKotlinNames(method.parameters, paramShapes)
+  // ADR-215: the trampoline (ADR-198) a `T` parameter needs: a trampolined own `T`, or a
+  // multi-bound owner `T`, which the erased receiver (`Pride<*>`) cannot be called with.
+  val trampoline: ForwardFlowTrampoline? = flowTrampoline(method, owner, paramShapes)
+  names.trampolineVariables = trampoline?.ownerVariables.orEmpty()
 
   // The whole call on `names.obj`, positional or dispatched; every body below reads it as is.
+  // ADR-215: with the member's own type arguments (`<Any?>`), as the suspend route spells them.
   val call: String =
     names.legacyInvocation(
-      "${names.obj}.${methodName.kotlinIdentifier()}", method.legacyParameterNames(),
+      "${names.obj}.${methodName.kotlinIdentifier()}${method.legacyTypeArguments()}",
+      method.legacyParameterNames(),
     )
   val paramPrelude: String = names.legacyPrelude(method.legacyParameterNames())
 
@@ -395,7 +421,7 @@ internal fun FileSpec.Builder.addFlowMethodExports(
           qualifiedName, call, paramPrelude, names.obj, memberNullable,
         ),
       )
-    addFunction(acquireBuilder.build())
+    addFunction(acquireBuilder.build().flowTrampolined(trampoline, qualifiedName))
     addAcquiredFlowCollectExport(method, "${prefix}_$cname", returnType, classifier)
     addFlowKeyedSharedFlowExports("${prefix}_$cname", method, returnType, classifier)
     return
@@ -420,7 +446,7 @@ internal fun FileSpec.Builder.addFlowMethodExports(
         buildStateFlowAcquireMethodBody(qualifiedName, call, paramPrelude, names.obj)
       )
 
-    addFunction(acquireBuilder.build())
+    addFunction(acquireBuilder.build().flowTrampolined(trampoline, qualifiedName))
     addHeldStateFlowSetValueExport("${prefix}_${cname}", method, flowElementType)
     addHeldStateFlowCompareAndSetExport("${prefix}_${cname}", method, flowElementType)
     return
@@ -446,8 +472,9 @@ internal fun FileSpec.Builder.addFlowMethodExports(
         elementNullable, memberNullable, flowElementCollection, names, flowElementEnvelope,
       )
     )
+  if (paramShapes.castsGenericBound()) builder.addAnnotation(forwardUncheckedCastSuppression)
 
-  addFunction(builder.build())
+  addFunction(builder.build().flowTrampolined(trampoline, qualifiedName))
 
   // ADR-209: a re-invoked SharedFlow return's `ReplayCache`, keyed like the collect: the owner and
   // the method's own arguments, the method re-run per read.
@@ -473,7 +500,7 @@ internal fun FileSpec.Builder.addFlowMethodExports(
         classifier.replayCacheExpression(flow, requireNotNull(returnType)), "null",
         errorOut = errorOut,
       )
-    addFunction(replayBuilder.build())
+    addFunction(replayBuilder.build().flowTrampolined(trampoline, qualifiedName))
   }
 
   if (isStateFlowMethod) {
@@ -500,7 +527,7 @@ internal fun FileSpec.Builder.addFlowMethodExports(
         )
       )
 
-    addFunction(valueBuilder.build())
+    addFunction(valueBuilder.build().flowTrampolined(trampoline, qualifiedName))
 
     // ADR-071 (2026-09-11): the settable half of a function return no longer lands here. A
     // `MutableStateFlow<T>`-declared return is held by handle and returned above, before the
@@ -525,7 +552,7 @@ internal fun FileSpec.Builder.addFlowMethodExports(
         buildFlowHasValueMethodBody(qualifiedName, call, paramPrelude, names.obj)
       )
 
-    addFunction(hasValueBuilder.build())
+    addFunction(hasValueBuilder.build().flowTrampolined(trampoline, qualifiedName))
   }
 }
 
@@ -727,6 +754,16 @@ internal fun mutableStateFlowWriteSlot(elementType: KSType?): MutableStateFlowWr
   val nullable: Boolean = elementType?.isMarkedNullable == true
   val element: MutableStateFlowElement.Writable = writableMutableStateFlowElement(elementType)
   return when (element) {
+    // ADR-215: the erased box read (`asStableRef<Any>()`), cast to the one bound when there is one;
+    // the receiver is the erased owner (`Brook<Any?>`), whose flow takes that type.
+    is MutableStateFlowElement.Boxed -> {
+      val boxNullable: Boolean = nullable || element.nullable
+      MutableStateFlowWriteSlot(
+        listOf("value" to cOpaquePointer.copy(nullable = boxNullable)),
+        forwardBoundedRead("value", element.bounds, boxNullable),
+      )
+    }
+
     is MutableStateFlowElement.Handle -> {
       val unwrap: String = if (nullable) {
         "value?.asStableRef<${element.kotlinType}>()?.get()"
@@ -818,6 +855,9 @@ private fun valueClassWriteSlot(
 
     is MutableStateFlowElement.ValueClass ->
       error("value class ${element.qualifiedName} over a value class has no write arm")
+
+    is MutableStateFlowElement.Boxed ->
+      error("value class ${element.qualifiedName} over a type parameter has no write arm")
   }
 }
 
@@ -1058,3 +1098,85 @@ private fun buildStateFlowCompareAndSetBody(compareAndSet: String): String = bui
   appendLine("  false")
   append("}")
 }
+
+/**
+ * ADR-215: whether a Flow element boxes through the null-guarded arm. An unconstrained `T` (and
+ * any `T` whose every bound is nullable) is nullable without a `?`, so `Hot<string?>` emitting
+ * null used to throw out of `retain(value as Any)` and end the stream in `onError`.
+ */
+internal fun KSType?.isFlowElementNullable(): Boolean {
+  if (this == null) return false
+  if (isMarkedNullable) return true
+  val parameter: KSTypeParameter = declaration as? KSTypeParameter ?: return false
+  return parameter.hasNullableBound()
+}
+
+/**
+ * ADR-215: the ADR-198 trampoline a Flow export wraps its body in. [variables] are re-declared
+ * with their bounds; [ownerVariables] are the multi-bound owner parameters among them, for which
+ * the receiver is read as [typedReceiver] (`Pride<T>`) instead of the star-projected `Pride<*>`.
+ */
+internal data class ForwardFlowTrampoline(
+  val variables: List<Pair<String, List<String>>>,
+  val ownerVariables: Set<String>,
+  val typedReceiver: String?,
+)
+
+private fun flowTrampoline(
+  method: KSFunctionDeclaration,
+  owner: KSClassDeclaration?,
+  shapes: List<ForwardLegacyParameterShape>,
+): ForwardFlowTrampoline? {
+  val boxed: Set<String> = shapes.filterIsInstance<ForwardLegacyParameterShape.Boxed>()
+    .map { shape -> shape.type.kotlinName }
+    .toSet()
+  val own: List<Pair<String, List<String>>> = method.forwardMethodTypeParameters()
+    .filter { parameter -> parameter.trampolineBounds.isNotEmpty() }
+    .map { parameter -> parameter.kotlinName to parameter.trampolineBounds }
+  val generic: ForwardGenericOwner? = owner?.forwardGenericOwner()
+  val ownerParameters = generic?.typeParameters.orEmpty()
+    .filter { parameter -> parameter.erased == null && parameter.kotlinName in boxed }
+  if (own.isEmpty() && ownerParameters.isEmpty()) return null
+  val ownerNames: Set<String> = ownerParameters.map { parameter -> parameter.kotlinName }.toSet()
+  val typedReceiver: String? = if (generic == null || ownerNames.isEmpty()) {
+    null
+  } else {
+    generic.applied(
+      generic.typeParameters.joinToString(", ") { parameter ->
+        if (parameter.kotlinName in ownerNames) parameter.kotlinName else parameter.erased ?: "*"
+      },
+    )
+  }
+  return ForwardFlowTrampoline(
+    variables = ownerParameters.map { parameter -> parameter.kotlinName to parameter.bounds } + own,
+    ownerVariables = ownerNames,
+    typedReceiver = typedReceiver,
+  )
+}
+
+/**
+ * ADR-215: [this] export inside [trampoline], its receiver read typed when an owner parameter
+ * is re-declared (a cast: `asStableRef` is reified, and a type variable is not).
+ */
+private fun FunSpec.flowTrampolined(
+  trampoline: ForwardFlowTrampoline?,
+  qualifiedName: String,
+): FunSpec {
+  if (trampoline == null) return this
+  val typed: String? = trampoline.typedReceiver
+  val spec: FunSpec = if (typed == null) {
+    this
+  } else {
+    val text: String = body.toString().replace(
+      "handle.asStableRef<$qualifiedName>().get()",
+      "(handle.asStableRef<Any>().get() as $typed)",
+    )
+    toBuilder().clearBody().addCode(CodeBlock.of("%L", text)).build()
+  }
+  return spec.trampolined(trampoline.variables)
+}
+
+/** ADR-215: whether a boxed `T`'s checked cast names a generic bound (`Comparable<Any?>`). */
+private fun List<ForwardLegacyParameterShape>.castsGenericBound(): Boolean =
+  filterIsInstance<ForwardLegacyParameterShape.Boxed>()
+    .any { shape -> !shape.type.trampolined && shape.type.legacyBounds().any { '<' in it } }

@@ -224,6 +224,11 @@ nothing. `LeakTests/LiveHandleTests.cs`'s `GenericInstance_ReturnedBoxes_ReturnT
 `GenericInstance_PassedBoxes_ReturnToBaseline` and `GenericInstance_SuspendAndFlow_ReturnToBaseline`
 pin the three groups. A `T` you assign to a generic class's `var` is boxed for the call and the box released after it: `GenericInstance_SetterBoxes_ReturnToBaseline`.
 
+The flows of a [generic class](coroutines-and-flow.md#flow-type-parameter) follow it: each element
+of `Brook<T>.Updates`, `Level` and `Babble()` that Kotlin hands back is one owned crossing, and the
+count returns to baseline once the flow is drained and the class disposed.
+`LeakTests/LiveHandleTests.cs`'s `GenericClass_FlowElements_ReturnToBaseline` pins it.
+
 A [sealed interface whose arms extend a class](interfaces-abstract-sealed.md#sealed-interface-over-arms)
 follows the same rule: an `I<Name>` Kotlin hands back is the arm wrapper, owns one handle, and its
 `Dispose` is the only release, for each element of a returned list too. A C#-built arm passed at a
