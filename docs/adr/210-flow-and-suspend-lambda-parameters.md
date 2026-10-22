@@ -509,3 +509,11 @@ A `suspend` lambda property now binds as `Func<A, CancellationToken, Task<R>>` (
 for `Unit`), the shape this ADR gives a parameter, on every owner and nullable too, and a `var`
 takes a C# delegate ([ADR-236](236-lambda-properties-on-every-owner.md)). It was `KotlinSuspendFunc<A, R>`
 with `InvokeAsync`.
+
+## Amendment (2026-10-22): the legacy routes take an interface parameter
+
+The legacy suspend and `Flow` routes gain a `ForwardLegacyParameterShape.Interface` arm. A
+Kotlin-backed interface lends its handle, a C# implementation mints its bridge and disposes it in
+the call's `finally`, and a defaulted interface parameter stays required
+([ADR-232](232-csharp-implemented-async-interfaces.md)). Members with an interface parameter that
+the legacy routes skipped before now bind.

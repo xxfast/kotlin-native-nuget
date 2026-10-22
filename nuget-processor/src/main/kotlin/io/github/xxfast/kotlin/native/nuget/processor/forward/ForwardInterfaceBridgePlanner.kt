@@ -68,6 +68,11 @@ internal data class ForwardBridgeType(
    * handle Kotlin retained in a fresh one.
    */
   val lambda: BridgeType.ReturnedLambda? = null,
+  /**
+   * ADR-232: a `StateFlow`, `SharedFlow` or mutable form, crossing as the Kotlin flow object's own
+   * handle on the OBJECT wire: retained by C# (`NugetHotFlowNative.Retain`), read and released here.
+   */
+  val hotFlow: Boolean = false,
 )
 
 internal data class ForwardBridgeParameter(
@@ -83,6 +88,18 @@ internal enum class ForwardBridgeSlotKind {
   FUNCTION,
   GETTER,
   SETTER,
+}
+
+/**
+ * ADR-232: how a slot's member crosses. [SYNC] is the ADR-084 call; [SUSPEND] is an ADR-210 Begin
+ * and End pair over the implementation's `Task`, the Begin delegate registered once per bridge; a
+ * [FLOW] slot returns the key of a registered enumeration factory over the implementation's
+ * `KotlinFlow<T>`, which Kotlin reads through the runtime's `flowForKotlin`.
+ */
+internal enum class ForwardBridgeAsync {
+  SYNC,
+  SUSPEND,
+  FLOW,
 }
 
 internal data class ForwardBridgeSlot(
@@ -105,6 +122,10 @@ internal data class ForwardBridgeSlot(
    * slot's prefix ([withUniqueSlotPrefixes]); `""` otherwise.
    */
   val uniqueSuffix: String = "",
+  /** ADR-232: a `suspend` member or a `Flow` result; [SYNC] for every other slot. */
+  val async: ForwardBridgeAsync = ForwardBridgeAsync.SYNC,
+  /** ADR-232: a [ForwardBridgeAsync.FLOW] slot's element type, null for every other slot. */
+  val element: ForwardBridgeType? = null,
 ) {
   /** A getter or a setter slot: forwards to a property, not a member function. */
   val isProperty: Boolean = kind != ForwardBridgeSlotKind.FUNCTION
@@ -227,9 +248,6 @@ private sealed interface ForwardBridgeSlotOutcome {
 private const val CARRIED_TYPES: String = "String, String?, a non-null Boolean, Int, Long, " +
   "Float or Double, a non-null enum, or a Throwable"
 
-private const val ASYNC_HINT: String =
-  "move it to a class; only a Kotlin-backed implementation can cross this parameter"
-
 /**
  * ADR-084 / ADR-064: the named skip for a reachable interface whose walk refused, naming every
  * disqualifying member with its reason and remedy. The interface is the declaration, not a member:
@@ -256,7 +274,7 @@ internal fun unimplementableInterfaceDiagnostic(
 internal object ForwardInterfaceBridgePlanner {
   /**
    * Returns the bridge plan for [iface], or `null` when any member falls outside the stage-1 slot
-   * vocabulary (`var` properties, object/collection slots, suspend members, generics). A `null`
+   * vocabulary (object/collection slots, hot flows, member type parameters). A `null`
    * plan means no factory export and no C# bridge state: `NugetMarshal.HandleOf` keeps throwing
    * for that interface rather than emitting a half-supported ABI. [planOrRefuse] says why.
    */
@@ -350,6 +368,9 @@ internal object ForwardInterfaceBridgePlanner {
   ): List<ForwardBridgeSlot>? {
     val outcome = slotOrRefusal(property, classifier) as? ForwardBridgeSlotOutcome.Slot
       ?: return null
+    // ADR-232: a Flow getter needs the factory's shared async thunks, which the ADR-039
+    // subscription route does not cross.
+    if (outcome.slot.async != ForwardBridgeAsync.SYNC) return null
     return listOfNotNull(outcome.slot, outcome.setter)
   }
 
@@ -370,8 +391,34 @@ internal object ForwardInterfaceBridgePlanner {
     if (!property.hasBridgeableName()) {
       return refuse("has no C# member name to implement", "give it a `@CSharpName`")
     }
+    // ADR-232: a `val` of `Flow<T>` is a FLOW getter slot, read exactly as a `Flow` function.
     if (type.isFlowType()) {
-      return refuse("is a Flow member, which a C# implementation cannot supply", ASYNC_HINT)
+      val outcome: FlowSlotOutcome = flowResult(type, classifier, owner)
+      if (outcome is FlowSlotOutcome.Refused) return refuse(outcome.reason, outcome.hint)
+      if (property.isMutable) {
+        return refuse(
+          "is a `var`, and its setter would take a Flow, a type the bridge cannot carry",
+          "declare it a `val`",
+        )
+      }
+      val getter = ForwardBridgeSlot(
+        name = name,
+        csName = property.csharpMemberName(),
+        kind = ForwardBridgeSlotKind.GETTER,
+        result = ForwardBridgeType(ForwardBridgeWire.UNIT, "Unit", "void"),
+        parameters = emptyList(),
+      )
+      return ForwardBridgeSlotOutcome.Slot(
+        when (outcome) {
+          is FlowSlotOutcome.Hot -> getter.copy(result = outcome.result)
+          is FlowSlotOutcome.Element -> getter.copy(
+            result = flowSlotResult(outcome.result),
+            async = ForwardBridgeAsync.FLOW,
+            element = outcome.result,
+          )
+          is FlowSlotOutcome.Refused -> error("refused above")
+        },
+      )
     }
     val result: ForwardBridgeType = lambdaSlotType(type, classifier)
       ?: bridgeType(type, classifier, owner)
@@ -411,9 +458,6 @@ internal object ForwardInterfaceBridgePlanner {
     val member: String = "${if (suspend) "suspend " else ""}fun $name"
     fun refuse(reason: String, hint: String): ForwardBridgeSlotOutcome =
       ForwardBridgeSlotOutcome.Refused(ForwardBridgeRefusal(member, reason, hint, name))
-    if (suspend) {
-      return refuse("is a suspend member, which a C# implementation cannot supply", ASYNC_HINT)
-    }
     if (!function.hasBridgeableName()) {
       return refuse("has no C# member name to implement", "give it a `@CSharpName`")
     }
@@ -431,12 +475,39 @@ internal object ForwardInterfaceBridgePlanner {
     }
     val returnType: KSType = function.returnType?.resolve()?.expandAliases()
       ?: return refuse("has no resolvable result type", "declare its result type")
-    if (returnType.isFlowType()) {
-      return refuse("returns a Flow, which a C# implementation cannot supply", ASYNC_HINT)
+    // ADR-232: a `Flow` result is a FLOW slot; a suspend member returning one awaits the C# task,
+    // whose End thunk registers the flow it completed with.
+    var hotResult: ForwardBridgeType? = null
+    val flow: ForwardBridgeType? = if (returnType.isFlowType()) {
+      when (val outcome: FlowSlotOutcome = flowResult(returnType, classifier, owner)) {
+        is FlowSlotOutcome.Element -> outcome.result
+        is FlowSlotOutcome.Hot -> {
+          hotResult = outcome.result
+          null
+        }
+        is FlowSlotOutcome.Refused -> return refuse(outcome.reason, outcome.hint)
+      }
+    } else {
+      null
+    }
+    if (suspend && hotResult != null) {
+      return refuse(
+        "is a suspend member returning a hot flow, which the awaited result cannot hand back",
+        "return the hot flow from a non-suspend member",
+      )
+    }
+    // ADR-232: the End thunk is not generic, so it names the element; an own `T` has no spelling.
+    if (suspend && flow?.typeParameter == true) {
+      return refuse(
+        "is a suspend member returning a Flow of its interface's own type parameter, which the " +
+          "awaited result cannot name",
+        "return the Flow from a non-suspend member",
+      )
     }
     // ADR-239: a returned lambda crosses as a lambda property's getter does, the delegate C#
     // returned minted into a Kotlin lambda through the ADR-236 managed-lambda exports.
-    val result: ForwardBridgeType = lambdaSlotType(returnType, classifier)
+    val result: ForwardBridgeType = hotResult ?: flow?.let { flowSlotResult(it) }
+      ?: lambdaSlotType(returnType, classifier)
       ?: bridgeType(returnType, classifier, owner)
       ?: return refuse(
         "returns `${returnType.kotlinSpelling(keepProjections = true)}`, a type the bridge " +
@@ -463,13 +534,95 @@ internal object ForwardInterfaceBridgePlanner {
     return ForwardBridgeSlotOutcome.Slot(
       ForwardBridgeSlot(
         name = name,
-        csName = function.csharpMemberName(),
+        csName = if (suspend) function.csharpAsyncMemberName() else function.csharpMemberName(),
         kind = ForwardBridgeSlotKind.FUNCTION,
         result = result,
         parameters = parameters,
+        async = when {
+          suspend -> ForwardBridgeAsync.SUSPEND
+          flow != null -> ForwardBridgeAsync.FLOW
+          else -> ForwardBridgeAsync.SYNC
+        },
+        element = flow,
       ),
     )
   }
+
+  private sealed interface FlowSlotOutcome {
+    data class Element(val result: ForwardBridgeType) : FlowSlotOutcome
+
+    data class Refused(val reason: String, val hint: String) : FlowSlotOutcome
+
+    /** ADR-232: a hot flow, the whole slot result. */
+    data class Hot(val result: ForwardBridgeType) : FlowSlotOutcome
+  }
+
+  /**
+   * ADR-232: the element of a `Flow<T>` member, in the vocabulary ADR-210's `flowForKotlin`
+   * lowering reads (a non-null `String`, `Boolean`, `Int`, `Long`, `Float`, `Double`, or the
+   * interface's own `T`). `StateFlow`, `SharedFlow` and their mutable forms keep ADR-210's named
+   * refusal: a C# implementation has no Kotlin flow handle to hand back for one.
+   */
+  private fun flowResult(
+    type: KSType,
+    classifier: ForwardBridgeTypeClassifier,
+    owner: KSClassDeclaration?,
+  ): FlowSlotOutcome {
+    val qualifiedName: String? = type.declaration.qualifiedName?.asString()
+    val hot: String? = HOT_FLOWS[qualifiedName]
+    if ((qualifiedName != "kotlinx.coroutines.flow.Flow" && hot == null) || type.isMarkedNullable) {
+      return FlowSlotOutcome.Refused(
+        "is a `${type.kotlinSpelling(keepProjections = true)}`, a flow type the bridge cannot carry",
+        "declare it a `Flow<T>`, `StateFlow<T>`, `SharedFlow<T>` or a mutable form, non-null",
+      )
+    }
+    val argument: KSType = type.arguments.singleOrNull()?.type?.resolve()?.expandAliases()
+      ?: return FlowSlotOutcome.Refused(
+        "is a star-projected Flow, whose element the bridge cannot name",
+        "give the Flow a concrete element type",
+      )
+    val element: ForwardBridgeType? = bridgeType(argument, classifier, owner)
+      ?.takeIf { element -> element.typeParameter || !element.nullable }
+      ?.takeIf { element -> element.throwable == null }
+      ?.takeIf { element ->
+        element.wire != ForwardBridgeWire.UNIT && element.wire != ForwardBridgeWire.ENUM
+      }
+    if (element == null) {
+      return FlowSlotOutcome.Refused(
+        "is a Flow of `${argument.kotlinSpelling(keepProjections = true)}`, an element the " +
+          "bridge cannot carry",
+        "use a Flow of String, Boolean, Int, Long, Float, Double or the interface's own type " +
+          "parameter",
+      )
+    }
+    if (hot != null) {
+      return FlowSlotOutcome.Hot(
+        ForwardBridgeType(
+          ForwardBridgeWire.OBJECT,
+          "$qualifiedName<${element.kotlin}>",
+          "$hot<${element.csharp}>",
+          hotFlow = true,
+        ),
+      )
+    }
+    return FlowSlotOutcome.Element(element)
+  }
+
+  /** ADR-232: each hot flow type, to the C# wrapper whose handle its slot hands back. */
+  private val HOT_FLOWS: Map<String?, String> = mapOf(
+    "kotlinx.coroutines.flow.StateFlow" to "KotlinStateFlow",
+    "kotlinx.coroutines.flow.MutableStateFlow" to "KotlinMutableStateFlow",
+    "kotlinx.coroutines.flow.SharedFlow" to "KotlinSharedFlow",
+    "kotlinx.coroutines.flow.MutableSharedFlow" to "KotlinMutableSharedFlow",
+  )
+
+  /** ADR-232: a FLOW slot crosses its enumeration factory's key on the OBJECT wire. */
+  private fun flowSlotResult(element: ForwardBridgeType): ForwardBridgeType =
+    ForwardBridgeType(
+      ForwardBridgeWire.OBJECT,
+      "kotlinx.coroutines.flow.Flow<${element.kotlin}>",
+      "KotlinFlow<${element.csharp}>",
+    )
 
   private fun refuseNarrow(
     member: String,
@@ -700,4 +853,98 @@ internal fun KSType.kotlinQualifiedSpelling(): String {
   }
   val generic: String = if (arguments.isEmpty()) "" else arguments.joinToString(", ", "<", ">")
   return "$qualified$generic$nullable"
+}
+
+/**
+ * ADR-232: a parameter-independent ADR-210 thunk a bridge factory crosses once, after its slot
+ * pairs, as [parameter] (Kotlin) and [pointer] (C#). `releasePtr_` names cannot collide with a
+ * slot's: every slot parameter ends in `Ptr` or `Ctx`, and `release` is a fixed name.
+ */
+internal enum class ForwardBridgeAsyncThunk(val parameter: String, val pointer: String) {
+  RELEASE_TASK("releasePtr_task", "NugetThunks.NugetAsyncReleaseTaskPtr"),
+  RELEASE_CANCELLATION("releasePtr_cancellation", "NugetThunks.NugetAsyncReleaseCancellationPtr"),
+  ENUMERATE("releasePtr_enumerate", "NugetThunks.NugetAsyncEnumeratePtr"),
+  MOVE_NEXT_BEGIN("releasePtr_moveNextBegin", "NugetThunks.NugetAsyncMoveNextBeginPtr"),
+  MOVE_NEXT_END("releasePtr_moveNextEnd", "NugetThunks.NugetAsyncMoveNextEndPtr"),
+  DISPOSE_ENUMERATION("releasePtr_dispose", "NugetThunks.NugetAsyncDisposeEnumerationPtr"),
+  RELEASE_CONTEXT("releasePtr_context", "NugetThunks.NugetAsyncReleaseContextPtr"),
+}
+
+/** ADR-232: the shared thunks [this] plan's async slots read, in ABI order; empty when none. */
+internal fun ForwardBridgeInterfacePlan.asyncThunks(): List<ForwardBridgeAsyncThunk> {
+  val suspends: Boolean = slots.any { slot -> slot.async == ForwardBridgeAsync.SUSPEND }
+  val flows: Boolean = slots.any { slot -> slot.element != null }
+  return ForwardBridgeAsyncThunk.entries.filter { thunk ->
+    when (thunk) {
+      ForwardBridgeAsyncThunk.RELEASE_TASK -> suspends || flows
+      ForwardBridgeAsyncThunk.RELEASE_CANCELLATION -> suspends
+      ForwardBridgeAsyncThunk.ENUMERATE,
+      ForwardBridgeAsyncThunk.MOVE_NEXT_BEGIN,
+      ForwardBridgeAsyncThunk.MOVE_NEXT_END,
+      ForwardBridgeAsyncThunk.DISPOSE_ENUMERATION,
+      ForwardBridgeAsyncThunk.RELEASE_CONTEXT,
+        -> flows
+    }
+  }
+}
+
+/**
+ * ADR-232: the slot's own extra thunk parameters after its pair: a SUSPEND slot's End thunk, then
+ * the Current thunk of the flow a FLOW slot (or a SUSPEND slot returning a Flow) reads.
+ */
+internal val ForwardBridgeSlot.asyncThunkParameters: List<String>
+  get() = listOfNotNull(
+    endThunkParameter.takeIf { async == ForwardBridgeAsync.SUSPEND },
+    currentThunkParameter.takeIf { element != null },
+  )
+
+/** ADR-232: a SUSPEND slot's End thunk parameter. */
+internal val ForwardBridgeSlot.endThunkParameter: String get() = "${slotPrefix}Ptr_end"
+
+/** ADR-232: the Current thunk parameter of the flow a slot returns. */
+internal val ForwardBridgeSlot.currentThunkParameter: String get() = "${slotPrefix}Ptr_current"
+
+/** ADR-232: a SUSPEND slot's Begin delegate and thunk, minted off its payload wires. */
+internal fun ForwardBridgeSlot.asyncBeginName(): String =
+  "NugetBridgeAsync" + parameters.joinToString("") { it.type.wire.nameFragment() } + "Begin"
+
+/**
+ * ADR-232: a SUSPEND slot's End thunk, one per result shape. The End read applies the ADR-084
+ * slot's own result conversion to the completed task's result, so Kotlin reads it exactly as it
+ * reads a synchronous slot of the same type.
+ */
+internal fun ForwardBridgeSlot.asyncEndName(): String {
+  val type: ForwardBridgeType = result
+  val shape: String = when {
+    element != null -> "Flow" + flowSource().forwardAsyncCurrentName().removePrefix("NugetAsync")
+      .removeSuffix("Current")
+    type.typeParameter -> "Boxed"
+    type.throwable != null -> if (type.nullable) "NullableException" else "Exception"
+    type.wire == ForwardBridgeWire.OBJECT -> if (type.nullable) "NullableString" else "String"
+    type.wire == ForwardBridgeWire.ENUM ->
+      type.kotlin.split('.').joinToString("") { it.replaceFirstChar(Char::uppercase) }
+    else -> type.wire.nameFragment()
+  }
+  return "NugetBridgeAsync${shape}End"
+}
+
+/** ADR-232: a FLOW slot's element as the ADR-210 `Flow` parameter element it is read as. */
+internal fun ForwardBridgeSlot.flowSource(): BridgeType.FlowSource {
+  val element: ForwardBridgeType = requireNotNull(element) { "ADR-232: `$name` is not a FLOW slot" }
+  val type: BridgeType = if (element.typeParameter) {
+    val parameter = BridgeType.TypeParameter(element.kotlin.removeSuffix("?"))
+    if (element.nullable) BridgeType.Nullable(parameter) else parameter
+  } else {
+    when (element.wire) {
+      ForwardBridgeWire.OBJECT -> BridgeType.String
+      ForwardBridgeWire.BOOLEAN -> BridgeType.Primitive(PrimitiveKind.BOOLEAN)
+      ForwardBridgeWire.INT -> BridgeType.Primitive(PrimitiveKind.INT)
+      ForwardBridgeWire.LONG -> BridgeType.Primitive(PrimitiveKind.LONG)
+      ForwardBridgeWire.FLOAT -> BridgeType.Primitive(PrimitiveKind.FLOAT)
+      ForwardBridgeWire.DOUBLE -> BridgeType.Primitive(PrimitiveKind.DOUBLE)
+      ForwardBridgeWire.UNIT, ForwardBridgeWire.ENUM ->
+        error("ADR-232: the planner admits no `${element.kotlin}` Flow element")
+    }
+  }
+  return BridgeType.FlowSource(type)
 }

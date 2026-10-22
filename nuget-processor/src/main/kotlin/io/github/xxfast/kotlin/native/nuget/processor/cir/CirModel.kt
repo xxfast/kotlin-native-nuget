@@ -785,6 +785,8 @@ internal data class CirFactoryEntry(
 internal data class CirBridgeHelper(
   val libraryName: String,
   val interfaces: List<CirBridgeInterface>,
+  // ADR-232: the export-name segment `NugetHotFlowNative` imports under, when a slot is a hot flow.
+  val hotFlowSegment: String? = null,
 ) : CirDeclaration
 
 // The bridge layer is emitted into the root namespace while `IPet` lives in the namespace mapped
@@ -882,6 +884,9 @@ internal data class CirFlowHelper(
   // includesStateFlow.
   val includesSharedFlow: Boolean = false,
   val includesMutableSharedFlow: Boolean = false,
+  // ADR-232: a C#-implemented interface has a hot-flow member, so the two mutable wrappers gain a
+  // public `Create` over `NugetHotFlowNative`.
+  val includesHotFlowHandles: Boolean = false,
 ) : CirDeclaration
 
 // ADR-068: the two shared generic exports keyed on an already-obtained StateFlow<*> handle --

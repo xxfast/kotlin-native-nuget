@@ -16,6 +16,18 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isGeneric
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardKotlinDeclaredSpelling
 import com.google.devtools.ksp.symbol.KSTypeParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.managedExceptionLowering
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAsyncKind
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAsyncShared
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAsyncSlots
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeAsync
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeAsyncThunk
+import io.github.xxfast.kotlin.native.nuget.processor.forward.asyncCallbackHolderConstruction
+import io.github.xxfast.kotlin.native.nuget.processor.forward.asyncThunkParameters
+import io.github.xxfast.kotlin.native.nuget.processor.forward.currentThunkParameter
+import io.github.xxfast.kotlin.native.nuget.processor.forward.endThunkParameter
+import io.github.xxfast.kotlin.native.nuget.processor.forward.asyncThunks
+import io.github.xxfast.kotlin.native.nuget.processor.forward.flowSource
+import io.github.xxfast.kotlin.native.nuget.processor.forward.flowSourceExpression
 
 /**
  * ADR-084 stage 1: the per-interface bridge factory export (`pet_bridge_create`).
@@ -40,6 +52,8 @@ internal fun FileSpec.Builder.addInterfaceBridgeFactoryExport(plan: ForwardBridg
   val body: String = buildString {
     appendLine("return try {")
     plan.slots.forEach { slot ->
+      // ADR-232: a SUSPEND slot's Begin thunk is reinterpreted at its one call, in the override.
+      if (slot.async == ForwardBridgeAsync.SUSPEND) return@forEach
       // ADR-161: payloads, the slot's ctx, then the trailing error slot.
       val args: String = (
           slot.parameters.map { it.type.wire.kotlinWire() } + "COpaquePointer" + "COpaquePointer?"
@@ -118,9 +132,11 @@ internal fun FileSpec.Builder.addInterfaceBridgeFactoryExport(plan: ForwardBridg
   plan.slots.forEach { slot ->
     builder.addParameter("${slot.slotPrefix}Ptr", cOpaquePointer)
     builder.addParameter("${slot.slotPrefix}Ctx", cOpaquePointer)
+    slot.asyncThunkParameters.forEach { thunk -> builder.addParameter(thunk, cOpaquePointer) }
   }
   builder.addParameter("releasePtr", cOpaquePointer)
   builder.addParameter("releaseCtx", cOpaquePointer)
+  plan.asyncThunks().forEach { thunk -> builder.addParameter(thunk.parameter, cOpaquePointer) }
   builder.addParameter("token", cOpaquePointer)
   builder.addParameter("errorOut", cOpaquePointer.copy(nullable = true))
   builder.returns(cOpaquePointer.copy(nullable = true))
@@ -153,7 +169,11 @@ private fun StringBuilder.appendSlotOverride(slot: ForwardBridgeSlot, mutable: B
       val keyword: String = if (mutable) "var" else "val"
       appendLine("    override $keyword ${slot.name.kotlinIdentifier()}: ${slot.result.kotlin}")
       appendLine("      get() {")
-      appendResultMarshalling(slot, call, "        ")
+      if (slot.async == ForwardBridgeAsync.FLOW) {
+        appendFlowRead(slot, call, "        ")
+      } else {
+        appendResultMarshalling(slot, call, "        ")
+      }
       appendLine("      }")
     }
 
@@ -169,14 +189,100 @@ private fun StringBuilder.appendSlotOverride(slot: ForwardBridgeSlot, mutable: B
     ForwardBridgeSlotKind.FUNCTION -> {
       val params: String =
         slot.parameters.joinToString(", ") { "${it.name.kotlinIdentifier()}: ${it.type.kotlin}" }
+      val modifier: String = if (slot.async == ForwardBridgeAsync.SUSPEND) "suspend " else ""
       appendLine(
-        "    override fun ${slot.name.kotlinIdentifier()}($params): ${slot.result.kotlin} {",
+        "    override ${modifier}fun ${slot.name.kotlinIdentifier()}($params): ${slot.result.kotlin} {",
       )
-      appendArgumentRefs(slot, "      ")
-      appendResultMarshalling(slot, call, "      ")
+      when (slot.async) {
+        ForwardBridgeAsync.SYNC -> {
+          appendArgumentRefs(slot, "      ")
+          appendResultMarshalling(slot, call, "      ")
+        }
+
+        ForwardBridgeAsync.SUSPEND -> appendSuspendCall(slot, "      ")
+        ForwardBridgeAsync.FLOW -> {
+          appendArgumentRefs(slot, "      ")
+          appendFlowRead(slot, call, "      ")
+        }
+      }
       appendLine("    }")
     }
   }
+}
+
+private const val RUNTIME: String = "io.github.xxfast.kotlin.native.nuget.runtime"
+
+/**
+ * ADR-232: a `suspend` member, awaited through the runtime's `awaitForKotlin` exactly as an ADR-210
+ * suspend lambda is. The Begin thunk dispatches to the slot's own delegate (`${slotPrefix}Ctx`, a
+ * key the bridge state pinned once), so no per-call key is minted; the payload handles are minted
+ * inside `begin`, where the Begin thunk's key-miss branch disposes them. The End thunk's result is
+ * the ADR-084 slot's own wire, read by [appendResultMarshalling].
+ */
+private fun StringBuilder.appendSuspendCall(slot: ForwardBridgeSlot, indent: String) {
+  val pointer = "COpaquePointer"
+  val payloads: List<String> = slot.parameters.map { it.type.wire.kotlinWire() }
+  val signature: String =
+    (payloads + listOf(pointer, pointer, pointer, "$pointer?")).joinToString(", ")
+  val arguments: String = (slotArguments(slot) +
+    listOf("nugetCallback", "nugetCtx", "${slot.slotPrefix}Ctx", "nugetErr")).joinToString(", ")
+  appendLine("${indent}val nugetTask: $pointer = $RUNTIME.awaitForKotlin(")
+  appendLine(
+    "$indent  release = { task -> ${ForwardBridgeAsyncThunk.RELEASE_TASK.parameter}" +
+      ".reinterpret<CFunction<($pointer) -> Unit>>().invoke(task) },",
+  )
+  appendLine(
+    "$indent  cancel = { source, cancelled -> " +
+      "${ForwardBridgeAsyncThunk.RELEASE_CANCELLATION.parameter}" +
+      ".reinterpret<CFunction<($pointer, Int) -> Unit>>()" +
+      ".invoke(source, if (cancelled) 1 else 0) },",
+  )
+  appendLine("$indent  begin = { nugetCallback, nugetCtx ->")
+  appendArgumentRefs(slot, "$indent    ")
+  appendLine(
+    "$indent    nugetCallbackCall { nugetErr -> ${slot.slotPrefix}Ptr" +
+      ".reinterpret<CFunction<($signature) -> $pointer?>>().invoke($arguments) }",
+  )
+  appendLine("$indent  },")
+  appendLine("$indent)")
+  val end: String = "nugetCallbackCall { nugetErr -> ${slot.endThunkParameter}" +
+    ".reinterpret<CFunction<($pointer, $pointer?) -> ${slot.result.wire.kotlinWire()}>>()" +
+    ".invoke(nugetTask, nugetErr) }"
+  // ADR-232: a suspend member returning a Flow completes with the key of its enumeration factory.
+  if (slot.element != null) appendFlowRead(slot, end, indent)
+  else appendResultMarshalling(slot, end, indent)
+}
+
+/**
+ * ADR-232: a `Flow` member. The slot call returns the key of the enumeration factory C# registered
+ * over the implementation's `KotlinFlow<T>`; a holder takes the key (its cleaner hands it back),
+ * and the runtime's `flowForKotlin` reads the enumeration exactly as an ADR-210 `Flow` parameter.
+ */
+private fun StringBuilder.appendFlowRead(slot: ForwardBridgeSlot, call: String, indent: String) {
+  val key = "nugetFlowKey"
+  val holder = "nugetFlowHolder"
+  val thunk: (ForwardBridgeAsyncThunk) -> String = { it.parameter }
+  val slots = ForwardAsyncSlots(
+    kind = ForwardAsyncKind.FLOW,
+    begin = thunk(ForwardBridgeAsyncThunk.ENUMERATE),
+    end = slot.currentThunkParameter,
+    key = key,
+    shared = mapOf(
+      ForwardAsyncShared.RELEASE_TASK to thunk(ForwardBridgeAsyncThunk.RELEASE_TASK),
+      ForwardAsyncShared.MOVE_NEXT_BEGIN to thunk(ForwardBridgeAsyncThunk.MOVE_NEXT_BEGIN),
+      ForwardAsyncShared.MOVE_NEXT_END to thunk(ForwardBridgeAsyncThunk.MOVE_NEXT_END),
+      ForwardAsyncShared.DISPOSE_ENUMERATION to thunk(ForwardBridgeAsyncThunk.DISPOSE_ENUMERATION),
+      ForwardAsyncShared.RELEASE_CONTEXT to thunk(ForwardBridgeAsyncThunk.RELEASE_CONTEXT),
+    ),
+    carried = emptyList(),
+    holder = holder,
+    csharpKey = key,
+  )
+  appendLine("${indent}val $key: COpaquePointer = $call!!")
+  appendLine("${indent}val $holder = ${asyncCallbackHolderConstruction(slots)}")
+  val flow: String = flowSourceExpression(slot.name, slot.flowSource(), slots, holderBuilt = true)
+  val cast: String = if (slot.element?.typeParameter == true) " as ${slot.result.kotlin}" else ""
+  appendLine("${indent}return ($flow)$cast")
 }
 
 /** The `argNRef` handle each [ForwardBridgeWire.OBJECT] argument of [slot] crosses as. */
@@ -203,7 +309,17 @@ private fun StringBuilder.appendArgumentRefs(slot: ForwardBridgeSlot, indent: St
 
 /** The `fooFn.invoke(...)` text: marshalled arguments in slot order, then the slot's context. */
 private fun invocation(slot: ForwardBridgeSlot): String {
-  val args: List<String> = slot.parameters.mapIndexed { index, parameter ->
+  val args: List<String> = slotArguments(slot)
+  // ADR-161: the ADR-084 slot's invocation goes through the error channel, so a C# member that
+  // throws becomes a `NugetManagedException` at the Kotlin call site of the interface member. The
+  // result marshalling below stays outside the helper, so the error is read before any `!!`.
+  val invokeArgs: String = (args + "${slot.slotPrefix}Ctx" + "nugetErr").joinToString(", ")
+  return "nugetCallbackCall { nugetErr -> ${slot.slotPrefix}Fn.invoke($invokeArgs) }"
+}
+
+/** The marshalled payload arguments of [slot], in slot order. */
+private fun slotArguments(slot: ForwardBridgeSlot): List<String> =
+  slot.parameters.mapIndexed { index, parameter ->
     when (parameter.type.wire) {
       ForwardBridgeWire.OBJECT -> "arg${index}Ref"
       ForwardBridgeWire.BOOLEAN ->
@@ -212,12 +328,6 @@ private fun invocation(slot: ForwardBridgeSlot): String {
       else -> parameter.name.kotlinIdentifier()
     }
   }
-  // ADR-161: the ADR-084 slot's invocation goes through the error channel, so a C# member that
-  // throws becomes a `NugetManagedException` at the Kotlin call site of the interface member. The
-  // result marshalling below stays outside the helper, so the error is read before any `!!`.
-  val invokeArgs: String = (args + "${slot.slotPrefix}Ctx" + "nugetErr").joinToString(", ")
-  return "nugetCallbackCall { nugetErr -> ${slot.slotPrefix}Fn.invoke($invokeArgs) }"
-}
 
 private fun StringBuilder.appendResultMarshalling(
   slot: ForwardBridgeSlot,
@@ -241,7 +351,8 @@ private fun StringBuilder.appendResultMarshalling(
         return
       }
       // ADR-222: a `T` result is the box `WrapOwned<T>` minted, read and released as lane A does.
-      if (slot.result.typeParameter) {
+      // ADR-232: a hot flow is the flow object's own handle, C# retained, read the same way.
+      if (slot.result.typeParameter || slot.result.hotFlow) {
         if (slot.result.nullable) {
           appendLine("${indent}val ref = $call ?: return null as ${slot.result.kotlin}")
         } else {

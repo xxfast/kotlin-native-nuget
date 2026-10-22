@@ -310,3 +310,10 @@ a collection component, a `Box<..>` argument, a lambda payload or result, a `sus
 `Flow` element binds, and a stored C# `IKeepsake<string>` comes back as the same object
 ([ADR-224](224-generic-interface-at-every-position.md)). The member-level type parameter stays
 impossible.
+
+## Amendment (2026-10-22): a generic interface's `suspend` and `Flow` members cross to Kotlin
+
+The sentence above that skips a position "when the interface's bridge cannot plan (a member's own
+`<R>`, a suspend member)" no longer holds for a `suspend` member: a C# `IKeepsake<T>`-style
+implementation with `Task<T>` and `KotlinFlow<T>` members crosses, `T` boxed as for any slot
+([ADR-232](232-csharp-implemented-async-interfaces.md)). A member's own `<R>` is still refused.

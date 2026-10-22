@@ -56,6 +56,11 @@ internal fun StringBuilder.renderSharedFlowTemplates(helper: CirFlowHelper) {
   appendLine("            _startEmit = startEmit;")
   appendLine("            _tryEmit = tryEmit;")
   appendLine("        }")
+  if (helper.includesHotFlowHandles) {
+    appendLine()
+    appendLine("        /// <summary>A Kotlin <c>MutableSharedFlow</c> replaying <paramref name=\"replay\"/> values, with an unbounded buffer, which a C# implementation of a Kotlin interface may hand to Kotlin.</summary>")
+    appendLine("        public static KotlinMutableSharedFlow<T> Create(int replay = 0) => NugetHotFlowNative.CreateShared<T>(replay);")
+  }
   appendLine()
   // A new owned `StateFlow<Int>` handle per read, collected on the scope this flow's own collect
   // uses, read through ADR-068's handle-keyed runtime pair. Disposing it frees the handle; an

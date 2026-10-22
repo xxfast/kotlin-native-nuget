@@ -286,12 +286,17 @@ internal fun KSFunctionDeclaration.reProjectsKeptBaseMember(
 internal object ForwardAsyncInterfaces {
   private val reachable: MutableSet<String> = mutableSetOf()
   private val bridgedOnly: MutableSet<String> = mutableSetOf()
+  private val declared: MutableSet<String> = mutableSetOf()
 
   fun reset(
     interfaces: Iterable<KSClassDeclaration>,
     // ADR-224: the generic interfaces only an input position reaches, bridged but not reachable.
     bridged: Iterable<KSClassDeclaration> = emptyList(),
+    // ADR-232: every interface `I<Name>` is declared for, reachable or not.
+    all: Iterable<KSClassDeclaration> = emptyList(),
   ) {
+    declared.clear()
+    all.mapNotNullTo(declared) { it.qualifiedName?.asString() }
     reachable.clear()
     interfaces.mapNotNullTo(reachable) { it.qualifiedName?.asString() }
     bridgedOnly.clear()
@@ -321,10 +326,14 @@ internal object ForwardAsyncInterfaces {
   /** ADR-224: whether [qualifiedName] names a reachable interface with a backing wrapper. */
   fun isReachable(qualifiedName: String): Boolean = qualifiedName in reachable
 
+  // ADR-232: a non-generic interface no position reaches carries its async surface too: its only
+  // consumer may be a C# implementation, so `I<Name>` declares the member either way. A generic
+  // one no position reaches is a super at a closed instantiation (`Haversack : Satchel<Int>`),
+  // which ADR-174 ruling 3 keeps out.
   fun carries(iface: KSClassDeclaration): Boolean =
-    iface.classKind == ClassKind.INTERFACE &&
-        iface.qualifiedName?.asString() in reachable &&
-        !iface.isSealedInterface()
+    iface.classKind == ClassKind.INTERFACE && !iface.isSealedInterface() &&
+      (iface.qualifiedName?.asString() in reachable ||
+        (iface.typeParameters.isEmpty() && iface.qualifiedName?.asString() in declared))
 }
 
 /**
