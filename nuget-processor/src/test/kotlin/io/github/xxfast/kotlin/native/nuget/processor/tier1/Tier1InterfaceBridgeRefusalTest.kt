@@ -41,12 +41,24 @@ class Tier1InterfaceBridgeRefusalTest {
     return result to warning
   }
 
+  /** ADR-233: a collection slot crosses as a class member's collection does, so it plans. */
   @Test
-  fun `a collection-typed slot names the interface unimplementable`() {
-    val (_, warning) = refusal("refuselist", "interface Pet { val tags: List<String> }")
+  fun `a collection-typed slot plans the bridge`() {
+    val result: Tier1Result = Tier1Harness.run(
+      """
+      package tier1.refuselist
 
-    assertTrue("`val tags: List<String>`" in warning, warning)
-    assertTrue("cannot carry" in warning, warning)
+      interface Pet { val tags: List<String> }
+
+      class Holder {
+        fun take(pet: Pet) = Unit
+      }
+      """.trimIndent(),
+    )
+
+    assertTrue(result.compiledClean, "compileErrors=${result.compileErrors}")
+    assertTrue(result.generated.contains("pet_bridge_create"), result.generated)
+    assertTrue(result.kspWarnings.none { it.contains(code) }, "${result.kspWarnings}")
   }
 
   @Test
@@ -72,17 +84,19 @@ class Tier1InterfaceBridgeRefusalTest {
         val tags: List<String>
         suspend fun fetch(id: Int): String
         fun <T> pick(item: T): T
+        fun <R> choose(item: R): R
         fun walk(a: Int, b: Int, c: Int)
       }
       """.trimIndent(),
     )
 
-    for (member in listOf("val tags", "fun pick", "fun walk")) {
+    for (member in listOf("fun pick", "fun choose")) {
       assertTrue("`$member" in warning, "expected $member named; got: $warning")
     }
     // ADR-084 amendment (2026-10-22): a `var` bridges through a setter slot, so it is not named.
     // ADR-232: nor is a `suspend` member, which bridges through an awaited Begin and End pair.
-    for (member in listOf("val name", "var mood", "suspend fun fetch")) {
+    // ADR-233: nor a collection slot, nor a member of any arity.
+    for (member in listOf("val name", "var mood", "suspend fun fetch", "val tags", "fun walk")) {
       assertFalse("`$member" in warning, "a bridgeable member is not named; got: $warning")
     }
   }

@@ -107,6 +107,8 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   appendLine("        private readonly IAsyncEnumerable<T>? _source;")
   appendLine()
   appendLine("        internal IntPtr KotlinHandle => _ownedHandle.IsInvalid ? IntPtr.Zero : _ownedHandle.DangerousGetHandle();")
+  // ADR-233: a member-built hot flow re-reads its owner and owns no handle; this mints a fresh one.
+  appendLine("        internal Func<IntPtr>? MintHandle { get; init; }")
   appendLine()
   appendLine("        private KotlinFlow(IAsyncEnumerable<T> source)")
   appendLine("            : this(static (_, _, _, _) => throw new NotSupportedException(\"a C#-made KotlinFlow has no Kotlin collector\"))")
@@ -374,8 +376,10 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
       appendLine("            Func<IntPtr> readValue,")
       appendLine("            Action<T> writeValue,")
       appendLine("            Func<T, T, bool> compareAndSet,")
-      appendLine("            NugetKotlinHandle? ownedHandle = null)")
-      appendLine("            : base(startCollect, readValue, ownedHandle)")
+      appendLine("            NugetKotlinHandle? ownedHandle = null,")
+      // ADR-233: a `Create`d flow owns its scope, released by `Dispose` rather than the finalizer.
+      appendLine("            NugetKotlinHandle? ownedScope = null)")
+      appendLine("            : base(startCollect, readValue, ownedHandle, ownedScope: ownedScope)")
       appendLine("        {")
       appendLine("            _writeValue = writeValue;")
       appendLine("            _compareAndSet = compareAndSet;")

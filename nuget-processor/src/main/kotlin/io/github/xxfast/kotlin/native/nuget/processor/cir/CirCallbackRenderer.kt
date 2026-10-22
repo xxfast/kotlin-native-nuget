@@ -19,6 +19,13 @@ internal fun StringBuilder.renderCallbackDelegateHelper(helper: CirCallbackDeleg
       appendCtxDispatchThunk(delegate.name, delegate.paramList, delegate.returnType)
     }
     appendAsyncCallbackThunks(helper)
+    if (helper.releasesContext && helper.asyncBegins.isEmpty() && helper.asyncCurrents.isEmpty()) {
+      appendThunkBody(
+        "NugetAsyncReleaseContext", "IntPtr a0, IntPtr* errOut", "void", "UnregisterCtx(a0)",
+        errOut = true,
+      )
+      appendThunkPointer("NugetAsyncReleaseContext", listOf("IntPtr", "IntPtr*"), "void")
+    }
   }
 }
 

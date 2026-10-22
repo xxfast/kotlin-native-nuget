@@ -218,21 +218,19 @@ class Tier1FlowVarPropertySetterTest {
     assertEquals(emptyList(), diagnostics.filter { line -> "Tap" in line })
   }
 
+  /** ADR-233: a cold `Flow` `var` binds its setter, which hands Kotlin the wrapped flow. */
   @Test
-  fun `a var Flow property keeps its getter and names the setter it cannot bind`() {
+  fun `a var Flow property binds its setter`() {
     val source: List<String> = property("Feeder", "public KotlinFlow<int> Source")
 
-    // The same shape as the `val` on `Tap`: the getter and the one collect export, no setter.
     assertTrue(source.hasAccessor("get"), "got=$source")
-    assertFalse(source.hasAccessor("set"), "got=$source")
+    assertTrue(source.hasAccessor("set"), "got=$source")
     assertEquals(
       listOf("library_tier1_flowvar__feeder_get_source_collect"),
       exports("feeder_get_source"),
     )
-    assertEquals(emptyList(), exports("feeder_set_source"))
-    assertSetterNamed("tier1.flowvar.Feeder.source", coldReason, coldHint("Source"))
-    // Issue #249: the property survives, so the remark is on it rather than on its type.
-    assertContains(source, "        /// Kotlin `source`: $coldReason ($setterCode).")
+    assertEquals(listOf("library_tier1_flowvar__feeder_set_source"), exports("feeder_set_source"))
+    assertEquals(emptyList(), skips(setterCode, "tier1.flowvar.Feeder.source"))
   }
 
   @Test
@@ -244,6 +242,7 @@ class Tier1FlowVarPropertySetterTest {
     assertEquals(
       listOf(
         "library_tier1_flowvar__gauge_get_source_collect",
+        "library_tier1_flowvar__gauge_get_source_flow",
         "library_tier1_flowvar__gauge_get_source_value",
       ),
       exports("gauge_get_source"),
@@ -273,9 +272,10 @@ class Tier1FlowVarPropertySetterTest {
   }
 
   @Test
-  fun `a nullable var Flow member names its setter too`() {
+  fun `a nullable var Flow member binds its setter too`() {
     property("Feeder", "public KotlinFlow<int>? Maybe")
-    assertSetterNamed("tier1.flowvar.Feeder.maybe", coldReason, coldHint("Maybe"))
+    assertEquals(listOf("library_tier1_flowvar__feeder_set_maybe"), exports("feeder_set_maybe"))
+    assertEquals(emptyList(), skips(setterCode, "tier1.flowvar.Feeder.maybe"))
   }
 
   /** There is no public setter to lose, so there is nothing to name. */
@@ -301,12 +301,12 @@ class Tier1FlowVarPropertySetterTest {
   }
 
   @Test
-  fun `an interface var and its implementer each name their own setter`() {
+  fun `an interface var and its implementer each bind their own setter`() {
     property("Feed", "public KotlinFlow<int> Source")
     property("TimedFeed", "public KotlinFlow<int> Source")
 
-    assertSetterNamed("tier1.flowvar.Feed.source", coldReason, coldHint("Source"))
-    assertSetterNamed("tier1.flowvar.TimedFeed.source", coldReason, coldHint("Source"))
+    assertEquals(emptyList(), skips(setterCode, "tier1.flowvar.Feed.source"))
+    assertEquals(emptyList(), skips(setterCode, "tier1.flowvar.TimedFeed.source"))
   }
 
   @Test
@@ -321,8 +321,8 @@ class Tier1FlowVarPropertySetterTest {
   }
 
   @Test
-  fun `an inherited var is named on the class that declares it alone`() {
-    assertSetterNamed("tier1.flowvar.Trough.source", coldReason, coldHint("Source"))
+  fun `an inherited var binds on the class that declares it`() {
+    assertEquals(emptyList(), skips(setterCode, "tier1.flowvar.Trough.source"))
     assertEquals(emptyList(), diagnostics.filter { line -> "DeepTrough" in line })
   }
 
@@ -359,6 +359,7 @@ class Tier1FlowVarPropertySetterTest {
       listOf(
         "library_tier1_flowvar__crate_get_source_collect",
         "library_tier1_flowvar__crate_get_fixed_collect",
+        "library_tier1_flowvar__crate_get_fixed_flow",
         "library_tier1_flowvar__crate_get_fixed_value",
       ),
       exports("crate_get_source") + exports("crate_get_fixed"),
@@ -401,17 +402,12 @@ class Tier1FlowVarPropertySetterTest {
     assertEquals(
       listOf(
         "tier1.flowvar.Crate.source",
-        "tier1.flowvar.Feed.source",
         "tier1.flowvar.Feeder.calls",
         "tier1.flowvar.Feeder.level",
-        "tier1.flowvar.Feeder.maybe",
         "tier1.flowvar.Feeder.shared",
-        "tier1.flowvar.Feeder.source",
         "tier1.flowvar.Gauge.source",
         "tier1.flowvar.Meal.Wet.source",
         "tier1.flowvar.Meal.portions",
-        "tier1.flowvar.TimedFeed.source",
-        "tier1.flowvar.Trough.source",
       ),
       diagnostics
         .filter { line -> line.startsWith("[nuget:$setterCode] ") }

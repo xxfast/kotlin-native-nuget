@@ -119,10 +119,13 @@ class Tier1InterfaceVarPropertyTest {
     val iface: String = block(result.generatedCSharp, "public interface ITally")
     val slipLine: Int = iface.indexOf("Exception? LastSlip { get; }")
     assertContains(iface.substring(0, slipLine), "<remarks>")
+    // ADR-233: the bridge refuses only the narrow result now, which ADR-201 names on its own line.
     assertEquals(
       1,
-      result.kspWarnings.count { it.contains("tier1.ivar.Tally.lastSlip") },
-      "expected exactly one warning naming Tally.lastSlip; got: ${result.kspWarnings}",
+      result.kspWarnings.count {
+        it.contains("tier1.ivar.Tally.lastSlip") && it.contains("its setter is not generated")
+      },
+      "expected exactly one setter warning naming Tally.lastSlip; got: ${result.kspWarnings}",
     )
   }
 

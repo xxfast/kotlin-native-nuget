@@ -74,8 +74,11 @@ internal fun BridgeType.forwardPublicCsharpType(): String = when (this) {
     "global::System.Collections.Generic.IAsyncEnumerable<${element.forwardPublicCsharpType()}>"
   // ADR-160 amendment: ADR-012's consumer type, `KotlinFunc<...>`, or `KotlinAction<...>` for a
   // `Unit` result (issue #114). Only reached once [unnameableTypeArgument] found nothing.
-  is BridgeType.ReturnedLambda ->
+  is BridgeType.ReturnedLambda -> if (delegate) {
+    BridgeType.Callback(typeArguments.dropLast(1), typeArguments.last()).forwardPublicCsharpType()
+  } else {
     csLambdaType(typeArguments.map { argument -> argument.forwardPublicCsharpType() })
+  }
 
   // ADR-147 amendment: a nullable-bounded bare `T` is `T`, not `T?`; the instantiation says
   // whether it holds null.

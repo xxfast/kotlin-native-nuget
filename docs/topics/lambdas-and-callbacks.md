@@ -88,8 +88,27 @@ returns; a `null` for a nullable parameter reaches Kotlin as `null`.
 
 The lambda's type arguments follow the rules above. One Kotlin cannot have C# spell, such as
 `() -> List<Int>`, skips the function with a named `SKIPPED_UNSUPPORTED_RETURN`. A `suspend` lambda
-return (`suspend () -> Int`) and a lambda returned from a class, object or companion member are named
-skips too; expose a lambda property on the class instead.
+return (`suspend () -> Int`) is a named skip too.
+
+### A class or interface member that returns a lambda {id="a-member-that-returns-a-lambda"}
+
+A class or interface method returning a lambda binds as a plain C# delegate, not a `KotlinFunc`:
+
+```kotlin
+class Depot {
+  fun callbackReturnOnClass(): (Int) -> Unit = {}
+}
+```
+
+```C#
+Action<int> callback = depot.CallbackReturnOnClass();
+callback(3);
+```
+
+There is nothing to dispose; the Kotlin lambda is released with the delegate. A C# class
+implementing a Kotlin interface returns an ordinary `Func<>`/`Action<>` from such a member, and a
+Kotlin lambda it receives as a parameter is a `Func<>`/`Action<>` too, see
+[every member shape](interfaces-abstract-sealed.md#implementing-every-member-shape).
 
 ### Which lambda properties bind {id="which-lambda-properties-bind"}
 
@@ -193,9 +212,7 @@ non-scalar (`List`, `Set`, `Map`, `Any`, `Pair`, an array, `Duration`, or anythi
 `kotlin`/`kotlinx` outside a primitive, `String`, `Char` or a `Throwable`, which binds as an unthrown
 `Exception`, see [Throwable values](exceptions.md#throwable-values)); a lambda's *own* return
 outside `Unit`, a primitive, `String` or a `Throwable`, `Exception` or `RuntimeException` (an
-object, an enum, `Char`, or one of those same builtins); a lambda type nested inside a `List`/`Set`/`Map`; a class or object member
-that returns a lambda rather than taking one (a [top-level function](#a-top-level-function-that-returns-a-lambda) can; expose a
-[lambda property](#kotlin-c-lambda-properties-and-returns) on the class instead); and a lambda parameter
+object, an enum, `Char`, or one of those same builtins); a lambda type nested inside a `List`/`Set`/`Map`; a member that returns a `suspend` lambda; and a lambda parameter
 on a constructor, a data class's `copy()`, an enum-arm box constructor, or a value-class member,
 since none of those can keep the callback registered past the single call that creates them.
 A [`suspend` lambda parameter](coroutines-and-flow.md#suspend-lambda-parameter) is a different

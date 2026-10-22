@@ -7,6 +7,7 @@ using Stamps = TestLibrary.Stamps;
 using Treatprep = TestLibrary.Treatprep;
 using Trickle = TestLibrary.Trickle;
 using Feedingtime = TestLibrary.Feedingtime;
+using Catsitter = TestLibrary.Catsitter;
 
 namespace LeakTests;
 
@@ -1194,5 +1195,43 @@ public class CollectabilityTests
             NugetBridgeState.ReleasedCount > before,
             $"expected the Kotlin cleaner to release the Feeder bridge; ReleasedCount stayed at {before}");
         Assert.False(bowl.IsAlive, "the C# bowl stayed reachable after Kotlin collected its bridge");
+    }
+
+    // ADR-233: a C#-implemented interface whose slots carry class handles, collections, lambdas and
+    // a generic interface result is collectable once Kotlin drops its bridge. A handle the slot
+    // returned is owned by Kotlin and a lambda the slot took is released after the call, so the
+    // ADR-084 cleaner releasing the bridge is the only thing that may have rooted the sitter.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference AdoptAndDropASitter()
+    {
+        var sitter = new LiveHandleTests.LeakSitter();
+        Assert.Equal("Oreo purrs", Catsitter.Sitters.Adoption(sitter, "Oreo"));
+        Assert.Equal("Mylo", Catsitter.Sitters.Cuddling(sitter, "Mylo"));
+        Assert.Contains("litter=Mylo, Oreo", Catsitter.Sitters.Census(sitter));
+        Assert.Equal("40/purr x3", Catsitter.Sitters.Purring(sitter));
+        Assert.Equal("favourite tuna", Catsitter.Sitters.Treasure(sitter));
+        return new WeakReference(sitter);
+    }
+
+    [Fact]
+    public void CSharpSitter_ReleasedAfterKotlinGc()
+    {
+        int before = NugetBridgeState.ReleasedCount;
+
+        WeakReference sitter = AdoptAndDropASitter();
+
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline && (sitter.IsAlive || NugetBridgeState.ReleasedCount <= before))
+        {
+            NugetMarshal.GcCollect();
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            Thread.Sleep(25);
+        }
+
+        Assert.True(
+            NugetBridgeState.ReleasedCount > before,
+            $"expected the Kotlin cleaner to release the Sitter bridge; ReleasedCount stayed at {before}");
+        Assert.False(sitter.IsAlive, "the C# sitter stayed reachable after Kotlin collected its bridge");
     }
 }

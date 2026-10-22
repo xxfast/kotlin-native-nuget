@@ -992,6 +992,17 @@ internal fun translate(
       })
     }
   }
+  // ADR-233: a boxed slot reads and writes a collection or a byte array through the same helpers a
+  // class member of that type does.
+  bridgeBoxedTypes(bridgePlans.map { entry -> entry.plan }).forEach { type ->
+    tracker.trackCollection(type)
+    // ADR-233: a Kotlin lambda a slot hands C# is read through the plan's lambda wrappers.
+    if (type is BridgeType.ReturnedLambda) tracker.lambdaArities.add(type.arity)
+    if (type is BridgeType.AsyncCallback) {
+      tracker.suspendLambdaArities.add(type.parameters.size)
+      tracker.needsAsync = true
+    }
+  }
   if (bridgePlans.isNotEmpty()) {
     tracker.callbackDelegates.addAll(
       bridgeDelegates(bridgePlans).filter { delegate ->
@@ -1037,7 +1048,7 @@ internal fun translate(
   val bridgeEnds: List<CirAsyncEnd> = bridgeAsyncEnds(bridgeAsyncPlans)
   val bridgeCurrents: List<CirAsyncEnd> = bridgeAsyncCurrents(bridgeAsyncPlans)
   val boxesAsync: Boolean = (asyncCallbacks + flowSources).any { type -> type.boxesIntoKotlin() } ||
-    bridgeAsyncBoxes(bridgeAsyncPlans)
+    bridgeAsyncBoxes(bridgeAsyncPlans) || bridgeWrapsOwned(bridgeAsyncPlans)
   val helpers: MutableList<CirDeclaration> = mutableListOf(
     CirMarshalHelper(
       context.libraryName,
@@ -1119,6 +1130,7 @@ internal fun translate(
         asyncCurrents = (flowSources.map { flow -> flow.forwardAsyncCurrent() } + bridgeCurrents)
           .distinctBy { current -> current.name },
         boxesObjects = boxesAsync,
+        releasesContext = bridgeReturnsLambdas(bridgeAsyncPlans),
       ),
     )
   }

@@ -19,6 +19,17 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.delegateName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.delegateParamList
 import io.github.xxfast.kotlin.native.nuget.processor.forward.managedExceptionTextCs
 import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.CollectionKind
+import io.github.xxfast.kotlin.native.nuget.processor.forward.collectionCreateArgument
+import io.github.xxfast.kotlin.native.nuget.processor.forward.componentCollectionRead
+import io.github.xxfast.kotlin.native.nuget.processor.forward.durationLiftCs
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.instantLiftCs
+import io.github.xxfast.kotlin.native.nuget.processor.forward.returnedCallback
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardCallbackPrelude
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardCallbackDelegate
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardCallbackDelegateName
 
 /**
  * ADR-084 stage 1, the C# half of the bridge factory: `NugetBridge.HandleFor` (the fallback
@@ -259,15 +270,33 @@ internal fun slotBody(slot: ForwardBridgeSlot, receiver: String): String {
       // ADR-232: a Flow member hands Kotlin the key of an enumeration factory over its result,
       // which Kotlin reads through `flowForKotlin` and whose holder releases the key.
       if (slot.async == ForwardBridgeAsync.FLOW) {
+        // ADR-233: a nullable flow member hands back the null key for a null flow.
+        val guard: String = if (slot.result.nullable) "result is null ? IntPtr.Zero : " else ""
         body.append(
-          "return NugetTasks.Register(result, \"${slot.csName}\", " +
+          "return ${guard}NugetTasks.Register(result, \"${slot.csName}\", " +
             "(Func<IntPtr>)(() => NugetAsyncEnumeration.Enumerate(result)));",
         )
         return body.toString()
       }
       // ADR-232: a hot flow hands back the Kotlin flow object it wraps, or fails at the slot.
       if (slot.result.hotFlow) {
-        body.append("return NugetHotFlowNative.Retain(result);")
+        val guard: String = if (slot.result.nullable) "result is null ? IntPtr.Zero : " else ""
+        body.append("return ${guard}NugetHotFlowNative.Retain(result);")
+        return body.toString()
+      }
+      // ADR-233: a C# lambda is registered as the ADR-160 callback delegate it is called through,
+      // and its key handed to Kotlin, whose holder releases it.
+      val callback: BridgeType.Callback? = slot.returnedCallback
+      if (callback != null) {
+        val step = forwardCallbackPrelude("result", callback, local = "nugetLambda")
+        body.append(step.declarations.joinToString(" ")).append(" ")
+        body.append(step.statement).append(" return nugetLambdaCtx;")
+        return body.toString()
+      }
+      // ADR-233: a boxed result is written as a class member's parameter of its type is.
+      val box: BridgeType? = slot.result.boxed
+      if (box != null) {
+        body.append("return ${boxWrite(box, "result")};")
         return body.toString()
       }
       // ADR-222: a `T` result is a box Kotlin owns, minted by lane A's `WrapOwned<T>`.
@@ -303,7 +332,11 @@ private fun parameterReads(slot: ForwardBridgeSlot): String {
       // ADR-201 amendment: the ADR-107 envelope, rebuilt (and disposed) by `BuildException`; a
       // null argument is the null pointer.
       // FromHandle disposes the StableRef the Kotlin side minted; that side deliberately does not.
-      ForwardBridgeWire.OBJECT -> if (parameter.type.throwable != null) {
+      ForwardBridgeWire.OBJECT -> if (parameter.type.boxed != null) {
+        // ADR-233: read as a class member's result of the same type is, releasing the box.
+        val box: BridgeType = requireNotNull(parameter.type.boxed)
+        body.append("${parameter.type.csharp} value$index = ${boxRead(box, "arg$index")}; ")
+      } else if (parameter.type.throwable != null) {
         val read = "NugetErrorNative.BuildException(arg$index)"
         val value: String =
           if (parameter.type.nullable) "arg$index == IntPtr.Zero ? null : $read" else read
@@ -350,7 +383,10 @@ internal fun bridgeDelegates(interfaces: List<CirBridgeInterface>): List<CirCall
       )
     }
   val release = CirCallbackDelegate("NugetBridgeVoidCallback", "(IntPtr ctx)", "void")
-  return (slotDelegates + release).distinctBy { delegate -> delegate.name }
+  // ADR-233: the ADR-160 delegate a C# lambda a slot returns is registered as.
+  val lambdas: List<CirCallbackDelegate> = interfaces.flatMap { entry -> entry.plan.slots }
+    .mapNotNull { slot -> slot.returnedCallback?.forwardCallbackDelegate() }
+  return (slotDelegates + release + lambdas).distinctBy { delegate -> delegate.name }
 }
 
 /** The bridge factory's `[DllImport]`, under [name] with [visibility]. */
@@ -439,6 +475,7 @@ private fun ForwardBridgeSlot.bridgeDelegateName(): String =
 private fun ForwardBridgeSlot.asyncThunkPointers(): List<String> = listOfNotNull(
   "NugetThunks.${asyncEndName()}Ptr".takeIf { async == ForwardBridgeAsync.SUSPEND },
   element?.let { "NugetThunks.${flowSource().forwardAsyncCurrentName()}Ptr" },
+  returnedCallback?.let { "NugetThunks.${it.forwardCallbackDelegateName()}Ptr" },
 )
 
 /** ADR-232: every Begin thunk the bridged interfaces' SUSPEND slots dispatch through. */
@@ -475,6 +512,20 @@ internal fun bridgeAsyncEnds(plans: List<ForwardBridgeInterfacePlan>): List<CirA
         }
 
         type.typeParameter -> CirAsyncEnd(name, "IntPtr", "NugetTasks.EndBoxed(a0)")
+        // ADR-233: an awaited hot flow hands back the Kotlin flow object it wraps.
+        type.hotFlow -> CirAsyncEnd(
+          name,
+          "IntPtr",
+          "NugetTasks.End<${type.csharp}>(a0) is var nugetValue && nugetValue is not null ? " +
+            "NugetHotFlowNative.Retain(nugetValue) : IntPtr.Zero",
+        )
+        // ADR-233: the completed result written as the synchronous boxed slot writes it.
+        type.boxed != null -> CirAsyncEnd(
+          name,
+          "IntPtr",
+          "NugetTasks.End<${type.csharp}>(a0) is var nugetValue ? " +
+            "${boxWrite(requireNotNull(type.boxed), "nugetValue")} : IntPtr.Zero",
+        )
         type.throwable != null -> CirAsyncEnd(
           name,
           "IntPtr",
@@ -515,8 +566,10 @@ internal fun bridgeAsyncBoxes(plans: List<ForwardBridgeInterfacePlan>): Boolean 
   plans.flatMap { plan -> plan.slots }.any { slot ->
     when (slot.async) {
       ForwardBridgeAsync.SYNC -> false
-      ForwardBridgeAsync.SUSPEND -> slot.result.typeParameter && slot.element == null
-      ForwardBridgeAsync.FLOW -> slot.element?.typeParameter == true
+      ForwardBridgeAsync.SUSPEND -> (slot.result.typeParameter && slot.element == null) ||
+        slot.element?.let { it.boxed != null || it.star } == true
+      ForwardBridgeAsync.FLOW ->
+        slot.element?.let { it.typeParameter || it.boxed != null || it.star } == true
     }
   }
 
@@ -557,6 +610,12 @@ internal fun StringBuilder.renderHotFlowNative(libraryName: String, symbols: (St
         {
             ArgumentNullException.ThrowIfNull(flow);
             IntPtr handle = flow.KotlinHandle;
+            if (handle == IntPtr.Zero && flow.MintHandle != null)
+            {
+                IntPtr minted = flow.MintHandle();
+                GC.KeepAlive(flow);
+                return minted;
+            }
             if (handle == IntPtr.Zero)
             {
                 throw new ArgumentException(
@@ -593,7 +652,8 @@ internal fun StringBuilder.renderHotFlowNative(libraryName: String, symbols: (St
                 () => Native_StateValue(handle),
                 value => WithBox(value, box => Native_StateSet(handle, box)),
                 (expect, update) => WithBox(expect, e => WithBox(update, u => Native_StateCompareAndSet(handle, e, u))),
-                handle);
+                handle,
+                ownedScope: scope);
         }
 
         internal static KotlinMutableSharedFlow<T> CreateShared<T>(int replay)
@@ -608,10 +668,138 @@ internal fun StringBuilder.renderHotFlowNative(libraryName: String, symbols: (St
                 () => Native_SharedSubscriptionCount(handle),
                 (value, callback, userData) => WithBox(value, box => Native_SharedEmit(handle, scope, box, callback, userData)),
                 value => WithBox(value, box => Native_SharedTryEmit(handle, box)),
-                ownedHandle: handle);
+                ownedHandle: handle,
+                ownedScope: scope);
         }
     }
 """.trimEnd(),
   )
   appendLine()
 }
+
+/**
+ * ADR-233: the C# value of [type] a Kotlin box at [handle] holds, read (and released) exactly as a
+ * class member's result of that type is read.
+ */
+internal fun boxRead(type: BridgeType, handle: String): String {
+  val csharp: String = type.forwardPublicCsharpType()
+  return when (type) {
+    is BridgeType.Nullable -> if (type.type.boxReadsItself()) {
+      "NugetMarshal.FromHandle<$csharp>($handle)"
+    } else {
+      "$handle == IntPtr.Zero ? default($csharp) : ${boxRead(type.type, handle)}"
+    }
+    BridgeType.Instant -> instantLiftCs("NugetMarshal.FromHandle<long>($handle)")
+    BridgeType.Duration -> durationLiftCs("NugetMarshal.FromHandle<long>($handle)")
+    BridgeType.Uuid -> "global::System.Guid.Parse(NugetMarshal.FromHandle<string>($handle))"
+    BridgeType.ByteArray -> "NugetMarshal.ReadBytes($handle)"
+    is BridgeType.Collection ->
+      componentCollectionRead(handle, type, { component -> component.forwardPublicCsharpType() })
+    // ADR-233: a Kotlin lambda, owned by the plan's wrapper, handed over as its delegate.
+    is BridgeType.ReturnedLambda ->
+      "new ${csLambdaType(type.typeArguments.map { it.forwardPublicCsharpType() })}($handle).Invoke"
+    is BridgeType.AsyncCallback -> {
+      val arguments: List<String> = type.parameters.map { it.forwardPublicCsharpType() }
+      val wrapper: String = if (type.result == BridgeType.Unit) {
+        if (arguments.isEmpty()) "KotlinSuspendAction"
+        else "KotlinSuspendAction<${arguments.joinToString(", ")}>"
+      } else {
+        val all: List<String> = arguments + type.result.forwardPublicCsharpType()
+        "KotlinSuspendFunc<${all.joinToString(", ")}>"
+      }
+      "new $wrapper($handle).InvokeAsync"
+    }
+    is BridgeType.Primitive,
+    BridgeType.Char,
+    BridgeType.String,
+    is BridgeType.Enum,
+    is BridgeType.ObjectHandle,
+    is BridgeType.Interface,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    is BridgeType.TypeParameter,
+    BridgeType.Unit,
+    is BridgeType.Throwable,
+    is BridgeType.Callback,
+    is BridgeType.FlowSource,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+      -> "NugetMarshal.FromHandle<$csharp>($handle)"
+  }
+}
+
+/**
+ * ADR-233: [value] of [type] as the owned box Kotlin reads, written exactly as a class member's
+ * parameter of that type is written; a borrowed wrapper handle is retained (`WrapOwned`).
+ */
+internal fun boxWrite(type: BridgeType, value: String): String {
+  val csharp: String = type.forwardPublicCsharpType()
+  return when (type) {
+    is BridgeType.Nullable -> if (type.type.boxReadsItself()) {
+      "NugetMarshal.WrapOwned<$csharp>($value)"
+    } else {
+      val present: String = if (type.type.isCsharpValueType()) "$value.Value" else "$value!"
+      "$value is null ? IntPtr.Zero : ${boxWrite(type.type, present)}"
+    }
+    BridgeType.Instant -> "NugetMarshal.Wrap<long>($value.UtcTicks, out bool _)"
+    BridgeType.Duration -> "NugetMarshal.Wrap<long>($value.Ticks, out bool _)"
+    BridgeType.Uuid -> "NugetMarshal.WrapString($value.ToString())"
+    BridgeType.ByteArray -> "NugetMarshal.CreateBytes($value)"
+    is BridgeType.Collection -> {
+      val factory: String = when (type.kind) {
+        CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> "CreateList"
+        CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> "CreateMap"
+        CollectionKind.SET, CollectionKind.MUTABLE_SET -> "CreateSet"
+      }
+      val argument: String = collectionCreateArgument(
+        value, type, csharpType = { component -> component.forwardPublicCsharpType() },
+      )
+      "NugetMarshal.$factory($argument)"
+    }
+    is BridgeType.Primitive,
+    BridgeType.Char,
+    BridgeType.String,
+    is BridgeType.Enum,
+    is BridgeType.ObjectHandle,
+    is BridgeType.Interface,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    is BridgeType.TypeParameter,
+    BridgeType.Unit,
+    is BridgeType.Throwable,
+    is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+      -> "NugetMarshal.WrapOwned<$csharp>($value)"
+  }
+}
+
+/** ADR-233: whether `FromHandle` / `WrapOwned` carry [this] (and its null) with no projection. */
+private fun BridgeType.boxReadsItself(): Boolean =
+  this != BridgeType.Instant && this != BridgeType.Duration && this != BridgeType.Uuid &&
+    this != BridgeType.ByteArray && this !is BridgeType.Collection
+
+/** ADR-233: a C# struct, whose nullable form is `Nullable<T>` and is read through `.Value`. */
+private fun BridgeType.isCsharpValueType(): Boolean =
+  this == BridgeType.Instant || this == BridgeType.Duration || this == BridgeType.Uuid
+
+/** ADR-233: whether a bridged interface's slot writes its result through `WrapOwned`. */
+internal fun bridgeWrapsOwned(plans: List<ForwardBridgeInterfacePlan>): Boolean =
+  plans.flatMap { plan -> plan.slots }.any { slot -> slot.result.boxed != null }
+
+/** ADR-233: every boxed slot type, so the marshal helper declares the collection helpers. */
+internal fun bridgeBoxedTypes(plans: List<ForwardBridgeInterfacePlan>): List<BridgeType> =
+  plans.flatMap { plan -> plan.slots }
+    .flatMap { slot -> slot.parameters.map { it.type } + slot.result }
+    .mapNotNull { type -> type.boxed }
+
+/** ADR-233: whether a slot returns a C# lambda, whose key Kotlin hands back on release. */
+internal fun bridgeReturnsLambdas(plans: List<ForwardBridgeInterfacePlan>): Boolean =
+  plans.flatMap { plan -> plan.slots }.any { slot -> slot.returnedCallback != null }

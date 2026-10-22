@@ -89,8 +89,7 @@ public class UnroutedPositionsTests
             typeof(Depot),
             PublicInstance,
             // ADR-210: `FlowParamOnClass` BINDS now (a `Flow<T>` parameter is `IAsyncEnumerable<T>`),
-            // asserted present below.
-            "CallbackReturnOnClass",
+            // asserted present below. ADR-233: so does `CallbackReturnOnClass`, as `Action<int>`.
             // ADR-208: `GenericReturnOnClass`, `GenericParamOnClass` and `GenericElementOnClass`
             // BIND now (a closed `Box<Int>` is an ordinary handle at every position) and are called
             // in GenericInstantiationsBindOnEveryOwner instead of being absent here.
@@ -102,6 +101,9 @@ public class UnroutedPositionsTests
         // ADR-210: the cell this row lost. Asserted positively so it cannot quietly go back.
         Assert.NotNull(typeof(Depot).GetMethod("SuspendCallbackParamOnClass", PublicInstance));
         Assert.NotNull(typeof(Depot).GetMethod("FlowParamOnClass", PublicInstance));
+        Assert.Equal(
+            typeof(Action<int>),
+            typeof(Depot).GetMethod("CallbackReturnOnClass", PublicInstance)!.ReturnType);
     }
 
     /// <summary>

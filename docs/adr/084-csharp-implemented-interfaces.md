@@ -710,3 +710,11 @@ The "Deferred" entry for `suspend` members, the `suspend` and `Flow`/`StateFlow`
 member and a `Flow`, `StateFlow`, `SharedFlow` or mutable-form member is a slot, carried by the
 ADR-210 Begin/End pair or the `flowForKotlin` enumeration factory
 ([ADR-232](232-csharp-implemented-async-interfaces.md)).
+
+## Amendment (2026-10-22): the slot vocabulary is the plan's vocabulary
+
+The nine-entry slot vocabulary, the two-parameter cap and the "object-typed and collection-typed
+slot" entry under **Deferred** no longer hold. A slot carries every type an ordinary member plan
+carries: class and generic handles, collections, value classes, nullable primitives and enums,
+`Char`, `Instant`, `Duration`, `Uuid`, `ByteArray`, lambdas and any number of parameters
+([ADR-233](233-interface-slot-vocabulary.md)). A member's own type parameter stays refused.

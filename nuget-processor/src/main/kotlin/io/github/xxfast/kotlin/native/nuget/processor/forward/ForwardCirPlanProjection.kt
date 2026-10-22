@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import io.github.xxfast.kotlin.native.nuget.processor.cir.csLambdaType
 import io.github.xxfast.kotlin.native.nuget.processor.RESULT_FAILED_SLOT
 import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
@@ -1514,11 +1515,16 @@ internal object ForwardCirPlanProjection {
       // through the shared arity-generic `NugetFunctionNative` exports the tracker declares.
       is BridgeType.ReturnedLambda -> {
         val lambdaType: String = result.forwardPublicCsharpType()
+        // ADR-233: a member's delegate is the wrapper's `Invoke`, which keeps the wrapper alive.
+        val wrapper: String =
+          csLambdaType(result.typeArguments.map { argument -> argument.forwardPublicCsharpType() })
+        val construct: String =
+          if (result.delegate) "new $wrapper(nativeResult).Invoke" else "new $wrapper(nativeResult)"
         CirResultProjection(
           returnType = lambdaType,
           nativeReturnType = "IntPtr",
           body = checkedPointerBody(
-            nativeName, callArguments, exit.returning("new $lambdaType(nativeResult)"), prelude,
+            nativeName, callArguments, exit.returning(construct), prelude,
             cleanup, exit,
           ),
         )
@@ -2136,10 +2142,12 @@ internal object ForwardCirPlanProjection {
     prelude,
     cleanup,
     buildString {
-      appendLine("            IntPtr bytesHandle = $nativeName($arguments);")
+      // ADR-233: `nativeResult`, as every sibling body names it: a `bytes` parameter's own
+      // prelude declares `bytesHandle`, which this local used to redeclare (CS0128).
+      appendLine("            IntPtr nativeResult = $nativeName($arguments);")
       appendErrorCheck(exit)
-      if (nullable) appendNullHandleExit("bytesHandle", exit)
-      append("            ${exit.returning("NugetMarshal.ReadBytes(bytesHandle)")}")
+      if (nullable) appendNullHandleExit("nativeResult", exit)
+      append("            ${exit.returning("NugetMarshal.ReadBytes(nativeResult)")}")
     },
   )
 

@@ -904,6 +904,9 @@ internal data class CirCallbackDelegateHelper(
   // ADR-215 lane C: a `suspend` lambda's `T` result or a `Flow<T>` element crosses as an owned
   // box, so `NugetTasks` gains `BeginBoxed`/`EndBoxed` and the enumeration `CurrentBoxed`.
   val boxesObjects: Boolean = false,
+  // ADR-233: a bridge slot returns a C# lambda, whose key a Kotlin holder hands back through the
+  // release-context thunk even when no async member declares it.
+  val releasesContext: Boolean = false,
 ) : CirDeclaration
 
 internal data class CirEnumEntry(

@@ -1548,7 +1548,11 @@ internal class ForwardCallablePlanner(
           parameters = method.parameters.map { parameter ->
             parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
           },
-          result = resultType?.let(classifier::classify) ?: BridgeType.Unit,
+          // ADR-233: a lambda result is the C# delegate a C# implementation returns too.
+          result = resultType?.let { type ->
+            classifier.returnedLambdaOrNull(type)?.takeIf { it.unnameableTypeArgument() == null }
+              ?.copy(delegate = true) ?: classifier.classify(type)
+          } ?: BridgeType.Unit,
           origin = ForwardCallableOrigin.CLASS,
           // ADR-224: a generic interface reads its receiver erased, as a generic class does.
           ownerType = iface.forwardGenericOwner(),
@@ -1674,7 +1678,12 @@ internal class ForwardCallablePlanner(
         parameters = method.parameters.map { parameter ->
           parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
         },
-        result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
+        // ADR-233: a class or interface member hands a lambda out as the C# delegate a C#
+        // implementation of the same interface member returns.
+        result = method.returnType?.resolve()?.let { type ->
+          classifier.returnedLambdaOrNull(type)?.takeIf { it.unnameableTypeArgument() == null }
+            ?.copy(delegate = true) ?: classifier.classify(type)
+        } ?: BridgeType.Unit,
         origin = ForwardCallableOrigin.CLASS,
         ownerType = ownerType,
         // The symbol carries the overload suffix; the Kotlin call site must not.

@@ -400,3 +400,11 @@ protocol name, so `val onNapFor: (Int) -> Unit` binds as `KotlinAction<int>` wit
 classification here is unchanged; a function-typed property still takes no part in the plan. See
 [ADR-064's 2026-10-04 amendment](064-forward-unsupported-declaration-diagnostics.md) for the
 per-owner rule, including the read-only `var` and the refused nullable lambda property.
+
+## Amendment (2026-10-22): a class or interface member returning a lambda returns the C# delegate
+
+The statement that a lambda returned from a class, object or companion member is refused no longer
+holds for a class or interface member: `fun callbackReturnOnClass(): (Int) -> Unit` binds as
+`Action<int> CallbackReturnOnClass()`, and an interface member returning `(Int) -> String` is
+`Func<int, string> Purrer()`, implementable in C# with the delegate registered as above and its
+key released by a cleaner ([ADR-233](233-interface-slot-vocabulary.md)).

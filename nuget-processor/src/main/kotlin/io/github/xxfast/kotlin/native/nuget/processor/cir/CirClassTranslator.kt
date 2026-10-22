@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import io.github.xxfast.kotlin.native.nuget.processor.exports.takesFlowSetter
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.getConstructors
 import com.google.devtools.ksp.getDeclaredFunctions
@@ -2217,16 +2218,37 @@ internal fun flowProperty(
       }
   }
 
+  // ADR-233: a member's hot flow re-reads its owner, so it holds no Kotlin handle of its own; it
+  // mints one on demand (`MintHandle`) when C# hands it back to Kotlin through an interface slot.
+  val minted: String = if (isStateFlowType || sharedFlow != null) {
+    val close: Int = getter.lastIndexOf(");")
+    getter.substring(0, close) +
+      ") { MintHandle = () => { $ownerGuard return ${nativeCarrier}Native_Get${csPropName}Flow(_handle); } };" +
+      getter.substring(close + 2)
+  } else {
+    getter
+  }
   return CirProperty(
     name = prop.csharpMemberName(),
     type = type,
     nativeReturnType = nativeReturnType,
     nativeName = propName.asCSymbol(),
     // ADR-216 (second amendment): a flow getter fills every open slot its element nests.
-    getter = getter.withOpenSlotFills(
+    getter = minted.withOpenSlotFills(
       listOf(classifier.openSlotType(prop.type.resolve())).openSlotFills("                "),
     ),
-    setter = null,
+    // ADR-233: a cold `Flow` `var` hands Kotlin the flow its `KotlinFlow<T>` wraps.
+    setter = if (prop.takesFlowSetter()) {
+      val handle = "value${if (isNullableMember) "?" else ""}.KotlinHandle"
+      val missing = "throw new ArgumentException(\"A KotlinFlow made in C# wraps no Kotlin flow, " +
+        "so it cannot be assigned to ${prop.csharpMemberName()}.\", nameof(value))"
+      val guard: String = if (isNullableMember) "value is null ? IntPtr.Zero : " else ""
+      "\n                ${nativeCarrier}Native_Set_${propName.asCSymbol()}(_handle, $guard($handle is IntPtr nugetFlow && " +
+        "nugetFlow != IntPtr.Zero ? nugetFlow : $missing));\n                GC.KeepAlive(value);"
+    } else {
+      null
+    },
+    nativeSetterType = "IntPtr",
     extraNatives = emptyList(),
     isFlow = true,
     isStateFlow = isStateFlowType,
@@ -4558,7 +4580,9 @@ internal fun translateInterface(
   }
   val asyncProperties: List<CirInterfaceProperty> = asyncByNew.flatMap { (isNew, async) ->
     async?.properties.orEmpty().map { prop ->
-      CirInterfaceProperty(prop.name, prop.type, doc = prop.doc, isNew = isNew)
+      CirInterfaceProperty(
+        prop.name, prop.type, hasSetter = prop.setter != null, doc = prop.doc, isNew = isNew,
+      )
     }
   }
 

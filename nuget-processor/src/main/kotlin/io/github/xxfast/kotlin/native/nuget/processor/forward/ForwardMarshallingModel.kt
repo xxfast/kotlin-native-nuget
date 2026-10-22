@@ -323,6 +323,12 @@ internal sealed interface BridgeType {
   data class ReturnedLambda(
     val typeArguments: List<BridgeType>,
     val kotlinTypeArguments: List<kotlin.String>,
+    /**
+     * ADR-233: a class or interface member's result, spelled as the C# delegate (`Func<...>`) a
+     * C# implementation of the interface returns too, over the same `KotlinFunc` wrapper's
+     * `Invoke`. A top-level function keeps ADR-012's `KotlinFunc<...>`.
+     */
+    val delegate: Boolean = false,
   ) : BridgeType {
     val arity: Int get() = typeArguments.size - 1
   }

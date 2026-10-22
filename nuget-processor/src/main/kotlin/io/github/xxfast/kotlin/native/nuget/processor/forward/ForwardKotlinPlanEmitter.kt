@@ -2210,7 +2210,7 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
  * the box with `WrapString` and no C# owner ever frees it, so this side releases it after reading.
  * A by-value scalar (and an enum ordinal) mints nothing in either direction.
  */
-private fun loweredCallbackExpression(
+internal fun loweredCallbackExpression(
   name: String,
   type: BridgeType.Callback,
   // The planner-minted slot names (`ForwardPublicParameter.callbackPtrSlot` / `...UserDataSlot`).

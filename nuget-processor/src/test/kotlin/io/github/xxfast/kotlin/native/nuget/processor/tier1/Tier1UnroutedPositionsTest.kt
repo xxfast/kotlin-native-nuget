@@ -62,7 +62,7 @@ class Tier1UnroutedPositionsTest {
     Cell(member, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_COMBINATION)
 
   /**
-   * The 18 individually-named silent cells (ADR-210 took the `suspend` lambda parameter and the
+   * The 17 individually-named silent cells (ADR-210 took the `suspend` lambda parameter and the
    * five `Flow<Int>` parameters out; ADR-160 took three of the original 29 out: the object,
    * top-level and extension per-call lambda parameters all bind off the plan now, and ADR-197 two
    * more: the class and object structural own-`<T>` members). The `Dock` secondary constructors
@@ -74,9 +74,7 @@ class Tier1UnroutedPositionsTest {
     // row 2: a Flow binds at a class-method RETURN (pinned routed below) but not at a parameter.
     // (a `Flow<Int>` PARAMETER binds since ADR-210, here and on every owner below: asserted in
     // `the Flow parameters bind off the plan`.)
-    // row 10: the mirror image of the routed lambda parameter — no route returns a lambda from a
-    // class method.
-    returns("tier1.unrouted.Depot.callbackReturnOnClass"),
+    // (row 10, a lambda returned from a class method, binds since ADR-233 as the C# delegate.)
     // row 21a/21b: an unrouted generic *type* ([generic]) at either position on a class. An
     // exported generic class (`Box<Int>`) binds there since ADR-208, so the cells take a generic
     // reference the bridge still defers from the witness.
@@ -348,7 +346,6 @@ class Tier1UnroutedPositionsTest {
     // Public C# names of the silent cells, per owner. The trailing `(` also catches the private
     // `Native_*` DllImport, which is exactly the stronger absence claim: no half of the member.
     listOf(
-      "CallbackReturnOnClass(",
       "GenericReturnOnClass(",
       "GenericParamOnClass(",
       "FlowElementOnClass(",
