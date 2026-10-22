@@ -5,6 +5,10 @@ import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
+import io.github.xxfast.kotlin.native.nuget.processor.freshName
+import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticSuspendReceiver
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpAsyncMemberName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
@@ -45,6 +49,15 @@ internal fun translateSuspendFunction(
   callableCatalog: ForwardCallablePlanCatalog,
   /** ADR-068 (2026-09-27 amendment): the namespace a `StateFlow<T>` element is spelled in. */
   context: NugetContext,
+  /** ADR-229: a static owner's export stem, minted by the planner; null for a top-level function. */
+  stem: String? = null,
+  /** ADR-229: an extension's or an enum member's receiver, the C# `this` parameter. */
+  receiver: ForwardStaticSuspendReceiver? = null,
+  /**
+   * ADR-229: a value-class member's receiver, the struct's own underlying. Not a public parameter:
+   * the member renders as an instance method that passes this argument first.
+   */
+  structReceiver: CirParameter? = null,
 ): List<CirMember> {
   if (classifier.legacyRefusedParameter(func.parameters) != null) return emptyList()
   // ADR-214: the Kotlin half's own admission, ADR-197/211's rules for a function's own `T`.
@@ -65,7 +78,7 @@ internal fun translateSuspendFunction(
   // silently binds the second body to the first overload's extern.
   val suffix: String = callableCatalog.overloadSuffix(func)
   // ADR-163: library- and package-qualified; `_async` is appended by the entry points below.
-  val cname: String = symbols.topLevel(func) + suffix
+  val cname: String = stem ?: (symbols.topLevel(func) + suffix)
   // ADR-110: the case change alone, so `suspend fun lock()` renders `LockAsync`;
   // the renderer escapes.
   // ADR-163: from the declaration name, not from [cname].
@@ -75,11 +88,16 @@ internal fun translateSuspendFunction(
   val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
   val isUnit: Boolean = kotlinReturnType == "Unit"
 
-  val params: List<CirParameter> = legacyRouteParameters(
+  val declared: List<CirParameter> = legacyRouteParameters(
     func.parameters, classifier, tracker,
     callableCatalog.legacyDefaultFlags(func),
     callableCatalog.legacySuspendSiblingArities(func),
   )
+  // ADR-229: the receiver leads, named apart from the declared parameters.
+  val receiverParameter: CirParameter? = receiver?.cirReceiverParameter(
+    freshName("receiver", declared.localScopeNames()),
+  )
+  val params: List<CirParameter> = listOfNotNull(receiverParameter) + declared
 
   // ADR-068 (2026-09-27 amendment): the class route's StateFlow bucket, on a top-level function.
   // The Kotlin half is the plain top-level export (the awaited flow is already minted as a handle);
@@ -140,7 +158,8 @@ internal fun translateSuspendFunction(
   // The trailing slot moves off a user parameter spelled `userData`, as the Kotlin export's does.
   val slotNames: ForwardLegacyNames =
     legacyCsharpNames(func.parameters, classifier, callableCatalog.legacyDefaultFlags(func))
-  val nativeParams: List<CirParameter> = params.nativeImportParameters() +
+  val nativeParams: List<CirParameter> =
+    listOfNotNull(structReceiver).nativeImportParameters() + params.nativeImportParameters() +
       listOf(
         CirParameter(slotNames.callback, callbackType),
         CirParameter(slotNames.userData, "IntPtr"),
@@ -174,7 +193,9 @@ internal fun translateSuspendFunction(
     nativeName = nativeName,
     parameters = params,
     body = "",
-    isStatic = true,
+    isStatic = structReceiver == null,
+    isExtension = receiverParameter != null,
+    asyncReceiver = structReceiver,
     isAsync = true,
     asyncReturnType = asyncReturnType,
     typeParameters = func.cirMethodTypeParameters(context, logger),
@@ -239,6 +260,40 @@ internal fun translateSuspendFunction(
   return listOf(nativeImport, asyncMethod) + listOfNotNull(collector) + awaitedPair +
     shared?.let { flowKeyedSharedFlowImports(libraryName, cname, "${nativeName}_", it) }.orEmpty()
 }
+
+/**
+ * ADR-229: the C# `this` parameter of a static suspend member's receiver, on the slot the Kotlin
+ * export declares for it (`addStaticSuspendExport`): a borrowed handle, a scalar, or an ordinal.
+ */
+internal fun ForwardStaticSuspendReceiver.cirReceiverParameter(name: String): CirParameter =
+  when (this) {
+    is ForwardStaticSuspendReceiver.Handle -> CirParameter(
+      name,
+      type = if (nullable) BridgeType.Nullable(type).forwardPublicCsharpType()
+      else type.forwardPublicCsharpType(),
+      nativeType = KOTLIN_HANDLE,
+      nativeArgumentExpression =
+        if (nullable) "$name?._handle ?? NugetKotlinHandle.Null" else "$name._handle",
+    )
+
+    is ForwardStaticSuspendReceiver.Scalar -> {
+      val csharp: String = mapParamType(kotlinType.substringAfterLast('.'))
+      CirParameter(
+        name,
+        csharp,
+        isReferenceType = csharp == "string",
+        nativeArgumentExpression = if (csharp == "string") nonNullStringOrThrow(name) else null,
+      )
+    }
+
+    is ForwardStaticSuspendReceiver.Enum -> CirParameter(
+      name,
+      type = type.csharpType,
+      nativeType = "int",
+      isReferenceType = false,
+      nativeArgumentExpression = "(int)$name",
+    )
+  }
 
 /**
  * ADR-214: a legacy-route member's own type parameters with their C# constraints, the planned

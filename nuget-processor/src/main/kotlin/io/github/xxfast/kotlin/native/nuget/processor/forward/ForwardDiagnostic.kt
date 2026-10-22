@@ -905,13 +905,16 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
             "parameter (`Func<T, CancellationToken, Task<R>>`, up to three primitive, String, " +
             "enum or class payloads and a Unit, primitive or String result), but not here"
 
-      // ROADMAP Phase 4 line 23 fold-in: the suspend route covers top-level functions and class,
-      // sealed-arm members, never an extension. The ADR-064 audit amendment: one sentence for
-      // every owner the route skips, so it lists each of them.
+      // The ADR-064 audit amendment: one sentence for every owner the route skips, so it lists
+      // each of them. ADR-229: the static owners bind on the top-level route now, so what is left
+      // is a static owner's `Flow` result, an extension on another receiver and an interface
+      // nothing returns.
       ForwardPlanSkipReason.SUSPEND.name ->
-        "a `suspend` function binds at the top level, on a class or sealed type, and on an " +
-          "interface a function returns, but not on an object, a companion object, a value " +
-          "class, an enum, an interface nothing returns, or as an extension"
+        "a `suspend` function binds at the top level, on a class or sealed type, an object, a " +
+          "companion, an enum or a value class, as an extension on a class, String, primitive " +
+          "or enum receiver, and on an interface a function returns, but not with a Flow " +
+          "result on an owner with no instance scope, as an extension on any other receiver, " +
+          "or on an interface nothing returns"
 
       // ADR-197: a member's own type parameter binds too now, on the owners and at the positions
       // the boxed wire reaches, so the sentence names those rather than "top-level only".
@@ -922,7 +925,8 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
       ForwardPlanSkipReason.GENERIC.name ->
         "an exported generic class binds at every position, and a function's own type " +
             "parameter binds on a top-level function, including a `suspend` one, and on a " +
-            "class, object, companion or sealed-class member: as a bare `T` or `T?`, inside a " +
+            "class, object, companion or sealed-class member, and on a `suspend` enum, " +
+            "value-class or extension member: as a bare `T` or `T?`, inside a " +
             "`List`, `Set` or `Map`, inside an exported generic class or a `Result` payload, " +
             "and inside a lambda or `Flow`; a generic interface binds only as a parameter or an " +
             "extension receiver (ADR-222), so at a result, property or erased position type it " +

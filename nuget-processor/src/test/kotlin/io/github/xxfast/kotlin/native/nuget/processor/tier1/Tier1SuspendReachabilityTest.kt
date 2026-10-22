@@ -211,11 +211,12 @@ class Tier1SuspendReachabilityTest {
     assertFalse("Tassel>" in result.generatedCSharp, result.generatedCSharp)
   }
 
+  /** ADR-229: a top-level suspend extension binds on the static suspend route, never dropped. */
   @Test
-  fun `a top-level suspend extension is named, never silently dropped`() {
-    val warning: String = result.kspWarnings.firstOrNull { it.contains("knotted") }
-      ?: error("expected knotted to be named; got: ${result.kspWarnings}")
-    assertTrue("suspend" in warning, warning)
+  fun `a top-level suspend extension binds as a C# this extension`() {
+    assertTrue(result.kspWarnings.none { it.contains("knotted") }, "${result.kspWarnings}")
+    assertTrue("KnottedAsync(this string receiver" in result.generatedCSharp, result.generatedCSharp)
+    assertTrue("_string_knotted_async" in result.generated, "no Kotlin export")
   }
 
   /** A value class with no `NugetBox`/`NugetUnbox` pair (ADR-171 builds one only for a scalar,

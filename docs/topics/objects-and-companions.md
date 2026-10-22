@@ -33,9 +33,9 @@ int count = CatRegistry.Count(); // 2
 Object methods are PascalCased and their returns marshalled exactly like class methods; see
 [Classes and objects](classes-and-objects.md).
 
-A `suspend` function on an `object` is not bound: the processor skips it with a
-`SKIPPED_UNSUPPORTED_COMBINATION` warning naming the member, so the C# `static class` omits it.
-Declare it at the top level or on a class instead.
+A `suspend` function on an `object` binds as a static `Task` method with a `CancellationToken`:
+`await Siesta.MinutesForAsync("Oreo")`. See
+[Coroutines and Flow](coroutines-and-flow.md#suspend-static-owners).
 
 <note>
     <p>Naming an <code>object</code> member <code>All</code>, <code>Any</code>, <code>First</code>,
@@ -150,8 +150,9 @@ This applies to the companion of an ordinary class or an enum. The companion of 
 value class, or a sealed class or arm binds nothing: each of its members is skipped with a named
 warning, so move it to a top-level declaration or an `object`.
 
-A `suspend` member of a companion object is skipped the same way, with a named warning; move it to
-a top-level `suspend fun` or a class member.
+A `suspend` member of a companion binds the same way, as a static `Task` method on the owning
+class: `await Swing.HangAsync("Oreo")`. A named companion binds too. See
+[Coroutines and Flow](coroutines-and-flow.md#suspend-static-owners).
 
 ## Method overloads {id="method-overloads"}
 

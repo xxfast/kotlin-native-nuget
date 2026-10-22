@@ -301,6 +301,11 @@ internal data class CirValueClass(
   val constructors: List<CirValueClassConstructor> = emptyList(),
   val properties: List<CirProperty>,
   val methods: List<CirMethod>,
+  /**
+   * ADR-229: the members on the static suspend route, each its `[DllImport]` and an instance
+   * `XAsync` method that passes the underlying's wire as the receiver.
+   */
+  val asyncMembers: List<CirMember> = emptyList(),
   // ADR-150: the author's KDoc, as plain text in tag slots; `renderDoc` owns the escaping.
   val doc: CirDoc? = null,
   /**
@@ -1037,6 +1042,11 @@ internal data class CirMethod(
   val isExtension: Boolean = false,
   val typeParameters: List<CirTypeParameter> = emptyList(),
   val isAsync: Boolean = false,
+  /**
+   * ADR-229: a value-class member on the static suspend route. Rendered as an instance method of
+   * the record struct with no `_handle` and no scope; this argument is passed to the extern first.
+   */
+  val asyncReceiver: CirParameter? = null,
   val asyncReturnType: String = "",
   // ADR-119: the C# expression turning the awaited `resultPtr` into [asyncReturnType], for a
   // suspend member returning a collection (`NugetMarshal.ReadList<T>(resultPtr, ...)`). Null keeps

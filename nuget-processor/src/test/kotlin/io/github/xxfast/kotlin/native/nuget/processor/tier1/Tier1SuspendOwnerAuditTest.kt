@@ -112,9 +112,6 @@ class Tier1SuspendOwnerAuditTest {
   @Test
   fun `a suspend member on an owner no suspend route carries is named exactly once`() {
     listOf(
-      "tier1.suspendowners.Depot.restock",
-      "tier1.suspendowners.Den.Companion.open",
-      "tier1.suspendowners.Tag.fetch",
       // An interface nothing returns: ADR-174's interface async route carries reachable ones only.
       "tier1.suspendowners.Pacer.pace",
     ).forEach { member ->
@@ -126,10 +123,31 @@ class Tier1SuspendOwnerAuditTest {
         "$member is a structural suspend drop; got=$warning",
       )
       assertTrue(
-        "not on an object, a companion object, a value class" in warning,
+        "or on an interface nothing returns" in warning,
         "$member must read the widened suspend sentence; got=$warning",
       )
     }
+  }
+
+  /**
+   * ADR-229: an object's, a companion's and a value class's suspend members bind on the static
+   * suspend route, one `_async` export each and a static (or, on the struct, instance) `XAsync`.
+   */
+  @Test
+  fun `a suspend member on an object, a companion or a value class binds and is not named`() {
+    listOf(
+      "tier1.suspendowners.Depot.restock" to "public static Task<int> RestockAsync(",
+      "tier1.suspendowners.Den.Companion.open" to "public static Task<int> OpenAsync(",
+      "tier1.suspendowners.Tag.fetch" to "public Task<int> FetchAsync(",
+    ).forEach { (member, declaration) ->
+      assertEquals(0, warningsNaming(member).size, "$member binds; ${result.kspWarnings}")
+      assertTrue(
+        declarations().any { line -> declaration in line },
+        "$member declares `$declaration`",
+      )
+    }
+    listOf("_depot_restock_async", "_den_companion_open_async", "_tag_fetch_async")
+      .forEach { export -> assertTrue(export in result.generated, "$export is exported") }
   }
 
   @Test
@@ -231,7 +249,7 @@ class Tier1SuspendOwnerAuditTest {
   @Test
   fun `the suspend drops are absent from the C# and the controls still bind`() {
     val declarations: List<String> = declarations()
-    listOf("Restock", "Open", "Fetch", "Pace", "Hold").forEach { member ->
+    listOf("Pace", "Hold").forEach { member ->
       val leaks: List<String> = declarations.filter { line ->
         Regex("\\b${member}(Async)?\\s*[(<]").containsMatchIn(line)
       }

@@ -1,5 +1,15 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import com.google.devtools.ksp.symbol.ClassKind
+
+import io.github.xxfast.kotlin.native.nuget.processor.forward.staticSuspendRouteMembers
+
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticSuspendReceiver
+
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticSuspendOwner
+
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticSuspendMember
+
 import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
 import com.google.devtools.ksp.processing.KSPLogger
 import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
@@ -371,6 +381,46 @@ internal fun translate(
     namespaces.mergeStaticClass(namespace, finalClassName, members)
   }
 
+  // ADR-229: the static suspend route, read through the selector the Kotlin half reads. Each
+  // member is translated once, on the C# owner its static owner renders as.
+  val staticSuspend: List<ForwardStaticSuspendMember> =
+    callableCatalog.staticSuspendRouteMembers(classifier)
+  fun staticSuspendCir(
+    member: ForwardStaticSuspendMember,
+    structReceiver: CirParameter? = null,
+  ): List<CirMember> {
+    val receiver: ForwardStaticSuspendReceiver? = when (val owner = member.owner) {
+      is ForwardStaticSuspendOwner.Extension -> owner.receiver
+      is ForwardStaticSuspendOwner.EnumMember -> owner.receiver
+      is ForwardStaticSuspendOwner.Object,
+      is ForwardStaticSuspendOwner.Companion,
+      is ForwardStaticSuspendOwner.ValueClass,
+        -> null
+    }
+    return translateSuspendFunction(
+      member.function, context.libraryName, context.symbols, tracker, exportedTypes, logger,
+      classifier, callableCatalog, context,
+      stem = member.owner.stem, receiver = receiver, structReceiver = structReceiver,
+    )
+  }
+  fun KSClassDeclaration.isSameAs(other: KSClassDeclaration): Boolean =
+    qualifiedName?.asString() == other.qualifiedName?.asString()
+  fun objectAsync(obj: KSClassDeclaration): List<CirMember> = staticSuspend
+    .filter { member -> (member.owner as? ForwardStaticSuspendOwner.Object)?.obj?.isSameAs(obj) == true }
+    .flatMap { member -> staticSuspendCir(member) }
+  fun companionAsync(cls: KSClassDeclaration): List<CirMember> = staticSuspend
+    .filter { member ->
+      (member.owner as? ForwardStaticSuspendOwner.Companion)?.owner?.isSameAs(cls) == true
+    }
+    .flatMap { member -> staticSuspendCir(member) }
+  fun valueClassAsync(cls: KSClassDeclaration): (CirParameter) -> List<CirMember> = { receiver ->
+    staticSuspend
+      .filter { member ->
+        (member.owner as? ForwardStaticSuspendOwner.ValueClass)?.valueClass?.isSameAs(cls) == true
+      }
+      .flatMap { member -> staticSuspendCir(member, receiver) }
+  }
+
   groupPropertiesByNamespaceAndFile(properties).forEach { (key, props) ->
     val (namespace, fileClassName) = key
     val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
@@ -442,6 +492,7 @@ internal fun translate(
       val translated: CirClass = translateClass(
         cls, context.libraryName, tracker, exportedTypes, logger, callableCatalog, context,
         classifier, interfaceDeclarationCatalog, expects, memberRegistry,
+        companionAsyncMembers = companionAsync(cls),
       )
       addAll(withNestedDeclarations(translated, translateNestedOf(cls)))
     }
@@ -457,6 +508,7 @@ internal fun translate(
     valueClasses.filter { isOwnedBy(owner, it) }.forEach { cls ->
       add(translateValueClass(
         cls, context.libraryName, logger, context, callableCatalog, expects, tracker,
+        staticSuspend = valueClassAsync(cls),
       ))
     }
     interfaces.filter { isOwnedBy(owner, it) }.forEach { iface ->
@@ -485,6 +537,7 @@ internal fun translate(
       add(
         translateObject(
           obj, context.libraryName, context.symbols, callableCatalog, tracker, logger, expects,
+          asyncMembers = objectAsync(obj),
         )
           .copy(nestedDeclarations = translateNestedOf(obj)),
       )
@@ -501,6 +554,7 @@ internal fun translate(
       val translated: CirClass = translateClass(
         cls, context.libraryName, tracker, exportedTypes, logger, callableCatalog, context,
         classifier, interfaceDeclarationCatalog, expects, memberRegistry,
+        companionAsyncMembers = companionAsync(cls),
       )
       withNestedDeclarations(translated, translateNestedOf(cls))
     } ?: return@forEach
@@ -515,6 +569,7 @@ internal fun translate(
     val declaration: CirDeclaration = guarded(cls.forwardGuardName(), cls, logger) {
       translateValueClass(
         cls, context.libraryName, logger, context, callableCatalog, expects, tracker,
+        staticSuspend = valueClassAsync(cls),
       )
     } ?: return@forEach
     namespaces.addDeclaration(namespaceOf(cls.packageName.asString()), declaration)
@@ -693,6 +748,7 @@ internal fun translate(
     val declaration: CirDeclaration = guarded(obj.forwardGuardName(), obj, logger) {
       translateObject(
         obj, context.libraryName, context.symbols, callableCatalog, tracker, logger, expects,
+        asyncMembers = objectAsync(obj),
       )
         .copy(nestedDeclarations = translateNestedOf(obj))
     } ?: return@forEach
@@ -925,6 +981,32 @@ internal fun translate(
       logger = logger,
       properties = staticProperties,
     )
+  }
+
+  // ADR-229: an enum body's and an enum companion's suspend members land on `{Enum}Extensions`,
+  // a suspend extension's on `{Receiver}Extensions`, beside their synchronous siblings.
+  staticSuspend.forEach { member ->
+    val home: Pair<String, String>? = when (val owner = member.owner) {
+      is ForwardStaticSuspendOwner.EnumMember ->
+        namespaceOf(owner.enum.packageName.asString()) to owner.enum.extensionReceiverKey()
+      is ForwardStaticSuspendOwner.Companion ->
+        if (owner.owner.classKind == ClassKind.ENUM_CLASS) {
+          namespaceOf(owner.owner.packageName.asString()) to owner.owner.extensionReceiverKey()
+        } else {
+          null
+        }
+      is ForwardStaticSuspendOwner.Extension -> {
+        val receiver: KSDeclaration = owner.receiverType.declaration
+        extensionNamespace(receiver, member.function) to receiver.extensionReceiverKey()
+      }
+      is ForwardStaticSuspendOwner.Object, is ForwardStaticSuspendOwner.ValueClass -> null
+    }
+    if (home != null) {
+      val (namespace, receiverKey) = home
+      namespaces.mergeStaticClass(
+        namespace, "${receiverKey.replace(".", "")}Extensions", staticSuspendCir(member),
+      )
+    }
   }
 
   // ADR-160: every per-call callback parameter the plan owns declares its delegate here, off the

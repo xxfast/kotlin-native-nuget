@@ -135,18 +135,30 @@ class Tier1EnumMemberFunctionPlanTest {
 
   @Test
   fun `every enum member with no route is named exactly once`() {
-    listOf("Mood.napAsync", "Mood.tagged", "Mood.ticks", "Mood.sound", "Mood.Companion.wake")
+    listOf("Mood.tagged", "Mood.ticks", "Mood.sound")
       .forEach { symbol ->
         val skips: List<String> = warningsFor(symbol)
         assertEquals(1, skips.size, "$symbol kspWarnings=${result.kspWarnings}")
       }
-    assertContains(
-      warningsFor("Mood.napAsync").single(),
-      "a companion object, a value class, an enum,",
-    )
     val cs: String = result.generatedCSharp
-    listOf("NapAsync", "Tagged", "Ticks", "Wake")
+    listOf("Tagged", "Ticks")
       .forEach { name -> assertFalse(cs.contains(" $name("), "$name must not render") }
+  }
+
+  /**
+   * ADR-229: an enum body's suspend member crosses its receiver by ordinal and a companion's is a
+   * static, both on `MoodExtensions`, on the static suspend route.
+   */
+  @Test
+  fun `an enum's suspend members bind on MoodExtensions`() {
+    listOf("Mood.napAsync", "Mood.Companion.wake").forEach { symbol ->
+      assertTrue(warningsFor(symbol).isEmpty(), "$symbol kspWarnings=${result.kspWarnings}")
+    }
+    val cs: String = result.generatedCSharp
+    assertContains(cs, "public static Task<int> NapAsyncAsync(this global::")
+    assertContains(cs, "public static Task<global::")
+    assertContains(cs, "> WakeAsync(CancellationToken cancellationToken = default)")
+    assertContains(result.generated, "Mood.entries[receiver].napAsync()")
   }
 
   @Test

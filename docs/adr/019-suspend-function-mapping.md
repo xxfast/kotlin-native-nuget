@@ -614,3 +614,10 @@ Verified: two new xunit rows in `IntegrationTests/LiveHandleTests.cs`,
 > **Pointer (2026-09-26):** a nullable primitive/`Char`/`String` *parameter* on this route (as
 > opposed to the nullable return covered above) was still bound as non-null; see
 > [ADR-122](122-handle-parameters-on-the-legacy-routes.md)'s 2026-09-26 amendment.
+
+## Amendment (2026-10-22): owners without an instance scope
+
+The suspend route is no longer limited to classes and top-level functions. An `object`, a companion,
+a suspend extension, an enum body and enum companion and a value class bind their `suspend` members
+on the same route with an ad-hoc root scope per call, as the top level does. See
+[ADR-229](229-suspend-on-static-owners.md).

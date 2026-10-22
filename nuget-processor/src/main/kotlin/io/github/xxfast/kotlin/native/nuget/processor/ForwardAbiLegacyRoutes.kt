@@ -152,8 +152,12 @@ internal object ForwardAbiLegacyRoutes {
       is CirSubscriptionHelper,
       is CirSuspendFuncHelper,
       is CirSuspendFuncNativeHelper,
-      is CirValueClass,
         -> Unit
+
+      // ADR-229: a value class's members on the static suspend route.
+      is CirValueClass -> declaration.asyncMembers.forEach { member ->
+        add(member, ForwardAbiLegacyRoute.SUSPEND_FUNCTION)
+      }
     }
   }
 

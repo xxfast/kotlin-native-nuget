@@ -1073,6 +1073,8 @@ internal fun translateClass(
   // ADR-110 amendment (ROADMAP line 32): where this class records the names it rendered, so the
   // inherited CS0108 post-pass can compare it against its kept base once every class translated.
   memberRegistry: CsMemberRegistry? = null,
+  /** ADR-229: the companion's members on the static suspend route, already translated. */
+  companionAsyncMembers: List<CirMember> = emptyList(),
 ): CirClass {
   val name: String = cls.simpleName.asString()
   val prefix: String = cls.nativePrefix(context.symbols)
@@ -1679,7 +1681,7 @@ internal fun translateClass(
         ForwardCirPlanProjection.static(planned, libraryName)
       }
 
-    companionConsts + companionProperties + companionFunctions
+    companionConsts + companionProperties + companionFunctions + companionAsyncMembers
   } else emptyList()
 
   // C# cannot declare two members of one type whose name and parameter types agree (ADR-034 /
@@ -3920,6 +3922,8 @@ internal fun translateObject(
   // ADR-150: the expect index. A bare `forwardKdoc()` here cannot reach the `expect` half,
   // so a documented `expect` declaration of this family rendered with no summary at all.
   expects: ExpectIndex = ExpectIndex(),
+  /** ADR-229: this object's members on the static suspend route, already translated. */
+  asyncMembers: List<CirMember> = emptyList(),
 ): CirObject {
   val name: String = obj.simpleName.asString()
   val prefix: String = obj.nativePrefix(symbols)
@@ -3988,7 +3992,13 @@ internal fun translateObject(
     }
     .toList()
 
-  val members: List<CirMember> = consts + properties + methods
+  asyncMembers.filterIsInstance<CirMethod>().forEach { method ->
+    kotlinSpellings.record(
+      method.name,
+      KotlinSpelling("suspend fun", method.name.removeSuffix("Async"), dependency = dependency),
+    )
+  }
+  val members: List<CirMember> = consts + properties + methods + asyncMembers
 
   emitCsharpSignatureCollisions(
     methods = members.filterIsInstance<CirMethod>(),
@@ -5076,6 +5086,11 @@ internal fun translateValueClass(
   // collection helpers like any other route's (CS0246 on `IReadOnlyList<>` otherwise); null for a
   // unit caller.
   tracker: CollectionHelperTracker? = null,
+  /**
+   * ADR-229: this value class's members on the static suspend route, translated against the
+   * struct receiver it is handed (the underlying's wire, read off `this`).
+   */
+  staticSuspend: (CirParameter) -> List<CirMember> = { emptyList() },
 ): CirValueClass {
   val name: String = cls.simpleName.asString()
   val qualifiedName: String = cls.qualifiedName?.asString() ?: name
@@ -5227,6 +5242,29 @@ internal fun translateValueClass(
 
   val csUnderlyingType: String = qualifiedElementCsType(underlyingResolved, context)
 
+  // ADR-229: the receiver slot of the static suspend route is the same wire the sync members pass.
+  val asyncMembers: List<CirMember> = staticSuspend(
+    CirParameter(
+      "receiver",
+      csUnderlyingType,
+      nativeType = if (isReferenceUnderlying) KOTLIN_HANDLE else underlyingNativeType,
+      nativeArgumentExpression = if (isEnumUnderlying) "(int)$nativeArg" else nativeArg,
+    ),
+  )
+  val asyncNames: List<CsMemberName> = asyncMembers.csMemberNames()
+  if (asyncNames.isNotEmpty()) {
+    emitMemberNameCollisions(
+      name, "value class $name", cls, valueClassNames + asyncNames, KotlinSpellings.ofClass(cls),
+      logger,
+    )
+    emitCsharpSignatureCollisions(
+      methods = methods + asyncMembers.filterIsInstance<CirMethod>(),
+      container = name,
+      symbol = cls,
+      logger = logger,
+    )
+  }
+
   return CirValueClass(
     name = name,
     libraryName = libraryName,
@@ -5238,6 +5276,7 @@ internal fun translateValueClass(
     constructors = constructors,
     properties = properties,
     methods = methods,
+    asyncMembers = asyncMembers,
     doc = cls.forwardKdoc(expects)?.toCirDoc(),
     // ADR-150 amendment: the underlying property is never a `CirProperty` -- both value-class
     // shapes render it themselves -- so it needs its own slot to be documented at all.

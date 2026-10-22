@@ -6,6 +6,7 @@ import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSTypeParameter
+import com.google.devtools.ksp.symbol.Modifier
 import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
@@ -19,12 +20,16 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
  * owner too; the width-variant route it used to share is gone.
  */
 internal fun KSFunctionDeclaration.isForwardGenericMemberOwner(): Boolean {
-  if (extensionReceiver != null) return false
+  // ADR-229: the static suspend route boxes a member's own `T` on every owner it reaches, an
+  // extension, an enum body and a value class included, as the top-level route does.
+  val suspends: Boolean = Modifier.SUSPEND in modifiers
+  if (extensionReceiver != null) return suspends
   if (parentDeclaration == null) return true
   val owner: KSClassDeclaration = parentDeclaration as? KSClassDeclaration ?: return false
   return when (owner.classKind) {
-    ClassKind.CLASS -> !owner.isValueClass()
+    ClassKind.CLASS -> !owner.isValueClass() || suspends
     ClassKind.OBJECT -> true
+    ClassKind.ENUM_CLASS -> suspends
     else -> false
   }
 }

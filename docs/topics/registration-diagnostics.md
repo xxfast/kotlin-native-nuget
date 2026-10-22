@@ -778,6 +778,15 @@ call, rather than one of the messages above. The `[nuget:interop]` line is the o
 this path; tracing which native asset the .NET host actually resolved is outside what this feature
 covers.
 
+The static suspend route (an `object`, a companion, a suspend extension, an enum or a value class)
+starts each call on its own scope, so it holds no owner state to leak. `LeakTests/LiveHandleTests.cs`
+pins the count after a call settles: `StaticSuspend_EveryOwner_Completion_ReturnsToBaseline`,
+`StaticSuspend_Fault_ReturnsToBaseline`, `StaticSuspend_Cancellation_ReturnsToBaseline` and
+`StaticSuspend_TightLoop_CompletionBeforeReturn_ReturnsToBaseline`. `LeakTests/CollectabilityTests.cs`
+holds a `WeakReference` to the call's state in `StaticSuspend_ObjectCallCompletes_ItsStateIsCollected`,
+`StaticSuspend_ExtensionCallCompletes_ItsStateAndReceiverAreCollected` and
+`StaticSuspend_ArgumentFailsItsNullGuard_ItsStateIsCollected`.
+
 <seealso>
     <category ref="related">
         <a href="reverse-overview.md">Consuming C# in Kotlin</a>

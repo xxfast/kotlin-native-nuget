@@ -677,7 +677,6 @@ class Tier1UnroutedPositionsTest {
     structural("tier1.residuals.Tag.tagPick"),
     input("tier1.residuals.Tag.tagFeed"),
     returns("tier1.residuals.Tag.tagTicker"),
-    structural("tier1.residuals.Tag.tagSettle"),
     input("tier1.residuals.Tag.tagOn"),
     // (c) class companion members (already named before this cell existed; coverage only). Its
     // `fun <T> denPick` binds since ADR-197, asserted in the control test.
@@ -722,6 +721,8 @@ class Tier1UnroutedPositionsTest {
     listOf(
       "OkShelf(", "OkRack(", "OkLedge(", "OkHidden(", "OkBase(", "OkCrate(", "OkTag(", "OkDen(",
       "OkDenCompanion(", "Greet(", "OkJob(",
+      // ADR-229: a value class's suspend member binds on the static suspend route.
+      "public Task<int> TagSettleAsync(",
     ).forEach { member ->
       assertTrue(
         declarations.any { line -> line.contains(member) },
@@ -765,7 +766,7 @@ class Tier1UnroutedPositionsTest {
 
     listOf(
       "Tally", "TagPick", "TagFeed", "TagTicker",
-      "TagSettle", "TagOn", "DenTicker", "Summon", "TagBlank", "Hire",
+      "TagOn", "DenTicker", "Summon", "TagBlank", "Hire",
       "HireCook",
     ).forEach { member ->
       val leaks: List<String> = declarations.filter { line ->
