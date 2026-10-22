@@ -84,6 +84,10 @@ TestLibrary.Reserved.StringExtensions.Tag("Oreo", "Mylo"); // a different packag
 | Nullable collection, nullable bound C# interface | yes | no |
 | Generic type, unexported (non-stdlib, non-dependency) type, `ByteArray` | no | no |
 
+A `suspend` extension is the exception for `ByteArray`: it binds on a `ByteArray` receiver, nullable
+too, as `this byte[]?` (see
+[Coroutines and Flow](coroutines-and-flow.md#async-wire-types)).
+
 A closed instantiation of an exported generic class (`Box<Int>`) is the exception to the generic
 row for a property: `val Box<Int>.doubled: Int` binds as an extension on `Box<int>`.
 

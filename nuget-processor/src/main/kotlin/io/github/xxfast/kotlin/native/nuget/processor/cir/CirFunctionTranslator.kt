@@ -18,6 +18,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeC
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyReturnShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyWireRead
+import io.github.xxfast.kotlin.native.nuget.processor.forward.planned
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBytesCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBytesRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyEnvelopeCsharpType
@@ -74,6 +76,10 @@ internal fun translateSuspendFunction(
   if (collectionReturn != null) tracker.trackCollection(collectionReturn)
   // ROADMAP Phase 4: the class route's bytes arm, for a top-level `suspend fun f(): ByteArray`.
   if (returnShape is ForwardLegacyReturnShape.Bytes) tracker.needsBytes = true
+  // ADR-240: the helpers a wire result's read binds to.
+  val planned: BridgeType? = (returnShape as? ForwardLegacyReturnShape.Wire)?.planned
+  if (planned == BridgeType.ByteArray) tracker.needsBytes = true
+  if (planned is BridgeType.Collection) tracker.trackCollection(planned)
 
   // ROADMAP line 29: the overload number goes on the entry point, the extern's name AND the
   // wrapper's call site. On a same-wire pair (both externs take identical native parameters)
@@ -98,7 +104,7 @@ internal fun translateSuspendFunction(
   )
   // ADR-229: the receiver leads, named apart from the declared parameters.
   val receiverParameter: CirParameter? = receiver?.cirReceiverParameter(
-    freshName("receiver", declared.localScopeNames()),
+    freshName("receiver", declared.localScopeNames()), tracker,
   )
   val params: List<CirParameter> = listOfNotNull(receiverParameter) + declared
 
@@ -157,6 +163,8 @@ internal fun translateSuspendFunction(
     returnShape is ForwardLegacyReturnShape.ValueClass -> returnShape.declaredCsharpType()
     returnShape is ForwardLegacyReturnShape.Enum -> returnShape.declaredCsharpType()
     returnShape is ForwardLegacyReturnShape.Boxed -> returnShape.declaredCsharpType()
+    // ADR-240: a bare narrow type or a value class without a box pair.
+    returnShape is ForwardLegacyReturnShape.Wire -> returnShape.declaredCsharpType()
     else -> {
       // ADR-118: same speller as the class route -- a nested sealed arm return carries its
       // enclosing base, a top-level type stays bare.
@@ -227,9 +235,9 @@ internal fun translateSuspendFunction(
     stateFlowSetValueNativeName = if (write != null) "${nativeName}_SetValue" else "",
     stateFlowCompareAndSetNativeName = if (write != null) "${nativeName}_CompareAndSet" else "",
     awaitedStateFlowCollectNativeName =
-      if (stateFlowElement?.collection != null) "${nativeName}_collect" else null,
+      if (stateFlowElement?.perMember == true) "${nativeName}_collect" else null,
     awaitedStateFlowValueNativeName =
-      if (stateFlowElement?.collection != null) "${nativeName}_value" else null,
+      if (stateFlowElement?.perMember == true) "${nativeName}_value" else null,
     // ADR-119 / ADR-131: the top-level route's own copy of the class route's decision, exhaustive
     // for the same reason -- the two routes have to answer a new return shape identically.
     asyncResultRead = when (returnShape) {
@@ -262,6 +270,9 @@ internal fun translateSuspendFunction(
       // ADR-214: the plan route's read of a boxed `T`.
       is ForwardLegacyReturnShape.Boxed -> returnShape.legacyBoxedRead("resultPtr")
 
+      // ADR-240: the ordinary route's read of the innermost underlying, re-wrapped.
+      is ForwardLegacyReturnShape.Wire -> returnShape.legacyWireRead("resultPtr")
+
       ForwardLegacyReturnShape.Plain, is ForwardLegacyReturnShape.Refused -> null
     },
   )
@@ -270,7 +281,7 @@ internal fun translateSuspendFunction(
     acquiredFlowCollectImport(libraryName, cname, name)
   }
   // ADR-068, collection element: the per-member pair the awaited holder reads through.
-  val awaitedPair: List<CirDllImport> = if (stateFlowElement?.collection != null) {
+  val awaitedPair: List<CirDllImport> = if (stateFlowElement?.perMember == true) {
     awaitedStateFlowCollectionImports(
       libraryName, cname, "${nativeName}_collect", "${nativeName}_value",
     )
@@ -299,7 +310,10 @@ internal fun translateSuspendFunction(
  * ADR-229: the C# `this` parameter of a static suspend member's receiver, on the slot the Kotlin
  * export declares for it (`addStaticSuspendExport`): a borrowed handle, a scalar, or an ordinal.
  */
-internal fun ForwardStaticSuspendReceiver.cirReceiverParameter(name: String): CirParameter =
+internal fun ForwardStaticSuspendReceiver.cirReceiverParameter(
+  name: String,
+  tracker: CollectionHelperTracker? = null,
+): CirParameter =
   when (this) {
     is ForwardStaticSuspendReceiver.Handle -> CirParameter(
       name,
@@ -326,6 +340,14 @@ internal fun ForwardStaticSuspendReceiver.cirReceiverParameter(name: String): Ci
       nativeType = "int",
       isReferenceType = false,
       nativeArgumentExpression = "(int)$name",
+    )
+
+    // ADR-240: the ordinary route's wire; a minted handle is released once the extern returns.
+    is ForwardStaticSuspendReceiver.Wire -> legacyWireParameter(
+      name, shape, tracker,
+      hasValue = if (shape.fansOut) "${name}HasValue" else null,
+      handle = "${name}Handle",
+      owned = "${name}Owned",
     )
 
     // ADR-225: the ADR-214 boxed `T`, minted before the extern and released after it returns.

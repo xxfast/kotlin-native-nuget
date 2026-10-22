@@ -14,8 +14,12 @@ import com.google.devtools.ksp.symbol.KSTypeParameter
 import com.google.devtools.ksp.symbol.KSValueParameter
 import com.google.devtools.ksp.symbol.Variance
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
-import io.github.xxfast.kotlin.native.nuget.processor.forward.CollectionKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardWriteClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionCreate
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyWireUnderlyingShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.unwrapNullable
+import io.github.xxfast.kotlin.native.nuget.processor.forward.CollectionKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardKotlinArgumentSpelling
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinSpelling
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyGenericSealedElement
@@ -302,6 +306,19 @@ internal sealed interface MutableStateFlowElement {
   /** A [KOTLIN_TO_CSHARP_PARAM] primitive, `Char` or `String`: crosses by value. */
   data object Scalar : Writable
 
+  /**
+   * ADR-240: a bare `Instant`, `Duration` (ticks) or `Uuid` (hex-dash text), crossing on the
+   * ordinary route's own wire; [qualifiedName] names which.
+   */
+  data class Narrow(val qualifiedName: String) : Writable
+
+  /**
+   * ADR-240: a bare `ByteArray`, a collection or a plain interface ([type], non-null), crossing as
+   * the handle the ordinary route mints for it: C# creates it before the extern and releases it in
+   * a `finally`, Kotlin reads it (copying a container) before the export returns.
+   */
+  data class Minted(val type: BridgeType) : Writable
+
   /** An enum (ADR-071 amendment): crosses as its ordinal, as the synchronous enum setter does. */
   data class Enum(val qualifiedName: String) : Writable
 
@@ -374,6 +391,14 @@ internal fun classifyMutableStateFlowElement(elementType: KSType?): MutableState
   }
   val simpleName: String = declaration.simpleName.asString()
   if (KOTLIN_TO_CSHARP_PARAM.containsKey(simpleName)) return MutableStateFlowElement.Scalar
+  // ADR-240: the narrow stdlib types write on their ticks or text wire.
+  val narrow: String? = declaration.qualifiedName?.asString()
+  if (narrow in NARROW_STATE_FLOW_ELEMENTS) {
+    return MutableStateFlowElement.Narrow(requireNotNull(narrow))
+  }
+  // ADR-240: a bare `ByteArray`, a collection or a plain interface writes a handle C# mints for the
+  // call (bytes, a wire container, the interface bridge), which Kotlin reads before it returns.
+  mintedStateFlowElement(elementType)?.let { minted -> return minted }
   // ROADMAP Phase 4: `kotlin.ByteArray` is a `CLASS`, so it would fall into the handle arm below,
   // but it crosses as a *bytes* handle (`nuget_bytes_create`/`ReadBytes`), not as the `v._handle`
   // an exported wrapper carries, and the ADR-071 write seam has no arm that mints one. Its READ
@@ -449,6 +474,9 @@ private fun valueClassElement(
       element
     }
 
+    // ADR-240: a value class over a narrow type writes as its own box (`writesAsOwnBox`).
+    is MutableStateFlowElement.Narrow,
+    is MutableStateFlowElement.Minted,
     // ADR-215: a value class over a type parameter is generic, refused above.
     is MutableStateFlowElement.Boxed,
     is MutableStateFlowElement.ValueClass,
@@ -490,6 +518,8 @@ internal class MutableStateFlowReadOnlyElement(val element: String, val why: Str
 internal fun readOnlyMutableStateFlowElement(
   elementType: KSType?,
 ): MutableStateFlowReadOnlyElement? {
+  // ADR-240: a bare `ByteArray`, a collection or a plain interface the write seam mints is settable.
+  if (classifyMutableStateFlowElement(elementType) is MutableStateFlowElement.Minted) return null
   val declaration: KSDeclaration = elementType?.expandAliases()?.declaration ?: return null
   val container = "the write seam does not build its wire container"
   return when (declaration.qualifiedName?.asString()) {
@@ -542,6 +572,8 @@ internal fun isMutableStateFlowElementWritable(elementType: KSType?): Boolean {
   if (elementType?.isMarkedNullable != true) return true
   return when (element) {
     MutableStateFlowElement.Scalar -> true
+    is MutableStateFlowElement.Narrow -> true
+    is MutableStateFlowElement.Minted -> true
     is MutableStateFlowElement.Enum -> true
     is MutableStateFlowElement.Boxed -> true
     is MutableStateFlowElement.Handle -> true
@@ -620,7 +652,40 @@ internal fun mutableStateFlowWrite(elementType: KSType?, csElementType: String):
     }
 
     is MutableStateFlowElement.ValueClass -> valueClassStateFlowWrite(element, nullable)
+
+    // ADR-240: ticks or text, nullable over the has-value pair or the null string.
+    is MutableStateFlowElement.Narrow -> narrowStateFlowWrite(element, nullable)
+
+    // ADR-240: one handle slot, minted around the call.
+    is MutableStateFlowElement.Minted -> CirStateFlowWrite(
+      parameters = listOf(CirParameter("value", "IntPtr")),
+      arguments = "v",
+      mint = mintedStateFlowWrite(element.type, nullable),
+    )
   }
+}
+
+private fun narrowStateFlowWrite(
+  element: MutableStateFlowElement.Narrow,
+  nullable: Boolean,
+): CirStateFlowWrite {
+  if (element.qualifiedName == "kotlin.uuid.Uuid") {
+    return CirStateFlowWrite(
+      parameters = listOf(CirParameter("value", if (nullable) "string?" else "string")),
+      arguments = if (nullable) "v?.ToString()" else "v.ToString()",
+    )
+  }
+  val ticks: String = if (element.qualifiedName == "kotlin.time.Instant") "UtcTicks" else "Ticks"
+  if (!nullable) {
+    return CirStateFlowWrite(
+      parameters = listOf(CirParameter("value", "long")),
+      arguments = "v.$ticks",
+    )
+  }
+  return CirStateFlowWrite(
+    parameters = listOf(CirParameter("valueHasValue", "bool"), CirParameter("value", "long")),
+    arguments = "v.HasValue, v.GetValueOrDefault().$ticks",
+  )
 }
 
 /**
@@ -681,6 +746,9 @@ private fun valueClassStateFlowWrite(
 
     is MutableStateFlowElement.ValueClass ->
       error("value class ${element.qualifiedName} over a value class has no write arm")
+
+    is MutableStateFlowElement.Narrow, is MutableStateFlowElement.Minted ->
+      error("value class ${element.qualifiedName} over a wire type writes as its own box")
 
     is MutableStateFlowElement.Boxed ->
       error("value class ${element.qualifiedName} over a type parameter has no write arm")
@@ -1236,6 +1304,90 @@ internal fun KSClassDeclaration.writesAsOwnBox(): Boolean {
   if (typeParameters.isNotEmpty()) return true
   val underlying: KSType = primaryConstructor?.parameters?.singleOrNull()?.type?.resolve()
     ?.expandAliases() ?: return false
-  return underlying.isMarkedNullable &&
-    underlying.declaration.qualifiedName?.asString() == "kotlin.String"
+  val name: String? = underlying.declaration.qualifiedName?.asString()
+  if (underlying.isMarkedNullable && name == "kotlin.String") return true
+  // ADR-240: an ADR-235 WIRE underlying writes through the box pair too, which takes the struct on
+  // that underlying's ordinary wire.
+  if (underlying.isMarkedNullable) return false
+  val wire: KSClassDeclaration? = underlying.declaration as? KSClassDeclaration
+  return name in WIRE_UNDERLYING_NAMES || wire?.isValueClass() == true ||
+    wire?.classKind == ClassKind.INTERFACE
+}
+
+/** ADR-240: the `MutableStateFlow` elements that write on the ticks or text wire. */
+internal val NARROW_STATE_FLOW_ELEMENTS: Set<String> =
+  setOf("kotlin.time.Instant", "kotlin.time.Duration", "kotlin.uuid.Uuid")
+
+/** ADR-240: the stdlib ADR-235 WIRE underlyings, by name. */
+private val WIRE_UNDERLYING_NAMES: Set<String> = NARROW_STATE_FLOW_ELEMENTS + setOf(
+  "kotlin.ByteArray", "kotlin.collections.List", "kotlin.collections.Set", "kotlin.collections.Map",
+  "kotlin.collections.MutableList", "kotlin.collections.MutableSet",
+  "kotlin.collections.MutableMap",
+)
+
+/**
+ * ADR-240: the [MutableStateFlowElement.Minted] a `MutableStateFlow`/`MutableSharedFlow` element
+ * writes as, or null. Read through the module's one classifier ([ForwardWriteClassifier]); with
+ * none installed every element keeps its previous classification.
+ */
+private fun mintedStateFlowElement(elementType: KSType?): MutableStateFlowElement.Minted? {
+  val classifier: ForwardBridgeTypeClassifier = ForwardWriteClassifier.current ?: return null
+  val type: KSType = elementType ?: return null
+  val inner: BridgeType = classifier.classify(type).unwrapNullable()
+  val minted: Boolean = when (inner) {
+    BridgeType.ByteArray -> true
+    is BridgeType.Collection -> legacyWireUnderlyingShape(inner) != null
+    is BridgeType.Interface -> inner.bridgeEntry == null && type.arguments.isEmpty()
+    BridgeType.Unit,
+    is BridgeType.Primitive,
+    BridgeType.Char,
+    BridgeType.String,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    is BridgeType.Throwable,
+    BridgeType.Uuid,
+    is BridgeType.Enum,
+    is BridgeType.ObjectHandle,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> false
+  }
+  return if (minted) MutableStateFlowElement.Minted(inner) else null
+}
+
+/** ADR-240: the C# mint and release of a [MutableStateFlowElement.Minted] write's handle. */
+private fun mintedStateFlowWrite(type: BridgeType, nullable: Boolean): CirStateFlowMint {
+  if (type == BridgeType.ByteArray) {
+    return CirStateFlowMint(
+      create = { v ->
+        if (nullable) "$v is null ? IntPtr.Zero : NugetMarshal.CreateBytes($v)"
+        else "NugetMarshal.CreateBytes($v)"
+      },
+      release = { v -> "if (${v}Box != IntPtr.Zero) NugetBytesNative.Dispose(${v}Box);" },
+    )
+  }
+  if (type is BridgeType.Collection) {
+    return CirStateFlowMint(
+      create = { v -> legacyCollectionCreate(v, type, nullable, root = v) },
+      release = { v -> "if (${v}Box != IntPtr.Zero) NugetMarshal.Dispose(${v}Box);" },
+    )
+  }
+  require(type is BridgeType.Interface) { "ADR-240: no minted write for $type" }
+  val helper: String = if (nullable) "HandleOfOrZero" else "HandleOf"
+  return CirStateFlowMint(
+    create = { v -> "NugetMarshal.$helper($v, out bool ${v}Owned)" },
+    release = { v ->
+      "if (${v}Owned && ${v}Box != IntPtr.Zero) NugetMarshal.Dispose(${v}Box); GC.KeepAlive($v);"
+    },
+  )
 }

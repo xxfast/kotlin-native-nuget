@@ -290,7 +290,9 @@ using KotlinStateFlow<IReadOnlyList<int>> litters = await tracker.AwaitLitterSiz
 IReadOnlyList<int> sizes = litters.Value;
 ```
 
-`suspend fun (): MutableStateFlow<List<T>>` is not bound, and an awaited nullable
+A `suspend fun (): MutableStateFlow<List<T>>` awaits to a settable
+`KotlinMutableStateFlow<IReadOnlyList<T>>`, and so does one over a `ByteArray` or an interface:
+each write mints the handle for the call and releases it afterwards. An awaited nullable
 `StateFlow<List<T>>?` is not covered by an end-to-end test.
 
 ## `suspend fun` returning `Flow<T>` {id="suspend-fun-returning-flow-t"}
@@ -1222,12 +1224,12 @@ tracker.SpareChipId.Value = null;
 - `default(CatId)` has no `Id`, so writing it, or passing it to `CompareAndSet`, throws
   `ArgumentException` in C# before anything crosses. This applies to a value class over a `String`
   or an object.
-- The underlying must be a `String`, a primitive other than `Char`, an enum, or an
-  exported class or object. A value class over anything else is not a flow element at all, on a
-  `Flow`, `StateFlow` or `SharedFlow` alike, and the member is skipped by name rather than bound
-  read-only. A `Char`, another value class, a `kotlin.*` class such as `Instant` or `Uuid`, a
-  `Throwable`, a `List` has no C# record struct
-  (`SKIPPED_UNSUPPORTED_TYPE`). A generic value class (`Sticker<Int>`) and one over a nullable
+- The underlying can be a `String`, a primitive other than `Char`, an enum, an exported class or
+  object, or (with its own box pair) an `Instant`, `Duration`, `Uuid`, `ByteArray`, collection,
+  plain interface or another value class, so `MutableStateFlow<PostPrint>` reads and writes.
+  A bare `Instant`, `Duration` or `Uuid` element is settable too, on its ticks or text wire. A
+  value class over a `Char` or a `Throwable` has no C# record struct, so its member is skipped by
+  name (`SKIPPED_UNSUPPORTED_TYPE`). A generic value class (`Sticker<Int>`) and one over a nullable
   underlying (`value class Nick(val name: String?)`) are flow elements too, and `null` stays distinct
   from `Nick(null)`; see
   [A generic value class at an erased position](value-classes.md#a-generic-value-class-at-an-erased-position).
@@ -1640,9 +1642,11 @@ This holds for `suspend` members, sealed-subclass members, top-level `suspend` f
 `Flow`/`StateFlow` members and `suspend` functions returning `StateFlow`. A nullable handle with a
 default value (`cat: Cat? = null`) is still required in C#, so pass `null` explicitly.
 
-Any other generic parameter (`Pair<A, B>`, `Array<T>`, a plain `(T) -> R` lambda; your own
-`Box<String>` binds as a handle), `Instant`/`Duration`/`Uuid`, a value class or an interface is not
-supported at these positions and is skipped with a diagnostic naming the member. A
+`Instant`, `Duration`, `Uuid`, `ByteArray`, a plain interface and a value class over any bound
+underlying bind at these positions too, as a parameter, a result, a flow element and a `suspend`
+extension receiver, each on the wire the ordinary route uses. Any other generic parameter
+(`Pair<A, B>`, `Array<T>`, a plain `(T) -> R` lambda; your own `Box<String>` binds as a handle) is
+not supported at these positions and is skipped with a diagnostic naming the member. A
 [`suspend` lambda parameter](#suspend-lambda-parameter) is the one lambda that binds, and a
 [`Flow<T>` of a primitive or `String`](#flow-parameter) is the one generic type that does. Pass an
 enum, or a class/object/sealed handle, `List`/`Set`/`Map` or primitive/`String` (each of these nullable or
@@ -1650,13 +1654,63 @@ not) instead, or split the parameter across separate
 members. A `Throwable`, `Exception` or `RuntimeException` parameter does bind, as a
 `System.Exception` (see [Throwable values](exceptions.md#throwable-values)).
 
+## Instant, Duration, Uuid, ByteArray, interfaces and value classes {id="async-wire-types"}
+
+A `suspend` or `Flow` member takes and returns `Instant`, `Duration`, `Uuid`, `ByteArray`, a plain
+interface or a value class over any of them as `DateTimeOffset`, `TimeSpan`, `Guid`, `byte[]`, the
+interface and the record struct, nullable too. A `Flow` or `StateFlow` element, a `MutableStateFlow`
+or `MutableSharedFlow` write, an awaited `StateFlow` and the receiver of a `suspend` extension or
+value-class member work the same way. Each type crosses as it does at an ordinary position: ticks,
+text, a copied array, the interface bridge, or the value class's underlying.
+
+```kotlin
+class Mailslot(val owner: String) {
+  suspend fun stamp(at: Instant): Instant = at + 1.minutes
+  suspend fun scan(pads: ByteArray): ByteArray = pads + 9.toByte()
+}
+
+value class PostPrint(val pads: ByteArray) {
+  suspend fun padCount(): Int = pads.size
+}
+
+class PostBoard {
+  val lastStamp: MutableStateFlow<Instant> = MutableStateFlow(OFFICE_POSTMARK)
+  val lastPrint: MutableStateFlow<PostPrint> = MutableStateFlow(PostPrint(byteArrayOf(1)))
+}
+
+suspend fun ByteArray?.padsOrNone(): Int = this?.size ?: -1
+```
+
+```C#
+await using var slot = new Mailslot("Oreo");
+DateTimeOffset next = await slot.StampAsync(DateTimeOffset.FromUnixTimeSeconds(1_700_000_000));
+
+int pads = await new PostPrint(new byte[] { 1, 2, 3 }).PadCountAsync();   // 3
+int none = await ((byte[]?)null).PadsOrNoneAsync();                       // -1
+
+using var board = new PostBoard();
+using KotlinMutableStateFlow<DateTimeOffset> stamp = board.LastStamp;
+stamp.Value = DateTimeOffset.FromUnixTimeSeconds(1_700_000_600);          // crosses as ticks
+using KotlinMutableStateFlow<PostPrint> print = board.LastPrint;
+print.Value = new PostPrint(new byte[] { 1, 2, 3, 4 });                   // re-wrapped in Kotlin
+```
+
+- A value class's `init` runs in Kotlin at the crossing. As a parameter it is boxed before the
+  call, so a failing `init` throws `KotlinArgumentException` from the call itself, before any
+  `Task` exists. As the receiver of a value class's own `suspend` member it faults the `Task` with
+  `KotlinArgumentException`.
+- `default(PostPrint)` has no bytes. Passing it, writing it to a holder, or calling a `suspend`
+  member on it throws `ArgumentException` in C#.
+- A value class over a nullable `String` (`value class PostNote(val text: String?)`) keeps an absent
+  `PostNote?` (`null`) apart from `PostNote(null)` (a struct whose `Text` is `null`).
+- A `ByteArray` or collection argument is copied for the call. Mutating your array afterwards does
+  not reach Kotlin.
+- A `MutableStateFlow` or `MutableSharedFlow` of a bare `ByteArray`, collection or interface is
+  settable: each write mints the handle for the call and releases it afterwards, and Kotlin keeps
+  its own copy (a C#-implemented interface is held through its bridge).
+
 ## Limitations
 
-- A `MutableStateFlow` of a `List`, `Set`, `Map`, `ByteArray` or interface surfaces as the
-  read-only `KotlinStateFlow<T>`, not `KotlinMutableStateFlow<T>`: `.Value` is not settable, and a
-  C# implementation of an interface cannot be written into a Kotlin flow. The build reports
-  `SKIPPED_UNSUPPORTED_INPUT` naming the member and the element. Expose a function that takes the
-  new value to write it.
 - `Emit`, `TryEmit`, `ReplayCache`, and `SubscriptionCount` on
   `MutableStateFlow<T>` are not exposed (`CompareAndSet` and `Update` are; see [Atomic updates](#atomic-updates)).
 - A `suspend fun` returning `MutableStateFlow<T?>` or `MutableStateFlow<T>?`, a top-level
@@ -1676,14 +1730,6 @@ members. A `Throwable`, `Exception` or `RuntimeException` parameter does bind, a
 - A `suspend inline fun <reified T> Receiver.f(...): Result<T>` extension has no bridge at all:
   `inline` plus `reified` erase at the native boundary, and `suspend` needs a concrete
   continuation type. It is skipped with a diagnostic naming the extension.
-- A top-level `suspend fun` declared as an **extension function** (`suspend fun String.extRet()`)
-  has no route at all and is skipped with a diagnostic naming the extension.
-- A bare `ByteArray` **parameter** on a `Flow`-, `StateFlow`-, or `suspend`-returning member is not
-  supported, even though a `ByteArray` return or `Flow` element is (see
-  [Collections](collections.md#bytearray-as-a-collection-component)). Pass it as a `List<ByteArray>`
-  of one, or split it onto a separate ordinary member.
-- `suspend fun (): StateFlow<ByteArray>` has no binding: the shared `nuget_stateflow_value` export
-  has no per-member projection seam for a `ByteArray`. A `StateFlow<ByteArray>` **property** binds.
 - `suspend fun (): StateFlow<Throwable>` and any `MutableStateFlow<Throwable>` have no binding, for
   the same shared-export reason. A read-only `StateFlow<Throwable>` property or method binds; see
   [Throwable values](exceptions.md#throwable-values).

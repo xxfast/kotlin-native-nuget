@@ -99,8 +99,9 @@ class Tier1SuspendFlowTest {
   @Test fun `refused combinations name their refusal and emit neither half`() {
     val refused: List<String> = listOf(
       "nullableCollection", "unsupported",
-      "mutableStateCollection",
     )
+    // ADR-240: an awaited `MutableStateFlow` of a collection is settable now.
+    assertTrue("MutableStateCollectionAsync(" in result.generatedCSharp, result.generatedCSharp)
     // ADR-230: a `suspend` extension's flow result binds on the static suspend route.
     assertTrue("ExtensionFlowAsync(this string " in result.generatedCSharp, result.generatedCSharp)
     // ADR-210: `suspend fun input(flow: Flow<Int>)` binds now, as `IAsyncEnumerable<int>`.

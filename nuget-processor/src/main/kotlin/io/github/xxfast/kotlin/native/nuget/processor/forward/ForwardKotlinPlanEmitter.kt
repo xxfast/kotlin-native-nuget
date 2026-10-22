@@ -2746,3 +2746,13 @@ private fun narrowComponentLowering(type: BridgeType, wire: String): String {
   require(type == BridgeType.Uuid) { "ADR-235: $type is not a narrow collection component" }
   return "kotlin.uuid.Uuid.parse($wire)"
 }
+
+/**
+ * ADR-240: the ordinary route's lowering of one [planned] wire slot [name] (and its has-value slot,
+ * when it fans out), for a legacy `suspend` or `Flow` parameter. The value-class re-wrap is the
+ * caller's, inside the launch.
+ */
+internal fun legacyWireLowering(name: String, planned: BridgeType, hasValue: String?): String =
+  underlyingArgument(
+    ForwardPublicParameter(name, planned, hasValueSlot = hasValue ?: "${name}HasValue"),
+  )

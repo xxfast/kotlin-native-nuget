@@ -728,3 +728,10 @@ binds all of them as a static `KotlinFlow<T>`: the collect export drops `handle`
 and each collection runs on `CoroutineScope(Dispatchers.Default)`, which is what the original
 design sketch of this ADR already said of top-level returns. The member is re-invoked per
 collection, and the enumerator's own job is the only cancellation handle.
+
+## Amendment (2026-10-22): wire elements and parameters
+
+[ADR-240](240-async-routes-carry-wire-underlyings.md) lets a `Flow`-returning member take, and emit,
+a bare `Instant`, `Duration`, `Uuid`, `ByteArray`, a plain interface or a value class over any
+underlying, on the ordinary route's wire. Verified by `Mailslot_BareTypes_FlowParamAndElement_RoundTrip`,
+`Mailslot_Interface_FlowParamAndElement_RoundTrip` and `Mailslot_ValueClasses_FlowParamAndElement_RoundTrip`.

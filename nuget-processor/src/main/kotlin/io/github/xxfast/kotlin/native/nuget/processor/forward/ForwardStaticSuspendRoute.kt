@@ -25,6 +25,14 @@ internal sealed interface ForwardStaticSuspendReceiver {
   data class Scalar(val type: BridgeType, override val kotlinType: String) :
     ForwardStaticSuspendReceiver
 
+  /**
+   * ADR-240: a bare `Instant`, `Duration`, `Uuid`, `ByteArray` or plain interface, or a value
+   * class over any underlying, nullable or not, on the wire [shape] plans for it. Read into a local
+   * before the launch; a value class is re-wrapped at the call, inside it.
+   */
+  data class Wire(val shape: ForwardLegacyParameterShape.Wire, override val kotlinType: String) :
+    ForwardStaticSuspendReceiver
+
   /** An exported enum, crossing by ordinal (ADR-080). */
   data class Enum(val type: BridgeType.Enum, override val kotlinType: String) :
     ForwardStaticSuspendReceiver
@@ -104,11 +112,18 @@ internal data class ForwardStaticSuspendMember(
  */
 internal fun ForwardBridgeTypeClassifier.staticSuspendReceiver(
   type: KSType,
+  // ADR-240: a value class member's receiver, its underlying, which may be a bare collection.
+  valueClassUnderlying: Boolean = false,
 ): ForwardStaticSuspendReceiver? {
   val expanded: KSType = type.expandAliases()
-  if (expanded.arguments.isNotEmpty()) return null
   val kotlinType: String = expanded.declaration.qualifiedName?.asString() ?: return null
   val classified: BridgeType = classify(expanded).sealedAsHandle()
+  // ADR-240: a type with a wire of its own on the ordinary route rides it as the receiver too,
+  // a collection underlying of a value class included.
+  val wire: ForwardLegacyParameterShape.Wire? =
+    if (valueClassUnderlying) legacyWireUnderlyingShape(classified) else legacyWireShape(classified)
+  if (wire != null) return ForwardStaticSuspendReceiver.Wire(wire, kotlinType)
+  if (expanded.arguments.isNotEmpty()) return null
   val nullable: Boolean = classified is BridgeType.Nullable
   return when (val inner: BridgeType = classified.unwrapNullable()) {
     is BridgeType.ObjectHandle -> ForwardStaticSuspendReceiver.Handle(inner, kotlinType, nullable)

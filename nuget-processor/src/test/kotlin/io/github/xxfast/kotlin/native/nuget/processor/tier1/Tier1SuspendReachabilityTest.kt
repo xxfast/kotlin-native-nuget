@@ -220,18 +220,16 @@ class Tier1SuspendReachabilityTest {
   }
 
   /** A value class with no `NugetBox`/`NugetUnbox` pair (ADR-171 builds one only for a scalar,
-   *  String, enum or handle underlying) is refused by name, never completed through a `NugetUnbox`
-   *  that was never generated (CS0117). `Litter` wraps a `List`: since ADR-235 it has a record
-   *  struct over `IReadOnlyList<string>`, and the skip names the missing boxed form, the real
-   *  reason. */
+   *  String, enum or handle underlying) is never completed through a `NugetUnbox` that was never
+   *  generated (CS0117). `Litter` wraps a `List`: ADR-240 completes it on the list's own result
+   *  wire (`ReadList`) and re-wraps the struct in C#. */
   @Test
-  fun `a value class with no unbox pair at a suspend return is refused by name`() {
-    val warning: String = result.kspWarnings.firstOrNull { it.contains("litterLater") }
-      ?: error("expected a skip for litterLater; got: ${result.kspWarnings}")
-    assertTrue("those are the underlyings it has a boxed form for" in warning, warning)
-    assertFalse("LitterLaterAsync" in result.generatedCSharp, result.generatedCSharp)
-    assertFalse("Litter.NugetUnbox" in result.generatedCSharp, result.generatedCSharp)
-    assertFalse("litterLater" in result.generated, "no Kotlin export; got: ${result.generated}")
+  fun `a value class with no unbox pair at a suspend return completes on its underlying wire`() {
+    assertTrue(result.kspWarnings.none { it.contains("litterLater") }, "${result.kspWarnings}")
+    assertTrue("LitterLaterAsync" in result.generatedCSharp, result.generatedCSharp)
+    // ADR-240: `Litter` has its own box pair now, so the awaited result reads through it.
+    assertTrue("Litter.NugetUnbox" in result.generatedCSharp, result.generatedCSharp)
+    assertTrue("litterLater" in result.generated, "no Kotlin export; got: ${result.generated}")
   }
 
   /**

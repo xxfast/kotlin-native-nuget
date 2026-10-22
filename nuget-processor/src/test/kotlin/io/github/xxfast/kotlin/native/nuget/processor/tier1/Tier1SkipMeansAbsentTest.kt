@@ -218,18 +218,16 @@ class Tier1SkipMeansAbsentTest {
           "generatedCSharp=${result.generatedCSharp}",
     )
 
-    // A declared `MutableStateFlow<ByteArray>` keeps the READ-ONLY mapping: the ADR-071 write seam
-    // spells its native setter with the element's own C# type, and `byte[]` is not a value the
-    // ABI can carry -- it needs a minted bytes handle nothing on that path produces.
+    // ADR-240: a declared `MutableStateFlow<ByteArray>` is settable: the write seam mints the bytes
+    // handle for the call (`NugetMarshal.CreateBytes`) and releases it after.
     assertTrue(
-      "public KotlinStateFlow<byte[]> Beacon" in result.generatedCSharp,
-      "expected the read-only StateFlow mapping for a MutableStateFlow<ByteArray>; " +
+      "public KotlinMutableStateFlow<byte[]> Beacon" in result.generatedCSharp,
+      "expected the settable mapping for a MutableStateFlow<ByteArray> (ADR-240); " +
           "generatedCSharp=${result.generatedCSharp}",
     )
     assertTrue(
-      "KotlinMutableStateFlow<byte[]>" !in result.generatedCSharp,
-      "a bytes element must not reach the settable .Value seam; " +
-          "generatedCSharp=${result.generatedCSharp}",
+      "NugetMarshal.CreateBytes(v)" in result.generatedCSharp,
+      "a bytes write must mint its handle; generatedCSharp=${result.generatedCSharp}",
     )
   }
 }

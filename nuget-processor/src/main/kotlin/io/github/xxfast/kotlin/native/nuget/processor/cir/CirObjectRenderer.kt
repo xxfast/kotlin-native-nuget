@@ -101,6 +101,9 @@ private fun StringBuilder.renderReferenceValueClass(cls: CirValueClass) {
     "${cls.name}$typeParameters(${cls.underlyingType} ${cls.underlyingName})$generic"
   appendLine("    public readonly record struct $header")
   appendLine("    {")
+  // ADR-240: a bytes or collection payload compares by content.
+  cls.contentEquality.forEach { line -> appendLine("        $line") }
+  if (cls.contentEquality.isNotEmpty()) appendLine()
 
   cls.constructors.forEach { ctor ->
     val paramStr: String = renderValueClassCreateChecked(cls, ctor)
@@ -194,6 +197,10 @@ private fun StringBuilder.renderValueClassBoxing(cls: CirValueClass) {
     renderGenericValueClassBoxing(cls, boxing)
     return
   }
+  if (boxing.boxBody != null) {
+    renderWireValueClassBoxing(cls, boxing, requireNotNull(boxing.unboxBody))
+    return
+  }
   val wire: String = boxing.unboxImport.returnType
   renderDllImport(boxing.boxImport)
   renderDllImport(boxing.unboxImport)
@@ -238,6 +245,40 @@ private fun StringBuilder.renderValueClassBoxing(cls: CirValueClass) {
   appendLine("                boxed.Dispose();")
   appendLine("            }")
   appendLine("            return ${boxing.unboxResult};")
+  appendLine("        }")
+  appendLine()
+}
+
+/**
+ * ADR-240: an ADR-235 WIRE struct's pair, each body the ordinary route's own. `NugetUnbox` owns
+ * the incoming box and disposes it whether or not the read succeeds.
+ */
+private fun StringBuilder.renderWireValueClassBoxing(
+  cls: CirValueClass,
+  boxing: CirValueClassBoxing,
+  unboxBody: String,
+) {
+  renderDllImport(boxing.boxImport)
+  renderDllImport(boxing.unboxImport)
+  appendLine("        internal static IntPtr NugetBox(${cls.name} ${boxing.boxParameter})")
+  appendLine("        {")
+  appendLine(requireNotNull(boxing.boxBody))
+  appendLine("        }")
+  appendLine()
+  appendLine("        internal static ${cls.name} NugetUnbox(IntPtr boxed)")
+  appendLine("            => NugetUnbox(new NugetKotlinHandle(boxed));")
+  appendLine()
+  appendLine("        internal static ${cls.name} NugetUnbox(NugetKotlinHandle boxedHandle)")
+  appendLine("        {")
+  appendLine("            IntPtr boxed = boxedHandle.DangerousGetHandle();")
+  appendLine("            try")
+  appendLine("            {")
+  unboxBody.lines().forEach { line -> appendLine("    $line") }
+  appendLine("            }")
+  appendLine("            finally")
+  appendLine("            {")
+  appendLine("                boxedHandle.Dispose();")
+  appendLine("            }")
   appendLine("        }")
   appendLine()
 }

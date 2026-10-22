@@ -34,7 +34,9 @@ internal fun FileSpec.Builder.addFlowArgumentExports(
     val flowType: TypeName = ClassName("kotlinx.coroutines.flow", argument.kind.kotlinName)
       .parameterizedBy(argument.element.toBridgeTypeName())
     val boxed: String =
-      itemBoxExpr(argument.element.isMarkedNullable, argument.collection, argument.envelope)
+      itemBoxExpr(
+        argument.element.isMarkedNullable, argument.collection, argument.envelope, argument.wire,
+      )
     val owner: ForwardExportOwnerTag =
       ownedBy(argument.owner, "flow type argument: ${argument.elementKotlinSpelling}")
     if (argument.kind == ForwardFlowArgumentKind.STATE_FLOW) {

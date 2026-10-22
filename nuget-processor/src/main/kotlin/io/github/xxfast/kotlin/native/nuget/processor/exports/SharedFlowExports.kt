@@ -16,6 +16,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.sharedFlowSurface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.collectionResultProjection
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyFlowElementShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementWire
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyWireBox
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementEnvelope
 
@@ -49,7 +52,11 @@ private fun replayItemExpr(
   elementNullable: Boolean,
   collection: BridgeType.Collection?,
   envelope: Boolean,
+  // ADR-240: a wire element replays on its result wire.
+  wire: ForwardLegacyFlowElementShape.Wire? = null,
 ): String = when {
+  wire != null && elementNullable -> "if (value != null) ${wire.legacyWireBox("value")} else null"
+  wire != null -> wire.legacyWireBox("value")
   envelope && elementNullable -> "if (value != null) buildError(value, ::nugetMappedType) else null"
   envelope -> "buildError(value, ::nugetMappedType)"
   elementNullable -> "value"
@@ -67,6 +74,7 @@ internal fun ForwardBridgeTypeClassifier.replayCacheExpression(
     elementNullable = element?.isMarkedNullable == true,
     collection = legacyFlowElementCollection(flowType),
     envelope = legacyFlowElementEnvelope(flowType),
+    wire = legacyFlowElementWire(flowType),
   )
   return "NugetHandles.retain($flow.replayCache.map { value -> $item })"
 }
