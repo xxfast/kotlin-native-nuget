@@ -5275,7 +5275,13 @@ internal fun translateValueClass(
   // planned `_create` -- the exact one-sided ABI the contract check then failed on.
   val isEnumUnderlying: Boolean =
     (underlyingResolved.declaration as? KSClassDeclaration)?.classKind == ClassKind.ENUM_CLASS
-  val underlyingNativeType: String = if (isEnumUnderlying) "int" else mapParamType(underlyingType)
+  // A `String?` underlying (`Nick(val name: String?)`) passes its receiver on the nullable string
+  // wire, since the struct's `Name` is a `string?`.
+  val underlyingNativeType: String = when {
+    isEnumUnderlying -> "int"
+    underlyingType == "String" && underlyingResolved.isMarkedNullable -> "string?"
+    else -> mapParamType(underlyingType)
+  }
   val isReferenceUnderlying: Boolean =
     !isEnumUnderlying && underlyingType !in KOTLIN_TO_CSHARP_PARAM
 
@@ -5379,7 +5385,10 @@ internal fun translateValueClass(
     name, "value class $name", cls, valueClassNames, KotlinSpellings.ofClass(cls), logger,
   )
 
-  val csUnderlyingType: String = qualifiedElementCsType(underlyingResolved, context)
+  // A nullable underlying (`TreatCount(val count: Int?)`) keeps its `?`: `int Count` cannot hold
+  // the `int?` its constructor returns.
+  val csUnderlyingType: String =
+    qualifiedElementCsType(underlyingResolved, context, nullable = underlyingResolved.isMarkedNullable)
 
   // ADR-229: the receiver slot of the static suspend route is the same wire the sync members pass.
   val asyncMembers: List<CirMember> = staticSuspend(

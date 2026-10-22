@@ -642,6 +642,12 @@ private fun elementKotlinTypeName(type: BridgeType): String = when (type) {
     -> error("Forward Kotlin plan emitter has no element type name for $type")
 }
 
+/** A value class underlying's cast target in a collection box: a nullable underlying
+ *  (`Nick(val name: String?)`) casts to the nullable spelling of its own type. */
+private fun underlyingElementTypeName(underlying: BridgeType): String =
+  if (underlying is BridgeType.Nullable) "${elementKotlinTypeName(underlying.type)}?"
+  else elementKotlinTypeName(underlying)
+
 /**
  * ADR-081: one component of an incoming collection, cast out of the `Any?` box and, for a value
  * class, re-wrapped. The box never holds the value class itself: the C# call site projected it to
@@ -700,7 +706,24 @@ internal fun componentLowering(
     is BridgeType.Unsupported,
     is BridgeType.RawCollection,
     is BridgeType.TypeParameter,
-      -> "${type.qualifiedName}($name as ${elementKotlinTypeName(underlying)})"
+      -> "${type.qualifiedName}($name as ${underlyingElementTypeName(underlying)})"
+  }
+
+  // A nullable value class over a nullable underlying (`Nick?` over `String?`) arrived as the
+  // value class's own box handle, so the box already holds the value class: `null` and `Nick(null)`
+  // stay apart. A generic one is read back through its star projection and re-wrapped over its
+  // checked underlying, since the element's own type arguments have no erased spelling here.
+  is BridgeType.Nullable if type.boxedValueClassComponent() != null -> {
+    val valueClass: BridgeType.ValueClass = requireNotNull(type.boxedValueClassComponent())
+    if (valueClass.typeArguments.isEmpty()) {
+      "$name as ${valueClass.qualifiedName}?"
+    } else {
+      val star: String = valueClass.typeArguments.joinToString(", ", "<", ">") { "*" }
+      val parameter: String = letParameter(depth)
+      "($name as ${valueClass.qualifiedName}$star?)?.let { $parameter -> " +
+          "${valueClass.qualifiedName}($parameter.${valueClass.underlyingPropertyName} as " +
+          "${underlyingElementTypeName(valueClass.underlying)}) }"
+    }
   }
 
   // ADR-083: a null component arrived as the null pointer and is already `null` in the `Any?` box,
@@ -898,6 +921,7 @@ private fun componentRaising(name: String, type: BridgeType, depth: Int = 0): St
     return if (type is BridgeType.Nullable) "$name?.let { buildError(it, ::nugetMappedType) }"
     else "buildError($name, ::nugetMappedType)"
   }
+  if (type.boxedValueClassComponent() != null) return name
   if (type.componentEnum() != null) return "$name${dot}ordinal"
   val valueClass: BridgeType.ValueClass = type.componentValueClass() ?: return name
   return "$name$dot${valueClass.underlyingPropertyName}" +

@@ -153,22 +153,30 @@ private fun StringBuilder.renderValueClassCreateChecked(
   // supplied one ((int)mood for an enum parameter); public and wire coincide otherwise.
   val nativeArgs: String = ctor.nativeArguments?.joinToString(", ") ?: paramNames
   val nativeReturnType: String =
-    if (cls.underlyingType == "string") "IntPtr" else cls.underlyingNativeType
+    if (cls.underlyingType.removeSuffix("?") == "string") "IntPtr" else cls.underlyingNativeType
   val suffix: String = ctor.nativeSuffix
+  // A nullable value-type underlying returns its has-value flag and writes the value out.
+  val valueOut: CirParameter? = ctor.valueOut
+  val helperType: String = if (valueOut == null) nativeReturnType else "${valueOut.type}?"
+  val call: String = if (valueOut == null) {
+    "$nativeReturnType underlying = Native_Create$suffix($nativeArgs, out IntPtr error);"
+  } else {
+    "bool hasValue = Native_Create$suffix($nativeArgs, ${valueOut.nativeType} ${valueOut.name}, " +
+        "out IntPtr error);"
+  }
+  val returned: String =
+    if (valueOut == null) "underlying" else "hasValue ? ${valueOut.name} : null"
 
   renderDllImport(cls.constructorNativeImport(ctor))
-  appendLine("        private static $nativeReturnType CreateChecked$suffix($paramStr)")
+  appendLine("        private static $helperType CreateChecked$suffix($paramStr)")
   appendLine("        {")
-  appendLine(
-    "            $nativeReturnType underlying = " +
-        "Native_Create$suffix($nativeArgs, out IntPtr error);",
-  )
+  appendLine("            $call")
   appendLine("            if (error != IntPtr.Zero)")
   appendLine("            {")
   appendLine("                throw NugetErrorNative.BuildException(error);")
   appendLine("            }")
   appendLine("            NugetErrorNative.ClearManagedFault();")
-  appendLine("            return underlying;")
+  appendLine("            return $returned;")
   appendLine("        }")
   appendLine()
   return paramStr

@@ -265,15 +265,21 @@ internal fun CirValueClass.constructorNativeImport(ctor: CirValueClassConstructo
   CirDllImport(
     libraryName = libraryName,
     entryPoint = ctor.nativeName,
-    returnType = if (underlyingType == "string") "IntPtr" else underlyingNativeType,
+    returnType = when {
+      ctor.valueOut != null -> "bool"
+      underlyingType.removeSuffix("?") == "string" -> "IntPtr"
+      else -> underlyingNativeType
+    },
     name = "Native_Create${ctor.nativeSuffix}",
     // ADR-077: the plan-projected wire shape (an enum parameter imports as `int`, its ordinal).
     // Every value-class constructor is plan-routed since the reference-underlying legacy adapter
     // was deleted, so `nativeParameters` is only absent on a hand-built CIR fixture.
-    parameters = ctor.nativeParameters
-      ?: ctor.parameters.map { parameter ->
-        parameter.copy(name = parameter.nativeName, nativeType = parameter.type)
-      },
+    parameters = (
+      ctor.nativeParameters
+        ?: ctor.parameters.map { parameter ->
+          parameter.copy(name = parameter.nativeName, nativeType = parameter.type)
+        }
+      ) + listOfNotNull(ctor.valueOut),
     visibility = CirVisibility.PRIVATE,
     // Unconditional, because `renderValueClass` calls `Native_Create` with `out IntPtr error`
     // unconditionally: every value-class constructor is planned with `includeError = true`.

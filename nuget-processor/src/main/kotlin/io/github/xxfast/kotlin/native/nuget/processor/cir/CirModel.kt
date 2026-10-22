@@ -399,6 +399,12 @@ internal data class CirValueClassConstructor(
    * ADR-035 leaves that surface to the positional record header (a hand-written twin is CS0111).
    */
   val doc: CirDoc? = null,
+  /**
+   * The has-value `valueOut` slot of a nullable value-type underlying (`TreatCount(val count: Int?)`):
+   * the export returns `bool` and writes the value through it, as every nullable primitive result
+   * does. Null for every other underlying, whose result is the underlying's own wire.
+   */
+  val valueOut: CirParameter? = null,
 )
 
 internal data class CirEnum(
