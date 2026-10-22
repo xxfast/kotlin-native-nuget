@@ -1,6 +1,8 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticFlowGetter
+import com.google.devtools.ksp.getAllSuperTypes
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardKotlinDeclaredSpelling
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementEnvelope
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMemberGenericRefusal
 import io.github.xxfast.kotlin.native.nuget.processor.forward.asyncTypeParameterNames
@@ -36,6 +38,7 @@ import com.squareup.kotlinpoet.TypeName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.MUTABLE_STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.SHARED_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.MutableStateFlowElement
 import io.github.xxfast.kotlin.native.nuget.processor.cir.writableMutableStateFlowElement
@@ -250,6 +253,40 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
       )
       .build()
   )
+
+  // ADR-233: a hot flow's own handle, which its member-built C# wrapper mints when it is handed
+  // back to Kotlin through a C#-implemented interface slot.
+  if (propType in STATE_FLOW_TYPES || propType in SHARED_FLOW_TYPES) {
+    addFunction(
+      FunSpec.builder("export_${prefix}_get_${propName}_flow")
+        .addAnnotation(cNameAnnotation("${prefix}_get_${propName}_flow", ownedBy(prop)))
+        .addParameter("handle", cOpaquePointer)
+        .returns(cOpaquePointer.copy(nullable = true))
+        .addCode(
+          "return (handle.asStableRef<$qualifiedName>().get().$propCall as Any?)" +
+            "?.let { NugetHandles.retain(it) }\n",
+        )
+        .build(),
+    )
+  }
+
+  // ADR-233: a cold `Flow` `var` takes the Kotlin flow a `KotlinFlow<T>` wraps, as its handle.
+  if (prop.takesFlowSetter()) {
+    val flowType: String = propTypeResolved.forwardKotlinDeclaredSpelling()
+    val read: String = if (memberNullable) {
+      "value?.asStableRef<Any>()?.get() as $flowType"
+    } else {
+      "value!!.asStableRef<Any>().get() as $flowType"
+    }
+    addFunction(
+      FunSpec.builder("export_${prefix}_set_${propName}")
+        .addAnnotation(cNameAnnotation("${prefix}_set_${propName}", ownedBy(prop)))
+        .addParameter("handle", cOpaquePointer)
+        .addParameter("value", cOpaquePointer.copy(nullable = true))
+        .addCode("handle.asStableRef<$qualifiedName>().get().$propCall = $read\n")
+        .build(),
+    )
+  }
 
   // ADR-209: a SharedFlow's `ReplayCache`, and a writable MutableSharedFlow's write surface.
   addSharedFlowPropertyExports(
@@ -1217,3 +1254,26 @@ internal fun FunSpec.flowTrampolined(
 private fun List<ForwardLegacyParameterShape>.castsGenericBound(): Boolean =
   filterIsInstance<ForwardLegacyParameterShape.Boxed>()
     .any { shape -> !shape.type.trampolined && shape.type.legacyBounds().any { '<' in it } }
+
+/**
+ * ADR-233: a public `var` of a cold `Flow<T>` on a non-generic owner takes a setter: C# hands the
+ * Kotlin flow its `KotlinFlow<T>` wraps, and a C#-made flow, which wraps none, is refused at the
+ * call with an `ArgumentException`, the rule a hot-flow slot already follows.
+ */
+internal fun KSPropertyDeclaration.takesFlowSetter(): Boolean {
+  val owner: KSClassDeclaration = parentDeclaration as? KSClassDeclaration ?: return false
+  val flow: String? = type.resolve().expandAliases().declaration.qualifiedName?.asString()
+  val hidden: Set<Modifier> = setOf(
+    Modifier.PRIVATE,
+    Modifier.INTERNAL,
+    Modifier.PROTECTED,
+  )
+  val sealedParent: Boolean =
+    (owner.parentDeclaration as? KSClassDeclaration)?.modifiers?.contains(Modifier.SEALED) == true
+  val sealedBelow: Boolean =
+    owner.getAllSuperTypes().any { type -> Modifier.SEALED in type.declaration.modifiers }
+  return isMutable && setter?.modifiers.orEmpty().none { modifier -> modifier in hidden } &&
+    owner.typeParameters.isEmpty() && Modifier.SEALED !in owner.modifiers &&
+    !sealedParent && !sealedBelow &&
+    flow == "kotlinx.coroutines.flow.Flow"
+}

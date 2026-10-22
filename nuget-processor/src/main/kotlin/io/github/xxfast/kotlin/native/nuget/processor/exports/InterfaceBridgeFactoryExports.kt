@@ -28,6 +28,10 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.endThunkParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.asyncThunks
 import io.github.xxfast.kotlin.native.nuget.processor.forward.flowSource
 import io.github.xxfast.kotlin.native.nuget.processor.forward.flowSourceExpression
+import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.collectionResultProjection
+import io.github.xxfast.kotlin.native.nuget.processor.forward.loweredCollectionExpression
+import io.github.xxfast.kotlin.native.nuget.processor.forward.unwrapNullable
 
 /**
  * ADR-084 stage 1: the per-interface bridge factory export (`pet_bridge_create`).
@@ -49,6 +53,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.flowSourceExpressi
  * owner, one dispose). A String *result* is minted by C# (`nuget_wrap_string`) and disposed here.
  */
 internal fun FileSpec.Builder.addInterfaceBridgeFactoryExport(plan: ForwardBridgeInterfacePlan) {
+  if (plan.slots.boxesTicks()) addImport(RUNTIME, "toDotNetTicks")
   val body: String = buildString {
     appendLine("return try {")
     plan.slots.forEach { slot ->
@@ -278,7 +283,9 @@ private fun StringBuilder.appendFlowRead(slot: ForwardBridgeSlot, call: String, 
     holder = holder,
     csharpKey = key,
   )
-  appendLine("${indent}val $key: COpaquePointer = $call!!")
+  // ADR-233: a nullable flow is the null key.
+  if (slot.result.nullable) appendLine("${indent}val $key: COpaquePointer = $call ?: return null")
+  else appendLine("${indent}val $key: COpaquePointer = $call!!")
   appendLine("${indent}val $holder = ${asyncCallbackHolderConstruction(slots)}")
   val flow: String = flowSourceExpression(slot.name, slot.flowSource(), slots, holderBuilt = true)
   val cast: String = if (slot.element?.typeParameter == true) " as ${slot.result.kotlin}" else ""
@@ -297,10 +304,14 @@ private fun StringBuilder.appendArgumentRefs(slot: ForwardBridgeSlot, indent: St
         if (parameter.type.throwable != null) "buildError($value, ::nugetMappedType)"
         else "$value as Any"
       }
-      val line: String = if (parameter.type.nullable) {
-        "$reference?.let { NugetHandles.retain(${boxed("it")}) }"
-      } else {
-        "NugetHandles.retain(${boxed(reference)})"
+      // ADR-233: a boxed slot hands C# the value the plan's own result projection would.
+      val box: BridgeType? = parameter.type.boxed
+      val line: String = when {
+        box != null && box is BridgeType.Nullable ->
+          "$reference?.let { NugetHandles.retain(${boxOut(box.type, "it")} as Any) }"
+        box != null -> "NugetHandles.retain(${boxOut(box, reference)} as Any)"
+        parameter.type.nullable -> "$reference?.let { NugetHandles.retain(${boxed("it")}) }"
+        else -> "NugetHandles.retain(${boxed(reference)})"
       }
       appendLine("${indent}val arg${index}Ref = $line")
     }
@@ -363,6 +374,19 @@ private fun StringBuilder.appendResultMarshalling(
         appendLine("${indent}return value")
         return
       }
+      // ADR-233: a boxed result is an owned box C# minted, read with the plan's own lowering.
+      val box: BridgeType? = slot.result.boxed
+      if (box != null) {
+        if (box is BridgeType.Nullable) {
+          appendLine("${indent}val ref = $call ?: return null")
+        } else {
+          appendLine("${indent}val ref = $call!!")
+        }
+        appendLine("${indent}val value = ${boxIn(box.unwrapNullable(), "ref", slot.result.kotlin.removeSuffix("?"))}")
+        appendLine("${indent}NugetHandles.release(ref)")
+        appendLine("${indent}return value")
+        return
+      }
       // ADR-084: the null String slot is the null pointer; `IntPtr.Zero` never means "empty".
       if (slot.result.nullable) {
         appendLine("${indent}val ref = $call ?: return null")
@@ -385,3 +409,83 @@ private fun StringBuilder.appendResultMarshalling(
     else -> appendLine("${indent}return $call")
   }
 }
+
+/**
+ * ADR-233: a non-null Kotlin value of [type] as the object its box holds, exactly what a class
+ * member's result of that type boxes: a collection with its components projected (ADR-081), an
+ * `Instant` or `Duration` as its .NET ticks, a `Uuid` as its text, everything else as itself.
+ */
+private fun boxOut(type: BridgeType, value: String): String = when (type) {
+  BridgeType.Instant, BridgeType.Duration -> "$value.toDotNetTicks()"
+  BridgeType.Uuid -> "$value.toString()"
+  is BridgeType.Collection -> collectionResultProjection(value, type)
+  is BridgeType.Nullable -> "$value?.let { ${boxOut(type.type, "it")} }"
+  is BridgeType.Primitive,
+  BridgeType.Char,
+  BridgeType.String,
+  is BridgeType.Enum,
+  is BridgeType.ObjectHandle,
+  is BridgeType.Interface,
+  is BridgeType.BoundInterface,
+  is BridgeType.ValueClass,
+  BridgeType.ByteArray,
+  is BridgeType.TypeParameter,
+  BridgeType.Unit,
+  is BridgeType.Throwable,
+  is BridgeType.Callback,
+  is BridgeType.AsyncCallback,
+  is BridgeType.FlowSource,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+    -> value
+}
+
+/**
+ * ADR-233: the non-null Kotlin value of [type] the box at [ref] holds, read exactly as a class
+ * member's parameter of that type reads it; [kotlin] is the declared spelling.
+ */
+private fun boxIn(type: BridgeType, ref: String, kotlin: String): String {
+  val raw = "$ref.asStableRef<Any>().get()"
+  return when (type) {
+    BridgeType.Instant -> "$RUNTIME.instantFromDotNetTicks($raw as Long)"
+    BridgeType.Duration -> "$RUNTIME.durationFromDotNetTicks($raw as Long)"
+    BridgeType.Uuid -> "kotlin.uuid.Uuid.parse($raw as String)"
+    is BridgeType.Collection -> "(${loweredCollectionExpression(ref, type)}) as $kotlin"
+    is BridgeType.Primitive,
+    BridgeType.Char,
+    BridgeType.String,
+    is BridgeType.Enum,
+    is BridgeType.ObjectHandle,
+    is BridgeType.Interface,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    BridgeType.ByteArray,
+    is BridgeType.Nullable,
+    is BridgeType.TypeParameter,
+    BridgeType.Unit,
+    is BridgeType.Throwable,
+    is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+      -> "$raw as $kotlin"
+  }
+}
+
+/** ADR-233: whether a slot of [slots] boxes an `Instant` or `Duration`, which need an import. */
+internal fun List<ForwardBridgeSlot>.boxesTicks(): Boolean =
+  flatMap { slot -> slot.parameters.map { it.type } + slot.result }
+    .mapNotNull { type -> type.boxed }
+    .any { box -> box.mentionsTicks() }
+
+private fun BridgeType.mentionsTicks(): Boolean =
+  this == BridgeType.Instant || this == BridgeType.Duration ||
+    (this is BridgeType.Nullable && type.mentionsTicks()) ||
+    (this is BridgeType.Collection && listOfNotNull(element, key, value).any { it.mentionsTicks() })

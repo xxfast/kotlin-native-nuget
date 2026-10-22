@@ -42,6 +42,8 @@ class Tier1FunctionTypeDiagnosticSpellingTest {
       val held: suspend (Int) -> String
       val heldNullable: (suspend (Int) -> String)?
       val heldPlain: (Int) -> String
+      fun pairNullable(prepare: (suspend (Int) -> Pair<Int, Int>)?): Int
+      fun pairPlainNullable(prepare: ((Int) -> Pair<Int, Int>)?): Int
     }
 
     class Holder { fun take(pet: Pet) = Unit }
@@ -121,12 +123,11 @@ class Tier1FunctionTypeDiagnosticSpellingTest {
     val line: String =
       diagnostic(ForwardDiagnosticKind.SKIPPED_UNIMPLEMENTABLE_INTERFACE, "tier1.spelling.Pet")
 
+    // ADR-233: a suspend lambda parameter of any arity bridges, nullable too (ADR-239), so the
+    // one named carries a `Pair` result the callback vocabulary refuses.
+    assertFalse("`fun nullable` " in line, line)
     listOf(
-      "`fun arityZero` takes `prepare: suspend () -> String`,",
-      "`fun arityOne` takes `prepare: suspend (Int) -> String`,",
-      "`fun arityTwo` takes `prepare: suspend (Int, Int) -> String`,",
-      "`fun arityThree` takes `prepare: suspend (Int, Int, Int) -> String`,",
-      "`fun nullable` takes `prepare: (suspend (Int) -> String)?`,",
+      "`fun pairNullable` takes `prepare: (suspend (Int) -> Pair<Int, Int>)?`,",
     ).forEach { expected -> assertContains(line, expected) }
   }
 
@@ -149,9 +150,11 @@ class Tier1FunctionTypeDiagnosticSpellingTest {
     val line: String =
       diagnostic(ForwardDiagnosticKind.SKIPPED_UNIMPLEMENTABLE_INTERFACE, "tier1.spelling.Pet")
 
+    // ADR-233: a plain lambda bridges in and out, nullable too (ADR-236), so the one named
+    // carries a `Pair` result the callback vocabulary refuses.
+    assertFalse("`fun plainNullable` " in line, line)
     listOf(
-      "`fun plain` takes `prepare: (Int) -> String`,",
-      "`fun plainNullable` takes `prepare: ((Int) -> String)?`,",
+      "`fun pairPlainNullable` takes `prepare: ((Int) -> Pair<Int, Int>)?`,",
     ).forEach { expected -> assertContains(line, expected) }
     assertFalse("`fun handsOutPlain` " in line, line)
   }

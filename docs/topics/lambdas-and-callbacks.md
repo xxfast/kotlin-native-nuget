@@ -186,6 +186,9 @@ private sealed class Pompom(string shaker) : IChanter
 CheersquadSample.Rally(new Pompom("Oreo"), "Mylo"); // "Oreo shakes for Mylo"
 ```
 
+A Kotlin lambda such a member receives as a parameter is a `Func<>`/`Action<>` too, see
+[every member shape](interfaces-abstract-sealed.md#implementing-every-member-shape).
+
 ### Migrating from `KotlinFunc` {id="migrating-from-kotlinfunc-properties"}
 
 Lambda properties and returned lambdas used to be `KotlinFunc<..>`, `KotlinAction<..>` and

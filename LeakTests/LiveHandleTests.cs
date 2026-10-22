@@ -56,6 +56,7 @@ using Zoomrun = TestLibrary.Zoomrun;
 using Cheersquad = TestLibrary.Cheersquad;
 using Purrclock = TestLibrary.Purrclock;
 using Feedingtime = TestLibrary.Feedingtime;
+using Catsitter = TestLibrary.Catsitter;
 
 namespace LeakTests;
 
@@ -7726,5 +7727,177 @@ public class LiveHandleTests
             using var pantry = new LeakPantry();
             Assert.Equal("kibble, tuna", await Feedingtime.Feeders.UnpackAsync(pantry));
         });
+    }
+
+    // A C#-implemented `ISitter` for the ADR-233 rows, here and in `CollectabilityTests`. Every slot
+    // kind that carries a handle answers with a fresh one, so a handle the bridge minted and never
+    // released is a positive delta. `Fault` makes the handle and collection slots throw.
+    internal sealed class LeakSitter : Catsitter.ISitter
+    {
+        public Exception? Fault;
+
+        public Catsitter.Kitten Adopt(string name) => Fault != null ? throw Fault : new Catsitter.Kitten(name);
+        public string Cuddle(Catsitter.Kitten kitten) => Fault != null ? throw Fault : kitten.Name;
+        public Catsitter.Kitten? Foster(Catsitter.Kitten? kitten) => kitten == null ? null : new Catsitter.Kitten(kitten.Name);
+        public Catsitter.Crate<string> Pack(string item) => new(item);
+        public int Unpack(Catsitter.Crate<int> crate) => crate.Item;
+        public IReadOnlyList<string> Names() => Fault != null ? throw Fault : ["Oreo", "Mylo"];
+        public int Weigh(IReadOnlyDictionary<string, int> weights) => weights.Count;
+        public IReadOnlySet<string> Litter(IReadOnlyList<Catsitter.Kitten> kittens) =>
+            kittens.Select(kitten => kitten.Name).ToHashSet();
+        public Catsitter.Whisker Trim(Catsitter.Whisker whisker) => whisker;
+        public int? Treats(string cat) => null;
+        public bool? Indoor(string cat) => true;
+        public Catsitter.Coat? Coat(string cat) => Catsitter.Coat.Caramel;
+        public char Initial(string cat) => cat[0];
+        public DateTimeOffset LastFed(DateTimeOffset at) => at;
+        public TimeSpan Nap(TimeSpan length) => length;
+        public Guid Chip(Guid id) => id;
+        public byte[] Photo(byte[] snapshot) => snapshot;
+        public int OnPurr(Func<string, int> callback) => callback("Oreo");
+        public Func<int, string> Purrer() => times => $"purr x{times}";
+        public Task<int> WhenHungryAsync(
+            Func<string, CancellationToken, Task<int>> callback, CancellationToken cancellationToken = default) =>
+            callback("Mylo", cancellationToken);
+        public Catsitter.ITrinket<string> Favourite() => Fault != null ? throw Fault : Catsitter.Sitters.Bauble("tuna");
+        public string Groom(string cat, int strokes, double minutes, bool gentle) => cat;
+        public void Dispose() { }
+        public ValueTask DisposeAsync() => default;
+    }
+
+    // A C#-implemented `ITracker` whose flows carry a handle, an enum, a nullable string and a value
+    // class. `Bolt` makes the handle flow fault after its first element.
+    internal sealed class LeakLookout : Catsitter.ITracker
+    {
+        public bool Bolt;
+        public Catsitter.Kitten Oreo = null!;
+
+        public KotlinFlow<Catsitter.Kitten> Kittens() =>
+            KotlinFlow<Catsitter.Kitten>.From(Bolt ? KittensThenBolt() : Each(new Catsitter.Kitten("Oreo")));
+        public KotlinFlow<Catsitter.Coat> Coats() => KotlinFlow<Catsitter.Coat>.From(Each(Catsitter.Coat.Tuxedo));
+        public KotlinFlow<string?> Sightings() => KotlinFlow<string?>.From(Each<string?>(null, "Mylo"));
+        public KotlinFlow<Catsitter.Whisker> Whiskers() => KotlinFlow<Catsitter.Whisker>.From(Each(new Catsitter.Whisker(2)));
+        public KotlinFlow<string> Feed { get; set; } = KotlinFlow<string>.From(Each("kibble"));
+        public KotlinFlow<string>? Maybe() => KotlinFlow<string>.From(Each("tuna"));
+        public KotlinMutableStateFlow<int> MoodFlow { get; } = KotlinMutableStateFlow<int>.Create(7);
+        public KotlinStateFlow<int>? Mood => MoodFlow;
+        public Task<KotlinStateFlow<int>> LevelAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<KotlinStateFlow<int>>(MoodFlow);
+        public void Dispose() => MoodFlow.Dispose();
+        public ValueTask DisposeAsync()
+        {
+            Dispose();
+            return default;
+        }
+
+        private static async IAsyncEnumerable<T> Each<T>(params T[] items)
+        {
+            foreach (T item in items)
+            {
+                await Task.Yield();
+                yield return item;
+            }
+        }
+
+        private static async IAsyncEnumerable<Catsitter.Kitten> KittensThenBolt(
+            [EnumeratorCancellation] CancellationToken token = default)
+        {
+            await Task.Delay(1, token);
+            yield return new Catsitter.Kitten("Oreo");
+            throw new InvalidOperationException("Mylo bolted");
+        }
+    }
+
+    // Row 20a. ADR-233: every handle-carrying slot kind of a C#-implemented interface, completing.
+    // A class handle returned (`WrapOwned` through the retain export) and passed (borrowed), a
+    // nullable handle, a generic handle each way, collections of strings and handles, a Kotlin
+    // lambda in, a C# lambda out, a suspend lambda, a generic interface result, and `Uuid` and
+    // `ByteArray` buffers. A handle a slot minted and never released is a positive delta.
+    [Fact]
+    public async Task CSharpInterfaceSlotVocabulary_Completion_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var sitter = new LeakSitter();
+            Assert.Equal("Oreo purrs", Catsitter.Sitters.Adoption(sitter, "Oreo"));
+            Assert.Equal("Mylo", Catsitter.Sitters.Cuddling(sitter, "Mylo"));
+            Assert.Equal("Oreo/null", Catsitter.Sitters.Fostering(sitter, "Oreo"));
+            Assert.Equal("tuna/3", Catsitter.Sitters.Crating(sitter, "tuna", 3));
+            Assert.Equal("names=Oreo, Mylo; weight=2; litter=Mylo, Oreo", Catsitter.Sitters.Census(sitter));
+            Assert.Contains("photo=1,2,3", Catsitter.Sitters.Records(sitter));
+            Assert.Equal("40/purr x3", Catsitter.Sitters.Purring(sitter));
+            Assert.Equal(104, await Catsitter.Sitters.HungerPangsAsync(sitter));
+            Assert.Equal("favourite tuna", Catsitter.Sitters.Treasure(sitter));
+        });
+    }
+
+    // Row 20b. The FAULT rows: a C# throw from a handle-returning slot, a passed-handle slot, a
+    // collection slot and a generic-interface slot, each caught in Kotlin or surfacing to C#.
+    [Fact]
+    public async Task CSharpInterfaceSlotVocabulary_Fault_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(() =>
+        {
+            using var sitter = new LeakSitter { Fault = new InvalidOperationException("Oreo hid") };
+            Assert.Contains("Oreo hid", Catsitter.Sitters.AdoptionOrRecover(sitter, "Oreo"));
+            Assert.Contains("Oreo hid", Catsitter.Sitters.CensusOrRecover(sitter));
+            Assert.Contains("Oreo hid", Assert.ThrowsAny<Exception>(() => Catsitter.Sitters.Cuddling(sitter, "Oreo")).ToString());
+            Assert.Contains("Oreo hid", Assert.ThrowsAny<Exception>(() => Catsitter.Sitters.Treasure(sitter)).ToString());
+            return Task.CompletedTask;
+        });
+    }
+
+    // Row 20c. ADR-233 flow slots, completing: flows of a handle, an enum, a nullable string and a
+    // value class collected to the end, a flow `var` replaced by Kotlin, nullable flows, and a
+    // suspend member returning a hot flow.
+    [Fact]
+    public async Task CSharpInterfaceFlowSlots_Completion_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var lookout = new LeakLookout();
+            Assert.Equal(
+                "kittens=Oreo; coats=TUXEDO; sightings=null, Mylo; whiskers=2",
+                await Catsitter.Sitters.SightingsAsync(lookout));
+            Assert.Equal("kibble -> salmon", await Catsitter.Sitters.RefeedAsync(lookout, "salmon"));
+            Assert.Equal("maybe=tuna mood=7", await Catsitter.Sitters.MaybesAsync(lookout));
+            Assert.Equal(7, await Catsitter.Sitters.LevellingAsync(lookout));
+        });
+    }
+
+    // Row 20d. The FAULT row for flow slots: a handle flow faulting after one element was minted.
+    [Fact]
+    public async Task CSharpInterfaceFlowSlots_Fault_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var lookout = new LeakLookout { Bolt = true };
+            Exception fault = await Assert.ThrowsAnyAsync<Exception>(() => Catsitter.Sitters.SightingsAsync(lookout));
+            Assert.Contains("Mylo bolted", fault.ToString());
+        });
+    }
+
+    // Row 20e. ADR-233: `KotlinMutableStateFlow<T>.Create` and `KotlinMutableSharedFlow<T>.Create`
+    // own the scope handle they mint, and `Dispose` releases it. Measured without a GC or a settle
+    // on purpose: a scope only the finalizer releases stays live here.
+    [Fact]
+    public void CreatedHotFlows_DisposeReleasesTheirScope_WithoutAGc()
+    {
+        long before = NugetMarshal.LiveHandles;
+        for (int i = 0; i < 20; i++)
+        {
+            using (KotlinMutableStateFlow<int> state = KotlinMutableStateFlow<int>.Create(i))
+            {
+                state.Value = i + 1;
+                Assert.Equal(i + 1, state.Value);
+            }
+
+            using (KotlinMutableSharedFlow<string> shared = KotlinMutableSharedFlow<string>.Create(replay: 1))
+            {
+                Assert.True(shared.TryEmit("Mylo"));
+            }
+        }
+
+        Assert.Equal(before, NugetMarshal.LiveHandles);
     }
 }

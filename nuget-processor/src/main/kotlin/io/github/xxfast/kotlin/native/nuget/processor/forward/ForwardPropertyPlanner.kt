@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import io.github.xxfast.kotlin.native.nuget.processor.exports.takesFlowSetter
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.getVisibility
@@ -1414,7 +1415,8 @@ internal class ForwardPropertyPlanner(
         classifier.legacyRefusedFlowElementShape(prop.type.resolve()) == null
       val bound: Boolean = flowCarrier && elementBound
       val hasPublicSetter: Boolean = prop.isMutable && prop.hasPublicSetter()
-      if (bound && hasPublicSetter) {
+      // ADR-233: a cold `Flow` `var` binds its setter now.
+      if (bound && hasPublicSetter && !prop.takesFlowSetter()) {
         droppedSetters.add(prop.droppedFlowSetter(symbol, type))
       }
       return

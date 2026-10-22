@@ -371,18 +371,14 @@ oreo.Befriend(dog);
 oreo.ClosestFriend().Speak(); // "Woof!" - Kotlin actually called into `dog`
 ```
 
-Only a limited set of member shapes can cross this bridge: `val` and `var` properties, methods of
-arity 0-2 returning `Unit`, a primitive, `Boolean`, an enum, `String`/`String?`, or a lambda (a
-`Func<>`/`Action<>` your member returns, `suspend` and nullable included; see
-[Lambdas a function returns](lambdas-and-callbacks.md#a-top-level-function-that-returns-a-lambda)), and
-[`suspend` and `Flow` members](#implementing-async-members-in-c). A `Throwable`,
-`Exception` or `RuntimeException` parameter or result crosses too, as a `System.Exception` (see
-[Throwable values](exceptions.md#throwable-values)); a result declared narrower than
-`RuntimeException` is named on a build warning. An interface with an object- or collection-typed
-member, a member that takes a `Flow`, a member with its own type parameter, or a member
-with more than two parameters has **no bridge at all**. The build warns once with
-`SKIPPED_UNIMPLEMENTABLE_INTERFACE`, naming every such member and how to fix it, and passing an
-implementation of it throws `NotSupportedException` the first time it crosses.
+A member can take and return anything an ordinary member can, with any number of parameters:
+classes (generic ones too), interfaces, collections, value classes, nullable primitives and enums,
+`Char`, `Instant`, `Duration`, `Uuid`, `ByteArray`, lambdas, [`suspend` and `Flow` members](#implementing-async-members-in-c),
+and a `Throwable`, `Exception` or `RuntimeException` as a `System.Exception` (see
+[Throwable values](exceptions.md#throwable-values)). See [every member shape](#implementing-every-member-shape)
+below. A member with its own type parameter (`fun <R> map(...)`) has **no bridge at all**: the build
+warns once with `SKIPPED_UNIMPLEMENTABLE_INTERFACE`, naming the member and how to fix it, and
+passing an implementation of it throws `NotSupportedException` the first time it crosses.
 
 A `var` works both ways: Kotlin's write lands on your C# property, and a later read sees it.
 
@@ -415,6 +411,64 @@ The same holds for a `var` on a [listener](lambdas-and-callbacks.md#a-listener-v
 is a `Func<>`/`Action<>` property on your class, `suspend` ones included; Kotlin reads it and writes a `var` back
 to your object. A Kotlin-backed implementation exposes the same delegate properties, see
 [Lambdas and callbacks](lambdas-and-callbacks.md#which-lambda-properties-bind).
+
+#### Every member shape {id="implementing-every-member-shape"}
+
+Implement each member as `I<Name>` declares it. A class Kotlin hands you is borrowed for the call,
+and a class you return becomes Kotlin's:
+
+```kotlin
+interface Sitter {
+  fun adopt(name: String): Kitten
+  fun foster(kitten: Kitten?): Kitten?
+  fun pack(item: String): Crate<String>
+  fun litter(kittens: List<Kitten>): Set<String>
+  fun trim(whisker: Whisker): Whisker            // a value class
+  fun treats(cat: String): Int?
+  fun coat(cat: String): Coat?                   // a nullable enum
+  fun lastFed(at: Instant): Instant
+  fun photo(bytes: ByteArray): ByteArray
+  fun onPurr(callback: (String) -> Int): Int
+  fun purrer(): (Int) -> String
+  suspend fun whenHungry(callback: suspend (String) -> Int): Int
+  fun groom(cat: String, strokes: Int, minutes: Double, gentle: Boolean): String
+}
+```
+
+```C#
+internal sealed class CatSitter : ISitter
+{
+    public Kitten Adopt(string name) => new(name);
+    public Kitten? Foster(Kitten? kitten) => kitten == null ? null : new Kitten($"{kitten.Name} jr");
+    public Crate<string> Pack(string item) => new($"crate of {item}");
+    public IReadOnlySet<string> Litter(IReadOnlyList<Kitten> kittens) =>
+        kittens.Select(kitten => kitten.Name.ToUpperInvariant()).ToHashSet();
+    public Whisker Trim(Whisker whisker) => new(whisker.Length * 2);
+    public int? Treats(string cat) => cat == "Oreo" ? 3 : null;
+    public Coat? Coat(string cat) => cat == "Oreo" ? TestLibrary.Catsitter.Coat.Tuxedo : null;
+    public DateTimeOffset LastFed(DateTimeOffset at) => at.AddHours(1);
+    public byte[] Photo(byte[] bytes) => bytes.Reverse().ToArray();
+    public int OnPurr(Func<string, int> callback) => callback("Mylo") + 1;
+    public Func<int, string> Purrer() => times => $"purr x{times}";
+    public async Task<int> WhenHungryAsync(
+        Func<string, CancellationToken, Task<int>> callback, CancellationToken cancellationToken = default) =>
+        await callback("Oreo", cancellationToken);
+    public string Groom(string cat, int strokes, double minutes, bool gentle) =>
+        $"groomed {cat} {strokes} strokes for {minutes} min{(gentle ? " gently" : "")}";
+    /* the remaining members, Dispose and DisposeAsync omitted */
+}
+```
+
+- **Lambdas.** A lambda Kotlin passes in is a `Func<>`/`Action<>` you call. A suspend lambda takes a
+  `CancellationToken` and returns a `Task`. A lambda you return is an ordinary `Func<>`/`Action<>`.
+- **Flows.** A `Flow` member can emit classes, enums, value classes and nullable elements, can be
+  nullable, and a `var` flow member has a setter Kotlin writes through. A `suspend` member can
+  return a `StateFlow`. Make flows with `KotlinFlow<T>.From` or `KotlinMutableStateFlow<T>.Create`,
+  see [Async members](#implementing-async-members-in-c).
+- **Inherited members.** A member a generic super-interface declares is typed with the argument
+  the sub-interface supplies: for `interface Hamper : Basket<String>`, implement
+  `string Put(string item)`.
+- **Faults.** An exception your member throws is catchable in Kotlin, whatever the member's type.
 
 #### Async members {id="implementing-async-members-in-c"}
 
@@ -474,16 +528,18 @@ await Feeders.MenuAsync(bowl);          // "kibble, tuna"
 - **`KotlinFlow<T>.From`.** It wraps any `IAsyncEnumerable<T>` and is cold: each Kotlin `collect`
   enumerates the source afresh, and Kotlin stopping early disposes your enumeration. A
   `KotlinFlow<T>` you got from Kotlin can be returned as it is.
-- **Element types.** A `Flow` member's element is a non-null `String`, `Boolean`, `Int`, `Long`,
-  `Float`, `Double`, or the interface's own `T`. A `suspend` member returns the types listed above,
+- **Element types.** A `Flow` member's element can be any type a member can take, including a
+  class, an enum, a value class and a nullable `String`; see
+  [every member shape](#implementing-every-member-shape). A `suspend` member returns the same types,
   `Throwable` included.
 - **A `suspend` member that returns a `Flow`** is `Task<KotlinFlow<T>>`. Kotlin awaits the task and
   then collects the flow.
 - **Hot flows.** A `StateFlow`, `SharedFlow` or mutable member must hand Kotlin a real Kotlin flow.
   Make one with `KotlinMutableStateFlow<T>.Create(initial)` or
   `KotlinMutableSharedFlow<T>.Create(replay)`; a write on either side is seen on the other.
-  Returning a flow that wraps no Kotlin flow of its own, such as `Level` read from a Kotlin-backed
-  interface, throws `ArgumentException` at that member.
+  Dispose a flow you made with `Create`, as `Dispose` releases its scope. A hot flow read from a
+  Kotlin-backed object, such as `Level` of a Kotlin `IThermostat`, can be returned from your member
+  as it is.
 
 ```C#
 private sealed class Boiler : IThermostat
@@ -1872,17 +1928,14 @@ A lambda over the arm's `T` binds as a per-call parameter (`fun each(action: (T)
 and in a stored pair (`addTaste`/`removeTaste` over `(T) -> Unit` is `IDisposable AddTaste(Action<T> listener)`).
 The payload is typed by the closed `T`, so `Dish.Hot<string>` hands your callback a `string`.
 
-A `var` flow property on a generic arm keeps its getter and names its dropped setter once, as it does
-on an ordinary class; see [A `var` flow property is read-only](coroutines-and-flow.md#flow-var-property).
+A `var` flow property on a generic arm keeps its getter and names its dropped setter once; see
+[A `var` flow property](coroutines-and-flow.md#flow-var-property).
 
 ## Limitations {id="limitations"}
 
-- A C#-implemented interface's bridge only supports `val` getters and arity 0-2 methods returning
-  `Unit`, a primitive, `Boolean`, an enum, `String`/`String?`, a lambda, or a `Throwable`/`Exception`/
-  `RuntimeException` as a `System.Exception`, plus `suspend` and `Flow` members. Anything else (an object- or collection-typed member,
-  a member with its own type parameter) throws `NotSupportedException` the
-  first time an implementation is passed. The build names each disqualifying member on one
-  `SKIPPED_UNIMPLEMENTABLE_INTERFACE` warning per interface.
+- A C#-implemented interface with a member that has its own type parameter (`fun <R> map(...)`)
+  has no bridge: passing an implementation throws `NotSupportedException` the first time. The
+  build names the member on one `SKIPPED_UNIMPLEMENTABLE_INTERFACE` warning per interface.
 - A C#-implemented object's bridge is released on Kotlin's next garbage-collection round, not
   deterministically; there is no `IDisposable`-style prompt release for it.
 - An interface member whose own return type is another interface or a class handle (chained

@@ -25,7 +25,7 @@ class Depot {
     cb(1)
   }
 
-  /** row 10: CALLBACK_PROTOCOL, lambda return on a class method. Predicted NONE. */
+  /** row 10: a lambda return on a class method, bound since ADR-233 as the C# delegate. */
   fun callbackReturnOnClass(): (Int) -> Unit = {}
 
   /** row 21: GENERIC, generic-declaration return on a class method. BINDS since ADR-208. */

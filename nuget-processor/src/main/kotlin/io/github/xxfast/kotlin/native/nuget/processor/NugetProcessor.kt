@@ -4011,6 +4011,9 @@ internal class NugetProcessor(
     // ADR-215 lane A: the retain a lambda's `T` result needs, when some plan carries one.
     builder.addRetainHandleExport(
       callableCatalog, context.symbols, legacyHost = forwardClassifier.boxedAsyncHost,
+      bridgeHost = bridgePlans
+        .firstOrNull { plan -> plan.slots.any { slot -> slot.result.boxed != null } }
+        ?.declaration,
     )
     // ADR-239: a bound C# interface at an erased position, once the routes above recorded it.
     builder.addBoundInterfaceBoxExports(forwardClassifier.boundInterfaces, context.symbols)
@@ -4027,8 +4030,9 @@ internal class NugetProcessor(
       }
     }
     // ADR-232: a C#-implemented interface's `Flow` member reads through the same holder.
+    // ADR-233: and a slot returning a C# lambda, whose key the same holder owns.
     val bridgesTakeFlows: Boolean = bridgePlans.any { plan ->
-      plan.slots.any { slot -> slot.async == ForwardBridgeAsync.FLOW }
+      plan.slots.any { slot -> slot.element != null || slot.result.boxed is BridgeType.Callback }
     }
     val hasAsyncCallbackParameters: Boolean =
       legacyRoutesTakeAsyncParameters || plansTakeAsyncParameters || bridgesTakeFlows

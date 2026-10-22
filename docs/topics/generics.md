@@ -500,9 +500,8 @@ wire cannot read its type argument `List<Int>`".
 A `MutableStateFlow<Box<Int>>` binds as a `KotlinMutableStateFlow<Box<int>>` with a settable
 `.Value`, `CompareAndSet` and `Update` (see
 [Settable `.Value`](coroutines-and-flow.md#settable-value)); the written box is borrowed, so you
-still dispose it. A C# class cannot
-implement a Kotlin interface that has a member returning `Box<Int>`; the implementation is skipped
-with `SKIPPED_UNIMPLEMENTABLE_INTERFACE`.
+still dispose it. A C# class can implement a Kotlin interface that has a member returning
+`Box<Int>` or taking one.
 
 A generic **sealed** hierarchy binds at the same positions; see
 [A generic sealed hierarchy](interfaces-abstract-sealed.md#generic-sealed-hierarchy). Unlike a
