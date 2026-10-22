@@ -303,3 +303,19 @@ ADR-054-style startup arm is deferred to bullet 5, where C# gains a startup call
 
 `nuget-runtime` also targets `linuxArm64` (verified on a Windows host: the klib cross-compiles),
 so the runtime klib is published for every `KONAN_TO_RID` target; the target list above predates it.
+
+## Amendment (2026-10-22): the marker fences the generator-facing surface
+
+`@NugetRuntimeApi` fences what generated code calls. A declaration whose only consumer is a library
+author's `catch` is author-facing and carries no marker. Today that is one type,
+`NugetManagedException` (ADR-161). Any future author-facing runtime type follows the same rule.
+
+Marking it would put `@OptIn(NugetRuntimeApi::class)` on every author catch site (ten in
+`test-library`) to acknowledge a surface the author is meant to use. That inverts the opt-in's
+purpose: "the Kotlin names are for the generator of the same version and nobody else" does not
+describe this type.
+
+Unmarked means its shape is stable public API: `NugetManagedException(managedType: String,
+managedMessage: String) : RuntimeException`, with message `"$managedType: $managedMessage"`.
+Renaming or reshaping it is a runtime major bump (`NugetRuntimeAbi2`), the same commitment this ADR
+makes for the other public names. ADR-161's omission note and residual 6 are closed by this.
