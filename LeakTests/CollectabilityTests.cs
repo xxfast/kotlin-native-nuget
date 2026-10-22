@@ -6,6 +6,7 @@ using Playroom = TestLibrary.Playroom;
 using Stamps = TestLibrary.Stamps;
 using Treatprep = TestLibrary.Treatprep;
 using Trickle = TestLibrary.Trickle;
+using Feedingtime = TestLibrary.Feedingtime;
 
 namespace LeakTests;
 
@@ -1156,5 +1157,42 @@ public class CollectabilityTests
             NugetBridgeState.ReleasedCount > before,
             $"expected the Kotlin cleaner to release the stored Keepsake bridge; ReleasedCount stayed at {before}");
         Assert.False(diary.IsAlive, "the C# Diary stayed reachable after Kotlin overwrote and collected its bridge");
+    }
+
+    // ADR-232: a C#-implemented interface with `suspend` and `Flow` members is collectable once
+    // Kotlin drops its bridge. Each suspend slot's delegate is the bridge object's own method, and
+    // the C#-made flow (`KotlinFlow<T>.From`) is consumed inside the call, so the ADR-084 cleaner
+    // that releases the bridge is the only thing that may have rooted the bowl. A per-await key or
+    // a flow wrapper the bridge kept would keep it alive here. The awaits run synchronously inside
+    // a non-async helper, so no continuation frame outlives the helper holding the bowl.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference ServeAndDropABowl()
+    {
+        var bowl = new LiveHandleTests.LeakBowl("Oreo's bowl");
+        Assert.Equal("Oreo's bowl gave Oreo 4 scoops", Feedingtime.Feeders.ServeAsync(bowl, "Oreo").GetAwaiter().GetResult());
+        Assert.Equal("kibble, tuna", Feedingtime.Feeders.MenuAsync(bowl).GetAwaiter().GetResult());
+        return new WeakReference(bowl);
+    }
+
+    [Fact]
+    public void CSharpAsyncFeeder_ReleasedAfterKotlinGc()
+    {
+        int before = NugetBridgeState.ReleasedCount;
+
+        WeakReference bowl = ServeAndDropABowl();
+
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline && (bowl.IsAlive || NugetBridgeState.ReleasedCount <= before))
+        {
+            NugetMarshal.GcCollect();
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            Thread.Sleep(25);
+        }
+
+        Assert.True(
+            NugetBridgeState.ReleasedCount > before,
+            $"expected the Kotlin cleaner to release the Feeder bridge; ReleasedCount stayed at {before}");
+        Assert.False(bowl.IsAlive, "the C# bowl stayed reachable after Kotlin collected its bridge");
     }
 }

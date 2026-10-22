@@ -58,9 +58,8 @@ await AsyncFunctions.FetchTreatAsync();  // "one treat for Oreo"
 await AsyncFunctions.FetchTreatAsync(3); // "3 treats for Mylo"
 ```
 
-A `suspend fun` binds at the top level, on a class or sealed type, and on an interface that some
-function returns. On an `object`, a companion object, a value class, an enum, an interface nothing
-returns, or as an extension, it is not bound: the member is skipped with a
+A `suspend fun` binds at the top level, on a class or sealed type, and on an interface. On an
+`object`, a companion object, a value class, an enum, or as an extension, it is not bound: the member is skipped with a
 `SKIPPED_UNSUPPORTED_COMBINATION` warning naming it.
 
 ## `suspend fun` returning a nullable type {id="suspend-fun-returning-a-nullable-type"}
@@ -634,7 +633,40 @@ unaffected.
 - **Implementing the interface in C#.** A Kotlin interface member that takes a `Flow` binds for
   calling, but a C# class cannot implement that interface: the build reports
   `SKIPPED_UNIMPLEMENTABLE_INTERFACE`, and passing such an implementation to Kotlin throws
-  `NotSupportedException`.
+  `NotSupportedException`. A member that returns a `Flow` is fine, see
+  [below](#csharp-implements-async-members).
+
+## Implementing `suspend` and `Flow` members in C# {id="csharp-implements-async-members"}
+
+A C# class can implement a Kotlin interface whose members are `suspend` or return a `Flow`, and
+Kotlin awaits and collects it like any other implementation. The interface declares
+`Task<int> FeedAsync(string cat, CancellationToken cancellationToken = default)` and
+`KotlinFlow<string> Meals()`; the class implements them:
+
+```C#
+public async Task<int> FeedAsync(string cat, CancellationToken cancellationToken = default)
+{
+    await Task.Delay(5, cancellationToken);
+    return 3;
+}
+
+public KotlinFlow<string> Meals() => KotlinFlow<string>.From(Courses()); // an IAsyncEnumerable<string>
+```
+
+- The token your `FeedAsync` receives is cancelled when the Kotlin coroutine is, for example by
+  `withTimeoutOrNull`. An exception it throws is catchable in Kotlin.
+- `KotlinFlow<T>.From(IAsyncEnumerable<T>)` is cold: every Kotlin `collect` enumerates the source
+  again, and a Kotlin `take(2)` disposes the enumeration early.
+- For a `StateFlow`, `SharedFlow` or mutable member, hand back a real Kotlin flow from
+  `KotlinMutableStateFlow<T>.Create(initial)` or `KotlinMutableSharedFlow<T>.Create(replay)`.
+  Kotlin reads and writes the same flow you hold, so `flow.Value = 23` in C# is seen by
+  `thermostat.level.value` in Kotlin. A wrapper that holds no Kotlin flow of its own, such as a
+  flow read from a Kotlin-backed object, throws
+  `ArgumentException` when it is returned from one of these members.
+- A `suspend` member that returns a `Flow` is `Task<KotlinFlow<T>>`.
+
+See [Implementing a Kotlin interface in C#](interfaces-abstract-sealed.md#implementing-async-members-in-c)
+for a full class and the element types a `Flow` member can carry.
 
 ## Cancellation and disposal
 

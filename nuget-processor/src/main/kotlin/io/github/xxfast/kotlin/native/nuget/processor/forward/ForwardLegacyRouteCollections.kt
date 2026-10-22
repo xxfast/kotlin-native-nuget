@@ -11,6 +11,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.freshName
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.symbol.KSTypeParameter
 import com.google.devtools.ksp.symbol.KSValueParameter
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Variance
@@ -88,6 +89,19 @@ internal sealed interface ForwardLegacyParameterShape {
     val widened: Boolean = false,
     /** ADR-164 rule 2: a defaulted nullable handle, `Optional<T?>` behind an `IsSet` slot. */
     val optional: Boolean = false,
+  ) : ForwardLegacyParameterShape
+
+  /**
+   * ADR-232: an interface, Kotlin-backed or a C# implementation, crossing as the handle
+   * `NugetMarshal.Wrap<I>` mints or borrows (the bridge factory for a C# implementation). Kotlin
+   * reads it before the coroutine launches, so C# disposes a minted handle once the extern returns.
+   * [kotlinRead] is the cast the read takes: the interface at its closed arguments, a type
+   * parameter argument as `kotlin.Any?` (the erased bridge accepts every one).
+   */
+  data class Interface(
+    val type: BridgeType.Interface,
+    val kotlinRead: String,
+    val nullable: Boolean = false,
   ) : ForwardLegacyParameterShape
 
   /**
@@ -220,6 +234,29 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
   // position: a sealed base crosses as the handle its arms do, and Kotlin discriminates. The
   // `viaDiscriminator` flag only matters for C# reconstruction, which a parameter never does.
   val classified: BridgeType = classify(type).sealedAsHandle()
+
+  // ADR-232: an interface crosses as the handle `NugetMarshal.Wrap<I>` gives it, a C#
+  // implementation's through its bridge factory, at any type arguments.
+  val iface: BridgeType.Interface? = classified.unwrapNullable() as? BridgeType.Interface
+  if (iface != null) {
+    val arguments: String = if (expanded.arguments.isEmpty()) {
+      ""
+    } else {
+      expanded.arguments.joinToString(", ", "<", ">") { argument ->
+        val resolved: KSType? = argument.type?.resolve()
+        if (resolved == null || resolved.declaration is KSTypeParameter) {
+          "kotlin.Any?"
+        } else {
+          resolved.forwardKotlinDeclaredSpelling()
+        }
+      }
+    }
+    return ForwardLegacyParameterShape.Interface(
+      iface,
+      kotlinRead = iface.qualifiedName + arguments,
+      nullable = classified is BridgeType.Nullable,
+    )
+  }
 
   // ADR-208: a closed instantiation of an exported generic class (`Box<String>`) is a borrowed
   // handle like any other class; only its Kotlin read is spelled applied. A generic sealed
@@ -580,6 +617,8 @@ private fun legacyWidenedIndices(
     is ForwardLegacyParameterShape.Marshalled -> shape.nullable
     // ADR-214: a defaulted `T` stays required; its box has no unset encoding.
     is ForwardLegacyParameterShape.Boxed,
+    // ADR-232: a defaulted interface stays required, as a defaulted `T` does.
+    is ForwardLegacyParameterShape.Interface,
     is ForwardLegacyParameterShape.ManagedException,
     is ForwardLegacyParameterShape.Async,
     is ForwardLegacyParameterShape.Refused -> false
@@ -642,6 +681,7 @@ internal val ForwardLegacyParameterShape.isLegacyDefaulted: Boolean
     is ForwardLegacyParameterShape.ManagedException,
     is ForwardLegacyParameterShape.Async,
     is ForwardLegacyParameterShape.Boxed,
+    is ForwardLegacyParameterShape.Interface,
     is ForwardLegacyParameterShape.Refused -> false
   }
 
@@ -1544,7 +1584,9 @@ internal class ForwardLegacyNames(
    * (`${name}Handle` unless taken), or null.
    */
   val handleLocals: List<String?> = parameters.mapIndexed { index, name ->
-    val boxed: Boolean = shapes[index] is ForwardLegacyParameterShape.Boxed
+    // ADR-232: an interface is wrapped the same way, into a handle that may be minted.
+    val boxed: Boolean = shapes[index] is ForwardLegacyParameterShape.Boxed ||
+      shapes[index] is ForwardLegacyParameterShape.Interface
     val marshalled: Boolean = csharp &&
       (shapes[index] is ForwardLegacyParameterShape.Marshalled || boxed)
     if (marshalled) mint(if (boxed) "${name}Box" else "${name}Handle") else null
@@ -1555,7 +1597,9 @@ internal class ForwardLegacyNames(
    * box in (`${name}Owned` unless taken), or null.
    */
   val ownedLocals: List<String?> = parameters.mapIndexed { index, name ->
-    if (csharp && shapes[index] is ForwardLegacyParameterShape.Boxed) mint("${name}Owned") else null
+    val wrapped: Boolean = shapes[index] is ForwardLegacyParameterShape.Boxed ||
+      shapes[index] is ForwardLegacyParameterShape.Interface
+    if (csharp && wrapped) mint("${name}Owned") else null
   }
 
   /** The member routes' class-scope slot. */
@@ -1638,7 +1682,8 @@ internal fun legacyHandleStatement(
 internal val ForwardLegacyParameterShape.isLegacyNullableSlot: Boolean
   get() = (this is ForwardLegacyParameterShape.Handle && nullable) ||
     (this is ForwardLegacyParameterShape.Marshalled && nullable) ||
-    this is ForwardLegacyParameterShape.Boxed
+    this is ForwardLegacyParameterShape.Boxed ||
+    (this is ForwardLegacyParameterShape.Interface && nullable)
 
 /**
  * Whether the Kotlin export binds this parameter to an eagerly-evaluated local rather than calling
@@ -1648,7 +1693,8 @@ internal val ForwardLegacyParameterShape.isLegacyNullableSlot: Boolean
 internal fun ForwardLegacyParameterShape.isLegacyLowered(): Boolean = when (this) {
   is ForwardLegacyParameterShape.Marshalled, is ForwardLegacyParameterShape.Handle,
   is ForwardLegacyParameterShape.Async,
-  is ForwardLegacyParameterShape.Boxed -> true
+  is ForwardLegacyParameterShape.Boxed,
+  is ForwardLegacyParameterShape.Interface -> true
   ForwardLegacyParameterShape.Plain,
   is ForwardLegacyParameterShape.Enum,
   is ForwardLegacyParameterShape.NullableScalar,
@@ -1827,6 +1873,13 @@ internal fun ForwardLegacyParameterShape.legacyPrelude(
   // ADR-214: the erased read only; the bound cast is [legacyArgument]'s, inside the launch.
   is ForwardLegacyParameterShape.Boxed ->
     "val ${requireNotNull(local)} = ${forwardBoundedRead(parameter, emptyList(), nullable = true)}"
+  // ADR-232: read before the launch, so C# may dispose a minted bridge handle once the extern
+  // returns; the Kotlin reference is what keeps the bridge alive from here on.
+  is ForwardLegacyParameterShape.Interface -> if (nullable) {
+    "val ${requireNotNull(local)} = $parameter?.asStableRef<Any>()?.get() as $kotlinRead?"
+  } else {
+    "val ${requireNotNull(local)} = $parameter.asStableRef<Any>().get() as $kotlinRead"
+  }
   ForwardLegacyParameterShape.Plain,
   is ForwardLegacyParameterShape.Enum,
   is ForwardLegacyParameterShape.NullableScalar,

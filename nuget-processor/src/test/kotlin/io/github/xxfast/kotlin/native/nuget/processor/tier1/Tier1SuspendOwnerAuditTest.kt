@@ -115,8 +115,6 @@ class Tier1SuspendOwnerAuditTest {
       "tier1.suspendowners.Depot.restock",
       "tier1.suspendowners.Den.Companion.open",
       "tier1.suspendowners.Tag.fetch",
-      // An interface nothing returns: ADR-174's interface async route carries reachable ones only.
-      "tier1.suspendowners.Pacer.pace",
     ).forEach { member ->
       val matches: List<String> = warningsNaming(member)
       assertEquals(1, matches.size, "$member must be named once; kspWarnings=${result.kspWarnings}")
@@ -231,7 +229,12 @@ class Tier1SuspendOwnerAuditTest {
   @Test
   fun `the suspend drops are absent from the C# and the controls still bind`() {
     val declarations: List<String> = declarations()
-    listOf("Restock", "Open", "Fetch", "Pace", "Hold").forEach { member ->
+    // ADR-232: `Pacer` is an interface nothing returns, and `IPacer` still declares `PaceAsync`.
+    assertTrue(
+      declarations.any { line -> "Task<int> PaceAsync(" in line },
+      "an interface nothing returns declares its suspend member",
+    )
+    listOf("Restock", "Open", "Fetch", "Hold").forEach { member ->
       val leaks: List<String> = declarations.filter { line ->
         Regex("\\b${member}(Async)?\\s*[(<]").containsMatchIn(line)
       }

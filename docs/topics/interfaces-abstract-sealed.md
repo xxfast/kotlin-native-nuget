@@ -342,9 +342,8 @@ the abstract class instead, see
 
 **Breaking:** a hand-written C# class implementing an interface that gains async members this way
 stops compiling (`CS0535` on the new members and on `DisposeAsync`), the same way adding a lambda
-parameter to `I<Name>` already could (see [below](#implementing-a-kotlin-interface-in-c)). Combined
-with that section's existing limits — `KotlinFlow<T>`'s constructor is `internal` — such an
-interface was never practically implementable in C# anyway.
+parameter to `I<Name>` already could. See
+[Async members in a C# implementation](#implementing-async-members-in-c) for how to implement them.
 
 ### Implementing a Kotlin interface in C# {id="implementing-a-kotlin-interface-in-c"}
 
@@ -372,12 +371,13 @@ oreo.Befriend(dog);
 oreo.ClosestFriend().Speak(); // "Woof!" - Kotlin actually called into `dog`
 ```
 
-Only a limited set of member shapes can cross this bridge: `val` and `var` properties, and methods of
-arity 0-2 returning `Unit`, a primitive, `Boolean`, an enum, or `String`/`String?`. A `Throwable`,
+Only a limited set of member shapes can cross this bridge: `val` and `var` properties, methods of
+arity 0-2 returning `Unit`, a primitive, `Boolean`, an enum, or `String`/`String?`, and
+[`suspend` and `Flow` members](#implementing-async-members-in-c). A `Throwable`,
 `Exception` or `RuntimeException` parameter or result crosses too, as a `System.Exception` (see
 [Throwable values](exceptions.md#throwable-values)); a result declared narrower than
 `RuntimeException` is named on a build warning. An interface with an object- or collection-typed
-member, a `suspend` member, a member that returns or takes a `Flow`, a member with its own type parameter, or a member
+member, a member that takes a `Flow`, a member with its own type parameter, or a member
 with more than two parameters has **no bridge at all**. The build warns once with
 `SKIPPED_UNIMPLEMENTABLE_INTERFACE`, naming every such member and how to fix it, and passing an
 implementation of it throws `NotSupportedException` the first time it crosses.
@@ -410,6 +410,92 @@ Retagging.Retag(collar, "OREO"); // "OREO"; collar.Tag is now "OREO"
 
 The same holds for a `var` on a [listener](lambdas-and-callbacks.md#a-listener-val) passed to an
 `add`/`remove` pair.
+
+#### Async members {id="implementing-async-members-in-c"}
+
+A `suspend` member is a `Task`-returning method with a `CancellationToken`, and a `Flow<T>` member
+returns a `KotlinFlow<T>`. Implement them as `IFeeder` declares them:
+
+```kotlin
+interface Feeder {
+  val name: String
+  suspend fun feed(cat: String): Int
+  fun meals(): Flow<String>
+}
+
+suspend fun serve(feeder: Feeder, cat: String): String =
+  "${feeder.name} gave $cat ${feeder.feed(cat)} scoops"
+
+suspend fun menu(feeder: Feeder): String = feeder.meals().toList().joinToString()
+```
+
+```C#
+private sealed class Bowl(string name) : IFeeder
+{
+    public string Name { get; } = name;
+
+    public async Task<int> FeedAsync(string cat, CancellationToken cancellationToken = default)
+    {
+        await Task.Delay(5, cancellationToken);
+        return cat == "Oreo" ? 3 : 5;
+    }
+
+    public KotlinFlow<string> Meals() => KotlinFlow<string>.From(Courses());
+
+    private static async IAsyncEnumerable<string> Courses(
+        [EnumeratorCancellation] CancellationToken token = default)
+    {
+        foreach (string course in new[] { "kibble", "tuna" })
+        {
+            await Task.Delay(1, token);
+            yield return course;
+        }
+    }
+
+    public void Dispose() { }
+    public ValueTask DisposeAsync() => default;
+}
+
+using var bowl = new Bowl("Oreo's bowl");
+await Feeders.ServeAsync(bowl, "Oreo"); // "Oreo's bowl gave Oreo 3 scoops"
+await Feeders.MenuAsync(bowl);          // "kibble, tuna"
+```
+
+- **Cancellation.** When Kotlin cancels the call, for example on a `withTimeoutOrNull`, the
+  `CancellationToken` your method received is cancelled. A cancelled task is a cancellation in
+  Kotlin, not a failure.
+- **Faults.** An exception your method throws, synchronously or from its task, is catchable in
+  Kotlin as a `Throwable`. If Kotlin does not catch it, the awaiting `Task` on the C# side faults.
+- **`KotlinFlow<T>.From`.** It wraps any `IAsyncEnumerable<T>` and is cold: each Kotlin `collect`
+  enumerates the source afresh, and Kotlin stopping early disposes your enumeration. A
+  `KotlinFlow<T>` you got from Kotlin can be returned as it is.
+- **Element types.** A `Flow` member's element is a non-null `String`, `Boolean`, `Int`, `Long`,
+  `Float`, `Double`, or the interface's own `T`. A `suspend` member returns the types listed above,
+  `Throwable` included.
+- **A `suspend` member that returns a `Flow`** is `Task<KotlinFlow<T>>`. Kotlin awaits the task and
+  then collects the flow.
+- **Hot flows.** A `StateFlow`, `SharedFlow` or mutable member must hand Kotlin a real Kotlin flow.
+  Make one with `KotlinMutableStateFlow<T>.Create(initial)` or
+  `KotlinMutableSharedFlow<T>.Create(replay)`; a write on either side is seen on the other.
+  Returning a flow that wraps no Kotlin flow of its own, such as `Level` read from a Kotlin-backed
+  interface, throws `ArgumentException` at that member.
+
+```C#
+private sealed class Boiler : IThermostat
+{
+    public KotlinMutableStateFlow<int> LevelFlow { get; } = KotlinMutableStateFlow<int>.Create(18);
+    public KotlinSharedFlow<string> News() => Headlines;
+    public KotlinMutableSharedFlow<string> Headlines { get; } = KotlinMutableSharedFlow<string>.Create(replay: 1);
+    public KotlinStateFlow<int> Level => LevelFlow;
+    /* Dial, Bell, Dispose and DisposeAsync omitted */
+}
+
+using var boiler = new Boiler();
+boiler.LevelFlow.Value = 23; // a Kotlin function reading `thermostat.level.value` sees 23
+```
+
+An interface that no function takes, returns or stores still declares its `suspend` members on
+`I<Name>`, so a C# class can implement it for the one place a C# value reaches Kotlin.
 
 #### A generic interface {id="implementing-a-generic-interface-in-c"}
 
@@ -466,7 +552,8 @@ each input position that would hand it a C# implementation is skipped with a nam
 
 A generic interface's `suspend` and `Flow` members bind too: `interface Heirloom<T>` declares
 `Task<T> PolishAsync(...)` and `KotlinFlow<T> Glints()` on `IHeirloom<T>`, which is
-`IAsyncDisposable`.
+`IAsyncDisposable`. A C# class implements them like [any other async member](#implementing-async-members-in-c),
+with `T` as the closed type argument: `Task<T> FetchAsync(int shelf, CancellationToken cancellationToken = default)`.
 
 Kotlin-backed implementations of the interface still cross as usual, and `IPet` still declares every
 member. A marker interface with no members bridges too:
@@ -1776,8 +1863,8 @@ on an ordinary class; see [A `var` flow property is read-only](coroutines-and-fl
 
 - A C#-implemented interface's bridge only supports `val` getters and arity 0-2 methods returning
   `Unit`, a primitive, `Boolean`, an enum, `String`/`String?`, or a `Throwable`/`Exception`/
-  `RuntimeException` as a `System.Exception`. Anything else (an object- or collection-typed member,
-  `suspend`, a member with its own type parameter) throws `NotSupportedException` the
+  `RuntimeException` as a `System.Exception`, plus `suspend` and `Flow` members. Anything else (an object- or collection-typed member,
+  a member with its own type parameter) throws `NotSupportedException` the
   first time an implementation is passed. The build names each disqualifying member on one
   `SKIPPED_UNIMPLEMENTABLE_INTERFACE` warning per interface.
 - A C#-implemented object's bridge is released on Kotlin's next garbage-collection round, not

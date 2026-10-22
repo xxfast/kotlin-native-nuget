@@ -1,6 +1,14 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInterfacePlan
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeAsync
+import io.github.xxfast.kotlin.native.nuget.processor.forward.asyncBeginName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.asyncEndName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.asyncThunkParameters
+import io.github.xxfast.kotlin.native.nuget.processor.forward.asyncThunks
+import io.github.xxfast.kotlin.native.nuget.processor.forward.flowSource
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncCurrent
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncCurrentName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.bridgeImplVariable
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isGeneric
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeSlot
@@ -87,6 +95,9 @@ internal fun StringBuilder.renderBridgeHelper(helper: CirBridgeHelper) {
   appendLine("        internal IntPtr MintBridge();")
   appendLine("    }")
   appendLine()
+  helper.hotFlowSegment?.let { segment ->
+    renderHotFlowNative(helper.libraryName) { stem -> "${segment}__hotflow_$stem" }
+  }
   appendLine("    internal abstract class NugetBridgeState")
   appendLine("    {")
   appendLine("        internal IntPtr KotlinHandle;")
@@ -174,17 +185,18 @@ private fun StringBuilder.renderBridgeState(libraryName: String, entry: CirBridg
   appendLine("            state.Root();")
   appendLine("            IntPtr token = state.TokenFor(impl);")
   plan.slots.forEach { slot ->
-    appendLine("            ${slot.delegateName()} ${slot.slotPrefix} = ${slotLambda(slot)};")
+    appendLine("            ${slot.bridgeDelegateName()} ${slot.slotPrefix} = ${slotLambda(slot)};")
   }
   appendLine("            NugetBridgeVoidCallback release = _ => state.FreeAll();")
   (plan.slots.map { it.slotPrefix } + "release").forEach { pinned ->
     appendLine("            IntPtr ${pinned}Ctx = state.Pin($pinned);")
   }
   val callArgs: List<String> = plan.slots.flatMap { slot ->
-    listOf("NugetThunks.${slot.delegateName()}Ptr", "${slot.slotPrefix}Ctx")
-  } + listOf(
-    "NugetThunks.NugetBridgeVoidCallbackPtr", "releaseCtx", "token", "out IntPtr error",
-  )
+    listOf("NugetThunks.${slot.bridgeDelegateName()}Ptr", "${slot.slotPrefix}Ctx") +
+      slot.asyncThunkPointers()
+  } + listOf("NugetThunks.NugetBridgeVoidCallbackPtr", "releaseCtx") +
+    plan.asyncThunks().map { thunk -> thunk.pointer } +
+    listOf("token", "out IntPtr error")
   appendLine("            state.KotlinHandle = $native(")
   appendLine("                ${callArgs.joinToString(", ")});")
   appendLine("            if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
@@ -197,6 +209,12 @@ private fun StringBuilder.renderBridgeState(libraryName: String, entry: CirBridg
 
 /** The C# statement-lambda body assigned to one slot's delegate variable. */
 private fun slotLambda(slot: ForwardBridgeSlot): String {
+  if (slot.async == ForwardBridgeAsync.SUSPEND) {
+    val parameters: String =
+      (slot.parameters.indices.map { "arg$it" } + "nugetCallback" + "nugetAwaitCtx")
+        .joinToString(", ")
+    return "($parameters) => { ${suspendSlotBody(slot, "impl")} }"
+  }
   val parameters: String = if (slot.parameters.isEmpty()) {
     "_"
   } else {
@@ -222,32 +240,7 @@ internal fun slotLambdaParameters(slot: ForwardBridgeSlot): String {
  * its value across exactly as it does on the bridge factory.
  */
 internal fun slotBody(slot: ForwardBridgeSlot, receiver: String): String {
-  val body: StringBuilder = StringBuilder()
-  slot.parameters.forEachIndexed { index, parameter ->
-    when (parameter.type.wire) {
-      // ADR-201 amendment: the ADR-107 envelope, rebuilt (and disposed) by `BuildException`; a
-      // null argument is the null pointer.
-      // FromHandle disposes the StableRef the Kotlin side minted; that side deliberately does not.
-      ForwardBridgeWire.OBJECT -> if (parameter.type.throwable != null) {
-        val read = "NugetErrorNative.BuildException(arg$index)"
-        val value: String =
-          if (parameter.type.nullable) "arg$index == IntPtr.Zero ? null : $read" else read
-        body.append("${parameter.type.csharp} value$index = $value; ")
-      } else
-        body.append(
-          "${parameter.type.csharp} value$index = NugetMarshal.FromHandle<${
-            parameter.type.csharp.removeSuffix(
-              "?"
-            )
-          }>(arg$index); "
-        )
-
-      ForwardBridgeWire.BOOLEAN -> body.append("bool value$index = arg$index != 0; ")
-      ForwardBridgeWire.ENUM -> body.append("${parameter.type.csharp} value$index = (${parameter.type.csharp})arg$index; ")
-      else -> body.append("${parameter.type.csharp} value$index = arg$index; ")
-    }
-  }
-
+  val body: StringBuilder = StringBuilder(parameterReads(slot))
   val arguments: String = slot.parameters.indices.joinToString(", ") { "value$it" }
   // ADR-179: the slot keeps the unescaped declared name; the call site escapes it.
   val member: String = toCSharpName(slot.csName)
@@ -263,6 +256,20 @@ internal fun slotBody(slot: ForwardBridgeSlot, receiver: String): String {
     ForwardBridgeWire.UNIT -> body.append("$access;")
     ForwardBridgeWire.OBJECT -> {
       body.append("${slot.result.csharp} result = $access; ")
+      // ADR-232: a Flow member hands Kotlin the key of an enumeration factory over its result,
+      // which Kotlin reads through `flowForKotlin` and whose holder releases the key.
+      if (slot.async == ForwardBridgeAsync.FLOW) {
+        body.append(
+          "return NugetTasks.Register(result, \"${slot.csName}\", " +
+            "(Func<IntPtr>)(() => NugetAsyncEnumeration.Enumerate(result)));",
+        )
+        return body.toString()
+      }
+      // ADR-232: a hot flow hands back the Kotlin flow object it wraps, or fails at the slot.
+      if (slot.result.hotFlow) {
+        body.append("return NugetHotFlowNative.Retain(result);")
+        return body.toString()
+      }
       // ADR-222: a `T` result is a box Kotlin owns, minted by lane A's `WrapOwned<T>`.
       if (slot.result.typeParameter) {
         body.append("return NugetMarshal.WrapOwned<${slot.result.csharp.removeSuffix("?")}>(result!);")
@@ -285,6 +292,44 @@ internal fun slotBody(slot: ForwardBridgeSlot, receiver: String): String {
     ForwardBridgeWire.ENUM -> body.append("return (int)$access;")
     else -> body.append("return $access;")
   }
+  return body.toString()
+}
+
+/** Each payload `argN` of [slot] read into its `valueN`, as statements. */
+private fun parameterReads(slot: ForwardBridgeSlot): String {
+  val body: StringBuilder = StringBuilder()
+  slot.parameters.forEachIndexed { index, parameter ->
+    when (parameter.type.wire) {
+      // ADR-201 amendment: the ADR-107 envelope, rebuilt (and disposed) by `BuildException`; a
+      // null argument is the null pointer.
+      // FromHandle disposes the StableRef the Kotlin side minted; that side deliberately does not.
+      ForwardBridgeWire.OBJECT -> if (parameter.type.throwable != null) {
+        val read = "NugetErrorNative.BuildException(arg$index)"
+        val value: String =
+          if (parameter.type.nullable) "arg$index == IntPtr.Zero ? null : $read" else read
+        body.append("${parameter.type.csharp} value$index = $value; ")
+      } else
+        body.append(
+          "${parameter.type.csharp} value$index = NugetMarshal.FromHandle<${
+            parameter.type.csharp.removeSuffix(
+              "?"
+            )
+          }>(arg$index); "
+        )
+
+      ForwardBridgeWire.BOOLEAN -> body.append("bool value$index = arg$index != 0; ")
+      ForwardBridgeWire.ENUM -> body.append(
+        "${parameter.type.csharp} value$index = (${parameter.type.csharp})arg$index; ",
+      )
+
+      ForwardBridgeWire.UNIT,
+      ForwardBridgeWire.INT,
+      ForwardBridgeWire.LONG,
+      ForwardBridgeWire.FLOAT,
+      ForwardBridgeWire.DOUBLE ->
+        body.append("${parameter.type.csharp} value$index = arg$index; ")
+    }
+  }
 
   return body.toString()
 }
@@ -295,6 +340,8 @@ internal fun slotBody(slot: ForwardBridgeSlot, receiver: String): String {
  */
 internal fun bridgeDelegates(interfaces: List<CirBridgeInterface>): List<CirCallbackDelegate> {
   val slotDelegates: List<CirCallbackDelegate> = interfaces.flatMap { entry -> entry.plan.slots }
+    // ADR-232: a SUSPEND slot's Begin delegate is declared by the ADR-210 async helper.
+    .filter { slot -> slot.async != ForwardBridgeAsync.SUSPEND }
     .map { slot ->
       CirCallbackDelegate(
         name = slot.delegateName(),
@@ -314,8 +361,13 @@ private fun StringBuilder.renderBridgeImport(
   name: String,
 ) {
   val nativeParams: List<String> = plan.slots.flatMap { slot ->
-    listOf("IntPtr ${slot.slotPrefix}Ptr", "IntPtr ${slot.slotPrefix}Ctx")
-  } + listOf("IntPtr releasePtr", "IntPtr releaseCtx", "IntPtr token", "out IntPtr error")
+    listOfNotNull(
+      "IntPtr ${slot.slotPrefix}Ptr",
+      "IntPtr ${slot.slotPrefix}Ctx",
+    ) + slot.asyncThunkParameters.map { thunk -> "IntPtr $thunk" }
+  } + listOf("IntPtr releasePtr", "IntPtr releaseCtx") +
+    plan.asyncThunks().map { thunk -> "IntPtr ${thunk.parameter}" } +
+    listOf("IntPtr token", "out IntPtr error")
   appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${plan.exportName}\")]")
   appendLine("        $visibility static extern IntPtr $name(${nativeParams.joinToString(", ")});")
   appendLine()
@@ -356,3 +408,210 @@ private fun CirBridgeInterface.whereClauses(): String = typeParameters
   .joinToString("") { parameter ->
     " where ${parameter.name} : ${parameter.bounds.joinToString(", ")}"
   }
+
+/**
+ * ADR-232: a SUSPEND slot's Begin delegate body. It reads the payloads as the synchronous slot
+ * does, then starts the implementation's `Task` through ADR-210's `NugetTasks.Begin`, which mints
+ * the `CancellationTokenSource` Kotlin's cancellation reaches and attaches the completion. A `T`
+ * result starts through `BeginBoxed`, so the End thunk can box it without naming `T`.
+ */
+private fun suspendSlotBody(slot: ForwardBridgeSlot, receiver: String): String {
+  val arguments: String =
+    (slot.parameters.indices.map { "value$it" } + "nugetToken").joinToString(", ")
+  val begin: String = if (slot.result.typeParameter) {
+    "NugetTasks.BeginBoxed<${slot.result.csharp.removeSuffix("?")}>"
+  } else {
+    "NugetTasks.Begin"
+  }
+  return parameterReads(slot) +
+    "return $begin(nugetToken => $receiver.${toCSharpName(slot.csName)}($arguments), " +
+    "nugetCallback, nugetAwaitCtx);"
+}
+
+/** The delegate type a slot's pinned delegate is declared as. */
+private fun ForwardBridgeSlot.bridgeDelegateName(): String =
+  if (async == ForwardBridgeAsync.SUSPEND) asyncBeginName() else delegateName()
+
+/**
+ * ADR-232: the thunk pointers an async slot crosses after its pair, in `asyncThunkParameters`
+ * order.
+ */
+private fun ForwardBridgeSlot.asyncThunkPointers(): List<String> = listOfNotNull(
+  "NugetThunks.${asyncEndName()}Ptr".takeIf { async == ForwardBridgeAsync.SUSPEND },
+  element?.let { "NugetThunks.${flowSource().forwardAsyncCurrentName()}Ptr" },
+)
+
+/** ADR-232: every Begin thunk the bridged interfaces' SUSPEND slots dispatch through. */
+internal fun bridgeAsyncBegins(plans: List<ForwardBridgeInterfacePlan>): List<CirAsyncBegin> =
+  plans.flatMap { plan -> plan.slots }
+    .filter { slot -> slot.async == ForwardBridgeAsync.SUSPEND }
+    .map { slot ->
+      CirAsyncBegin(slot.asyncBeginName(), slot.parameters.map { it.type.wire.csharpWire() })
+    }
+
+/**
+ * ADR-232: every End thunk the SUSPEND slots read through. Each applies the synchronous slot's
+ * result conversion to the completed task's result, after the read is certain (ADR-210
+ * alternative 8), and frees the task handle in `NugetTasks.End`'s `finally`.
+ */
+internal fun bridgeAsyncEnds(plans: List<ForwardBridgeInterfacePlan>): List<CirAsyncEnd> =
+  plans.flatMap { plan -> plan.slots }
+    .filter { slot -> slot.async == ForwardBridgeAsync.SUSPEND }
+    .map { slot ->
+      val type = slot.result
+      val name: String = slot.asyncEndName()
+      val exception = "global::System.Exception"
+      when {
+        // ADR-232: a suspend member returning a Flow: the awaited flow's enumeration factory key.
+        slot.element != null -> {
+          val flow: String = slot.result.csharp
+          CirAsyncEnd(
+            name,
+            "IntPtr",
+            "NugetTasks.End<$flow>(a0) is $flow nugetValue ? NugetTasks.Register(nugetValue, " +
+              "\"${slot.csName}\", (Func<IntPtr>)(() => NugetAsyncEnumeration.Enumerate(nugetValue))) : " +
+              "IntPtr.Zero",
+          )
+        }
+
+        type.typeParameter -> CirAsyncEnd(name, "IntPtr", "NugetTasks.EndBoxed(a0)")
+        type.throwable != null -> CirAsyncEnd(
+          name,
+          "IntPtr",
+          "NugetTasks.End<$exception?>(a0) is $exception nugetValue ? " +
+            "NugetMarshal.WrapString(${managedExceptionTextCs("nugetValue", nullable = false)}) : " +
+            "IntPtr.Zero",
+        )
+
+        type.wire == ForwardBridgeWire.OBJECT && type.nullable -> CirAsyncEnd(
+          name,
+          "IntPtr",
+          "NugetTasks.End<string?>(a0) is string nugetValue ? " +
+            "NugetMarshal.WrapString(nugetValue) : IntPtr.Zero",
+        )
+
+        type.wire == ForwardBridgeWire.OBJECT ->
+          CirAsyncEnd(name, "IntPtr", "NugetMarshal.WrapString(NugetTasks.End<string>(a0))")
+
+        type.wire == ForwardBridgeWire.UNIT -> CirAsyncEnd(name, "void", "NugetTasks.End(a0)")
+        type.wire == ForwardBridgeWire.BOOLEAN ->
+          CirAsyncEnd(name, "byte", "NugetTasks.End<bool>(a0) ? (byte)1 : (byte)0")
+
+        type.wire == ForwardBridgeWire.ENUM ->
+          CirAsyncEnd(name, "int", "(int)NugetTasks.End<${type.csharp}>(a0)")
+
+        else -> CirAsyncEnd(name, type.csharp, "NugetTasks.End<${type.csharp}>(a0)")
+      }
+    }
+
+/** ADR-232: every Current thunk the FLOW slots read their elements through. */
+internal fun bridgeAsyncCurrents(plans: List<ForwardBridgeInterfacePlan>): List<CirAsyncEnd> =
+  plans.flatMap { plan -> plan.slots }
+    .filter { slot -> slot.element != null }
+    .map { slot -> slot.flowSource().forwardAsyncCurrent() }
+
+/** ADR-232: a SUSPEND slot's `T` result or a FLOW slot's `T` element crosses as an owned box. */
+internal fun bridgeAsyncBoxes(plans: List<ForwardBridgeInterfacePlan>): Boolean =
+  plans.flatMap { plan -> plan.slots }.any { slot ->
+    when (slot.async) {
+      ForwardBridgeAsync.SYNC -> false
+      ForwardBridgeAsync.SUSPEND -> slot.result.typeParameter && slot.element == null
+      ForwardBridgeAsync.FLOW -> slot.element?.typeParameter == true
+    }
+  }
+
+/** ADR-232: whether any bridged interface has a hot-flow slot. */
+internal fun List<ForwardBridgeInterfacePlan>.bridgesHotFlows(): Boolean =
+  any { plan -> plan.slots.any { slot -> slot.result.hotFlow } }
+
+/**
+ * ADR-232: the C# half of `HotFlowHandleExports`. `Retain` is the hot-flow slot's whole body: a
+ * wrapper that owns a Kotlin flow hands a new handle to it back; one that does not (a member
+ * wrapper that re-reads its owner) fails at the slot with an `ArgumentException`, never silently.
+ * `CreateState` and `CreateShared` build the mutable wrappers over a real Kotlin flow, on the
+ * same delegates every other wrapper is built from.
+ */
+internal fun StringBuilder.renderHotFlowNative(libraryName: String, symbols: (String) -> String) {
+  fun import(stem: String, returns: String, parameters: String) {
+    appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${symbols(stem)}\")]")
+    if (returns == "bool") appendLine("        [return: MarshalAs(UnmanagedType.I1)]")
+    appendLine("        private static extern $returns Native_${stem.split('_').joinToString("") { it.replaceFirstChar(Char::uppercase) }}($parameters);")
+    appendLine()
+  }
+  appendLine("    internal static class NugetHotFlowNative")
+  appendLine("    {")
+  import("state_create", "IntPtr", "IntPtr initial")
+  import("state_value", "IntPtr", "NugetKotlinHandle handle")
+  import("state_set", "void", "NugetKotlinHandle handle, IntPtr value")
+  import("state_compare_and_set", "bool", "NugetKotlinHandle handle, IntPtr expect, IntPtr update")
+  import("shared_create", "IntPtr", "int replay")
+  import("shared_replay_cache", "IntPtr", "NugetKotlinHandle handle")
+  import("shared_subscription_count", "IntPtr", "NugetKotlinHandle handle")
+  import("shared_try_emit", "bool", "NugetKotlinHandle handle, IntPtr value")
+  import("shared_emit", "IntPtr", "NugetKotlinHandle handle, NugetKotlinHandle scopeHandle, IntPtr value, IntPtr callback, IntPtr userData")
+  import("collect", "IntPtr", "NugetKotlinHandle handle, NugetKotlinHandle scopeHandle, IntPtr onNext, IntPtr onComplete, IntPtr onError, IntPtr userData")
+  import("retain", "IntPtr", "IntPtr handle")
+  appendLine(
+    """
+        internal static IntPtr Retain<T>(KotlinFlow<T> flow)
+        {
+            ArgumentNullException.ThrowIfNull(flow);
+            IntPtr handle = flow.KotlinHandle;
+            if (handle == IntPtr.Zero)
+            {
+                throw new ArgumentException(
+                    $"{flow.GetType().Name} wraps no Kotlin flow of its own, so it cannot be handed to Kotlin. " +
+                    "Return a KotlinMutableStateFlow<T>.Create or KotlinMutableSharedFlow<T>.Create flow, " +
+                    "or one Kotlin returned that owns its flow.",
+                    nameof(flow));
+            }
+            IntPtr retained = Native_Retain(handle);
+            GC.KeepAlive(flow);
+            return retained;
+        }
+
+        private static void WithBox<T>(T value, Action<IntPtr> use)
+        {
+            IntPtr box = NugetMarshal.Wrap<T>(value!, out bool owned);
+            try { use(box); }
+            finally { if (owned) NugetMarshal.Dispose(box); else GC.KeepAlive(value); }
+        }
+
+        private static TResult WithBox<T, TResult>(T value, Func<IntPtr, TResult> use)
+        {
+            IntPtr box = NugetMarshal.Wrap<T>(value!, out bool owned);
+            try { return use(box); }
+            finally { if (owned) NugetMarshal.Dispose(box); else GC.KeepAlive(value); }
+        }
+
+        internal static KotlinMutableStateFlow<T> CreateState<T>(T initial)
+        {
+            var handle = new NugetKotlinHandle(WithBox(initial, box => Native_StateCreate(box)));
+            var scope = new NugetScopeHandle(NugetScopeNative.Create());
+            return new KotlinMutableStateFlow<T>(
+                (onNext, onComplete, onError, userData) => Native_Collect(handle, scope, onNext, onComplete, onError, userData),
+                () => Native_StateValue(handle),
+                value => WithBox(value, box => Native_StateSet(handle, box)),
+                (expect, update) => WithBox(expect, e => WithBox(update, u => Native_StateCompareAndSet(handle, e, u))),
+                handle);
+        }
+
+        internal static KotlinMutableSharedFlow<T> CreateShared<T>(int replay)
+        {
+            if (replay < 0) throw new ArgumentOutOfRangeException(nameof(replay), replay, "replay must not be negative");
+            var handle = new NugetKotlinHandle(Native_SharedCreate(replay));
+            var scope = new NugetScopeHandle(NugetScopeNative.Create());
+            return new KotlinMutableSharedFlow<T>(
+                (onNext, onComplete, onError, userData) => Native_Collect(handle, scope, onNext, onComplete, onError, userData),
+                () => Native_SharedReplayCache(handle),
+                () => scope,
+                () => Native_SharedSubscriptionCount(handle),
+                (value, callback, userData) => WithBox(value, box => Native_SharedEmit(handle, scope, box, callback, userData)),
+                value => WithBox(value, box => Native_SharedTryEmit(handle, box)),
+                ownedHandle: handle);
+        }
+    }
+""".trimEnd(),
+  )
+  appendLine()
+}

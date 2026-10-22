@@ -70,6 +70,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmStoredCa
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowProperties
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addInterfaceBridgeFactoryExport
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addHotFlowHandleExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addInterfaceExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addLambdaParamMethodExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addStoredCallbackExports
@@ -132,6 +133,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.renderForwardDiagn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticTrackingLogger
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInterfacePlan
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeAsync
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgePlanOutcome
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceBridgePlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.unimplementableInterfaceDiagnostic
@@ -877,9 +879,9 @@ internal fun warnRefusedLegacyRouteMembers(
     // rather than only what it cannot. A nullable List/Set/Map binds too since the ADR-114
     // amendment, so "nullable or not" covers both the collections and the handles.
     reason = "a Flow-returning or suspend member can take a primitive/String, or a List/Set/Map " +
-        "or a class/object/sealed-type handle, each nullable or not, but not $refused",
-    hint = "pass a class, object or sealed type, a List/Set/Map, or a primitive/String, or " +
-        "expose the values as separate parameters",
+        "or a class/object/sealed-type handle or an interface, each nullable or not, but not $refused",
+    hint = "pass a class, object, sealed type or interface, a List/Set/Map, or a " +
+        "primitive/String, or expose the values as separate parameters",
     owner = owner,
     member = member.simpleName.asString(),
   )
@@ -2786,7 +2788,7 @@ internal class NugetProcessor(
       .filter { iface -> iface.qualifiedName?.asString() !in closedInterfaceNames }
     // ADR-174: the reachable set is the one that carries interface async members; every selector
     // (Kotlin exports, `I<Name>`, the backing wrapper, a generic implementer's forwards) reads it.
-    ForwardAsyncInterfaces.reset(reachableInterfaces, genericBridgeInterfaces)
+    ForwardAsyncInterfaces.reset(reachableInterfaces, genericBridgeInterfaces, interfaces)
 
     // ADR-162: the interface planning loops are guarded per interface for the same reason the
     // callable planner's `planOrSkip` is: an interface whose planning throws used to abort the
@@ -3458,6 +3460,9 @@ internal class NugetProcessor(
       (outcome as? ForwardBridgePlanOutcome.Planned)?.plan
     }
     bridgePlans.forEach { plan -> builder.addInterfaceBridgeFactoryExport(plan) }
+    // ADR-232: the handle-keyed hot-flow exports a C# implementation's hot-flow slot reads through.
+    bridgePlans.firstOrNull { plan -> plan.slots.any { slot -> slot.result.hotFlow } }
+      ?.let { plan -> builder.addHotFlowHandleExports(context.symbols, plan.declaration) }
     // ADR-084 / ADR-064: a null bridge plan used to be silent, a C# implementation then failing at
     // runtime in `NugetMarshal.HandleOf` with a message naming only its own type. Every reachable
     // unplanned interface is now named once, from the planner's own walk (so the reason cannot
@@ -3973,8 +3978,12 @@ internal class NugetProcessor(
         parameter.type.asyncKind() != null
       }
     }
+    // ADR-232: a C#-implemented interface's `Flow` member reads through the same holder.
+    val bridgesTakeFlows: Boolean = bridgePlans.any { plan ->
+      plan.slots.any { slot -> slot.async == ForwardBridgeAsync.FLOW }
+    }
     val hasAsyncCallbackParameters: Boolean =
-      legacyRoutesTakeAsyncParameters || plansTakeAsyncParameters
+      legacyRoutesTakeAsyncParameters || plansTakeAsyncParameters || bridgesTakeFlows
     if (hasAsyncCallbackParameters) {
       builder.addImport("kotlinx.cinterop", "reinterpret")
       builder.addImport("kotlinx.cinterop", "invoke")

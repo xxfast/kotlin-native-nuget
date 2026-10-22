@@ -558,6 +558,25 @@ asserts Kotlin's garbage collection releases it.
 
 A generic interface at an output or erased position adds no new obligation: a Kotlin-backed `Keepsake<T>` you receive is yours to dispose, and a C# implementation Kotlin returns is your own object, with the transfer handle released. `LeakTests/LiveHandleTests.cs`'s `GenericInterfaceOutput_ReturnedKeepsakes_ReturnToBaseline` and `GenericInterfaceOutput_ErasedInputs_ReturnToBaseline` return to baseline, and `LeakTests/CollectabilityTests.cs`'s `CSharpGenericKeepsake_StoredThenDropped_ReleasedAfterKotlinGc` asserts a stored C# implementation is released after Kotlin's garbage collection once you overwrite and drop it.
 
+A C# class implementing a Kotlin interface with `suspend` and `Flow` members adds no handle you
+dispose: each awaited result, each flow element and each hot-flow handle Kotlin reads is released
+by Kotlin, and no per-call state outlives the call. `LeakTests/LiveHandleTests.cs` rows 19a to 19d
+return to baseline:
+
+- Row 19a, `CSharpAsyncInterface_Completion_ReturnsToBaseline`: every result wire, a `Unit` member
+  awaited twice, a flow made with `KotlinFlow<T>.From` collected to the end, and a Kotlin-made flow
+  passed back through the C# implementation.
+- Row 19b, `CSharpAsyncInterface_Fault_ReturnsToBaseline`: a C# fault caught in Kotlin, and the same
+  fault left uncaught.
+- Row 19c, `CSharpAsyncInterface_Cancellation_ReturnsToBaseline`: a Kotlin timeout cancelling a
+  pending C# call, and the C# caller's token cancelling the outer call.
+- Row 19d, `CSharpHotFlowInterface_ReturnsToBaseline`: `KotlinMutableStateFlow<T>.Create` and
+  `KotlinMutableSharedFlow<T>.Create` flows read, written, collected and emitted from both sides, and
+  a `suspend` member returning a `Flow`.
+
+`LeakTests/CollectabilityTests.cs` `CSharpAsyncFeeder_ReleasedAfterKotlinGc` holds a `WeakReference`
+to the implementation and asserts Kotlin's garbage collection releases it once Kotlin drops its bridge.
+
 An exception thrown from Kotlin allocates one error handle per call, and the
 [exception mapping](exceptions.md#catching-a-specific-exception-type) reads a mapped type from it
 for the exception and each cause. `LeakTests/LiveHandleTests.cs`'s

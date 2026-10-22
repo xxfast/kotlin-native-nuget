@@ -366,6 +366,25 @@ private fun legacyRouteParameter(
       )
     }
 
+    // ADR-232: an interface, through the same erased write: a Kotlin-backed value lends its own
+    // handle, a C# implementation mints its bridge (`HandleFor`, or a generic interface's
+    // `MintBridge`), disposed in the `finally` once Kotlin has read it in the export's prelude.
+    is ForwardLegacyParameterShape.Interface -> {
+      val declared: BridgeType = if (shape.nullable) BridgeType.Nullable(shape.type) else shape.type
+      val type: String = declared.forwardPublicCsharpType()
+      val handle: String = requireNotNull(names.handleLocals[index])
+      val owned: String = requireNotNull(names.ownedLocals[index])
+      CirParameter(
+        name,
+        type = type,
+        nativeType = "IntPtr",
+        isReferenceType = true,
+        collectionCreate = "NugetMarshal.Wrap<${shape.type.forwardPublicCsharpType()}>($name!, out bool $owned)",
+        collectionHandle = handle,
+        boxOwnedLocal = owned,
+      )
+    }
+
     // ADR-201 amendment: the sync route's wire, one `string` slot of managed-exception text.
     is ForwardLegacyParameterShape.ManagedException -> CirParameter(
       name,

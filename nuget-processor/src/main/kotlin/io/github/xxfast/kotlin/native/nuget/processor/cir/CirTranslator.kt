@@ -1030,7 +1030,14 @@ internal fun translate(
         tracker.flowSources
       ).distinct()
   // ADR-215 lane C: a `suspend` lambda's `T` result or a `Flow<T>` element is an owned box too.
-  val boxesAsync: Boolean = (asyncCallbacks + flowSources).any { type -> type.boxesIntoKotlin() }
+  // ADR-232: a C#-implemented interface's `suspend` and `Flow` members read through the same
+  // thunks.
+  val bridgeAsyncPlans: List<ForwardBridgeInterfacePlan> = bridgePlans.map { entry -> entry.plan }
+  val bridgeBegins: List<CirAsyncBegin> = bridgeAsyncBegins(bridgeAsyncPlans)
+  val bridgeEnds: List<CirAsyncEnd> = bridgeAsyncEnds(bridgeAsyncPlans)
+  val bridgeCurrents: List<CirAsyncEnd> = bridgeAsyncCurrents(bridgeAsyncPlans)
+  val boxesAsync: Boolean = (asyncCallbacks + flowSources).any { type -> type.boxesIntoKotlin() } ||
+    bridgeAsyncBoxes(bridgeAsyncPlans)
   val helpers: MutableList<CirDeclaration> = mutableListOf(
     CirMarshalHelper(
       context.libraryName,
@@ -1057,7 +1064,16 @@ internal fun translate(
         .takeIf { callableCatalog.objectCallbackResultOwner() != null || boxesAsync },
     ),
   )
-  if (bridgePlans.isNotEmpty()) helpers.add(CirBridgeHelper(context.libraryName, bridgePlans))
+  val hotFlows: Boolean = bridgeAsyncPlans.bridgesHotFlows()
+  if (bridgePlans.isNotEmpty()) {
+    helpers.add(
+      CirBridgeHelper(
+        context.libraryName,
+        bridgePlans,
+        hotFlowSegment = context.symbols.librarySegment.takeIf { hotFlows },
+      ),
+    )
+  }
   if (tracker.needsList) helpers.add(CirListHelper(context.libraryName))
   if (tracker.needsBytes) helpers.add(CirBytesHelper(context.libraryName))
   if (tracker.needsMap) helpers.add(CirMapHelper(context.libraryName))
@@ -1073,14 +1089,15 @@ internal fun translate(
   if (tracker.needsAsync) helpers.add(CirScopeHelper(context.libraryName))
   if (tracker.needsAsync) helpers.add(CirJobHelper(context.libraryName))
   helpers.add(CirErrorHelper(context.libraryName))
-  if (tracker.needsFlow) {
+  if (tracker.needsFlow || hotFlows) {
     helpers.add(
       CirFlowHelper(
         context.libraryName,
-        includesStateFlow = tracker.needsStateFlow,
-        includesMutableStateFlow = tracker.needsMutableStateFlow,
-        includesSharedFlow = tracker.needsSharedFlow,
-        includesMutableSharedFlow = tracker.needsMutableSharedFlow,
+        includesStateFlow = tracker.needsStateFlow || hotFlows,
+        includesMutableStateFlow = tracker.needsMutableStateFlow || hotFlows,
+        includesSharedFlow = tracker.needsSharedFlow || hotFlows,
+        includesMutableSharedFlow = tracker.needsMutableSharedFlow || hotFlows,
+        includesHotFlowHandles = hotFlows,
       ),
     )
   }
@@ -1088,16 +1105,18 @@ internal fun translate(
     helpers.add(CirStateFlowHandleHelper(context.libraryName))
   }
   val hasCallbackDelegates: Boolean = tracker.callbackDelegates.isNotEmpty()
-  val hasAsyncParameters: Boolean = asyncCallbacks.isNotEmpty() || flowSources.isNotEmpty()
+  val hasAsyncParameters: Boolean = asyncCallbacks.isNotEmpty() || flowSources.isNotEmpty() ||
+    bridgeBegins.isNotEmpty() || bridgeCurrents.isNotEmpty()
   if (hasCallbackDelegates || hasAsyncParameters) {
     helpers.add(
       CirCallbackDelegateHelper(
         tracker.callbackDelegates.distinctBy { it.name },
-        asyncBegins = asyncCallbacks.map { callback -> callback.forwardAsyncBegin() }
+        asyncBegins =
+          (asyncCallbacks.map { callback -> callback.forwardAsyncBegin() } + bridgeBegins)
           .distinctBy { begin -> begin.name },
-        asyncEnds = asyncCallbacks.map { callback -> callback.forwardAsyncEnd() }
+        asyncEnds = (asyncCallbacks.map { callback -> callback.forwardAsyncEnd() } + bridgeEnds)
           .distinctBy { end -> end.name },
-        asyncCurrents = flowSources.map { flow -> flow.forwardAsyncCurrent() }
+        asyncCurrents = (flowSources.map { flow -> flow.forwardAsyncCurrent() } + bridgeCurrents)
           .distinctBy { current -> current.name },
         boxesObjects = boxesAsync,
       ),
