@@ -75,7 +75,6 @@ Three open items.
 
 ## Phase 7: Bidirectional support (C# → Kotlin)
 - [ ] A generic interface (`IHolder<T>`) implemented in C# and passed to Kotlin is not bridged: [ADR-084](docs/adr/084-csharp-implemented-interface-handles.md) bridges no generic interface, so the C# side of an interface `var item: T` is out of reach ([ADR-218](docs/adr/218-type-parameter-property-setter.md))
-- [ ] Fold the reverse template's internal `NugetManagedException` onto the runtime class over the ADR-130 expect/actual seam ([details](docs/backlog/fold-reverse-managed-exception-onto-runtime-class.md))
 
 ## Phase 8: Ecosystem – consuming NuGet packages from Kotlin
 
