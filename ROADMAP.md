@@ -56,7 +56,6 @@ Complete.
 ## Phase 4: Rich type support
 
 - [ ] A function's own `T` inside a generic value class under `?` (`Sticker<T>?`) or inside a `List`, `Set` or `Map` (`List<Sticker<T>>`) is skipped, named: `null` and `Sticker(null)` would share the null pointer, and the collection element needs ADR-212's element box plus the re-wrap ([ADR-220](docs/adr/220-generic-value-class-record-struct.md))
-- [ ] A generic value class at an erased position (`Box<Sticker<Int>>`, a lambda payload or result, a `Flow` element, an awaited `suspend` result) is skipped, named: it needs a per-instantiation box/unbox pair, which has no design ([ADR-220](docs/adr/220-generic-value-class-record-struct.md))
 
 ## Phase 5: Exception handling
 

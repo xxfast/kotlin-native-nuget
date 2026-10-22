@@ -7,6 +7,7 @@ import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.KSTypeAlias
 import com.google.devtools.ksp.symbol.KSTypeArgument
 import com.google.devtools.ksp.symbol.KSTypeParameter
@@ -18,6 +19,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeC
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardKotlinArgumentSpelling
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinSpelling
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyGenericSealedElement
+import io.github.xxfast.kotlin.native.nuget.processor.forward.hasErasedCrossing
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isDeclaredGeneric
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
@@ -405,6 +408,14 @@ internal fun classifyMutableStateFlowElement(elementType: KSType?): MutableState
 
     // Before the CLASS arm: a value class is a `CLASS` too. A generic value class is refused by
     // name there and is never read as a handle.
+    // ADR-228: a generic value class, and one over a nullable String, write as their own box
+    // (`NugetMarshal.Wrap<V>` mints it through the box pair, running `init` there), read back
+    // in Kotlin at the applied spelling.
+    classDeclaration.isValueClass() && classDeclaration.writesAsOwnBox() ->
+      MutableStateFlowElement.Boxed(
+        listOf(expanded.makeNotNullable().forwardKotlinArgumentSpelling()), nullable = false,
+      )
+
     classDeclaration.isValueClass() -> valueClassElement(classDeclaration, qualifiedName)
 
     // ADR-208: a closed generic instantiation (`Box<String>`, a generic sealed `Outcome<Int>`)
@@ -983,7 +994,9 @@ internal fun qualifiedElementCsType(type: KSType?, context: NugetContext): Strin
   } else {
     classDeclaration.nestedCsName()
   }
-  if (context.rootNamespace.isEmpty()) return nestedName
+  if (context.rootNamespace.isEmpty()) {
+    return nestedName + classDeclaration.valueClassArguments(requireNotNull(type), context)
+  }
   val kotlinPackage: String = classDeclaration.packageName.asString()
   // ADR-123: this is the *user-type* speller. A Kotlin builtin reaching it is a defect at every
   // call site, because [mapPackageToNamespace] has no notion of a builtin package: it capitalises
@@ -999,7 +1012,20 @@ internal fun qualifiedElementCsType(type: KSType?, context: NugetContext): Strin
   val namespace: String = mapPackageToNamespace(
     kotlinPackage, context.rootPackage, context.rootNamespace,
   )
-  return "global::$namespace.$nestedName"
+  return "global::$namespace.$nestedName" + classDeclaration.valueClassArguments(type, context)
+}
+
+/**
+ * ADR-228: a generic value class element (`Sticker<int>`) keeps its type arguments, which the
+ * struct needs to be named at all (CS0305). Empty for every other declaration.
+ */
+private fun KSClassDeclaration.valueClassArguments(type: KSType, context: NugetContext): String {
+  if (typeParameters.isEmpty() || Modifier.VALUE !in modifiers) return ""
+  val arguments: List<String> = type.expandAliases().arguments.map { argument ->
+    val resolved: KSType? = argument.type?.resolve()
+    qualifiedElementCsType(resolved, context, resolved?.isMarkedNullable == true)
+  }
+  return if (arguments.isEmpty()) "" else arguments.joinToString(", ", "<", ">")
 }
 
 /**
@@ -1099,6 +1125,12 @@ internal fun csTypeArgument(
   if (declaration !is KSClassDeclaration) return CsTypeArgument.Unnameable(qualifiedName)
   // ADR-199: a closed generic sealed instantiation is read through its `Factories` entry.
   if (resolved.arguments.isNotEmpty()) {
+    // ADR-228: a generic value class crosses through its one box pair.
+    val valueClass: BridgeType.ValueClass? =
+      classifier.classify(resolved.makeNotNullable()) as? BridgeType.ValueClass
+    if (valueClass != null && valueClass.isDeclaredGeneric() && valueClass.hasErasedCrossing()) {
+      return CsTypeArgument.Named("${valueClass.csharpType}$suffix")
+    }
     return classifier.legacyGenericSealedElement(resolved, nullable = suffix.isNotEmpty())
       ?.let { spelled -> CsTypeArgument.Named(spelled) }
       ?: CsTypeArgument.Unnameable(qualifiedName)
@@ -1225,3 +1257,16 @@ internal fun lambdaTypeArgumentDiagnostic(
       "primitive, a String, or a top-level exported class in the export scope (a Flow or a " +
       "generic type argument needs its own bridgeable wrapper type)",
 )
+
+/**
+ * ADR-228: a value class whose erased crossing is its own box pair rather than its underlying's
+ * wire: a generic one (every instantiation shares the pair), or one over a nullable `String`,
+ * whose `null` underlying the plain wire cannot tell from an absent value.
+ */
+internal fun KSClassDeclaration.writesAsOwnBox(): Boolean {
+  if (typeParameters.isNotEmpty()) return true
+  val underlying: KSType = primaryConstructor?.parameters?.singleOrNull()?.type?.resolve()
+    ?.expandAliases() ?: return false
+  return underlying.isMarkedNullable &&
+    underlying.declaration.qualifiedName?.asString() == "kotlin.String"
+}

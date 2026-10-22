@@ -109,11 +109,11 @@ class Tier1GenericValueClassTest {
       Regex("""@CName\("[^"]*_(sticker|decal)_create"""").containsMatchIn(result.generated),
       "expected no _create for a generic value class",
     )
-    // ADR-237: an own-`T` underlying rides an `object` box pair; a phantom one has none and crosses
-    // an `object` position as an opaque `KotlinObject`.
+    // ADR-228: one box pair per generic value class, shared by every instantiation, a phantom's
+    // included; ADR-237 reads one back at an `object` position through it.
     assertTrue(Regex("""@CName\("[^"]*_sticker_box"\)""").containsMatchIn(result.generated))
     assertTrue(Regex("""@CName\("[^"]*_sticker_unbox"\)""").containsMatchIn(result.generated))
-    assertFalse(Regex("""@CName\("[^"]*_decal_(box|unbox)"""").containsMatchIn(result.generated))
+    assertTrue(Regex("""@CName\("[^"]*_decal_unbox"\)""").containsMatchIn(result.generated))
     assertContains(code, "public readonly record struct Sticker<T>(T Value) : INugetGenericValue")
     assertContains(code, "internal static class StickerNative")
   }
@@ -220,12 +220,15 @@ class Tier1GenericValueClassTest {
   @Test
   fun `a generic value class outside the ordinary wire stays a named skip`() {
     listOf(
-      "maybeStick", "stickAll", "boxed", "later", "initial", "starred",
+      "maybeStick", "stickAll", "initial", "starred",
     ).forEach { member ->
       assertTrue(result.skipped(member), "expected $member named; kspWarnings=${result.kspWarnings}")
     }
-    val named = Regex("""\b(MaybeStick|StickAll|Boxed|Later|Initial|Starred)\(""")
+    val named = Regex("""\b(MaybeStick|StickAll|Initial|Starred)\(""")
     assertFalse(named.containsMatchIn(code))
+    // ADR-228: an erased position crosses through the box pair.
+    assertContains(code, "Sticker<int>> Boxed()")
+    assertContains(code, "Sticker<int>> LaterAsync(")
   }
 
   /** ADR-225: the struct's own member binds on it, its receiver re-wrapped so `init` runs. */

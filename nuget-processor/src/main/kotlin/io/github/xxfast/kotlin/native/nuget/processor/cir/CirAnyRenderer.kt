@@ -182,18 +182,12 @@ internal fun StringBuilder.renderAnyWire(helper: CirMarshalHelper) {
 }
 
 /**
- * ADR-237: the C# types behind the `object` wire that no wrapper covers: [INugetGenericValue], a
- * generic value class struct that boxes itself, and `KotlinObject`, a Kotlin object with no C#
- * wrapper. The latter is opaque: it hands the same Kotlin object back when C# passes it to Kotlin,
+ * ADR-237: the C# type behind the `object` wire that no wrapper covers, `KotlinObject`, a Kotlin
+ * object with no C# wrapper (a generic value class struct boxes itself through ADR-228's
+ * `INugetGenericValue`). It is opaque: it hands the same Kotlin object back when C# passes it to Kotlin,
  * and releases its handle on [IDisposable.Dispose] or finalization.
  */
 internal fun StringBuilder.renderKotlinObject() {
-  appendLine("    /// <summary>A generic value class struct, boxed for Kotlin by its own generated pair.</summary>")
-  appendLine("    internal interface INugetGenericValue")
-  appendLine("    {")
-  appendLine("        IntPtr NugetBox();")
-  appendLine("    }")
-  appendLine()
   appendLine("    /// <summary>A Kotlin object with no C# wrapper, read through <c>object</c>. Passing it back to Kotlin hands over the same object.</summary>")
   appendLine("    public sealed class KotlinObject : IDisposable, INugetHandle")
   appendLine("    {")

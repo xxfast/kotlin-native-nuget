@@ -34,6 +34,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyParameterSha
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.valueClassWithoutStruct
 import io.github.xxfast.kotlin.native.nuget.processor.forward.hasErasedCrossing
+import io.github.xxfast.kotlin.native.nuget.processor.forward.unwrapNullable
 import io.github.xxfast.kotlin.native.nuget.processor.forward.sealedAsHandle
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter

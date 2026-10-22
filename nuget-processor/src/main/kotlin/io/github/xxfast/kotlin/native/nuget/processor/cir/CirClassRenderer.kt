@@ -799,8 +799,15 @@ private fun StringBuilder.renderMethodBody(method: CirMethod, className: String)
   val disposedName: String = method.explicitInterface ?: className
   if (method.isAsync || method.isFlow) {
     val rendered = StringBuilder()
-    if (method.isAsync) rendered.renderAsyncMethod(method, disposedName)
-    else rendered.renderFlowMethod(method, disposedName)
+    if (method.isAsync) {
+      rendered.renderAsyncMethod(method, disposedName)
+    } else if (!method.flowReceiverBox) {
+      rendered.renderFlowMethod(method, disposedName)
+    } else {
+      // ADR-228: every extern call over the receiver local mints its box and releases it after.
+      val flow: String = buildString { renderFlowMethod(method, disposedName) }
+      rendered.append(boxedReceiverCalls(flow, requireNotNull(method.flowReceiverLocal)))
+    }
     append(rendered.withOpeningFills(method.openSlotFills))
     return
   }

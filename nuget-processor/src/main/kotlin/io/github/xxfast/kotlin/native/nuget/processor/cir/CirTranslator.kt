@@ -1666,7 +1666,8 @@ private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry
  * produces; a sealed arm's scope follows its `isNested` placement, as in [factoryEntries].
  */
 private fun valueClassNames(namespaces: List<CirNamespace>): List<String> =
-  valueClasses(namespaces).map { (name, _) -> name }.distinct()
+  // ADR-228: a generic one has no single `Type` key; it registers per instantiation instead.
+  valueClasses(namespaces).map { (name, _) -> name }.filterNot { name -> '<' in name }.distinct()
 
 /**
  * [valueClassNames], each paired with the value class's Kotlin qualified name (ADR-237), the key
@@ -2095,6 +2096,8 @@ private fun CirDeclaration.fillsFactorySlot(): Boolean {
   if (this is CirClass && typeParameters.isNotEmpty() && (!isAbstract || backingName != null)) {
     return true
   }
+  // ADR-228: a generic value class with a box pair registers its instantiations.
+  if (this is CirValueClass && typeParameters.isNotEmpty() && boxing != null) return true
   val nested: List<CirDeclaration> = when (this) {
     is CirSealedClass -> nestedDeclarations
     is CirClass -> nestedDeclarations

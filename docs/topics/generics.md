@@ -315,8 +315,10 @@ class. A position that does (`Describe`, `Pick`) crosses as the same boxed handl
 property already uses: a value type pays one box mint and dispose per call, an exported class
 instantiation borrows the argument's own live handle and mints nothing on the way in, and a
 [value class](value-classes.md#at-an-erased-generic-position) mints and disposes a box through its
-own box/unbox pair, running `init` at the boundary. A value class with no such pair (a nullable
-underlying or an ineligible sealed interface) still compiles at `T` but throws
+own box/unbox pair, running `init` at the boundary. A generic one (`Box<Sticker<Int>>`, or `Sticker<T>` over a
+function's own `T`) uses a single pair for every instantiation, see
+[A generic value class at an erased position](value-classes.md#a-generic-value-class-at-an-erased-position). A value class with no such pair (an ineligible sealed
+interface) still compiles at `T` but throws
 `NotSupportedException` at the call, since an open C# generic has no build-time way to refuse it.
 A Kotlin member that uses a value class with no C# record struct (over `Char`, `Instant`, and so
 on) at `T` is skipped by name instead.

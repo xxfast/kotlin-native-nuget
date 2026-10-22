@@ -216,32 +216,23 @@ class Tier1MutableStateFlowValueClassElementTest {
   }
 
   /**
-   * `Nick` wraps a `String?`. It has a record struct but no ADR-171 box/unbox pair, so nothing
-   * could read a bare `Nick` element back (`FromHandle<Nick>` has no `Factories` entry). It used
-   * to bind as a read-only holder whose `.Value` would throw; the flow route now drops the member
-   * and names it, and the write-arm refusal, which describes a member that survives read-only,
-   * stays silent.
+   * ADR-228: `Nick` wraps a `String?` and has its box/unbox pair now, so a bare `Nick` element
+   * reads back through its `Factories` entry and writes as its own box (`Wrap<Nick>`): both
+   * members bind writable with no diagnostic.
    */
   @Test
-  fun `a value class over an underlying the setter refuses is skipped by name`() {
+  fun `a value class over a nullable String underlying writes as its own box`() {
     assertClean()
     val kotlin: String = result.generated
     val csharp: String = result.generatedCSharp
-    assertFalse(
-      Regex("""Flow<[\w.:]*Nick\??>""").containsMatchIn(csharp),
-      "expected no holder of a bare Nick element; generatedCSharp=$csharp",
-    )
-    assertFalse("tracker_set_nick_value" in kotlin, "expected no Kotlin setter for Nick")
+    assertContains(csharp, Regex("""Flow<[\w.:]*Nick\??>"""))
+    assertTrue("tracker_set_nick_value" in kotlin, "expected a Kotlin setter for Nick")
     listOf("Tracker.nick:", "Tracker.nickDial:").forEach { member ->
-      val named: List<String> = result.kspWarnings.filter { it.contains(member) }
-      assertEquals(1, named.size, "expected $member named once; got: ${result.kspWarnings}")
-      assertContains(named.single(), "Nick")
-      assertContains(named.single(), "those are the underlyings it has a boxed form for")
+      assertTrue(
+        result.kspWarnings.none { it.contains(member) },
+        "expected $member to bind silently; got: ${result.kspWarnings}",
+      )
     }
-    assertFalse(
-      result.kspWarnings.any { it.contains("has no write arm") },
-      "a dropped member has no read-only surface to describe; got: ${result.kspWarnings}",
-    )
     // Every writable element is silent: nothing names Tag, Naps, MoodRing, Collar or Flag.
     listOf("Tracker.tag:", "Tracker.spareTag:", "Tracker.flag:", "Tracker.tagDial").forEach {
       assertFalse(
@@ -260,7 +251,7 @@ class Tier1MutableStateFlowValueClassElementTest {
    * this cell used to assert the Kotlin half only, while the C# half spelled the undeclared type.
    */
   @Test
-  fun `a Char, stdlib class, nested value class or generic underlying is refused by name`() {
+  fun `a Char, stdlib class or nested value class underlying is refused by name`() {
     val refusing: Tier1Result = Tier1Harness.run(
       """
       package tier1.vcrefused
@@ -298,9 +289,15 @@ class Tier1MutableStateFlowValueClassElementTest {
     )
     assertEquals(emptyList(), refusing.kspErrors)
     assertTrue(refusing.compiledClean, "got: ${refusing.compileErrors}")
-    assertFalse(
-      Regex("""tracker_set_\w+_value""").containsMatchIn(refusing.generated),
-      "expected no Kotlin setter for a refused value class element",
+    // ADR-228: only the generic `Crate` element is writable, through its own box.
+    assertEquals(
+      listOf("tracker_set_crate_value"),
+      Regex("""tracker_set_\w+_value""")
+        .findAll(refusing.generated)
+        .map { it.value }
+        .distinct()
+        .toList(),
+      "expected a Kotlin setter for the generic value class element only",
     )
     mapOf(
       "Tracker.initial:" to listOf("`tier1.vcrefused.Initial`", "`kotlin.Char`"),
@@ -317,11 +314,11 @@ class Tier1MutableStateFlowValueClassElementTest {
         assertContains(skips.single(), text, message = "expected $member to name $text")
       }
     }
-    // ADR-220: a generic value class IS declared now, so its flow element is refused as a generic
-    // type with no box pair, not as an undeclared struct.
-    val crate: List<String> = refusing.kspWarnings.filter { it.contains("Tracker.crate:") }
-    assertEquals(1, crate.size, "expected Tracker.crate skipped once; got: ${refusing.kspWarnings}")
-    assertContains(crate.single(), "not the generic type Crate<Int>")
+    // ADR-228: a generic value class crosses as its own box, so its element binds silently.
+    assertTrue(
+      refusing.kspWarnings.none { it.contains("Tracker.crate:") },
+      "expected Tracker.crate to bind; got: ${refusing.kspWarnings}",
+    )
     assertFalse(
       refusing.kspWarnings.any { it.contains("has no write arm") },
       "a dropped member has no read-only surface to describe; got: ${refusing.kspWarnings}",

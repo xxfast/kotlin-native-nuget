@@ -274,8 +274,8 @@ internal fun BridgeType.isErasedBoxable(): Boolean = when (this) {
   is BridgeType.Throwable -> acceptsManagedException
 
   // ADR-171: a value class with a box/unbox pair crosses an erased position; the same test the
-  // planner mints that pair on, which it never does for a generic value class.
-  is BridgeType.ValueClass -> typeArguments.isEmpty() && hasErasedCrossing()
+  // planner mints that pair on (ADR-228: a generic one included).
+  is BridgeType.ValueClass -> hasErasedCrossing()
   is BridgeType.Nullable ->
     type != BridgeType.Unit && type !is BridgeType.Nullable && type.isErasedBoxable()
   // ADR-215 lane A: an ADR-211 `fun <T>` own `T`, which `KotlinFunc<T, R>` boxes like any argument.

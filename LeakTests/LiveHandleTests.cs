@@ -8241,4 +8241,103 @@ public class LiveHandleTests
                 () => new TestLibrary.Stickers.Sticker<int>(-1).PeelLaterAsync());
         });
     }
+
+    // ADR-228
+    // A generic value class (and `Nick`, a value class over a nullable `String?`) at an erased
+    // position crosses as one Kotlin box per value. `Wrap<T>` mints the box through the value
+    // class's box export with `owned = true`, and the caller's `finally` disposes it; a read takes
+    // one retained box, which the registered factory unboxes and disposes. Ledger per iteration:
+    // C#-built Box<Sticker<int>> sticker box +1/-1, box_create +1, `.Value` read +1/-1, box_dispose
+    // -1; Kotlin-made Box<Sticker<string>> box_create +1, read +1/-1 (plus its inner string box
+    // +1/-1), dispose -1; Box<Sticker<string?>?> blank read +1/-1, none read 0; Box<Nick?>
+    // present read +1/-1; the courier +1/-1; the `OnSticker` delegate read +1, released once
+    // collected -1, its payload box +1/-1 and result +1/-1; the C#
+    // lambda's payload +1/-1 and result +1/-1. Net zero.
+    [Fact]
+    public void GenericValueClass_ErasedPositions_ReturnToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using (var box = new Box<TestLibrary.Stickers.Sticker<int>>(new TestLibrary.Stickers.Sticker<int>(4)))
+                Assert.Equal(4, box.Value.Value);
+            using (var box = TestLibrary.Stickers.StickerSwaps.BoxedOf("Oreo"))
+                Assert.Equal("Oreo", box.Value.Value);
+            using (var box = TestLibrary.Stickers.StickerSwaps.BoxedBlank())
+                Assert.Null(box.Value!.Value.Value);
+            using (var box = TestLibrary.Stickers.StickerSwaps.BoxedNone())
+                Assert.Null(box.Value);
+            using (var box = TestLibrary.Stickers.StickerSwaps.NickBoxOrNone(true))
+                Assert.Null(box.Value!.Value.Name);
+            using var courier = new TestLibrary.Stickers.StickerCourier("Oreo's desk");
+            Assert.Equal(4, courier.OnSticker.Invoke(new TestLibrary.Stickers.Sticker<string>("Oreo")).Value);
+            Assert.Equal(20, courier.Relay(
+                new TestLibrary.Stickers.Sticker<int>(2),
+                sticker => new TestLibrary.Stickers.Sticker<int>(sticker.Value * 10)));
+        });
+    }
+
+    // ADR-228
+    // The fault paths: Sticker's `init` refuses -1 when Kotlin re-wraps it. The box export throws
+    // before anything is minted (C#-built Box), the C# lambda's result throws inside Kotlin after
+    // its payload box was minted and released, and the MutableStateFlow write throws before the
+    // element is stored. Net zero; a positive delta is a box the error path minted and nobody owns.
+    [Fact]
+    public void GenericValueClass_ErasedPositionInitThrows_ReturnsToBaseline()
+    {
+        using var courier = new TestLibrary.Stickers.StickerCourier("Mylo's desk");
+        AssertNoLeak(() =>
+        {
+            Assert.ThrowsAny<ArgumentException>(() =>
+                new Box<TestLibrary.Stickers.Sticker<int>>(new TestLibrary.Stickers.Sticker<int>(-1)));
+            Assert.ThrowsAny<ArgumentException>(() => courier.Relay(
+                new TestLibrary.Stickers.Sticker<int>(2),
+                _ => new TestLibrary.Stickers.Sticker<int>(-1)));
+            Assert.ThrowsAny<ArgumentException>(() =>
+                courier.Board.Value = new TestLibrary.Stickers.Sticker<int>(-1));
+        });
+    }
+
+    // ADR-228
+    // The async erased positions: every awaited result is one retained box the factory unboxes
+    // and disposes, every awaited parameter one owned box the `finally` disposes, every flow
+    // element one box per emission, and each completed call releases its job handle. Ledger per
+    // iteration: courier +1/-1; BumpLater box +1/-1, result +1/-1, job +1/-1; NickLater(true)
+    // result +1/-1, job +1/-1; NickLater(false) job +1/-1; LaterOf("Mylo") argument +1/-1, result
+    // +1/-1 (plus the inner string), job +1/-1; Stream two elements +1/-1 each and their cats
+    // +1/-1; Nicks two present elements +1/-1; Total three C# elements +1/-1 each, job +1/-1;
+    // the `RefileLater` delegate read +1, released once collected -1, its payload +1/-1, result
+    // +1/-1. Net zero.
+    [Fact]
+    public async Task GenericValueClass_AsyncErasedPositions_ReturnToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var courier = new TestLibrary.Stickers.StickerCourier("Oreo's desk");
+            Assert.Equal(6, (await courier.BumpLaterAsync(new TestLibrary.Stickers.Sticker<int>(5))).Value);
+            Assert.Null((await courier.NickLaterAsync(true))!.Value.Name);
+            Assert.Null(await courier.NickLaterAsync(false));
+            Assert.Equal("Mylo", (await courier.LaterOfAsync("Mylo")).Value);
+            await foreach (TestLibrary.Stickers.Sticker<Cat> sticker in courier.Stream())
+            {
+                using Cat cat = sticker.Value;
+                Assert.NotEmpty(cat.Name);
+            }
+            int nicks = 0;
+            await foreach (TestLibrary.Stickers.Nick? _ in courier.Nicks())
+                nicks++;
+            Assert.Equal(3, nicks);
+            Assert.Equal(6, await courier.TotalAsync(StickerDrip(1, 2, 3)));
+            Assert.Equal(6, (await courier.RefileLater(
+                new TestLibrary.Stickers.Sticker<int>(5), CancellationToken.None)).Value);
+        });
+    }
+
+    private static async IAsyncEnumerable<TestLibrary.Stickers.Sticker<int>> StickerDrip(params int[] values)
+    {
+        foreach (int value in values)
+        {
+            await Task.Yield();
+            yield return new TestLibrary.Stickers.Sticker<int>(value);
+        }
+    }
 }

@@ -206,32 +206,24 @@ class Tier1FlowElementValueClassWithoutStructTest {
   }
 
   /**
-   * `Nick` wraps a `String?`: it HAS a record struct, but no ADR-171 box/unbox pair, so no
-   * `NugetMarshal.Factories` entry reads it back and `FromHandle<Nick>` would throw
-   * `NotSupportedException` at the first `.Value`. Tier 1 compiles the C# but cannot execute it
-   * (no native library is linked), so the cell pins what makes the read impossible (no factory
-   * entry) and that the bare element is refused by name instead. Inside a `List` it is projected
-   * per component, with no box, so that member binds and its read compiles.
+   * ADR-228: `Nick` wraps a `String?` and now has the ADR-171 box/unbox pair, crossing as a real
+   * box (`Nick(null)` is a live box, a `null` `Nick?` the null pointer). So a bare element reads
+   * back through its `Factories` entry and every member binds, with no diagnostic.
    */
   @Test
-  fun `a value class with a record struct but no boxed form is refused as a bare element`() {
+  fun `a value class over a nullable String underlying binds as a bare element`() {
     assertClean()
     assertContains(result.generatedCSharp, "public readonly record struct Nick")
-    assertFalse(
-      "[typeof(global::Interop.Nick)]" in result.generatedCSharp,
-      "Nick has no box/unbox pair, so no Factories entry can read a bare element back",
-    )
+    assertContains(result.generatedCSharp, "[typeof(global::Interop.Nick)]")
     listOf("Tracker.nick:", "Tracker.maybeNick:", "Tracker.nickFlow:", "Tracker.awaitNick:")
       .forEach { member ->
-        val named: List<String> = result.kspWarnings.filter { it.contains(member) }
-        assertEquals(1, named.size, "expected $member named once; got: $named")
-        assertContains(named.single(), "Nick")
-        assertContains(named.single(), "those are the underlyings it has a boxed form for")
+        assertTrue(
+          result.kspWarnings.none { it.contains(member) },
+          "expected $member to bind silently; " +
+            "got: ${result.kspWarnings.filter { it.contains(member) }}",
+        )
       }
-    assertFalse(
-      Regex("""Flow<[\w.:]*Nick\??>""").containsMatchIn(code),
-      "expected no flow holder of a bare Nick element",
-    )
+    assertContains(code, Regex("""KotlinStateFlow<[\w.:]*Nick> Nick\b"""))
     assertContains(
       result.generatedCSharp,
       Regex("""public KotlinStateFlow<IReadOnlyList<[\w.:]*Nick>> Nicks\b"""),

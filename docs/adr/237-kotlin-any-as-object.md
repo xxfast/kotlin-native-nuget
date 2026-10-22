@@ -124,3 +124,16 @@ as a managed object and returns as the same instance, read from the generated `W
 `ReadAny`. The three refused shapes of an erased `<R>` (`reified`, two bounds, a bound naming a type
 parameter) are read from the planner. A use-site `out` projection of a concrete type (`Box<out Cat>`)
 is unchanged.
+
+## Amendment 2026-10-24: the box pair is ADR-228's
+
+A generic value class's `object` box pair is the one
+[ADR-228](228-generic-value-class-erased-positions.md) gives every generic value class for its
+erased positions, so this ADR builds none of its own: one `_box`/`_unbox` export pair per class,
+the `INugetGenericValue` struct and its `{Name}Native` holder, with `Bow<object?>` still registered
+under the Kotlin name `KotlinTypes` reads. That pair also covers a phantom, so
+`Decal<T>(val serial: Long)` crosses an `object` position as its struct and reads back as
+`Decal<object?>` rather than as an opaque `KotlinObject`. `Tier1GenericValueClassTest` pins the
+phantom's exports, and `Stash_PhantomGenericValueClass_ReadsBackOverObject` reads one back. A
+generic value class with no pair (an underlying no erased position carries) is still the opaque
+`KotlinObject`.

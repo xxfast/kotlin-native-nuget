@@ -102,7 +102,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.staticFlowCandidat
 import io.github.xxfast.kotlin.native.nuget.processor.forward.staticFlowRouteMembers
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addStaticFlowExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addValueClassExports
-import io.github.xxfast.kotlin.native.nuget.processor.exports.addGenericValueBoxExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedDeclaration
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.COMPANION_OWNER_INTERFACE
@@ -3483,8 +3482,6 @@ internal class NugetProcessor(
     valueClasses.forEach { cls ->
       guardDeclaration(cls) {
         builder.addValueClassExports(cls, callableCatalog, forwardClassifier)
-        // ADR-237: a generic value class's `object` box pair.
-        builder.addGenericValueBoxExports(cls, cls.nativePrefix(context.symbols))
       }
     }
     reachableInterfaces.forEach { iface ->

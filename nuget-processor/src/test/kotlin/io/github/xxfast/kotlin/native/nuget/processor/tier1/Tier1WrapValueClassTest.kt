@@ -76,26 +76,19 @@ class Tier1WrapValueClassTest {
   }
 
   @Test
-  fun `a lambda over a boxed value class binds, over one with no pair it is refused by name`() {
+  fun `a lambda over a boxed value class binds, a nullable String underlying included`() {
     val result = run()
     val cs: String = result.generatedCSharp
 
     // ADR-236: the property plan renders the header alone on its line.
     assertContains(cs, "Func<global::Tier1.ChartId, string> OnChart\n")
     assertContains(cs, "Func<global::Tier1.Finding, string> OnFinding\n")
-
-    listOf("OnMaybe" to "tier1.wrap.MaybeId")
-      .forEach { (member, valueClass) ->
-        assertFalse(cs.contains(" $member\n"), "expected no $member; a $valueClass has no box pair")
-        val diagnostic: String? = result.kspWarnings.firstOrNull { warning ->
-          warning.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name}]") &&
-            warning.contains("Courier.${member.replaceFirstChar { it.lowercase() }}")
-        }
-        assertTrue(
-          diagnostic != null && diagnostic.contains(valueClass),
-          "expected a named skip for $member naming $valueClass; kspWarnings=${result.kspWarnings}",
-        )
-      }
+    // ADR-228: `MaybeId` wraps a `String?` and has its box/unbox pair now.
+    assertContains(cs, "Func<global::Tier1.MaybeId, string> OnMaybe\n")
+    assertTrue(
+      result.kspWarnings.none { it.contains("Courier.onMaybe") },
+      "expected onMaybe to bind silently; kspWarnings=${result.kspWarnings}",
+    )
   }
 
   /**

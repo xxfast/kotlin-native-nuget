@@ -185,7 +185,8 @@ internal fun BridgeType.isErasedTypeArgument(): Boolean = when (this) {
   is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.TypeParameter,
     -> true
 
-  is BridgeType.ValueClass -> typeArguments.isEmpty() && hasErasedCrossing()
+  // ADR-228: a generic one too, through the one box pair every instantiation shares.
+  is BridgeType.ValueClass -> hasErasedCrossing()
   is BridgeType.Nullable -> type.isErasedTypeArgument()
   BridgeType.Unit,
   BridgeType.Instant,
