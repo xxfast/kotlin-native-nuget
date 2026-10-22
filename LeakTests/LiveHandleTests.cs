@@ -43,6 +43,7 @@ using TestLibrary.Metronome;
 using TestLibrary.Mishaps;
 using TestLibrary.Models;
 using TestLibrary.Nested;
+using Wardrobe = TestLibrary.Wardrobe;
 using TestLibrary.Objectprops;
 using TestLibrary.Parcel;
 using TestLibrary.Petlist;
@@ -1735,7 +1736,7 @@ public class LiveHandleTests
     }
 
     // Row 6d. The fault-injection twin, and the reason ADR-135 asks for a row rather than reusing
-    // Row 6: an interface with a `var` member plans to null, so `NugetBridge.HandleFor` throws
+    // Row 6: an interface with a `fun <R>` member plans to null, so `NugetBridge.HandleFor` throws
     // before any handle is minted. The `finally` still runs, and today it disposes `IntPtr.Zero`
     // with no zero guard, which kills the process. This row pins that a FAILED mint neither leaks
     // nor disposes anything. The throw is asserted inside `AssertNoLeak`, not around it.
@@ -3115,6 +3116,51 @@ public class LiveHandleTests
             using var box = new PurrBox();
             using IDisposable sub = box.AddPurrListener(new ProbePurrListener());
             Assert.Equal(20, box.ReadNames(5));
+        });
+    }
+
+    // Row 8j-listener-var. The listener `var` on the ADR-039 pair: each `RetagAll` is one getter
+    // crossing (C# mints, Kotlin releases), one `tagSet` crossing whose `String` argument Kotlin
+    // mints and C# releases after reading, and one more getter read-back. A setter that forgets its
+    // argument handle shows up as +50 over the iterations below.
+    private sealed class ProbeNameTagListener : INameTagListener
+    {
+        public string Tag { get; set; } = "Oreo";
+        public void OnRetag() { }
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void InterfaceBridge_ListenerSetterSlot_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var board = new NameTagBoard();
+            using IDisposable sub = board.AddNameTagListener(new ProbeNameTagListener());
+            Assert.Equal("cat:Oreo", board.RetagAll("cat"));
+        });
+    }
+
+    // Row 8j-var. The ADR-084 amendment's setter slot: each `tag` write is one `TagSet` crossing
+    // whose `String` argument Kotlin mints and C# releases after reading, then one getter crossing
+    // whose result C# mints and Kotlin releases. `AddBell` is the scalar pair, which mints nothing
+    // but still rides the transfer handle every call. A setter that forgets its argument handle
+    // shows up as +50 over the iterations below.
+    private sealed class ProbeCollar : Wardrobe.ICollar
+    {
+        public string Tag { get; set; } = "Mylo";
+        public int Bells { get; set; }
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void InterfaceBridge_SetterSlot_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            var collar = new ProbeCollar();
+            Assert.Equal("OREO", Wardrobe.Retagging.Retag(collar, "OREO"));
+            Assert.Equal(1, Wardrobe.Retagging.AddBell(collar));
         });
     }
 

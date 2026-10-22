@@ -372,23 +372,44 @@ oreo.Befriend(dog);
 oreo.ClosestFriend().Speak(); // "Woof!" - Kotlin actually called into `dog`
 ```
 
-Only a limited set of member shapes can cross this bridge: `val` getters, and methods of arity 0-2
-returning `Unit`, a primitive, `Boolean`, an enum, or `String`/`String?`. A `Throwable`,
+Only a limited set of member shapes can cross this bridge: `val` and `var` properties, and methods of
+arity 0-2 returning `Unit`, a primitive, `Boolean`, an enum, or `String`/`String?`. A `Throwable`,
 `Exception` or `RuntimeException` parameter or result crosses too, as a `System.Exception` (see
 [Throwable values](exceptions.md#throwable-values)); a result declared narrower than
-`RuntimeException` is named on a build warning. An interface with a `var`
-property, an object- or collection-typed member, a `suspend` member, a member that returns or takes
-a `Flow`, a generic member, or
-a member with more than two parameters has **no bridge at all**. The build warns once with
+`RuntimeException` is named on a build warning. An interface with an object- or collection-typed
+member, a `suspend` member, a member that returns or takes a `Flow`, a generic member, or a member
+with more than two parameters has **no bridge at all**. The build warns once with
 `SKIPPED_UNIMPLEMENTABLE_INTERFACE`, naming every such member and how to fix it, and passing an
-implementation of it throws `NotSupportedException` the first time it crosses:
+implementation of it throws `NotSupportedException` the first time it crosses.
 
+A `var` works both ways: Kotlin's write lands on your C# property, and a later read sees it.
+
+```kotlin
+interface Collar {
+  var tag: String
+  var bells: Int
+}
+
+fun retag(collar: Collar, tag: String): String {
+  collar.tag = tag
+  return collar.tag
+}
 ```
-[nuget:SKIPPED_UNIMPLEMENTABLE_INTERFACE] Skipping tier1.refusevar.Pet: a C# class implementing
-    `IPet` cannot be passed to Kotlin, because `var mood: String` is a `var`, and the bridge carries
-    a property through a getter slot only. For `var mood: String`, declare it `val`, or hand the
-    value over through a member function. Kotlin-backed `IPet` values are unaffected
+
+```C#
+private sealed class BreakawayCollar : ICollar
+{
+    public string Tag { get; set; } = "Mylo";
+    public int Bells { get; set; } = 1;
+    public void Dispose() { }
+}
+
+var collar = new BreakawayCollar();
+Retagging.Retag(collar, "OREO"); // "OREO"; collar.Tag is now "OREO"
 ```
+
+The same holds for a `var` on a [listener](lambdas-and-callbacks.md#a-listener-val) passed to an
+`add`/`remove` pair.
 
 Kotlin-backed implementations of the interface still cross as usual, and `IPet` still declares every
 member. A marker interface with no members bridges too:

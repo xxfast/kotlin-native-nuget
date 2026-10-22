@@ -451,7 +451,7 @@ Neither `AddWatcher` nor any wire for `onBatch` is generated; nothing else in `K
 The same warning names a non-`Unit` return, as `SKIPPED_UNSUPPORTED_RETURN`, and a member inherited
 from a super-interface.
 
-### A listener `val` {id="a-listener-val"}
+### A listener property {id="a-listener-val"}
 
 A listener interface can declare `val` properties beside its methods. Your implementation supplies
 each one, and Kotlin reads it from your object every time it uses the property, so a change you
@@ -485,12 +485,33 @@ using IDisposable sub = box.AddPurrListener(new Purrer("Oreo", sleepy: false));
 box.Purr(3); // Kotlin reads Sleepy, then calls OnPurr(3)
 ```
 
-A property binds when it is a `val` declared on the listener itself, typed `String`, `String?`,
-`Boolean`, `Int`, `Long`, `Float`, `Double`, or a non-null enum. Any other property refuses the
-whole pair, named on both `add` and `remove`: a `var` or a property inherited from a super-interface
-as `SKIPPED_UNSUPPORTED_INPUT`, and any other type (a collection, a nullable primitive, `Char`, a
-class) as `SKIPPED_UNSUPPORTED_RETURN`. To bind the pair, declare the property `val` on the
-listener, or pass the new value through a member function.
+A property binds when it is a `val` or `var` declared on the listener itself, typed `String`,
+`String?`, `Boolean`, `Int`, `Long`, `Float`, `Double`, or a non-null enum. Kotlin reads the current
+value on every access, and a write to a `var` lands on your C# property:
+
+```kotlin
+interface NameTagListener {
+  var tag: String
+  fun onRetag()
+}
+```
+
+```C#
+private sealed class RecordingNameTagListener(string tag) : INameTagListener
+{
+    public string Tag { get; set; } = tag;
+    public void OnRetag() { }
+    public void Dispose() { }
+}
+
+using IDisposable sub = board.AddNameTagListener(new RecordingNameTagListener("Oreo"));
+board.RetagAll("cat"); // Kotlin writes "cat:Oreo" to Tag, then reads it back
+```
+
+Any other property refuses the whole pair, named on both `add` and `remove`: one inherited from a
+super-interface as `SKIPPED_UNSUPPORTED_INPUT`, and any other type (a collection, a nullable
+primitive, `Char`, a class) as `SKIPPED_UNSUPPORTED_RETURN`. To bind the pair, declare the property
+on the listener itself with a supported type, or pass the value through a member function.
 
 A listener with no members at all (a marker interface) binds too: `AddX(new Quiet())` subscribes
 and the returned `IDisposable` unsubscribes, with nothing for Kotlin to call. A listener can also

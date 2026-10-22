@@ -239,14 +239,14 @@ class Tier1InterfaceBridgeFactoryTest {
 
       interface Pet {
         val name: String
-        // A `var` needs a setter slot, which stage 1 does not model: the whole interface plans to
-        // null rather than shipping a partial ABI.
-        var mood: String
+        // A member type parameter has no slot (a slot carries no type argument): the whole
+        // interface plans to null rather than shipping a partial ABI.
+        fun <R> pick(item: R): R
       }
 
       class Cat(val title: String) : Pet {
         override val name: String = title
-        override var mood: String = "calm"
+        override fun <R> pick(item: R): R = item
 
         fun befriend(pet: Pet) = Unit
         fun closestFriend(): Pet = this
@@ -269,7 +269,7 @@ class Tier1InterfaceBridgeFactoryTest {
     val skip: String =
       result.kspWarnings.single { it.contains("SKIPPED_UNIMPLEMENTABLE_INTERFACE") }
     assertContains(skip, "Skipping tier1.bridgefactoryskip.Pet:")
-    assertContains(skip, "`var mood: String` is a `var`")
+    assertContains(skip, "`fun pick` declares type parameters")
   }
 
   /**
@@ -456,5 +456,75 @@ class Tier1InterfaceBridgeFactoryTest {
     // `global::`-qualified, from the classifier's own spelling rule.
     assertContains(cs, "global::Interop.Heat value0 = (global::Interop.Heat)arg0;")
     assertContains(cs, "return (int)impl.Heat;")
+  }
+
+  /**
+   * ADR-084 amendment (2026-10-22): a `var` bridges. Its setter is a `<name>Set` slot,
+   * `(value, ctx) -> Unit`, ordered directly after its getter, and the value crosses exactly as a
+   * one-parameter function slot of the same type does.
+   */
+  @Test
+  fun `a var crosses through a setter slot ordered after its getter`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.bridgevar
+
+      interface Collar {
+        var mood: String
+        var bells: Int
+        fun jingle(): Int
+      }
+
+      fun retag(collar: Collar, mood: String): String {
+        collar.mood = mood
+        return collar.mood
+      }
+      """.trimIndent(),
+    )
+    assertTrue(
+      result.compiledClean,
+      "expected the var bridge to compile; got: ${result.compileErrors}",
+    )
+
+    val kotlin: String = result.generated
+    val signature: String = kotlin
+      .substringAfter("fun export_library_tier1_bridgevar__collar_bridge_create(")
+      .substringBefore(")")
+    val order: List<String> = listOf(
+      "moodGetPtr", "moodSetPtr", "bellsGetPtr", "bellsSetPtr", "jinglePtr", "releasePtr",
+    )
+    val positions: List<Int> = order.map { name -> signature.indexOf(name) }
+    assertTrue(positions.none { it < 0 } && positions == positions.sorted(), signature)
+
+    assertContains(kotlin, "override var mood: String")
+    assertContains(kotlin, "override var bells: Int")
+    // The String argument is minted here and released by C#'s `FromHandle`, as a function's is.
+    assertContains(
+      kotlin,
+      "val moodSetFn = moodSetPtr.reinterpret<CFunction<(COpaquePointer?, COpaquePointer, " +
+          "COpaquePointer?) -> Unit>>()",
+    )
+    assertContains(
+      kotlin,
+      "      set(value) {\n        val arg0Ref = NugetHandles.retain(value as Any)",
+    )
+    assertContains(
+      kotlin,
+      "nugetCallbackCall { nugetErr -> moodSetFn.invoke(arg0Ref, moodSetCtx, nugetErr) }",
+    )
+    assertContains(
+      kotlin,
+      "val bellsSetFn = bellsSetPtr.reinterpret<CFunction<(Int, COpaquePointer, " +
+          "COpaquePointer?) -> Unit>>()",
+    )
+    assertContains(
+      kotlin,
+      "nugetCallbackCall { nugetErr -> bellsSetFn.invoke(value, bellsSetCtx, nugetErr) }",
+    )
+
+    val cs: String = result.generatedCSharp
+    assertContains(cs, "string value0 = NugetMarshal.FromHandle<string>(arg0); impl.Mood = value0;")
+    assertContains(cs, "int value0 = arg0; impl.Bells = value0;")
+    assertContains(cs, "IntPtr moodGetPtr, IntPtr moodGetCtx, IntPtr moodSetPtr, IntPtr moodSetCtx")
   }
 }

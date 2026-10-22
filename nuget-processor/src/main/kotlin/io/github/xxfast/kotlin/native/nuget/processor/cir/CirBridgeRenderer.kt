@@ -3,6 +3,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInterfacePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.bridgeImplVariable
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeSlot
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeSlotKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeWire
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpWire
 import io.github.xxfast.kotlin.native.nuget.processor.forward.delegateName
@@ -186,6 +187,17 @@ private fun slotLambda(slot: ForwardBridgeSlot): String {
 }
 
 /**
+ * `(IntPtr arg0, IntPtr _)`: one slot's typed lambda parameters, its arguments then the ctx, for
+ * the ADR-039 subscription route's listener-property lambda, so a setter reads `arg0` there too.
+ */
+internal fun slotLambdaParameters(slot: ForwardBridgeSlot): String {
+  val arguments: List<String> = slot.parameters.mapIndexed { index, parameter ->
+    "${parameter.type.wire.csharpWire()} arg$index"
+  }
+  return "(${(arguments + "IntPtr _").joinToString(", ")})"
+}
+
+/**
  * The statements of one slot's delegate body, calling the member on [receiver]. Also the ADR-039
  * subscription route's listener-property body (receiver `listener`), so a listener `val` returns
  * its value across exactly as it does on the bridge factory.
@@ -220,8 +232,13 @@ internal fun slotBody(slot: ForwardBridgeSlot, receiver: String): String {
   val arguments: String = slot.parameters.indices.joinToString(", ") { "value$it" }
   // ADR-179: the slot keeps the unescaped declared name; the call site escapes it.
   val member: String = toCSharpName(slot.csName)
-  val access: String =
-    if (slot.isProperty) "$receiver.$member" else "$receiver.$member($arguments)"
+  // ADR-084 amendment (2026-10-22): a setter slot assigns its one argument, read exactly as a
+  // function slot reads it, and returns nothing.
+  val access: String = when (slot.kind) {
+    ForwardBridgeSlotKind.GETTER -> "$receiver.$member"
+    ForwardBridgeSlotKind.SETTER -> "$receiver.$member = value0"
+    ForwardBridgeSlotKind.FUNCTION -> "$receiver.$member($arguments)"
+  }
 
   when (slot.result.wire) {
     ForwardBridgeWire.UNIT -> body.append("$access;")

@@ -95,10 +95,13 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
     appendLine("  val obj = handle.asStableRef<$qualifiedClassName>().get()")
 
     propertySlots.forEach { slot ->
-      val wire: String = slot.result.wire.kotlinWire()
+      // A setter slot carries its value ahead of the ctx, as on the ADR-084 bridge factory.
+      val args: String = (
+          slot.parameters.map { it.type.wire.kotlinWire() } + "COpaquePointer" + "COpaquePointer?"
+          ).joinToString(", ")
       appendLine(
         "  val ${slot.slotPrefix}Fn = ${slot.slotPrefix}Ptr" +
-            ".reinterpret<CFunction<(COpaquePointer, COpaquePointer?) -> $wire>>()"
+            ".reinterpret<CFunction<($args) -> ${slot.result.wire.kotlinWire()}>>()"
       )
     }
 
@@ -127,7 +130,7 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
 
     // Build anonymous bridge object
     appendLine("  val bridge = object : $ifaceQualifiedName {")
-    propertySlots.forEach { slot -> appendSlotOverride(slot) }
+    appendSlotOverrides(propertySlots)
     ifaceMethods.forEach { method ->
       // The slot stem (`inFn`, `tug_hardPtr`) and, backticked where needed, the override's name.
       val mName: String = method.simpleName.asString().asCSymbol()

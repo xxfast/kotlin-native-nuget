@@ -533,6 +533,13 @@ dispose: a `String` it returns is released by Kotlin after each read.
 `InterfaceBridge_ListenerStringProperty_ReturnsToBaseline`, reads one repeatedly and returns to
 baseline.
 
+A `var` on a C# class implementing a Kotlin interface, written by Kotlin, adds no handle you
+dispose: the `String` Kotlin passes to the setter is released after C# reads it.
+`LeakTests/LiveHandleTests.cs` row 8j-var, `InterfaceBridge_SetterSlot_ReturnsToBaseline`, writes
+and reads back a `String` and an `Int` repeatedly, and row 8j-listener-var,
+`InterfaceBridge_ListenerSetterSlot_ReturnsToBaseline`, does the same through an `add`/`remove`
+listener; both return to baseline.
+
 A C# class implementing a member-less Kotlin interface crosses at a plain parameter through a
 bridge with no callback slots, and comes back as the same instance. `LeakTests/LiveHandleTests.cs`
 row 8j-marker, `InterfaceBridge_CSharpMarkerInterface_ReturnsToBaseline`, passes one repeatedly and

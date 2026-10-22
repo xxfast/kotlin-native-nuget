@@ -1927,8 +1927,9 @@ private fun listenerProperties(listener: KSClassDeclaration): List<KSPropertyDec
     .toList()
 
 /**
- * The getter slots of [listener]'s properties, in the order both halves of the ADR-039
- * subscription export list them (ahead of the function slots, as on the ADR-084 bridge factory).
+ * The getter slots (and, for a `var`, the setter slot directly after) of [listener]'s properties,
+ * in the order both halves of the ADR-039 subscription export list them (ahead of the function
+ * slots, as on the ADR-084 bridge factory).
  * The anonymous `object : Listener` the Kotlin half builds must override every property, so a
  * listener `val` crosses as the same getter slot [ForwardInterfaceBridgePlanner] gives it when a
  * C# implementation is passed at a plain parameter. Only called for a pair the gate admitted, so
@@ -1947,8 +1948,8 @@ internal fun ForwardBridgeTypeClassifier.listenerPropertySlots(
     .map { method -> method.simpleName.asString() }
     .toSet()
   return listenerProperties(listener)
-    .map { property ->
-      requireNotNull(ForwardInterfaceBridgePlanner.slotOf(property, this)) {
+    .flatMap { property ->
+      requireNotNull(ForwardInterfaceBridgePlanner.slotsOf(property, this)) {
         "ADR-039: the subscription pair gate admitted `${property.simpleName.asString()}`, " +
             "which has no getter slot"
       }
@@ -1958,8 +1959,8 @@ internal fun ForwardBridgeTypeClassifier.listenerPropertySlots(
 
 /**
  * Why the subscription route cannot carry one listener property, or null when it can: it is
- * carried exactly when the ADR-084 bridge factory gives it a getter slot (an immutable `String`,
- * `String?`, non-null primitive or non-null enum), and refused when it is inherited, for the
+ * carried exactly when the ADR-084 bridge factory gives it slots (a `String`, `String?`, non-null
+ * primitive or non-null enum, as a `val` or a `var`), and refused when it is inherited, for the
  * reason [refusedListenerMember] gives.
  */
 private fun ForwardBridgeTypeClassifier.refusedListenerProperty(
@@ -1982,16 +1983,8 @@ private fun ForwardBridgeTypeClassifier.refusedListenerProperty(
           "`I$listenerName` declares it",
     )
   }
-  if (property.isMutable) {
-    return LegacyRefusedInterfaceBridgePair(
-      kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
-      reason = "its listener property $signature is a `var`, and this subscription route reads a " +
-          "listener property through a getter callback only",
-      hint = "declare it `val` on `$listenerName`, or hand the new value to the listener " +
-          "through a member function",
-    )
-  }
-  if (ForwardInterfaceBridgePlanner.slotOf(property, this) != null) return null
+  // ADR-084 amendment (2026-10-22): a `var` crosses as its getter and setter slot pair.
+  if (ForwardInterfaceBridgePlanner.slotsOf(property, this) != null) return null
   return LegacyRefusedInterfaceBridgePair(
     kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
     reason = "its listener property $signature has a type a C# listener cannot return (it " +

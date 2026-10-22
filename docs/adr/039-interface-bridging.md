@@ -628,7 +628,7 @@ parameter type (previously not mapped at all).
   widens the tested matrix; deferred until arity-1 is proven.
 - Interface properties (getter/setter) — each property generates 1–2 function pointers; the
   detection rule needs to be extended to cover property-bearing interfaces; deferred. A getter-only
-  `val` shipped on 2026-10-04 (see that amendment at the end); a `var` stays refused by name.
+  `val` shipped on 2026-10-04 and a `var` on 2026-10-22 (see the amendments at the end).
 - `suspend` interface methods — require composing with the coroutine bridge (ADR-019); deferred.
 - Interfaces with no paired `remove*` where Kotlin stores the object indefinitely — requires an
   explicit annotation (`@NugetInterfaceParam(lifetime = Stored)`) so the generator knows it cannot
@@ -682,8 +682,8 @@ The gate stays whole-pair. After the existing undeclared-listener and repeated-m
 `legacyRefusedInterfaceBridgePair` now checks each listener property before the member arm and
 refuses the pair, named on both `add` and `remove`, when the property is:
 
-- inherited from a super-interface, or a `var` (the route reads through a getter only, with no
-  setter slot): `SKIPPED_UNSUPPORTED_INPUT`;
+- inherited from a super-interface (a `var` was refused here until the 2026-10-22 amendment):
+  `SKIPPED_UNSUPPORTED_INPUT`;
 - of any other type, such as a collection, a class, a nullable primitive or enum, or `Char`:
   `SKIPPED_UNSUPPORTED_RETURN`.
 
@@ -729,3 +729,12 @@ asserts no skip warning for the pair), and `IntegrationTests/MarkerInterfaceTest
 unsubscribes a C# member-less listener on the native pipeline. Full `:nuget-processor:test`: 1698
 passed; native pipeline `IntegrationTests` 3069, `LeakTests` 169, 7 AOT shapes. The slot-name
 clash is verified by the Tier 1 cell only, not on the native pipeline.
+
+## Amendment (2026-10-22): a listener `var` crosses as a getter and a setter slot
+
+The 2026-10-04 amendment's `var` refusal is lifted. A `var` on the listener carries its ADR-084
+getter slot followed by the `<name>Set` slot added by that ADR's 2026-10-22 amendment, so Kotlin
+writing `listener.tag = value` lands on the C# object the listener was subscribed with, and the next
+read sees it. The gate stays whole-pair and keeps refusing an inherited property
+(`SKIPPED_UNSUPPORTED_INPUT`) and a type outside the slot vocabulary (`SKIPPED_UNSUPPORTED_RETURN`).
+Evidence: `NameTagBoard` in `test-library`, `ListenerPropertyTests`, LeakTests row 8j-listener-var.
