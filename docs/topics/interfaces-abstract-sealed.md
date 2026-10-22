@@ -1409,8 +1409,8 @@ arm and uses the base's scope, so `await using` on the base reference drains it 
 moves to the base. C# source keeps compiling, since `loaf.AreaAsync()` now resolves to the inherited
 `Shape.AreaAsync`. A consumer compiled against an earlier package must be rebuilt.
 
-A generic sealed base does not carry these members, and an arm with its own type parameter skips its
-`suspend` members; see [Members of a generic arm](#generic-sealed-arm-members).
+A generic sealed base does not carry these members; they bind on each arm, see
+[Members of a generic arm](#generic-sealed-arm-members).
 
 #### A `suspend fun` returning the sealed base {id="sealed-method-suspend-base-generated-c"}
 
@@ -1673,14 +1673,15 @@ bell.Dispose();  // stops the callback
 `Bare` is not generic in Kotlin, but C# declares it as `Dish.Bare<T>` (like `Err` above), and every member of
 it binds, `suspend` ones included: `await mylo.WipeAsync()`.
 
-Two kinds of member on an arm with a Kotlin type parameter are skipped, named
+A `suspend` member on an arm with a Kotlin type parameter binds like a generic class's: `Hot<T>.serve(): T`
+becomes `Task<T> ServeAsync(CancellationToken)`, an override of the generic base's `suspend` member
+binds on the arm, and an arm implementing an exported interface with a `suspend` member implements
+its `IAsyncDisposable` and the interface member. See
+[Coroutines and Flow](coroutines-and-flow.md#suspend-generic-owner).
+
+A member of this kind on an arm with a Kotlin type parameter is skipped, named
 `SKIPPED_UNSUPPORTED_COMBINATION`, and the rest of the arm still binds:
 
-- **A `suspend` member.** Declaring `suspend fun cool()` on `Hot<T>`, taking a `suspend` lambda
-  (`suspend fun warm(cb: suspend (Int) -> Int)`), or overriding an abstract `suspend` member of the
-  generic base or of a generic sealed interface is reported as "it is a `suspend` member of a generic
-  class". Declare it on an arm that fixes the argument (`class Cold : Dish<Int>()` binds
-  `ThawAsync`), or on a non-generic class that wraps the hierarchy.
 - **A stored lambda over the arm's `T`.** A per-call `fun each(action: (T) -> Unit)` binds (as `Each(Action<T>)`); an
   `addTaste`/`removeTaste` pair over `(T) -> Unit` is reported with the sentence "one of its lambdas
   takes or returns a type parameter of its generic sealed arm, and the bridge calls the arm with that

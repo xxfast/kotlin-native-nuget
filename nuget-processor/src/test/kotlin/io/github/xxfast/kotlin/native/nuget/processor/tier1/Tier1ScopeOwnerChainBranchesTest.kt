@@ -404,9 +404,9 @@ class Tier1ScopeOwnerChainBranchesTest {
   /**
    * `reProjectsKeptBaseMember`'s generic-kept-base half: `Barge : Keel(dropped) : Crate<Int>`, with
    * the generic `Crate<T>` declaring an `open suspend fun` and an `open` Flow method that both
-   * `Keel` and `Barge` override. A generic class projects no suspend member (ADR-147 refusal), so
-   * the nearest overridee being on the dropped `Keel` leaves Barge as its only carrier, plain (no
-   * `override`). ADR-215: the Flow member is the generic Crate's, which owns the scope. The base
+   * `Keel` and `Barge` override. ADR-215 / ADR-219: both members are the generic Crate's, projected
+   * over its erased receiver, so Crate owns the scope and Barge inherits both (the export
+   * dispatches to Barge's override in Kotlin). The base
    * list closes `Crate` through the dropped hop, and the generic base's `item: T` (which KSP parents to `Keel`, the class that
    * closes `T`) is not re-homed onto Barge.
    */
@@ -453,22 +453,19 @@ class Tier1ScopeOwnerChainBranchesTest {
     val cs: String = result.generatedCSharp
     assertFalse(Regex("class Keel\\b").containsMatchIn(cs), "outside the root")
     // ADR-215: the generic Crate projects its Flow member over the erased receiver, so it is the
-    // root-most scope user and owns the scope; its suspend member stays refused (ADR-147).
+    // root-most scope user and owns the scope; ADR-219: its suspend member too.
     assertContains(cs, "public class Barge : Crate<int>\n")
     val crate: String = classBlock(cs, "Crate<T>")
     assertEquals(
-      listOf("public KotlinFlow<int> Ripples("),
+      listOf("public Task<string> LoadAsync(", "public KotlinFlow<int> Ripples("),
       Regex("public [a-z ]*(Task<string> LoadAsync|KotlinFlow<int> Ripples)[(]")
         .findAll(crate).map { it.value }.toList(),
-      "expected the generic Crate to project Ripples alone; got: $crate",
+      "expected the generic Crate to project LoadAsync and Ripples; got: $crate",
     )
     assertTrue(crate.contains("internal NugetScopeHandle? _scopeHandle;"), "Crate owns the scope")
     val block: String = classBlock(cs, "Barge")
-    assertEquals(
-      listOf("public Task<string> LoadAsync("),
-      Regex("public [a-z ]*Task<string> LoadAsync[(]").findAll(block).map { it.value }.toList(),
-      "expected Barge to project its kept override of load, not as a C# override; got: $block",
-    )
+    // Crate's LoadAsync dispatches to this override in Kotlin, as Ripples does.
+    assertFalse("LoadAsync(" in block, "expected Barge to inherit LoadAsync; got: $block")
     // Crate's Ripples dispatches to this override in Kotlin; a second C# one would hide it.
     assertFalse("Ripples(" in block, "expected Barge to inherit Ripples; got: $block")
     assertFalse(
@@ -480,7 +477,8 @@ class Tier1ScopeOwnerChainBranchesTest {
       "expected Barge to inherit Item from Crate<int>, not restate it (CS0506); got: $block",
     )
     val kotlin: String = result.generated
-    assertContains(kotlin, "@CName(\"library_barge_load_async\")")
+    assertContains(kotlin, "@CName(\"library_crate_load_async\")")
+    assertFalse(kotlin.contains("@CName(\"library_barge_load_async\")"), "Barge inherits it")
     assertContains(kotlin, "@CName(\"library_crate_ripples_collect\")")
     assertFalse(kotlin.contains("@CName(\"library_barge_ripples_collect\")"), "Barge inherits it")
     assertContains(kotlin, "@CName(\"library_crate_get_item\")")

@@ -373,11 +373,14 @@ private fun StringBuilder.renderClassDeclaration(cls: CirClass) {
   }
 
   // ADR-215: a generic class's Flow member names its owner applied (`nameof(Brook<T>)`), since
-  // `nameof(Brook)` does not bind inside `Brook<T>` (CS0305).
+  // `nameof(Brook)` does not bind inside `Brook<T>` (CS0305). ADR-219: so does a suspend member.
   val flowOwner: String = if (cls.typeParameters.isEmpty()) cls.name
   else cls.name + cls.typeParameters.joinToString(", ", "<", ">") { it.name }
   for (member in cls.companionMembers) {
-    renderMember(member, if (member is CirMethod && member.isFlow) flowOwner else cls.name)
+    renderMember(
+      member,
+      if (member is CirMethod && (member.isFlow || member.isAsync)) flowOwner else cls.name,
+    )
   }
 
   if (cls.isDataClass) {

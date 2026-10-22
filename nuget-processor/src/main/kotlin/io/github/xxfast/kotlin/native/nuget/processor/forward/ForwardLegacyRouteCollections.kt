@@ -312,14 +312,15 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
     return ForwardLegacyParameterShape.Refused(expanded.legacyDescription(), hotFlow = true)
   }
   val shape: ForwardLegacyParameterShape = legacyParameterShape(type)
-  // ADR-214: the suspend route carries a boxed `T`, bar a trampolined one (ADR-198), which needs a
-  // type variable the launch lambda cannot declare. ADR-215: a Flow-returning member carries every
-  // boxed `T`; its export wraps the whole body in the ADR-198 trampoline when one needs it.
+  // ADR-214: the suspend route carries a boxed `T`. ADR-215: a Flow-returning member carries every
+  // boxed `T`; its export wraps the whole body in the ADR-198 trampoline when one needs it. ADR-219:
+  // so does a suspend export, the launch included, so the lambda sees the re-declared variable.
   // Every other legacy host keeps the refusal.
   if (shape is ForwardLegacyParameterShape.Boxed) {
     val suspends: Boolean = host != null && Modifier.SUSPEND in host.modifiers
     val returnsFlow: Boolean = host?.returnsForwardFlow() == true && !suspends
-    val admitted: Boolean = returnsFlow || (suspends && !shape.type.trampolined)
+    // ADR-219: and the suspend route wraps its export in the same trampoline.
+    val admitted: Boolean = returnsFlow || suspends
     if (!admitted) return ForwardLegacyParameterShape.Refused(expanded.legacyDescription())
   }
   return shape

@@ -29,6 +29,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmStoredCa
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardClassLegacyMembers
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyFlowReturn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.takesGenericFlowRoute
+import io.github.xxfast.kotlin.native.nuget.processor.forward.takesGenericSuspendRoute
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasNullableLegacyFlowReturn
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyLambdaParameter
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasPlannedCallbackParameter
@@ -1795,6 +1796,8 @@ internal class ForwardCallablePlanner(
       // ADR-215: a plain generic class's Flow member binds over the erased receiver; a refused
       // one is named by `warnRefusedLegacyRouteMembers`, never as a generic-receiver drop.
       if (method.takesGenericFlowRoute(cls)) return@map entry
+      // ADR-219: and a suspend member, over the same receiver on the suspend route.
+      if (method.takesGenericSuspendRoute(cls)) return@map entry
       entry.copy(
         reason = ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE,
         detail = entry.reason.name,
@@ -2127,6 +2130,9 @@ internal class ForwardCallablePlanner(
       val carriedByInterface: Boolean = !overrideIsOnSealedBase && overridesExportedInterface
       if (carriedByInterface) return@map entry
       val isSuspend: Boolean = method.modifiers.contains(Modifier.SUSPEND)
+      // ADR-219: a generic arm's suspend member binds over its erased receiver now; a refused one
+      // is named by `warnRefusedLegacyRouteMembers`.
+      if (isSuspend && method.takesGenericSuspendRoute(arm)) return@map entry
       val deferredSuspend: Boolean = isSuspend &&
           (entry.reason == ForwardPlanSkipReason.SUSPEND ||
               entry.reason == ForwardPlanSkipReason.ABSTRACT)

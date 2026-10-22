@@ -8,6 +8,9 @@ at top-level") and [ADR-019](019-suspend-function-mapping.md) (the suspend route
 [ADR-197](197-method-type-parameters-on-the-callable-plan.md)'s owner and shape rules and
 ADR-147's boxed-handle wire.
 
+Amended by [ADR-219](219-generic-owner-suspend-members.md): a trampolined `T` parameter and a generic
+owner's suspend members bind on the suspend route too.
+
 ## Context
 
 A top-level `suspend fun <T>` has no working route. **Verified by Tier 1 spike** (2026-10-22, at

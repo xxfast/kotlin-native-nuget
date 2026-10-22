@@ -351,7 +351,7 @@ inherent to erasure. The same identity rule applies to a lambda argument
 `T` is admitted at a parameter, a return, a constructor parameter, or a property (getter and setter), optionally
 nullable, and as the element of a `List`, `Set` or `Map` at those positions (`List<T>` binds as
 `IReadOnlyList<T>`; see [A type parameter as an element](#a-type-parameter-as-an-element)). It is refused, named,
-everywhere else: nested in a `Flow` parameter or a `suspend` lambda, a `suspend fun`, a
+everywhere else: nested in a `Flow` parameter or a `suspend` lambda, a
 stored-callback member, and a method's own type parameter when its signature carries a `suspend` lambda or a `Flow` parameter
 (a plain `fun <U> swap(next: U): U` [binds](#generic-methods), and so does a [`T` in a lambda](#a-type-parameter-in-a-lambda)). A
 type parameter declared on an `interface` rather than a `class` is unaffected by this and keeps
@@ -416,8 +416,8 @@ Assert.Equal("barge:7", barge.Weigh());
 Assert.Equal("barge loaded 7", await barge.LoadAsync());
 ```
 
-`Crate<T>` itself has no `LoadAsync`, since a generic class binds no `suspend` member, so the
-override on `Barge` is the only one C# sees.
+`Crate<T>` has `LoadAsync` too (a generic class binds its `suspend` members), and `Barge` inherits it;
+the override runs on the Kotlin side.
 
 ## A generic class at a member position {id="returning-an-instantiated-generic-class"}
 
@@ -627,8 +627,9 @@ using var fetch = new Chore.Fetch("ball");
 Assert.Equal(7, fetch.Pick(7));
 ```
 
-A `suspend` member binds as a generic `Task<T>` method on a class or non-generic sealed arm; see
-[A `suspend fun` with its own type parameter](coroutines-and-flow.md#suspend-fun-generic).
+A `suspend` member binds as a generic `Task<T>` method on a class or sealed arm, generic owner included; see
+[A `suspend fun` with its own type parameter](coroutines-and-flow.md#suspend-fun-generic) and
+[`suspend` members of a generic class](coroutines-and-flow.md#suspend-generic-owner).
 
 What differs from a generic class:
 
@@ -849,9 +850,9 @@ C#, so the type argument you choose decides whether `null` can be held.
 
 A generic class binds its ordinary members, including a member that takes a lambda
 (`box.Measure(n => n * 10)`). Its `Flow`, `StateFlow` and `MutableStateFlow` members bind too, as `KotlinFlow<T>` and its
-siblings (see [A `Flow` with a type parameter](coroutines-and-flow.md#flow-type-parameter)). It does
-not bind `suspend` members, stored
-callback or listener pairs, or lambda members with a `Char` payload. Each is skipped with a
+siblings (see [A `Flow` with a type parameter](coroutines-and-flow.md#flow-type-parameter)), and so do its
+`suspend` members (see [`suspend` members of a generic class](coroutines-and-flow.md#suspend-generic-owner)). It does
+not bind stored callback or listener pairs, or lambda members with a `Char` payload. Each is skipped with a
 named `SKIPPED_UNSUPPORTED_COMBINATION` diagnostic; move it onto a non-generic class that wraps the
 generic one.
 

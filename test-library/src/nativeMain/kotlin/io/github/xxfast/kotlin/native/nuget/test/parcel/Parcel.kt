@@ -51,8 +51,9 @@ open class Crate<T>(val item: T) {
   fun label(prefix: String, count: Int): String = "$prefix-$count:$item"
 
   /**
-   * ADR-147 refuses a `suspend` member on a generic class, so `Crate<T>` carries no `LoadAsync`
-   * (`SKIPPED_UNSUPPORTED_COMBINATION`); [Barge]'s override is the only C# carrier.
+   * ADR-219: a `suspend` member of a generic class binds over the erased receiver
+   * (`Crate<Any?>`), so `Crate<T>` carries `LoadAsync` and [Barge] inherits it; Kotlin's dispatch
+   * reaches [Barge]'s override.
    *
    * Oreo loads the crate. Oreo also unloads the crate, onto the floor.
    */

@@ -50,6 +50,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMemberGener
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMethodTypeParameters
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardUncheckedCastSuppression
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBounds
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardOwnerTypeName
 
 /**
  * Generates @CName bridge exports for suspend functions using a callback-based async pattern.
@@ -101,6 +102,9 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(
   val paramShapes: List<ForwardLegacyParameterShape> =
     classifier.legacyParameterShapes(func.parameters, callableCatalog.legacyDefaultFlags(func))
   val names: ForwardLegacyNames = legacyKotlinNames(func.parameters, paramShapes)
+  // ADR-219: a trampolined `T` (ADR-198) needs the type variable the launch lambda reads, so the
+  // whole export, launch included, runs inside the trampoline.
+  val trampoline: ForwardFlowTrampoline? = flowTrampoline(func, owner = null, paramShapes)
   val call: String =
     names.legacyInvocation(funcName + func.legacyTypeArguments(), func.legacyParameterNames())
   val paramPrelude: String = names.legacyPrelude(func.legacyParameterNames())
@@ -127,7 +131,7 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(
   // ADR-163: the default package has no qualifier to spell, so the bare call needs this import.
   importIfDefaultPackage(func)
 
-  addFunction(builder.build())
+  addFunction(builder.build().flowTrampolined(trampoline, qualifiedName = ""))
   addAcquiredFlowCollectExport(func, cname, returnType, classifier)
   addFlowKeyedSharedFlowExports(cname, func, returnType, classifier)
   addAwaitedStateFlowCollectionExports(func, cname, returnType, classifier)
@@ -148,7 +152,9 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
   isArm: Boolean = false,
   exportedTypes: Set<String> = emptySet(),
 ) {
-  val qualifiedName: String = cls.qualifiedName?.asString() ?: return
+  // ADR-219: a generic owner reads its receiver erased (`Platter<Any?>`, `Picnic<*>`), the Flow
+  // route's spelling (ADR-215); every other owner its bare name.
+  val qualifiedName: String = cls.forwardOwnerTypeName() ?: cls.qualifiedName?.asString() ?: return
 
   // ADR-159: one selector, shared with the C# half (`translateClass`'s `allSuspendMethods`) and
   // with the gate in `NugetProcessor`. It owns the ADR-147 generic-owner refusal, the ADR-114/119
@@ -180,6 +186,11 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
       method.parameters, callableCatalog.legacyDefaultFlags(method),
     )
     val names: ForwardLegacyNames = legacyKotlinNames(method.parameters, paramShapes)
+    // ADR-219: the Flow route's trampoline (ADR-215): a trampolined own `T`, or a multi-bound
+    // owner `T` the star-projected receiver cannot be called with.
+    val trampoline: ForwardFlowTrampoline? =
+      flowTrampoline(method, owner = cls, paramShapes)
+    names.trampolineVariables = trampoline?.ownerVariables.orEmpty()
     val call: String =
       names.legacyInvocation(
         "${names.obj}.${methodName.kotlinIdentifier()}${method.legacyTypeArguments()}",
@@ -232,7 +243,7 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
       .returns(cOpaquePointer)
       .addCode(body)
 
-    addFunction(builder.build())
+    addFunction(builder.build().flowTrampolined(trampoline, qualifiedName))
     addAcquiredFlowCollectExport(method, "${prefix}_${cname}", returnType, classifier)
     addFlowKeyedSharedFlowExports("${prefix}_${cname}", method, returnType, classifier)
     addAwaitedStateFlowCollectionExports(method, "${prefix}_${cname}", returnType, classifier)

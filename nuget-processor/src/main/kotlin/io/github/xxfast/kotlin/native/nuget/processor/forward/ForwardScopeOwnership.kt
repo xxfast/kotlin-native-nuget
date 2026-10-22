@@ -59,14 +59,18 @@ internal fun KSClassDeclaration.forwardSuspendRouteMethods(
   superClass: KSClassDeclaration?,
   isArm: Boolean = false,
 ): List<KSFunctionDeclaration> {
-  // ADR-147: the suspend route spells `asStableRef<Crate>()`, which does not compile for a generic
-  // owner. Refused there on both halves, so a generic class projects no scope-using member either.
-  if (forwardTypeParametersInScope().isNotEmpty()) return emptyList()
+  // ADR-219: a generic class or generic sealed arm reads its receiver erased on this route, as the
+  // Flow route does (ADR-215). Any other generic owner (an inner class of one, a generic sealed
+  // base, a generic interface) keeps ADR-147's refusal.
+  val isGenericWithoutRoute: Boolean =
+    forwardTypeParametersInScope().isNotEmpty() && !carriesGenericSuspendRoute()
+  if (isGenericWithoutRoute) return emptyList()
   return getAllFunctions()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { it.modifiers.contains(Modifier.SUSPEND) }
     .filter { method -> !method.isCompilerOwnedMember(this) }
     .filter { method -> !isArm || isForwardArmMember(method) }
+    .filter { method -> typeParameters.isEmpty() || method.takesGenericSuspendRoute(this) }
     .filter { method -> !isArm || !forwardArmMemberProjectedByBase(method, classifier) }
     // ADR-114 / ADR-119: a parameter or return this route cannot marshal drops the member on both
     // halves, named once by `warnRefusedLegacyRouteMembers`.
@@ -252,7 +256,8 @@ internal fun KSFunctionDeclaration.reProjectsKeptBaseMember(
   // A generic base projects no suspend member (ADR-147 refuses that legacy route on a generic
   // owner), so this class is the only carrier there is, as for a dropped base. ADR-215: it does
   // project a Flow member over its erased receiver, which then dispatches to this override.
-  if (overridee.forwardTypeParametersInScope().isNotEmpty() && !takesGenericFlowRoute(overridee)) {
+  // ADR-219: and a suspend member over the suspend route's.
+  if (overridee.forwardTypeParametersInScope().isNotEmpty() && !takesGenericRoute(overridee)) {
     return false
   }
   val qualified: String = overridee.qualifiedName?.asString() ?: return false
@@ -265,7 +270,7 @@ internal fun KSFunctionDeclaration.reProjectsKeptBaseMember(
   // has no such member is this class the only carrier.
   if (superClass == null) return false
   val genericOwner: Boolean = superClass.forwardTypeParametersInScope().isNotEmpty()
-  if (genericOwner && !takesGenericFlowRoute(superClass)) return false
+  if (genericOwner && !takesGenericRoute(superClass)) return false
   val key: List<String> = forwardSignatureKey()
   return superClass.getAllFunctions()
     .any { inherited -> inherited.forwardInheritedSignatureKey().admits(key) }
@@ -454,3 +459,30 @@ internal fun KSFunctionDeclaration.takesGenericFlowRoute(cls: KSClassDeclaration
 internal fun KSPropertyDeclaration.takesGenericFlowRoute(cls: KSClassDeclaration): Boolean =
   type.resolve().expandAliases().isForwardFlowType() && cls.carriesGenericFlowRoute() &&
     (findOverridee()?.parentDeclaration as? KSClassDeclaration)?.classKind != ClassKind.INTERFACE
+
+/**
+ * ADR-219: whether this generic owner takes the legacy suspend route over its erased receiver
+ * (`asStableRef<Platter<Any?>>()`, a multi-bound parameter star-projected): a
+ * [carriesGenericFlowRoute] class, or a generic sealed arm (ADR-199 reads an arm's receiver the
+ * same way). An inner class of a generic owner and a generic sealed base keep ADR-147's refusal.
+ */
+internal fun KSClassDeclaration.carriesGenericSuspendRoute(): Boolean =
+  carriesGenericFlowRoute() ||
+    (typeParameters.isNotEmpty() && capturedTypeParameterOwners().isEmpty() && isSealedSubclass())
+
+/**
+ * ADR-219: whether [cls] binds this `suspend` member over its erased receiver. A generic class's
+ * override of an interface member keeps ADR-174's explicit forwarding, as on the Flow route
+ * ([takesGenericFlowRoute]); a sealed arm projects one as its own member, as a non-generic arm
+ * always has (ADR-118), so the arm's public member implements the interface.
+ */
+internal fun KSFunctionDeclaration.takesGenericSuspendRoute(cls: KSClassDeclaration): Boolean {
+  if (Modifier.SUSPEND !in modifiers || !cls.carriesGenericSuspendRoute()) return false
+  val overridesInterface: Boolean =
+    (findOverridee()?.parentDeclaration as? KSClassDeclaration)?.classKind == ClassKind.INTERFACE
+  return cls.isSealedSubclass() || !overridesInterface
+}
+
+/** ADR-219: whether [cls] projects this member over its erased receiver, on either legacy route. */
+private fun KSFunctionDeclaration.takesGenericRoute(cls: KSClassDeclaration): Boolean =
+  takesGenericFlowRoute(cls) || takesGenericSuspendRoute(cls)

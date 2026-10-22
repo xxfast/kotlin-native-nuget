@@ -7,8 +7,8 @@ namespace IntegrationTests;
 /// ADR-101 amendment (2026-10-10): `class Barge : Keel()` where `open class Keel : Crate&lt;Int&gt;(7)`
 /// sits outside the export root. C# sees `public class Barge : Crate&lt;int&gt;`, reaches the generic
 /// base's members through it, and declares only what Barge and the dropped Keel declare: the
-/// re-homed `Weigh()` and the `suspend` override `LoadAsync()`, which the generic `Crate&lt;T&gt;`
-/// cannot carry itself (ADR-147).
+/// re-homed `Weigh()`. ADR-219: the `suspend` `LoadAsync()` is the generic `Crate&lt;T&gt;`'s own now,
+/// over its erased receiver, so Barge inherits it and Kotlin's dispatch reaches Barge's override.
 ///
 /// Before this, the shape failed generation outright; with only the base spelling fixed, Barge
 /// restated `Crate&lt;T&gt;.Item` as `public override int Item` (CS0506).
@@ -57,7 +57,7 @@ public class GenericBaseUnderDroppedMiddleTests
             method => method.Name is "Describe" or "Pick" or "Label");
 
         Assert.NotNull(typeof(Barge).GetMethod("Weigh", DeclaredOnly));
-        Assert.NotNull(typeof(Barge).GetMethod("LoadAsync", DeclaredOnly));
-        Assert.Null(typeof(Crate<int>).GetMethod("LoadAsync"));
+        Assert.Null(typeof(Barge).GetMethod("LoadAsync", DeclaredOnly));
+        Assert.NotNull(typeof(Crate<int>).GetMethod("LoadAsync", DeclaredOnly));
     }
 }

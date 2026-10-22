@@ -325,6 +325,11 @@ you pass is borrowed. `LeakTests/LiveHandleTests.cs`'s
 `TopLevelSuspendGeneric_BoxedTypeParameter_ReturnsToBaseline` loops over an `int`, a `string` and a
 wrapper plus one pre-canceled call.
 
+A [generic class's `suspend` members](coroutines-and-flow.md#suspend-generic-owner) box the owner `T`
+argument and release the box when the native call returns, a trampolined `RateAsync` and a pre-canceled
+call included. `LeakTests/LiveHandleTests.cs`'s `GenericOwner_SuspendMembers_ReturnToBaseline` loops
+over a generic class, a bounded and a multi-bound one, and a generic sealed arm.
+
 A nullable [`StateFlow<T?>` or `StateFlow<T>?` from a `suspend fun`](coroutines-and-flow.md#suspend-stateflow-nullable)
 mints nothing for a null: a null `.Value` or null emission frees nothing, and a null holder owns no
 handle. `LeakTests/LiveHandleTests.cs`'s `SuspendStateFlowNullableElementAndMember_ReturnsToBaseline`

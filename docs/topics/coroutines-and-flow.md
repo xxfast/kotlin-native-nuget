@@ -323,7 +323,7 @@ owner, so dispose the holder and cancel collection through its enumerator or tok
 
 A `suspend fun <T>` becomes a generic `Task<T>` method, with the same `where` clauses and boxed `T`
 as a [generic function](generics.md#generic-methods). It binds at the top level, on a class, and on
-a sealed arm, as long as the owner has no type parameter of its own.
+a sealed arm, including on an owner with a type parameter of its own (next section).
 
 ```kotlin
 suspend fun <T> fetchLater(value: T): T { /* ... */ }
@@ -355,8 +355,66 @@ using Toy back = await SuspendGenericSample.FetchLaterAsync(toy);   // the same 
   suspension. A wrapper you pass is borrowed and must stay alive until the `Task` completes.
 - Cancelling the token cancels the `Task`, as on any other `suspend fun`.
 
-A `suspend` member of an `object` or companion has no route, generic or not, and a `suspend`
-member of a generic class or generic sealed arm is skipped. Both are named in the build output.
+A `suspend` member of an `object` or companion has no route, generic or not. It is named in the
+build output.
+
+A trampolined bound (`T : Enum<T>`, which C# cannot spell for Kotlin) binds on the parameter too:
+
+```kotlin
+suspend fun <T : Enum<T>> rateLater(medal: T): T { /* ... */ }
+```
+
+```C#
+public static Task<T> RateLaterAsync<T>(T medal, CancellationToken cancellationToken = default) where T : struct, Enum
+```
+
+An out-of-bound value faults the `Task` instead of throwing at the call.
+
+## `suspend` members of a generic class {id="suspend-generic-owner"}
+
+A generic class, and a generic sealed arm such as `Dish.Hot<T>`, binds its `suspend` members the way
+a non-generic class does. The owner `T` crosses boxed as it does on a
+[generic method](generics.md#generic-methods), and the class implements `IAsyncDisposable`, so
+`await using` it.
+
+```kotlin
+class Platter<T>(served: T) {
+  suspend fun take(): T { /* ... */ }
+  suspend fun put(item: T) { /* ... */ }
+  suspend fun <M : Enum<M>> rate(medal: M): M { /* ... */ }
+}
+
+class Picnic<T>(host: T) where T : Furry, T : Tricky {
+  suspend fun invite(guest: T): String { /* ... */ }
+}
+```
+
+```C#
+public class Platter<T> : IDisposable, IAsyncDisposable
+{
+    public Task<T> TakeAsync(CancellationToken cancellationToken = default);
+    public Task PutAsync(T item, CancellationToken cancellationToken = default);
+    public Task<M> RateAsync<M>(M medal, CancellationToken cancellationToken = default) where M : struct, Enum;
+}
+
+public class Picnic<T> : IDisposable, IAsyncDisposable where T : IFurry, ITricky
+{
+    public Task<string> InviteAsync(T guest, CancellationToken cancellationToken = default);
+}
+```
+
+```C#
+await using var platter = new Platter<int>(4);
+await platter.PutAsync(3);
+Assert.Equal(3, await platter.TakeAsync());
+Assert.Equal(Medal.Gold, await platter.RateAsync(Medal.Gold));
+await Assert.ThrowsAnyAsync<ArgumentException>(() => platter.RateAsync(Medal.Bronze)); // Kotlin's require failed
+```
+
+- A multi-bound `T` (`Picnic`) works too: the argument is checked against every bound inside the
+  coroutine, so a value that fails faults the `Task`.
+- An inner class of a generic owner and a `suspend` member of a generic sealed *base* are still skipped,
+  named. A generic sealed arm binds them itself, so declare the member on the arm.
 
 ## `suspend () -> R` lambdas
 
@@ -1315,8 +1373,7 @@ await foreach (int n in creek.Stream(4)) { /* 4 */ }
 
 Not every shape binds:
 
-- A `suspend` member of a generic class is still skipped, named. So is a `var` flow property's
-  setter, as on any class.
+- A `var` flow property's setter is skipped, named, as on any class.
 - A `Flow` return on an `object`, a companion or a top-level function has no route at all, generic
   or not. The generic form is named with the sentence that blames the type parameter.
 - A `Flow<T>` or `suspend` lambda *parameter* that mentions `T` is still skipped.

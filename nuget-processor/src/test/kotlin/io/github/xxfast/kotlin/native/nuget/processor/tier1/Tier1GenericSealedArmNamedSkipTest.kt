@@ -10,11 +10,9 @@ import kotlin.test.assertTrue
  * ADR-147 on an arm of a generic sealed hierarchy (ADR-199): what a generic arm cannot bind is
  * named, under the code a generic CLASS's member takes (`Tier1GenericOwnerLegacyRouteTest`).
  *
- * Two member kinds are drops on an arm with a Kotlin type parameter in scope:
- *  - a `suspend` member. The suspend route refuses a generic owner on both halves, so `Hot<T>.cool`
- *    had no export, no `CoolAsync` and no diagnostic. An override of a base member is the same
- *    drop: the generic base projects nothing, and its own skip tells the author to declare the
- *    member on the arm. It reads the generic class's sentence, which is true of it.
+ * One member kind is a drop on an arm with a Kotlin type parameter in scope (a `suspend` member was
+ * the second until ADR-219, which binds it over the arm's erased receiver, an override of the
+ * generic base's member included, since the base projects nothing):
  *  - a callback member whose lambda carries the type parameter (`cb: (T) -> Unit`). The route has
  *    no marshalling for a `T` payload, so the generated Kotlin did not compile. It reads a sentence
  *    of its own: the arm's receiver IS spelled, so "cannot spell a generic receiver" would be
@@ -117,6 +115,7 @@ class Tier1GenericSealedArmNamedSkipTest {
                   using var cold = new Dish.Cold();
                   cold.WithChill(chill => seen += chill);
                   using var bare = new Plate.Bare<string>(3);
+                  seen += await hot.CoolAsync() + await hot.OverAsync();
                   return seen + await cold.ThawAsync() + await cold.OverAsync()
                       + await bare.WipeAsync();
               }
@@ -128,20 +127,15 @@ class Tier1GenericSealedArmNamedSkipTest {
   }
 
   @Test
-  fun `a suspend member of a generic arm is named like a generic class's`() {
+  fun `a suspend member of a generic arm binds over the erased receiver`() {
+    // ADR-219: the suspend route reads `Dish.Hot<Any?>`, as the arm's Flow route does.
     listOf("Dish.Hot.cool", "Dish.Hot.warm", "Dish.Hot.over", "Reply.Trill.hush")
       .forEach { member ->
-        val warnings: List<String> = named(member)
-        assertEquals(1, warnings.size, "expected `$member` named once; got: ${result.kspWarnings}")
-        assertContains(warnings.single(), "SKIPPED_UNSUPPORTED_COMBINATION")
-        assertContains(warnings.single(), "it is a `suspend` member of a generic class")
-        assertContains(warnings.single(), "(ADR-147)")
+        assertTrue(named(member).isEmpty(), "`$member` binds; got: ${named(member)}")
       }
-    listOf("hot_cool", "hot_warm", "hot_over", "trill_hush").forEach { export ->
-      assertFalse(export in result.generated, "expected no Kotlin export for $export")
-    }
+    assertContains(result.generated, "asStableRef<tier1.larder.Dish.Hot<Any?>>().get()")
     listOf("CoolAsync(", "WarmAsync(", "HushAsync(").forEach { member ->
-      assertFalse(member in result.generatedCSharp, "expected no `$member` in C#")
+      assertContains(result.generatedCSharp, "public Task<int> $member")
     }
   }
 
@@ -191,8 +185,8 @@ class Tier1GenericSealedArmNamedSkipTest {
       "public void WithCount(Action<int> cb)", "public void WithChill(Action<int> cb)",
       "public void WithItem(Action<T> cb)",
     ).forEach { member -> assertContains(cs, member) }
-    // `over` binds on the one arm that can carry it, and nowhere else.
-    assertEquals(1, cs.lines().count { "public Task<int> OverAsync(" in it })
+    // `over` binds on each arm (ADR-219 for the generic one), never on the generic base.
+    assertEquals(2, cs.lines().count { "public Task<int> OverAsync(" in it })
     assertTrue(result.kspErrors.isEmpty(), "kspErrors=${result.kspErrors}")
   }
 }
