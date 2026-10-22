@@ -274,12 +274,34 @@ The fix has two parts, both without reflection:
 Rejected: `RuntimeHelpers.RunClassConstructor` (reflection, not verified under NativeAOT, against
 ADR-199), and constructing only the list element directly (it leaves `.Item` broken).
 
-Residual gap, one ROADMAP line: an open exported generic instantiation that a property or a
-parameter-side callback nests two or more levels deep, read before the consumer holds one, still
-has no factory. A member's own result is covered at every depth; a generic sealed hierarchy keeps
-ADR-199's static-constructor rule.
-
 Fixed in this lane: on `main`, a class-`T` member returning `Basket<Basket<T>>` (`Basket<T>.rebasket()`)
 threw `NotSupportedException` from `Materialize` when the consumer read `.Item`. It is pinned by
 `BoxedTypeParameter_ClassTypeParameterRebasket_ReadsTheInnerBasket`. **Verified** red before the
 fix and green after it by `scripts/verify.sh`; no ROADMAP line.
+
+## Amendment (2026-10-22): the fill follows the instantiation to every position
+
+An open exported generic instantiation nested at any depth (`Basket<Basket<T>>`, `List<Basket<T>>`,
+`Map<String, Basket<T>>`, `Basket<Pickup<T>>`) now has its `NugetFactory<X>` slot filled at every
+position a consumer can first meet it, not only a member's result: property getters and setters,
+parameters, collection elements and map values, callback arguments, `Flow` elements, returned
+lambdas, `suspend` results and `Result` payloads. This replaces the residual gap above.
+
+- **One collector.** `BridgeType.openSlots()` walks every variant (`Nullable`, `Collection`,
+  `Callback`, `AsyncCallback`, `FlowSource`, `ReturnedLambda`, `SpecializedProtocol`) and lists each
+  open handle with its factory spelling. Every member body that can bring a Kotlin value to C#
+  starts with the fills for its whole signature, deduplicated by C# type.
+- **Sealed and abstract.** A generic sealed type nested in an instantiation fills with
+  `X.FromHandle(handle)`. An abstract generic class now gets its own static constructor and fills by
+  constructing its backing class, so `Basket<Cabinet<T>>` reads even before the consumer holds a
+  `Cabinet<int>`.
+- **The top-level-handle rule.** A handle the member constructs directly as its own result (a
+  bare `Basket<Basket<int>>` getter) fills only what it nests, because its own static constructor
+  fills the outer slot. A callback argument, `Flow` element, returned lambda, collection or map
+  fills the outer instantiation as well, since nothing constructs it directly.
+- **No silent drop.** A member whose signature needs fills always renders a body that carries
+  them.
+
+Ownership is unchanged: a fill stores a factory, mints no handle and runs no P/Invoke. Pinned by
+`ForwardOpenSlotsTest`, `Tier1OpenSlotFillTest`, `OpenSlotFillTests` and the leak row
+`OpenSlot_NestedThroughGetter_ReturnsToBaseline`.

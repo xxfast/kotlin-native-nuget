@@ -5925,6 +5925,24 @@ public class LiveHandleTests
         });
     }
 
+    // ADR-216 (second amendment): an open nested instantiation read through a getter before this
+    // process held the inner one. The getter's fill stores a factory and mints no handle; the
+    // inner basket is a fresh wrapper per `Item` read, released by its own `using`.
+    // Ledger per iteration: nested +1/-1, inner +1/-1. Net zero.
+    [Fact]
+    public void OpenSlot_NestedThroughGetter_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var satchel = new Membergeneric.Satchel<short>(7);
+            for (int i = 0; i < 5; i++)
+            {
+                using Membergeneric.Basket<Membergeneric.Basket<short>> nested = satchel.Nested;
+                using (Membergeneric.Basket<short> inner = nested.Item) Assert.Equal((short)7, inner.Item);
+            }
+        });
+    }
+
     // A member's own `T` inside a `Result<List<T>>` payload. Each returned `Tabby` element is a
     // fresh wrapper the caller disposes; the list handle is released by the read. `TrySpill`
     // takes the failure path: no list is minted and the error handle is released when the

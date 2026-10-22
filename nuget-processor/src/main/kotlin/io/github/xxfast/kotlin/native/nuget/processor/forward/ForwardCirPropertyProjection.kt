@@ -294,11 +294,12 @@ internal object ForwardCirPropertyProjection {
         nativeName(plan, getter.presence), nativeName(plan, getter.value), args, plan.type,
       )
     }
+    // ADR-216 (second amendment): a getter fills every open slot its type nests on entry.
     return forwardCirHandleScope(
       prelude = listOfNotNull(receiverStep),
       cleanup = listOfNotNull(receiverCleanup),
       core = core,
-    )
+    ).withOpenSlotFills(plan.type.openSlotsBeneath().fills())
   }
 
   private fun setterBody(
@@ -309,7 +310,8 @@ internal object ForwardCirPropertyProjection {
   ): String {
     val prefix: String = listOf(receiver).filter { it.isNotBlank() }.joinToString(", ")
     fun args(extra: String = ""): String = listOf(prefix, extra).filter { it.isNotBlank() }.joinToString(", ")
-    return when (val setter = plan.setter) {
+    // ADR-216 (second amendment): a setter fills too, for a value whose callback hands one back.
+    val body: String = when (val setter = plan.setter) {
       // ROADMAP:130: the setter's temporary handle is released in a `finally`, so the error
       // check's throw cannot skip it. With no handle to release the body keeps its flat shape.
       // The receiver's own step comes first: it is an argument to the same native call, and its
@@ -357,6 +359,7 @@ internal object ForwardCirPropertyProjection {
 
       null -> error("Forward property ${plan.symbol} has no setter")
     }
+    return body.withOpenSlotFills(listOf(plan.type).openSlotFills())
   }
 
   private fun checkedGetter(native: String, args: String, type: BridgeType): String = buildString {

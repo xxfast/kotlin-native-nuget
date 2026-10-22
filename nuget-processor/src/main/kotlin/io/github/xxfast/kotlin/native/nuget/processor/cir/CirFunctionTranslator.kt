@@ -176,6 +176,7 @@ internal fun translateSuspendFunction(
     body = "",
     isStatic = true,
     isAsync = true,
+    openSlotFills = classifier.openSlotFills(func),
     asyncReturnType = asyncReturnType,
     typeParameters = func.cirMethodTypeParameters(context, logger),
     flowElementRead = stateFlowElement?.read,

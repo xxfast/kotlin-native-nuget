@@ -125,10 +125,11 @@ internal sealed interface BridgeType {
      */
     val constructType: kotlin.String? = null,
     /**
-     * ADR-216 amendment: the open instantiations of an exported (non-sealed) generic class nested
-     * in this one's type arguments (`Basket<T>` inside `Basket<Basket<T>>`), at every depth. A
-     * member returning this type fills each one's `NugetFactory<T>` slot before the read, since
-     * the consumer may never have touched that instantiation. Empty otherwise.
+     * ADR-216 amendment: the open instantiations of an exported generic class or generic sealed
+     * type nested in this one's type arguments (`Basket<T>` inside `Basket<Basket<T>>`), at every
+     * depth. Every generated C# body whose signature mentions this type fills each one's
+     * `NugetFactory<T>` slot on entry ([openSlots]), since the consumer may never have touched
+     * that instantiation. Empty otherwise.
      */
     val openArguments: List<ObjectHandle> = emptyList(),
     /** ADR-216 amendment: an instantiation whose arguments mention a type parameter. */
@@ -478,6 +479,84 @@ internal sealed interface BridgeType {
      */
     val valueType: kotlin.Boolean = false,
   ) : BridgeType
+}
+
+/**
+ * ADR-216 (second amendment): one `NugetFactory<T>` slot a generated C# body fills on entry, so
+ * an erased read of an open instantiation (`Basket<T>` read through `Basket<Basket<T>>.Item`)
+ * finds a factory even when the consumer never held that instantiation. [factory] is the
+ * expression the slot's lambda returns for its `handle` parameter.
+ */
+internal data class OpenSlot(val csharpType: String, val factory: String)
+
+/**
+ * ADR-216 (second amendment): every open exported generic instantiation this type mentions, at
+ * every depth and through every composite: the instantiation itself when it is open, its nested
+ * open type arguments, collection components, callback parameters and results, a `Flow` element,
+ * a returned lambda's type arguments and a sealed helper's handle. Deduplicated by C# type.
+ */
+internal fun BridgeType.openSlots(): List<OpenSlot> =
+  collectOpenSlots().distinctBy { it.csharpType }
+
+private fun BridgeType.collectOpenSlots(): List<OpenSlot> = when (this) {
+  is BridgeType.ObjectHandle -> (if (open) listOf(openSlot()) else emptyList()) +
+      openArguments.map { it.openSlot() }
+  is BridgeType.Nullable -> type.collectOpenSlots()
+  is BridgeType.Collection -> listOfNotNull(element, key, value).flatMap { it.collectOpenSlots() }
+  is BridgeType.Callback -> (parameters + result).flatMap { it.collectOpenSlots() }
+  is BridgeType.AsyncCallback -> (parameters + result).flatMap { it.collectOpenSlots() }
+  is BridgeType.FlowSource -> element.collectOpenSlots()
+  is BridgeType.ReturnedLambda -> typeArguments.flatMap { it.collectOpenSlots() }
+  is BridgeType.SpecializedProtocol -> sealedHandle?.collectOpenSlots() ?: emptyList()
+  BridgeType.Unit, is BridgeType.Primitive, BridgeType.Char, BridgeType.String,
+  BridgeType.Instant, BridgeType.Duration, is BridgeType.Throwable, BridgeType.Uuid,
+  is BridgeType.Enum, is BridgeType.Interface, is BridgeType.BoundInterface,
+  is BridgeType.ValueClass, BridgeType.ByteArray, is BridgeType.RawKSType,
+  is BridgeType.Unsupported, is BridgeType.RawCollection, is BridgeType.TypeParameter,
+    -> emptyList()
+}
+
+/**
+ * A sealed handle reads through its discriminator; a class (an abstract one via its backing) is
+ * constructed.
+ */
+private fun BridgeType.ObjectHandle.openSlot(): OpenSlot = OpenSlot(
+  csharpType = csharpType,
+  factory = if (viaDiscriminator) {
+    "$csharpType.FromHandle(handle)"
+  } else {
+    "new ${constructType ?: csharpType}(handle, out _)"
+  },
+)
+
+/**
+ * ADR-216 (second amendment): the `??=` lines filling every slot [types] mention, one per C# type,
+ * at [indent]. Empty when none is open.
+ */
+internal fun List<BridgeType>.openSlotFills(indent: String = "            "): String =
+  flatMap { it.openSlots() }.fills(indent)
+
+/** The `??=` lines for these slots, one per C# type, at [indent]. */
+internal fun List<OpenSlot>.fills(indent: String = "            "): String =
+  distinctBy { it.csharpType }.joinToString("") { slot ->
+    "${indent}NugetFactory<${slot.csharpType}>.Create ??= static handle => ${slot.factory};\n"
+  }
+
+/**
+ * [openSlots] of a value the body reconstructs itself (a planned result or getter) or the consumer
+ * handed in (a parameter): a root instantiation is `new`ed, read through its discriminator or
+ * already a wrapper, so only what it nests needs a slot. Any other root (a callback, a collection,
+ * a returned lambda) reads through `FromHandle` and keeps every slot.
+ */
+internal fun BridgeType.openSlotsBeneath(): List<OpenSlot> {
+  val root: BridgeType = if (this is BridgeType.Nullable) type else this
+  val handle: BridgeType.ObjectHandle? = if (root is BridgeType.SpecializedProtocol) {
+    root.sealedHandle
+  } else {
+    root as? BridgeType.ObjectHandle
+  }
+  if (handle == null) return openSlots()
+  return handle.openArguments.map { it.openSlot() }.distinctBy { it.csharpType }
 }
 
 internal enum class PrimitiveKind {
@@ -1466,3 +1545,10 @@ internal fun ForwardConversion.helper(): ForwardHelperRequirement = when (this) 
 
   ForwardConversion.DIRECT -> error("Direct conversion does not require a helper")
 }
+
+/**
+ * [this] body with [fills] as its first statements. A body leads with a newline so its opening
+ * brace stays alone on its line, and the fills go after it.
+ */
+internal fun String.withOpenSlotFills(fills: String): String =
+  if (fills.isEmpty()) this else "\n" + fills + removePrefix("\n")

@@ -470,6 +470,8 @@ element: passed wrappers stay borrowed, returned ones are disposed, and `Pad` ro
 `Basket<T>` is yours to dispose, a passed one is borrowed, and `Basket(Basket(1))` disposes both.
 `MemberGeneric_ResultListOfT_ReturnsToBaseline` covers a `Result<List<T>>` payload: wrapper elements
 are disposed and a failed result's error handle is released.
+`OpenSlot_NestedThroughGetter_ReturnsToBaseline` covers a nested instantiation read through a getter:
+both baskets are yours to dispose and the count returns to baseline.
 
 A `T` in a non-suspend lambda mints one box per payload, consumed by the C# read (a wrapper payload is
 yours to dispose), and one owned box per result, which Kotlin releases after it reads it. A wrapper

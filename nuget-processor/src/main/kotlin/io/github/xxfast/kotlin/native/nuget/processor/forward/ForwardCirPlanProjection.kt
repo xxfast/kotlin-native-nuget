@@ -1476,9 +1476,14 @@ internal object ForwardCirPlanProjection {
     val callArguments: String = (argumentList + nativeOutParameters(nativeCall) + "out IntPtr error").joinToString(", ")
     // A `Result`-unwrapping export carries the failure flag, an out slot the generic pass-through
     // renderer would not pass, so both of its C# members take a hand-built body.
-    val needsCustomParams: Boolean = forceCustomBody || invocation.unwrapsKotlinResult ||
-        parameters.any { parameter -> !parameter.isTrivialInput() }
     val result: BridgeType = publicSignature.result
+    // ADR-216 (second amendment): the body fills every open slot its signature mentions, so a
+    // filling member always takes a custom body.
+    val fills: String =
+      (result.openSlotsBeneath() + parameters.flatMap { it.type.openSlotsBeneath() }).fills()
+    val needsCustomParams: Boolean = forceCustomBody || fills.isNotEmpty() ||
+        invocation.unwrapsKotlinResult ||
+        parameters.any { parameter -> !parameter.isTrivialInput() }
     val projection: CirResultProjection = when (result) {
       is BridgeType.ObjectHandle -> CirResultProjection(
         returnType = result.csharpType(),
@@ -1876,43 +1881,19 @@ internal object ForwardCirPlanProjection {
         exit,
       )
     }
-    return projection.fillingOpenSlots(result)
+    return projection.fillingOpenSlots(fills)
   }
 
   /**
    * ADR-216 amendment: fill the `NugetFactory<T>` slot of every open generic instantiation the
-   * result nests (`Basket<T>` in `Basket<Basket<T>>`, a `List<Basket<T>>` element) before the
-   * body reads one through an erased `T`. The class's static constructor fills it too, but only
-   * once the consumer has touched that instantiation.
+   * signature nests (`Basket<T>` in `Basket<Basket<T>>`, a `List<Basket<T>>` element, a callback
+   * argument) before the body reads one through an erased `T`. The class's static constructor
+   * fills it too, but only once the consumer has touched that instantiation.
    */
-  private fun CirResultProjection.fillingOpenSlots(result: BridgeType): CirResultProjection {
-    val open: List<BridgeType.ObjectHandle> = result.openSlotHandles().distinctBy { it.csharpType }
-    if (open.isEmpty() || !hasCustomBody) return this
-    val fills: String = open.joinToString("") { handle ->
-      "            NugetFactory<${handle.csharpType}>.Create ??= " +
-          "static handle => new ${handle.constructType ?: handle.csharpType}(handle, out _);\n"
-    }
-    return copy(body = fills + body)
-  }
-
-  private fun BridgeType.openSlotHandles(): List<BridgeType.ObjectHandle> = when (this) {
-    is BridgeType.ObjectHandle -> openArguments
-    is BridgeType.Nullable -> type.openSlotHandles()
-    is BridgeType.Collection -> listOfNotNull(element, key, value).flatMap { component ->
-      val handle: BridgeType = if (component is BridgeType.Nullable) component.type else component
-      val open: Boolean = handle is BridgeType.ObjectHandle && !handle.viaDiscriminator &&
-          handle.open
-      (if (open) listOf(handle as BridgeType.ObjectHandle) else emptyList()) +
-          component.openSlotHandles()
-    }
-    BridgeType.Unit, is BridgeType.Primitive, BridgeType.Char, BridgeType.String,
-    BridgeType.Instant, BridgeType.Duration, is BridgeType.Throwable, BridgeType.Uuid,
-    is BridgeType.Enum, is BridgeType.Interface, is BridgeType.BoundInterface,
-    is BridgeType.ValueClass, BridgeType.ByteArray, is BridgeType.Callback,
-    is BridgeType.AsyncCallback, is BridgeType.FlowSource, is BridgeType.ReturnedLambda,
-    is BridgeType.SpecializedProtocol, is BridgeType.RawKSType, is BridgeType.Unsupported,
-    is BridgeType.RawCollection, is BridgeType.TypeParameter,
-      -> emptyList()
+  private fun CirResultProjection.fillingOpenSlots(fills: String): CirResultProjection {
+    if (fills.isEmpty()) return this
+    check(hasCustomBody) { "An open factory slot fill needs a custom body:\n$fills" }
+    return copy(body = body.withOpenSlotFills(fills))
   }
 
   private fun directOrCustomResultProjection(
