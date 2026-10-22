@@ -9,6 +9,7 @@ import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.symbol.KSTypeParameter
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.ClassName
@@ -45,6 +46,10 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedRetur
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnShape
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMemberGenericRefusal
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMethodTypeParameters
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardUncheckedCastSuppression
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBounds
 
 /**
  * Generates @CName bridge exports for suspend functions using a callback-based async pattern.
@@ -72,6 +77,8 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(
   if (classifier.legacyRefusedParameter(func.parameters) != null) return
   // ADR-119: a generic return that is not a marshallable collection skips on both halves too.
   if (classifier.legacyRefusedReturn(func) != null) return
+  // ADR-214: a function's own type parameters route under ADR-197/211's rules, named otherwise.
+  if (func.forwardMemberGenericRefusal() != null) return
   // ADR-163: library- and package-qualified, and the Kotlin call fully qualified rather than
   // imported by simple name (two same-named suspend functions in two packages both export now).
   // ROADMAP line 29: plus the overload number, so two top-level `suspend` overloads take two C
@@ -82,18 +89,22 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(
       func.simpleName.asString().kotlinIdentifier()
   val returnType = func.returnType?.resolve()?.expandAliases()
   val qualifiedReturn: String = returnType?.declaration?.qualifiedName?.asString() ?: "kotlin.Unit"
-  val isUnit: Boolean = qualifiedReturn == "kotlin.Unit"
+  val isUnit: Boolean =
+    qualifiedReturn == "kotlin.Unit" && returnType?.declaration !is KSTypeParameter
   // Issue #108: a nullable return cannot go straight into `StableRef.create`, whose T is `Any`.
-  val isNullable: Boolean = returnType?.isMarkedNullable == true
+  val returnShape: ForwardLegacyReturnShape = classifier.legacyReturnShape(returnType)
+  // ADR-214: an unbounded `T` result is nullable without a `?`.
+  val isNullable: Boolean = returnType?.isMarkedNullable == true || returnShape.isNullableBox()
 
   // ADR-164: the catalog's default flags (the ADR-074 expect index included) widen the defaulted
   // parameters, exactly as `translateSuspendFunction` reads them for the C# half.
   val paramShapes: List<ForwardLegacyParameterShape> =
     classifier.legacyParameterShapes(func.parameters, callableCatalog.legacyDefaultFlags(func))
   val names: ForwardLegacyNames = legacyKotlinNames(func.parameters, paramShapes)
-  val call: String = names.legacyInvocation(funcName, func.legacyParameterNames())
+  val call: String =
+    names.legacyInvocation(funcName + func.legacyTypeArguments(), func.legacyParameterNames())
   val paramPrelude: String = names.legacyPrelude(func.legacyParameterNames())
-  val boxed: String = legacyBoxedResult(classifier.legacyReturnShape(returnType))
+  val boxed: String = legacyBoxedResult(returnShape)
 
   val body: String = buildSuspendFunctionBody(
     call, paramPrelude, isUnit, isNullable, boxed, names,
@@ -109,6 +120,9 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(
     .addParameter(names.userData, cOpaquePointer)
     .returns(cOpaquePointer)
     .addCode(body)
+  if (paramShapes.legacyCastsGenericBound()) {
+    builder.addAnnotation(forwardUncheckedCastSuppression)
+  }
 
   // ADR-163: the default package has no qualifier to spell, so the bare call needs this import.
   importIfDefaultPackage(func)
@@ -156,9 +170,11 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
     val cname: String = toCName(methodName) + callableCatalog.overloadSuffix(method)
     val returnType = method.returnType?.resolve()?.expandAliases()
     val qualifiedReturn: String = returnType?.declaration?.qualifiedName?.asString() ?: "kotlin.Unit"
-    val isUnit: Boolean = qualifiedReturn == "kotlin.Unit"
+    val isUnit: Boolean =
+    qualifiedReturn == "kotlin.Unit" && returnType?.declaration !is KSTypeParameter
     // Issue #108: same nullable-return guard as the top-level builder.
-    val isNullable: Boolean = returnType?.isMarkedNullable == true
+    val returnShape: ForwardLegacyReturnShape = classifier.legacyReturnShape(returnType)
+    val isNullable: Boolean = returnType?.isMarkedNullable == true || returnShape.isNullableBox()
 
     val paramShapes: List<ForwardLegacyParameterShape> = classifier.legacyParameterShapes(
       method.parameters, callableCatalog.legacyDefaultFlags(method),
@@ -166,10 +182,11 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
     val names: ForwardLegacyNames = legacyKotlinNames(method.parameters, paramShapes)
     val call: String =
       names.legacyInvocation(
-        "${names.obj}.${methodName.kotlinIdentifier()}", method.legacyParameterNames(),
+        "${names.obj}.${methodName.kotlinIdentifier()}${method.legacyTypeArguments()}",
+        method.legacyParameterNames(),
       )
     val paramPrelude: String = names.legacyPrelude(method.legacyParameterNames())
-    val boxed: String = legacyBoxedResult(classifier.legacyReturnShape(returnType))
+    val boxed: String = legacyBoxedResult(returnShape)
 
     val body: String = buildSuspendMethodBody(
       qualifiedName, call, paramPrelude, isUnit, isNullable, boxed, names,
@@ -180,6 +197,9 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
       .addAnnotation(cNameAnnotation("${prefix}_${cname}_async", ownedBy(method)))
       .addParameter("handle", cOpaquePointer)
       .addParameter(names.scopeHandle, cOpaquePointer)
+    if (paramShapes.legacyCastsGenericBound()) {
+      builder.addAnnotation(forwardUncheckedCastSuppression)
+    }
 
     method.parameters.forEachIndexed { index, param ->
       val paramName: String = param.name?.asString() ?: "_"
@@ -326,8 +346,28 @@ private fun legacyBoxedResult(shape: ForwardLegacyReturnShape): String = when (s
   is ForwardLegacyReturnShape.Enum -> "result.ordinal"
   // ADR-201 amendment: the ADR-107 envelope, which the C# completion reads with `BuildException`.
   is ForwardLegacyReturnShape.Envelope -> "buildError(result, ::nugetMappedType)"
+  // ADR-214: a boxed `T` is pinned as it is, which is what `FromHandle<T>` reads.
+  is ForwardLegacyReturnShape.Boxed -> "result"
   else -> "result"
 }
+
+/** ADR-214: a boxed `T` result whose null crosses as the null pointer. */
+private fun ForwardLegacyReturnShape.isNullableBox(): Boolean =
+  this is ForwardLegacyReturnShape.Boxed && nullable
+
+/**
+ * ADR-214: the member's own type arguments at the call (`<Any?>`), the plan route's
+ * [ForwardMethodTypeParameter.kotlinTypeArgument]s, so a `T` only the return mentions resolves.
+ */
+internal fun KSFunctionDeclaration.legacyTypeArguments(): String {
+  val arguments: List<String> = forwardMethodTypeParameters().map { it.kotlinTypeArgument }
+  return if (arguments.isEmpty()) "" else arguments.joinToString(", ", "<", ">")
+}
+
+/** ADR-214: whether a boxed `T`'s checked cast names a generic bound (`Comparable<Any?>`). */
+private fun List<ForwardLegacyParameterShape>.legacyCastsGenericBound(): Boolean =
+  filterIsInstance<ForwardLegacyParameterShape.Boxed>()
+    .any { shape -> shape.type.legacyBounds().any { bound -> '<' in bound } }
 
 /**
  * The member's parameter names as the export declares its slots, the spelling

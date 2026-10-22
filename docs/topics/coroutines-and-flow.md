@@ -318,6 +318,45 @@ work and `DisposeAsync()` drains it. The acquisition `CancellationToken` control
 use `WithCancellation` or the enumerator token to cancel a collection. A top-level function has no
 owner, so dispose the holder and cancel collection through its enumerator or token.
 
+## A `suspend fun` with its own type parameter {id="suspend-fun-generic"}
+
+A `suspend fun <T>` becomes a generic `Task<T>` method, with the same `where` clauses and boxed `T`
+as a [generic function](generics.md#generic-methods). It binds at the top level, on a class, and on
+a sealed arm, as long as the owner has no type parameter of its own.
+
+```kotlin
+suspend fun <T> fetchLater(value: T): T { /* ... */ }
+suspend fun <T : Any> describeLater(value: T): String { /* ... */ }
+suspend fun <T> shuffleLater(list: List<T>): List<T> { /* ... */ }
+
+class Courier {
+  suspend fun <T> ferry(value: T): T { /* ... */ }
+}
+```
+
+```C#
+public static Task<T> FetchLaterAsync<T>(T value, CancellationToken cancellationToken = default)
+public static Task<string> DescribeLaterAsync<T>(T value, CancellationToken cancellationToken = default) where T : notnull
+public static Task<IReadOnlyList<T>> ShuffleLaterAsync<T>(IReadOnlyList<T> list, CancellationToken cancellationToken = default)
+public Task<T> FerryAsync<T>(T value, CancellationToken cancellationToken = default)
+```
+
+```C#
+Assert.Equal(4, await SuspendGenericSample.FetchLaterAsync(4));
+using Toy back = await SuspendGenericSample.FetchLaterAsync(toy);   // the same Kotlin object, yours to dispose
+```
+
+- A builtin, a `string`, a wrapper or a C# implementation of an exported interface all work as `T`.
+  A `List`, `Set` or `Map` of the function's own `T` binds too.
+- A type argument outside a bound C# cannot name (`T : Number`) is accepted by the compiler and
+  faults the returned `Task` with `KotlinInvalidCastException`. It does not throw at the call.
+- A C# implementation passed as `T` stays callable by Kotlin after the call returns, for the whole
+  suspension. A wrapper you pass is borrowed and must stay alive until the `Task` completes.
+- Cancelling the token cancels the `Task`, as on any other `suspend fun`.
+
+A `suspend` member of an `object` or companion has no route, generic or not, and a `suspend`
+member of a generic class or generic sealed arm is skipped. Both are named in the build output.
+
 ## `suspend () -> R` lambdas
 
 ```kotlin

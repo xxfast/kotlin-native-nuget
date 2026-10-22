@@ -313,6 +313,13 @@ handle is minted for it. `LeakTests/LiveHandleTests.cs`'s
 `TopLevelSuspendStateFlow_AwaitReadCollectDispose_ReturnsToBaseline` covers the await, read,
 collect and dispose cycle for an `Int` and a class element.
 
+A [`suspend fun <T>`](coroutines-and-flow.md#suspend-fun-generic) boxes each `T` argument for the
+call. The box is released once the native call returns, before the `Task` completes, so passing a
+builtin, a string or a wrapper leaves no handle behind, a pre-canceled token included. The wrapper
+you pass is borrowed. `LeakTests/LiveHandleTests.cs`'s
+`TopLevelSuspendGeneric_BoxedTypeParameter_ReturnsToBaseline` loops over an `int`, a `string` and a
+wrapper plus one pre-canceled call.
+
 A nullable [`StateFlow<T?>` or `StateFlow<T>?` from a `suspend fun`](coroutines-and-flow.md#suspend-stateflow-nullable)
 mints nothing for a null: a null `.Value` or null emission frees nothing, and a null holder owns no
 handle. `LeakTests/LiveHandleTests.cs`'s `SuspendStateFlowNullableElementAndMember_ReturnsToBaseline`

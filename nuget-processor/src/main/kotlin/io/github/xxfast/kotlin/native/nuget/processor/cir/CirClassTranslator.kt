@@ -165,6 +165,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementI
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyInterfaceElementReadArgument
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyInterfaceRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBoxedRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyHandleRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyValueClassRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyEnumRead
@@ -1604,6 +1605,7 @@ internal fun translateClass(
     callableCatalog = callableCatalog,
     context = context,
     expects = expects,
+    logger = logger,
   )
 
   // ADR-124: the whole flow projection lives in one function now, so a sealed arm gets
@@ -2530,6 +2532,8 @@ internal fun suspendMembers(
   // ADR-150: the expect index, so a documented suspend member of an `expect class` keeps its
   // summary; a bare `forwardKdoc()` here could never reach the expect half.
   expects: ExpectIndex = ExpectIndex(),
+  // ADR-214: reports a dropped builtin bound of a member's own `T`; null where no owner routes one.
+  logger: KSPLogger? = null,
 ): List<CirMember> {
   // ADR-068/194: preserve asynchronous acquisition before exposing the acquired stream.
   // Plain Flow uses typed per-member collection; StateFlow retains its existing shared helpers.
@@ -2603,6 +2607,7 @@ internal fun suspendMembers(
       returnShape is ForwardLegacyReturnShape.Handle -> returnShape.declaredCsharpType()
       returnShape is ForwardLegacyReturnShape.ValueClass -> returnShape.declaredCsharpType()
       returnShape is ForwardLegacyReturnShape.Enum -> returnShape.declaredCsharpType()
+      returnShape is ForwardLegacyReturnShape.Boxed -> returnShape.declaredCsharpType()
       else -> {
         // ADR-118: a nested sealed arm is declared inside its base (ADR-009), so the bare simple
         // name is unresolvable at namespace scope (CS0246). `nestedCsName()` walks class parents
@@ -2656,6 +2661,11 @@ internal fun suspendMembers(
       parameters = methodParams,
       body = "",
       isAsync = true,
+      // ADR-214: the member's own `<T>`, constrained as the planned route constrains it. Only a
+      // generic member reads the logger (a dropped builtin bound is reported once, here).
+      typeParameters =
+        if (method.typeParameters.isEmpty()) emptyList()
+        else method.cirMethodTypeParameters(context, requireNotNull(logger)),
       asyncReturnType = asyncReturnType,
       // ADR-119 / ADR-131: exhaustive on purpose -- a new return shape must be answered here
       // rather than fall through an `else` into the renderer's `new T(resultPtr)`.
@@ -2694,6 +2704,9 @@ internal fun suspendMembers(
 
         // The boxed ordinal, cast back to the enum (never handed back as an `int`).
         is ForwardLegacyReturnShape.Enum -> returnShape.legacyEnumRead("resultPtr")
+
+        // ADR-214: the plan route's read of a boxed `T`.
+        is ForwardLegacyReturnShape.Boxed -> returnShape.legacyBoxedRead("resultPtr")
 
         ForwardLegacyReturnShape.Plain, is ForwardLegacyReturnShape.Refused -> null
       },
@@ -3116,6 +3129,7 @@ internal fun translateSealedClass(
     tracker = tracker,
     callableCatalog = callableCatalog,
     context = context,
+    logger = logger,
     expects = expects,
   )
   val baseFlowMembers: List<CirMember> = flowMembers(
@@ -3356,6 +3370,7 @@ internal fun translateSealedClass(
         callableCatalog = callableCatalog,
         context = context,
         expects = expects,
+        logger = logger,
       )
 
       // ADR-124: the arm's declared Flow/StateFlow-returning methods, on the same legacy route

@@ -1405,6 +1405,10 @@ internal data class CirParameter(
   // `value` keeps its name in the public signature while its ABI slot stays `value_`. Read only
   // where an extern is derived from the public parameters ([nativeName]). Null means [name].
   val abiName: String? = null,
+  // ADR-214: the `out bool` local a boxed `T`'s `NugetMarshal.Wrap<T>` [collectionCreate] reports
+  // a minted box in. Its `finally` disposes the box only when it is set, and otherwise keeps the
+  // borrowed wrapper alive past the call. Null for every other parameter.
+  val boxOwnedLocal: String? = null,
 ) {
   /** The parameter as an extern derived from the public signature spells it. */
   val nativeName: String get() = abiName ?: name

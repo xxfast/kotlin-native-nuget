@@ -524,9 +524,10 @@ Assert.Equal("4 x2", Descriptions.Tally(4, 2));
 // public static string Tally<T>(T x, int n) where T : notnull
 ```
 
-A top-level `fun <T>` with a lambda or `Flow` in the signature, a `suspend` modifier, an extension
-receiver, or a `reified` `T` whose bound C# cannot spell is not generated, and the warning names
-which one.
+A top-level `fun <T>` with a lambda or `Flow` in the signature, an extension receiver,
+or a `reified` `T` whose bound C# cannot spell is not generated, and the warning names
+which one. A `suspend fun <T>` binds as a `Task<T>`; see
+[A `suspend fun` with its own type parameter](coroutines-and-flow.md#suspend-fun-generic).
 
 A C# builtin (`int`, `double`, `string`, `short`, ...) works as `T`, with a stdlib bound or none.
 A bound C# cannot name is dropped, so a type argument outside it compiles and throws
@@ -574,6 +575,9 @@ Assert.Equal(7, Groomer.First(7));
 using var fetch = new Chore.Fetch("ball");
 Assert.Equal(7, fetch.Pick(7));
 ```
+
+A `suspend` member binds as a generic `Task<T>` method on a class or non-generic sealed arm; see
+[A `suspend fun` with its own type parameter](coroutines-and-flow.md#suspend-fun-generic).
 
 What differs from a generic class:
 

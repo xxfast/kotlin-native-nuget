@@ -914,6 +914,27 @@ internal fun warnRefusedLegacyRouteMembers(
     declaration: String,
     owner: ForwardDiagnosticOwner?,
   ) {
+    // ADR-214: a suspend member's own type parameters route under ADR-197/211's rules; a shape
+    // they refuse is named with the plan's structural GENERIC sentence and its `(here, ...)` rule,
+    // never as an input the route cannot take.
+    val generic: String? =
+      member.forwardMemberGenericRefusal().takeIf { Modifier.SUSPEND in member.modifiers }
+    if (generic != null) {
+      add(
+        ForwardDiagnostic(
+          kind = ForwardPlanSkipReason.UNROUTED_POSITION.toDiagnosticKind(structural = true),
+          symbol = member,
+          declaration = declaration,
+          reason = ForwardPlanSkipReason.UNROUTED_POSITION
+            .diagnosticReason(ForwardPlanSkipReason.GENERIC.name) + " (here, $generic)",
+          hint = ForwardPlanSkipReason.UNROUTED_POSITION
+            .diagnosticHint(ForwardPlanSkipReason.GENERIC.name),
+          owner = owner,
+          member = member.simpleName.asString(),
+        ),
+      )
+      return
+    }
     val parameter: Pair<String, ForwardLegacyParameterShape.Refused>? =
       classifier.legacyRefusedParameterShape(member.parameters)
     if (parameter != null) {
@@ -1864,16 +1885,15 @@ internal class NugetProcessor(
 
     // ADR-213: every top-level `fun <T>` is planned like any other top-level function, as a static
     // generic method, except ADR-198's reified unspellable case. The suspend partition comes
-    // first: a `suspend fun <T>` has no route yet and is only named.
+    // first: ADR-214, a `suspend fun <T>` takes the suspend route, never the plan's sync route.
     val (suspendCandidates, regularCandidates) = allFunctions
       .partition { it.modifiers.contains(Modifier.SUSPEND) }
     val suspendFunctions: List<KSFunctionDeclaration> = suspendCandidates
-      .filter { it.typeParameters.isEmpty() }
+      .filter { it.isPlannedTopLevelFunction() }
     val functions: List<KSFunctionDeclaration> = regularCandidates
       .filter { it.isPlannedTopLevelFunction() }
     val genericFunctions: List<KSFunctionDeclaration> =
-      regularCandidates.filterNot { it.isPlannedTopLevelFunction() } +
-          suspendCandidates.filter { it.typeParameters.isNotEmpty() }
+      allFunctions.filterNot { it.isPlannedTopLevelFunction() }
 
     val allProperties: List<KSPropertyDeclaration> = allDeclarations
       .filterIsInstance<KSPropertyDeclaration>()
@@ -2446,6 +2466,26 @@ internal class NugetProcessor(
       return (unwrapped as? BridgeType.Interface)?.qualifiedName
     }
 
+    // ADR-214: a suspend member's bare `T` bounded by an interface
+    // (`fun <T : Snoozer> f(snoozer: T)`) is spelled `where T : ISnoozer`, so a C# implementation crosses through `Wrap<T>` and needs the bridge
+    // the interface has only once it is reachable. Found by the red integration run: an interface
+    // reachable only as a bound threw `NotSupportedException` from `NugetBridge.HandleFor`.
+    // Walked for the legacy suspend positions only ([legacyCarriedInterfaceNames]); the plan's
+    // bare `T` keeps its output.
+    // A generic interface (`Node<T>`) is never bridged (ADR-084), so it is not promoted here.
+    val interfaceNames: Set<String> = interfaces
+      .filter { iface -> iface.typeParameters.isEmpty() }
+      .mapNotNullTo(mutableSetOf()) { iface -> iface.qualifiedName?.asString() }
+
+    fun BridgeType.boundInterfaceQualifiedNames(): Set<String> {
+      val unwrapped: BridgeType = if (this is BridgeType.Nullable) type else this
+      val parameter: BridgeType.TypeParameter =
+        unwrapped as? BridgeType.TypeParameter ?: return emptySet()
+      return (listOfNotNull(parameter.boundQualifiedName) + parameter.additionalBounds)
+        .map { bound -> bound.substringBefore('<') }
+        .filterTo(mutableSetOf()) { bound -> bound in interfaceNames }
+    }
+
     // ADR-176: every interface a type carries inside a collection component (element, map key,
     // map value), recursively through nested collections and `Nullable`. A SET, not the first hit:
     // `Map<Pet, Owner>` needs both backing wrappers, and a key-only `Map<Scent, String>` needs its
@@ -2594,7 +2634,8 @@ internal class NugetProcessor(
     fun legacyCarriedInterfaceNames(type: KSType?): Set<String> {
       val expanded: KSType = type?.expandAliases() ?: return emptySet()
       val carried: KSType = legacyFlowElement(expanded) ?: expanded
-      return forwardClassifier.classify(carried).interfaceQualifiedNames()
+      val classified: BridgeType = forwardClassifier.classify(carried)
+      return classified.interfaceQualifiedNames() + classified.boundInterfaceQualifiedNames()
     }
 
     fun legacyPositionTypes(): Sequence<KSType?> = sequence {

@@ -137,6 +137,14 @@ internal fun List<CirParameter>.collectionScopedCall(
     // non-null pointer. Unconditional, as the sync route's guard is: a real handle is never zero.
     handles.forEach { parameter ->
       val handle: String = parameter.collectionHandleLocal
+      // ADR-214: a boxed `T` disposes only a box `Wrap<T>` minted; a borrowed wrapper's own handle
+      // is kept alive past the call instead (ADR-187).
+      val owned: String? = parameter.boxOwnedLocal
+      if (owned != null) {
+        add("$indent        if ($owned) NugetMarshal.Dispose($handle);")
+        add("$indent        else GC.KeepAlive(${parameter.name});")
+        return@forEach
+      }
       add("$indent        if ($handle != IntPtr.Zero) NugetMarshal.Dispose($handle);")
     }
     keys.forEach { parameter ->
@@ -336,6 +344,25 @@ private fun legacyRouteParameter(
         nativeSlots = slots.declared,
         asyncKeyLocal = slots.csharpKey,
         asyncKeyRegister = forwardAsyncRegistration(name, shape.type),
+      )
+    }
+
+    // ADR-214: a suspend member's own `T`, boxed by the ONE erased write function the plan route
+    // uses. Built before the extern and released in its `finally`: Kotlin read the box in the
+    // export's prelude, before the coroutine launched. `!`: `Wrap<T>` answers a null itself.
+    is ForwardLegacyParameterShape.Boxed -> {
+      val boxed: BridgeType = if (shape.nullable) BridgeType.Nullable(shape.type) else shape.type
+      val type: String = boxed.forwardPublicCsharpType()
+      val handle: String = requireNotNull(names.handleLocals[index])
+      val owned: String = requireNotNull(names.ownedLocals[index])
+      CirParameter(
+        name,
+        type = type,
+        nativeType = "IntPtr",
+        isReferenceType = false,
+        collectionCreate = "NugetMarshal.Wrap<$type>($name!, out bool $owned)",
+        collectionHandle = handle,
+        boxOwnedLocal = owned,
       )
     }
 
