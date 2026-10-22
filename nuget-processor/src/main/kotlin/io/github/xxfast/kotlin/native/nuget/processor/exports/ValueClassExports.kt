@@ -32,8 +32,9 @@ internal fun FileSpec.Builder.addValueClassExports(
   // members with their own type parameters, ride the ordinary route.
   callableCatalog.valueClassRouteMembers(qualifiedName).forEach { addForwardKotlinPlanExport(it) }
   // ADR-220: no primary `_create` for a generic value class. ADR-228: one box pair for all its
-  // instantiations.
-  if (role == ForwardValueClassUnderlying.GENERIC) {
+  // instantiations. ADR-235: a WIRE one is a positional struct whose members and secondaries are
+  // all on the route above, so only its box pair (when planned) is left.
+  if (role == ForwardValueClassUnderlying.GENERIC || role == ForwardValueClassUnderlying.WIRE) {
     callableCatalog.valueClassBoxing(qualifiedName)?.toList()
       ?.forEach { addForwardKotlinPlanExport(it) }
     return

@@ -492,3 +492,8 @@ defects, not surfaces anyone consumes.
    status as documented, framework-era invariants.
 4. **`TimeSpan.FromSeconds(double.PositiveInfinity)` throwing** (Alternative 4): **inferred**, not
    spiked; load-bearing only for a rejected alternative.
+
+## Amendment, 2026-10-22: see ADR-235
+
+[ADR-235](235-value-class-wire-underlyings.md) binds `Duration` as a `List`, `Set` and `Map`
+component on the ticks wire, per element. The collection deferral above no longer applies.

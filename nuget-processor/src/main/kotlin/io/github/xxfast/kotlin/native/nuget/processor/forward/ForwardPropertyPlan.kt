@@ -216,6 +216,8 @@ internal data class ForwardPropertyPlan(
   val helperRequirements: Set<ForwardHelperRequirement> = emptySet(),
   /** ADR-150: the author's KDoc, parsed once at planning time. `@param` never applies here. */
   val doc: ForwardKdoc? = null,
+  /** ADR-235: set when the declared type is a WIRE value class; [type] is then its underlying. */
+  val view: ForwardValueClassView? = null,
 ) {
   fun validate(): ForwardPropertyPlan {
     require(symbol.isNotBlank()) { "Forward property plan symbol must not be blank" }

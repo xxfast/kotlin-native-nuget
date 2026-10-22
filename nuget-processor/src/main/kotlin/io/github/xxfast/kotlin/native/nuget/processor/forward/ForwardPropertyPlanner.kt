@@ -1105,9 +1105,13 @@ internal class ForwardPropertyPlanner(
       )
       return null
     }
-    // ADR-226: a nullable value class over a nullable-admitting underlying is its box handle.
-    val type: BridgeType = classifier.classify(typeOverride ?: prop.type.resolve()).sealedAsHandle()
-      .asValueClassBoxHandle()
+    val declaredType: BridgeType =
+      classifier.classify(typeOverride ?: prop.type.resolve()).sealedAsHandle()
+        // ADR-226: a nullable value class over a nullable-admitting underlying is its box handle.
+        .asValueClassBoxHandle()
+    // ADR-235: a WIRE value class is planned as its underlying, as a callable parameter is.
+    val view: ForwardValueClassView? = declaredType.valueClassViewOrNull()
+    val type: BridgeType = view?.planned ?: declaredType
     // ADR-075: getter eligibility never depended on mutability or on the collection facet — a
     // `Collection` (nullable or not) plans whenever the C# read can spell every component
     // (`isReadable`; `isPlannable` already recurses through `Nullable`). Whether a *setter* can
@@ -1166,6 +1170,7 @@ internal class ForwardPropertyPlanner(
       setter = setter,
       explicitSetterInterfaces = if (setter != null) explicitInterfaces else emptyList(),
       helperRequirements = helperRequirements(type, receiver, getter, setter),
+      view = view,
     ).validate()
   }
 
@@ -1716,8 +1721,8 @@ internal class ForwardPropertyPlanner(
     // ADR-201: a Throwable component reads back as its own envelope through
     // `NugetErrorNative.BuildException`, the same per-element box `isBridgeableComponent` admits.
     is BridgeType.Throwable -> true
-    // ADR-106: `List<Uuid>` is deferred for the same reason, and skips named here.
-    BridgeType.Uuid -> false
+    // ADR-235: a `Uuid` component reads back from its text, as `isBridgeableComponent` admits.
+    BridgeType.Uuid -> true
     // ROADMAP Phase 4 (ADR-151 amendment): a `ByteArray` component reads back through
     // `NugetMarshal.ReadBytes(h)` -- the per-element box IS the bytes handle -- so the property
     // projection can spell it (`byte[]`), matching `isBridgeableComponent`.

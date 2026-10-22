@@ -182,8 +182,19 @@ internal object ForwardCirPlanProjection {
       "Forward CIR value-class method projection received ${plan.invocation.origin}"
     }
     val publicParams: List<CirParameter> = plan.publicParameters()
+    // ADR-235: a WIRE value class argument is unwrapped inline; the member route has no prelude.
     val argumentList: List<String> = listOf(nativeReceiverArg) +
-        plan.publicSignature.parameters.flatMap { parameter -> plan.callArgument(parameter) }
+        plan.publicSignature.parameters.flatMap { parameter ->
+          val view: ForwardValueClassView? = parameter.view
+          if (view == null) {
+            plan.callArgument(parameter)
+          } else {
+            plan.callArgument(
+              parameter.copy(csharpLabel = view.csharpUnwrap(parameter.csharpName), view = null),
+              named = parameter.csharpName,
+            )
+          }
+        }
     // ADR-082 overload numbering: the symbol's last segment carries the `_2` suffix, the public
     // name does not (the C# surface is one natural overload set). The `DllImport` name must follow
     // the *numbered* name, or two overloads that happen to share a wire shape would declare the
@@ -248,7 +259,11 @@ internal object ForwardCirPlanProjection {
         "Native_${declared.asCSymbol().replaceFirstChar { it.uppercase() }}"
     }
     val self: List<ForwardPublicParameter> = plan.publicSignature.receiver
-      ?.let { receiver -> listOf(ForwardPublicParameter(VALUE_CLASS_SELF, receiver.type)) }
+      ?.let { receiver ->
+        // ADR-235: a WIRE receiver keeps its view, so `this` is unwrapped (and its handle minted
+        // and released) exactly as a parameter of the same value class is.
+        listOf(ForwardPublicParameter(VALUE_CLASS_SELF, receiver.type, view = receiver.view))
+      }
       .orEmpty()
     val selfLocal: String =
       if (self.isEmpty()) "" else "\n            var $VALUE_CLASS_SELF = this;"
@@ -319,6 +334,24 @@ internal object ForwardCirPlanProjection {
    * `valueOut` out slot for a nullable value-type result.
    */
   private fun ForwardCallablePlan.valueClassMemberExpression(
+    nativeName: String,
+    callArguments: String,
+  ): ValueClassMemberBody {
+    val member: ValueClassMemberBody = valueClassMemberUnderlying(nativeName, callArguments)
+    // ADR-235: a WIRE value class result is read as its underlying, then wrapped in its struct.
+    val view: ForwardValueClassView = publicSignature.resultView ?: return member
+    val marker = "return "
+    val body: String = if (member.body.contains(marker)) {
+      val head: String = member.body.substringBeforeLast(marker)
+      val read: String = member.body.substringAfterLast(marker).removeSuffix(";")
+      "$head$marker${view.csharpWrap(read)};"
+    } else {
+      view.csharpWrap(member.body)
+    }
+    return member.copy(returnType = view.declared.csharpType(), body = body)
+  }
+
+  private fun ForwardCallablePlan.valueClassMemberUnderlying(
     nativeName: String,
     callArguments: String,
   ): ValueClassMemberBody {
@@ -918,7 +951,7 @@ internal object ForwardCirPlanProjection {
     publicSignature.parameters.map { parameter ->
       // ADR-164: a widened parameter's type is already its nullable form; an already-nullable one
       // is wrapped in the generated `Optional<T>` struct, a value type.
-      val type: String = parameter.type.csharpType()
+      val type: String = (parameter.view?.declared ?: parameter.type).csharpType()
       CirParameter(
         name = parameter.csharpName,
         type = when (parameter.default?.encoding) {
@@ -926,10 +959,11 @@ internal object ForwardCirPlanProjection {
           ForwardDefaultEncoding.PRESENCE -> "$type?"
           else -> type
         },
-        isReferenceType = !parameter.isOptional && parameter.type.isCSharpReferenceType(),
+        isReferenceType = !parameter.isOptional &&
+            (parameter.view?.declared ?: parameter.type).isCSharpReferenceType(),
         // C# can pass `null!` where a `string` is declared; the generic renderers read a non-null
         // one through the guard, the spelling [callArgument] gives a hand-built call site.
-        nativeArgumentExpression = if (parameter.type == BridgeType.String) {
+        nativeArgumentExpression = if (parameter.view == null && parameter.type == BridgeType.String) {
           nonNullStringOrThrow(parameter.csharpName)
         } else {
           null
@@ -954,6 +988,13 @@ internal object ForwardCirPlanProjection {
     copy(name = optionalLocal, default = null)
 
   private fun ForwardPublicParameter.optionalPrelude(): ForwardCirHandleStep? {
+    val view: ForwardValueClassView? = view
+    if (view != null) {
+      // A `default(V)` receiver is refused without a `nameof`: the caller passed no such parameter.
+      val named: String? = csharpName.takeIf { it != VALUE_CLASS_SELF }
+      val local = "var ${viewValue().csharpName} = ${view.csharpUnwrap(csharpName, named)};"
+      return ForwardCirHandleStep(flat = local, declarations = listOf(local), statement = "")
+    }
     if (!isOptional) return null
     val local = "var ${optionalValue().csharpName} = $csharpName.Value;"
     return ForwardCirHandleStep(flat = local, declarations = listOf(local), statement = "")
@@ -961,10 +1002,25 @@ internal object ForwardCirPlanProjection {
 
   /** ADR-164: [parameters] as the preludes and cleanups see them, each `Optional<T>` unwrapped. */
   private fun List<ForwardPublicParameter>.unwrapped(): List<ForwardPublicParameter> =
-    map { parameter -> if (parameter.isOptional) parameter.optionalValue() else parameter }
+    map { parameter ->
+      when {
+        parameter.view != null -> parameter.viewValue()
+        parameter.isOptional -> parameter.optionalValue()
+        else -> parameter
+      }
+    }
+
+  /**
+   * ADR-235: a WIRE value class parameter's underlying, read once into a local beside it so every
+   * prelude, argument and cleanup of the underlying works on it unchanged, as ADR-164's
+   * `Optional<T>` local does.
+   */
+  private fun ForwardPublicParameter.viewValue(): ForwardPublicParameter =
+    copy(name = "${name}Underlying", csharpLabel = null, view = null)
 
   /** ADR-164: an `Optional<T>` never passes straight through, whatever its inner type. */
-  private fun ForwardPublicParameter.isTrivialInput(): Boolean = !isOptional && type.isTrivialInput()
+  private fun ForwardPublicParameter.isTrivialInput(): Boolean =
+    view == null && !isOptional && type.isTrivialInput()
 
   /** ADR-164: the call arguments of [parameter], led by the `IsSet` slot when it is optional. */
   private fun ForwardCallablePlan.inputArguments(parameter: ForwardPublicParameter): List<String> =
@@ -976,7 +1032,9 @@ internal object ForwardCirPlanProjection {
       ForwardDefaultEncoding.PRESENCE ->
         listOf("${parameter.csharpName} is not null") + callArgument(parameter)
 
-      else -> callArgument(parameter)
+      else ->
+        if (parameter.view != null) callArgument(parameter.viewValue(), named = parameter.csharpName)
+        else callArgument(parameter)
     }
 
   /** The DllImport-only native parameter list: every native ABI IN parameter in [nativeParameters]
@@ -1557,7 +1615,7 @@ internal object ForwardCirPlanProjection {
     tryNames: CirTryNames? = null,
   ): CirResultProjection {
     val nativeCall: ForwardNativeCall = singleNativeImport()
-    val exit = CirBodyExit(tryNames)
+    val exit = CirBodyExit(tryNames, publicSignature.resultView)
     val prelude: List<ForwardCirHandleStep> =
       parameters.mapNotNull { parameter -> callbackNullGuard(parameter) } +
           parameters.mapNotNull { parameter -> parameter.optionalPrelude() } +
@@ -1584,7 +1642,7 @@ internal object ForwardCirPlanProjection {
     val callArguments: String = (argumentList + nativeOutParameters(nativeCall) + "out IntPtr error").joinToString(", ")
     // A `Result`-unwrapping export carries the failure flag, an out slot the generic pass-through
     // renderer would not pass, so both of its C# members take a hand-built body.
-    val needsCustomParams: Boolean = forceCustomBody || invocation.unwrapsKotlinResult ||
+    val needsCustomParams: Boolean = forceCustomBody || invocation.unwrapsKotlinResult || publicSignature.resultView != null ||
         parameters.any { parameter -> !parameter.isTrivialInput() }
     val result: BridgeType = publicSignature.result
     val projection: CirResultProjection = when (result) {
@@ -1994,7 +2052,14 @@ internal object ForwardCirPlanProjection {
         exit,
       )
     }
-    return projection.fillingOpenSlots(result)
+    return projection.viewing(publicSignature.resultView).fillingOpenSlots(result)
+  }
+
+  /** ADR-235: a WIRE value class result, read as its underlying, then wrapped in its struct. */
+  private fun CirResultProjection.viewing(view: ForwardValueClassView?): CirResultProjection {
+    if (view == null) return this
+    check(hasCustomBody) { "A value-class view result needs a custom body" }
+    return copy(returnType = view.declared.csharpType())
   }
 
   /**
@@ -2543,8 +2608,13 @@ internal data class CirTryNames(val value: String?, val failure: String, val exc
  * `TryX` twin's `value = ...; failure = null; return true;`. Each statement after the first starts
  * at the bodies' own 12-space column, so a caller places only the first.
  */
-internal class CirBodyExit(val names: CirTryNames?) {
-  fun returning(expression: String): String {
+internal class CirBodyExit(
+  val names: CirTryNames?,
+  // ADR-235: the struct a WIRE value class result is wrapped in on the way out.
+  private val view: ForwardValueClassView? = null,
+) {
+  fun returning(read: String): String {
+    val expression: String = view?.csharpWrap(read) ?: read
     val names: CirTryNames = names ?: return "return $expression;"
     val value: String = requireNotNull(names.value) { "A Result<Unit> Try has no value to return" }
     return "$value = $expression;\n            ${names.failure} = null;\n            return true;"

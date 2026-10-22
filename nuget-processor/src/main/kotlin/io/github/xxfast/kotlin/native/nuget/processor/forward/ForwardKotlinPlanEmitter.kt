@@ -400,7 +400,7 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
   }
   val memberName: String =
     (plan.invocation.member ?: plan.invocation.symbol.substringAfterLast('.')).kotlinIdentifier()
-  val invocation: String = when {
+  val declaredInvocation: String = when {
     isConstructor -> {
       val underlyingProp: String = requireNotNull(plan.invocation.receiver) {
         "Value-class constructor plan ${plan.invocation.symbol} is missing underlying property name"
@@ -418,6 +418,9 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
       "$reconstructed.$memberName($arguments)"
     }
   }
+  // ADR-235: a WIRE value class result crosses as its underlying.
+  val invocation: String =
+    plan.publicSignature.resultView?.kotlinUnwrap(declaredInvocation) ?: declaredInvocation
 
   when (val result: BridgeType = plan.publicSignature.result) {
     BridgeType.Unit -> {
@@ -727,24 +730,30 @@ internal fun componentLowering(
   // ADR-212: the box holds the element itself; it is cast to the bound chain, never to `T`.
   is BridgeType.TypeParameter -> typeParameterElementCast(name, type, nullable = false)
 
+  // ADR-235: the element arrived as its parameter wire, ticks or text, and converts back here.
+  BridgeType.Instant, BridgeType.Duration, BridgeType.Uuid ->
+    narrowComponentLowering(type, "($name as ${narrowComponentWire(type)})")
+
   is BridgeType.ValueClass -> when (val underlying: BridgeType = type.underlying) {
     is BridgeType.Enum ->
       "${type.qualifiedName}(${underlying.qualifiedName}.entries[$name as kotlin.Int])"
+    // ADR-235: a WIRE underlying is read as the bare underlying is, then re-wrapped.
+    BridgeType.Instant,
+    BridgeType.Duration,
+    BridgeType.Uuid,
+    is BridgeType.Interface,
+    is BridgeType.ValueClass,
+    BridgeType.ByteArray,
+    is BridgeType.Collection,
+      -> "${type.qualifiedName}(${componentLowering(name, underlying, depth)})"
 
     BridgeType.Unit,
     is BridgeType.Primitive,
     BridgeType.Char,
     BridgeType.String,
-    BridgeType.Instant,
-    BridgeType.Duration,
     is BridgeType.Throwable,
-    BridgeType.Uuid,
     is BridgeType.ObjectHandle,
-    is BridgeType.Interface,
     is BridgeType.BoundInterface,
-    is BridgeType.ValueClass,
-    BridgeType.ByteArray,
-    is BridgeType.Collection,
     is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
@@ -814,8 +823,9 @@ internal fun componentLowering(
         "($name)?.let { ${letParameter(depth)} -> " +
             "${inner.qualifiedName}(${underlyingElementCast(letParameter(depth), underlying)}) }"
       } else {
-        "($name as ${elementKotlinTypeName(underlying)}?)?.let { ${letParameter(depth)} -> " +
-            "${inner.qualifiedName}(${letParameter(depth)}) }"
+        // ADR-235: the underlying's own nullable lowering, so a WIRE underlying converts first.
+        "(${componentLowering(name, BridgeType.Nullable(underlying), depth)})?.let { " +
+            "${letParameter(depth)} -> ${inner.qualifiedName}(${letParameter(depth)}) }"
       }
     }
 
@@ -823,15 +833,17 @@ internal fun componentLowering(
     is BridgeType.Throwable ->
       managedExceptionLowering("($name as kotlin.String?)", nullable = true)
 
+    // ADR-235: a null element arrived as the null pointer; a present one converts from its wire.
+    BridgeType.Instant, BridgeType.Duration, BridgeType.Uuid ->
+      "($name as ${narrowComponentWire(inner)}?)?.let { ${letParameter(depth)} -> " +
+          "${narrowComponentLowering(inner, letParameter(depth))} }"
+
     is BridgeType.TypeParameter -> typeParameterElementCast(name, inner, nullable = true)
 
     BridgeType.Unit,
     is BridgeType.Primitive,
     BridgeType.Char,
     BridgeType.String,
-    BridgeType.Instant,
-    BridgeType.Duration,
-    BridgeType.Uuid,
     is BridgeType.ObjectHandle,
     is BridgeType.Interface,
     is BridgeType.BoundInterface,
@@ -853,9 +865,6 @@ internal fun componentLowering(
   is BridgeType.Primitive,
   BridgeType.Char,
   BridgeType.String,
-  BridgeType.Instant,
-  BridgeType.Duration,
-  BridgeType.Uuid,
   is BridgeType.ObjectHandle,
   is BridgeType.Interface,
   is BridgeType.BoundInterface,
@@ -969,7 +978,20 @@ private fun componentRaising(name: String, type: BridgeType, depth: Int = 0): St
   }
   if (type.boxedValueClassComponent() != null) return name
   if (type.componentEnum() != null) return "$name${dot}ordinal"
+  // ADR-235: an `Instant`/`Duration` element leaves as its ticks, a `Uuid` as its text.
+  val narrow: BridgeType = type.unwrapNullable()
+  if (narrow == BridgeType.Instant || narrow == BridgeType.Duration) return "$name${dot}toDotNetTicks()"
+  if (narrow == BridgeType.Uuid) return "$name${dot}toString()"
   val valueClass: BridgeType.ValueClass = type.componentValueClass() ?: return name
+  // ADR-235: a WIRE underlying is boxed as the bare underlying is, one level of unwrap down.
+  if (valueClass.underlying.valueClassUnderlyingRole() == ForwardValueClassUnderlying.WIRE) {
+    val underlying: BridgeType = valueClass.underlying
+    val unwrapped: String = "$name$dot${valueClass.underlyingPropertyName.kotlinIdentifier()}"
+    return componentRaising(
+      unwrapped, if (type is BridgeType.Nullable) BridgeType.Nullable(underlying) else underlying,
+      depth,
+    )
+  }
   return "$name$dot${valueClass.underlyingPropertyName}" +
       if (valueClass.underlying is BridgeType.Enum) "$dot" + "ordinal" else ""
 }
@@ -1837,7 +1859,17 @@ internal fun String.kotlinIdentifier(): String =
 internal fun String.isPlainKotlinIdentifier(): Boolean =
   isNotEmpty() && !first().isDigit() && all { char -> char.isLetterOrDigit() || char == '_' }
 
+/** ADR-235: the call, unwrapped to the underlying when the result is a WIRE value class. */
 private fun invocationExpression(
+  plan: ForwardCallablePlan,
+  receiver: ForwardAbiParameter?,
+  arguments: String,
+): String {
+  val call: String = declaredInvocationExpression(plan, receiver, arguments)
+  return plan.publicSignature.resultView?.kotlinUnwrap(call) ?: call
+}
+
+private fun declaredInvocationExpression(
   plan: ForwardCallablePlan,
   receiver: ForwardAbiParameter?,
   arguments: String,
@@ -1939,8 +1971,14 @@ private fun invocationExpression(
         val self: ForwardPublicParameter = requireNotNull(plan.publicSignature.receiver) {
           "Value-class member plan ${plan.invocation.symbol} has no public receiver"
         }
-        val type: BridgeType.ValueClass = self.type as BridgeType.ValueClass
-        val rewrapped = "$construction(${valueClassUnderlyingLowering(self.ref, type.underlying)})"
+        // ADR-235: a WIRE receiver arrives as its innermost underlying; its own lowering re-wraps
+        // the whole value class chain, so each `init` runs inside this export's error slot.
+        val rewrapped: String = if (self.view != null) {
+          loweredArgument(self)
+        } else {
+          val type: BridgeType.ValueClass = self.type as BridgeType.ValueClass
+          "$construction(${valueClassUnderlyingLowering(self.ref, type.underlying)})"
+        }
         if (plan.invocation.target?.endsWith("#property") == true) "$rewrapped.$declaredName"
         else "$rewrapped.$functionName($arguments)"
       }
@@ -2183,7 +2221,13 @@ private val ForwardPublicParameter.ref: String
   get() = name.kotlinIdentifier()
 
 /** The lowering expression that turns one native ABI value back into the Kotlin argument. */
-private fun loweredArgument(parameter: ForwardPublicParameter): String =
+private fun loweredArgument(parameter: ForwardPublicParameter): String {
+  val underlying: String = underlyingArgument(parameter)
+  // ADR-235: a WIRE value class is re-wrapped here, so its `init` runs on every crossing.
+  return parameter.view?.kotlinWrap(underlying) ?: underlying
+}
+
+private fun underlyingArgument(parameter: ForwardPublicParameter): String =
   when (val type: BridgeType = parameter.type) {
     is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> parameter.ref
     // ADR-106: parse the canonical text back into a Uuid. Spelled fully qualified so the generated
@@ -2690,3 +2734,15 @@ private fun ForwardNativeCall.valueOutName(): String? =
 /** ADR-226: `Int?` read as `Int` for the value slot of a has-value pair. */
 private fun BridgeType.unwrapNullablePrimitive(): BridgeType =
   if (isNullablePrimitive()) (this as BridgeType.Nullable).type else this
+
+/** ADR-235: the boxed wire an `Instant`, `Duration` or `Uuid` collection element crosses as. */
+private fun narrowComponentWire(type: BridgeType): String =
+  if (type == BridgeType.Uuid) "kotlin.String" else "kotlin.Long"
+
+/** ADR-235: [wire] (ticks or text) back into the `Instant`, `Duration` or `Uuid` element. */
+private fun narrowComponentLowering(type: BridgeType, wire: String): String {
+  if (type == BridgeType.Instant) return "instantFromDotNetTicks($wire)"
+  if (type == BridgeType.Duration) return "durationFromDotNetTicks($wire)"
+  require(type == BridgeType.Uuid) { "ADR-235: $type is not a narrow collection component" }
+  return "kotlin.uuid.Uuid.parse($wire)"
+}

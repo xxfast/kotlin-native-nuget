@@ -2483,11 +2483,12 @@ internal class NugetProcessor(
           symbol = cls.takeIf { it.containingFile != null },
           declaration = name,
           reason = "value class `$name` wraps `$underlying`, which no value-class wire carries " +
-              "(a value class crosses as a String, a primitive other than Char, an enum, or an " +
-              "exported class or sealed type), so no C# record struct is declared for it",
+              "(a value class crosses as a String, a primitive other than Char, an enum, an " +
+              "exported class or sealed type, an `Instant`, a `Duration`, a `Uuid`, a `ByteArray`, " +
+              "a collection, a plain interface or another value class), so no C# record struct " +
+              "is declared for it",
           hint = "change the underlying to one of those (a `Char` fits in a `String` or an " +
-              "`Int`; an interface fits behind an exported class that implements it), or make " +
-              "the value class internal",
+              "`Int`), or make the value class internal",
           owner = null,
         )
       },

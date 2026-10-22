@@ -48,7 +48,7 @@ internal object ForwardCirPropertyProjection {
    * declaration can be projected from the *same* call the implementing class's property goes
    * through. A second spelling of the same plan is what CS0738 is made of.
    */
-  fun publicType(plan: ForwardPropertyPlan): String = plan.type.forwardPublicCsharpType()
+  fun publicType(plan: ForwardPropertyPlan): String = plan.publicCsharpType()
 
   fun staticProperty(plan: ForwardPropertyPlan, libraryName: String): List<CirMember> {
     // ROADMAP Phase 4: an `object`'s own property is the third static position, projected by this
@@ -118,7 +118,7 @@ internal object ForwardCirPropertyProjection {
     val property = CirExtensionProperty(
       receiverType = publicReceiver,
       name = plan.publicName,
-      type = plan.type.forwardPublicCsharpType(),
+      type = plan.publicCsharpType(),
       getter = getterBody(plan, receiverArgument, receiverStep, receiverCleanup),
       setter = plan.setter?.let {
         setterBody(plan, receiverArgument, receiverStep, receiverCleanup)
@@ -157,7 +157,7 @@ internal object ForwardCirPropertyProjection {
     val getter = CirMethod(
       doc = plan.doc?.toCirDoc(),
       name = plan.publicName,
-      returnType = plan.type.forwardPublicCsharpType(),
+      returnType = plan.publicCsharpType(),
       nativeReturnType = plan.getter.calls().first().result.csharpWireType(),
       parameters = listOf(CirParameter(receiverName, publicReceiver)),
       body = getterBody(plan, receiverArgument),
@@ -171,7 +171,7 @@ internal object ForwardCirPropertyProjection {
         returnType = "void",
         parameters = listOf(
           CirParameter(receiverName, publicReceiver),
-          CirParameter("value", plan.type.forwardPublicCsharpType()),
+          CirParameter("value", plan.publicCsharpType()),
         ),
         body = setterBody(plan, receiverArgument),
         isStatic = true,
@@ -193,7 +193,7 @@ internal object ForwardCirPropertyProjection {
     val directGetter: ForwardNativeCall = plan.getter.calls().first()
     return CirProperty(
       name = plan.publicName,
-      type = plan.type.forwardPublicCsharpType(),
+      type = plan.publicCsharpType(),
       nativeReturnType = directGetter.result.csharpWireType(),
       nativeSetterType = if (plan.setter != null) setterNativeType(plan.type) else directGetter.result.csharpWireType(),
       nativeName = plan.kotlinName.asCSymbol(),
@@ -277,7 +277,41 @@ internal object ForwardCirPropertyProjection {
   // minted a handle. An interface receiver mints one per read, so the core goes inside a scope
   // whose `finally` disposes it even when the error check throws. With no receiver handle
   // [forwardCirHandleScope] keeps the flat shape byte for byte.
+  /** ADR-235: the declared spelling, the WIRE value class rather than the planned underlying. */
+  private fun ForwardPropertyPlan.publicCsharpType(): String =
+    (view?.declared ?: type).forwardPublicCsharpType()
+
+  /**
+   * ADR-235: a WIRE value class property reads and writes its underlying in a local function, the
+   * underlying's own body unchanged, and wraps or unwraps the struct around it.
+   */
   private fun getterBody(
+    plan: ForwardPropertyPlan,
+    receiver: String,
+    receiverStep: ForwardCirHandleStep? = null,
+    receiverCleanup: String? = null,
+  ): String {
+    val body: String = underlyingGetterBody(plan, receiver, receiverStep, receiverCleanup)
+    val view: ForwardValueClassView = plan.view ?: return body
+    return "\n            return ${view.csharpWrap("NugetRead()")};" +
+        "\n            ${plan.type.forwardPublicCsharpType()} NugetRead()\n            {" + body +
+        "\n            }"
+  }
+
+  private fun setterBody(
+    plan: ForwardPropertyPlan,
+    receiver: String,
+    receiverStep: ForwardCirHandleStep? = null,
+    receiverCleanup: String? = null,
+  ): String {
+    val body: String = underlyingSetterBody(plan, receiver, receiverStep, receiverCleanup)
+    val view: ForwardValueClassView = plan.view ?: return body
+    return "\n            NugetWrite(${view.csharpUnwrap("value")});" +
+        "\n            void NugetWrite(${plan.type.forwardPublicCsharpType()} value)\n            {" +
+        body + "\n            }"
+  }
+
+  private fun underlyingGetterBody(
     plan: ForwardPropertyPlan,
     receiver: String,
     receiverStep: ForwardCirHandleStep? = null,
@@ -301,7 +335,7 @@ internal object ForwardCirPropertyProjection {
     )
   }
 
-  private fun setterBody(
+  private fun underlyingSetterBody(
     plan: ForwardPropertyPlan,
     receiver: String,
     receiverStep: ForwardCirHandleStep? = null,

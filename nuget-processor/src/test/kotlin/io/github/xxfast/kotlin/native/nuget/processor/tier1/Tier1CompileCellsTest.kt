@@ -446,55 +446,6 @@ class Tier1CompileCellsTest {
     )
   }
 
-  /**
-   * `ForwardPropertyPlanner.componentDescription()`'s `!keyOk && !valueOk` arm: a `Map` whose key
-   * AND value both fail `isWrappableComponent()`, so the diagnostic must name both sides.
-   *
-   * The key comes from [Tier1UnwrappableWitness.setterMapKey], which excludes a nullable key: the
-   * ADR-083 amendment (boundary nullability part B) declines one at the READ position too, so that
-   * shape would drop the whole property and leave no getter to assert. Key and value may be the
-   * same type; the arm only needs both sides to fail.
-   */
-  @Test
-  fun `class property with Map of unwrappable key and value has no setter and names both types`() {
-    val key: Tier1UnwrappableCandidate = Tier1UnwrappableWitness.setterMapKey
-    val value: Tier1UnwrappableCandidate = Tier1UnwrappableWitness.setterComponent
-    val imports: String = setOf(key.importLine, value.importLine).joinToString("\n")
-    val result = Tier1Harness.run(
-      """
-      package tier1.moodmapboth
-
-      $imports
-
-      class Box {
-        var scores: Map<${key.kotlin}, ${value.kotlin}> = emptyMap()
-      }
-      """.trimIndent()
-    )
-
-    assertTrue(
-      result.compiledClean,
-      "expected export_library_tier1_moodmapboth__box_get_scores to compile; got: ${result.compileErrors}",
-    )
-    assertTrue(
-      "export_library_tier1_moodmapboth__box_get_scores" in result.generated,
-      "expected the getter export to still be generated; generated=${result.generated}",
-    )
-    assertTrue(
-      "export_library_tier1_moodmapboth__box_set_scores" !in result.generated,
-      "expected no setter export (neither the key nor the value is a wrappable map component); " +
-          "generated=${result.generated}",
-    )
-    assertTrue(
-      result.kspWarnings.any {
-        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) &&
-            it.contains("key type ${key.diagnosticName}") &&
-            it.contains("and value type ${value.diagnosticName}")
-      },
-      "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming both Box.scores's key and value " +
-          "types; kspWarnings=${result.kspWarnings}",
-    )
-  }
 
   /**
    * ADR-075: the `Visit(patient, symptoms, notes)` data-class primary constructor from the

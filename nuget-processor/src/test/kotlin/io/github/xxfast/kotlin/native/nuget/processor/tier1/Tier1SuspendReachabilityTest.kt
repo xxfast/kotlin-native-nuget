@@ -221,13 +221,14 @@ class Tier1SuspendReachabilityTest {
 
   /** A value class with no `NugetBox`/`NugetUnbox` pair (ADR-171 builds one only for a scalar,
    *  String, enum or handle underlying) is refused by name, never completed through a `NugetUnbox`
-   *  that was never generated (CS0117). `Litter` wraps a `List`, so it has no record struct either,
-   *  and the skip names that, the real reason, rather than calling it a generic type. */
+   *  that was never generated (CS0117). `Litter` wraps a `List`: since ADR-235 it has a record
+   *  struct over `IReadOnlyList<string>`, and the skip names the missing boxed form, the real
+   *  reason. */
   @Test
   fun `a value class with no unbox pair at a suspend return is refused by name`() {
-    val warning: String = skip("litterLater", ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE)
-    assertTrue("has no C# record struct, because it wraps `kotlin.collections.List`" in warning)
-    assertFalse("generic type" in warning, warning)
+    val warning: String = result.kspWarnings.firstOrNull { it.contains("litterLater") }
+      ?: error("expected a skip for litterLater; got: ${result.kspWarnings}")
+    assertTrue("those are the underlyings it has a boxed form for" in warning, warning)
     assertFalse("LitterLaterAsync" in result.generatedCSharp, result.generatedCSharp)
     assertFalse("Litter.NugetUnbox" in result.generatedCSharp, result.generatedCSharp)
     assertFalse("litterLater" in result.generated, "no Kotlin export; got: ${result.generated}")

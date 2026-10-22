@@ -33,6 +33,7 @@ namespace IntegrationTests;
 /// </para>
 /// <para>Oreo tries to subscribe nobody to everything. Mylo has to live with the consequences.</para>
 /// </summary>
+[Collection(JobIdleWatchersCollection.Name)]
 public class CallbackNullGuardTests
 {
     private sealed class RecordingCatListener : ICatEventListener

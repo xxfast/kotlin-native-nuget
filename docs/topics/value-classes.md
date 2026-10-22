@@ -29,14 +29,78 @@ string name = result.Cat.Name;              // "Oreo" -- dispose result.Cat like
 another class, only a secondary constructor's validation crosses the bridge -- the primary
 constructor's `init` does not run when called from C#.
 
-Only a value class over `String`, a primitive other than `Char`, an enum, a nullable `String` or
-primitive, an object handle, or a sealed base/eligible sealed interface is declared at all. A value
-class over `Char`, a plain interface, a nullable non-scalar, `Instant`, `Duration`, `Uuid`,
-`ByteArray`, a collection, another value class, or a type outside the export set is refused by
+A value class over `String`, a primitive other than `Char`, an enum, a nullable `String` or
+primitive, an object handle, a sealed base/eligible sealed interface, `Instant`, `Duration`, `Uuid`,
+`ByteArray`, a collection, another value class, or a plain interface is declared at all (the last
+group is [below](#over-instant-bytearray-collection-interface)). A value class over `Char`, a
+nullable non-scalar, or a type outside the export set is refused by
 name; every member typed with it, at any position, is a separate named skip
 (`SKIPPED_UNSUPPORTED_TYPE`: "its value class type `X` has no C# record struct, because it wraps
 `kotlin.Char`, which no value-class wire carries"). That covers a `Box<X>`, `List<X>`, lambda or
 `Flow` of one.
+
+## Over `Instant`, `Duration`, `Uuid`, `ByteArray`, a collection, another value class or an interface {id="over-instant-bytearray-collection-interface"}
+
+A value class over one of these becomes a `readonly record struct` whose one property is the
+underlying's usual C# type, and it crosses on that type's own wire. Kotlin re-wraps it, so `init`
+runs when the struct reaches Kotlin, not when you construct it in C#.
+
+```kotlin
+value class SunbeamStart(val at: Instant) {
+  init { require(at.epochSeconds >= 0) { "a sunbeam cannot start before 1970" } }
+  fun minutesUntil(other: SunbeamStart): Long = (other.at - at).inWholeMinutes
+}
+
+value class PawPrint(val pads: ByteArray) {
+  constructor(pad: Byte, count: Int) : this(ByteArray(count) { pad })
+  init { require(pads.isNotEmpty()) { "a paw print needs at least one pad" } }
+  val padCount: Int get() = pads.size
+}
+
+value class PurrVoice(val rumbler: Rumbler) // Rumbler is a plain Kotlin interface
+```
+
+```C#
+var start = new SunbeamStart(DateTimeOffset.FromUnixTimeSeconds(1_700_000_000));
+FurcoatSample.EchoStart(start);                  // fine
+FurcoatSample.EchoStart(new SunbeamStart(DateTimeOffset.FromUnixTimeSeconds(-60)));
+                                                 // ArgumentException: init ran in Kotlin
+
+var paw = new PawPrint(new byte[] { 1, 2 });     // byte[]
+int pads = paw.PadCount;                         // 2
+var same = new PawPrint(7, 3);                   // secondary constructor, runs in Kotlin
+```
+
+| Underlying | Struct property |
+|---|---|
+| `Instant` | `DateTimeOffset` |
+| `Duration` | `TimeSpan` |
+| `Uuid` | `Guid` |
+| `ByteArray` | `byte[]` |
+| `List<String>` and the other collections | `IReadOnlyList<string>`, `IReadOnlySet<T>`, `IReadOnlyDictionary<K,V>` |
+| another value class | that value class's struct (`ShelterTag(ChipSerial Serial)`) |
+| a plain interface | the generated `I<Name>` (`PurrVoice(IRumbler Rumbler)`) |
+
+These structs bind at parameters, results, properties and constructors, nullable included,
+exactly like the structs above, and as a `List`, `Set` or `Map` element, key or value. Unlike a
+[bare `ByteArray`](collections.md#bytearray-as-a-collection-component), a struct over a `ByteArray`
+or a collection is accepted as a `Set` element and a `Map` key, but it compares by reference (see
+below), so `Contains` or a lookup with a struct you just built never matches; read the elements
+or iterate the entries instead. Their methods, properties and
+secondary constructors bind too. A failing `init` on the receiver throws the usual
+[exception](exceptions.md) from the member call.
+
+- A `ByteArray` or collection is copied at each crossing, so changing the array you passed in
+  does not reach Kotlin. Those two structs compare their payload by reference, so assert on
+  `Pads` or `Toys`, not on the struct.
+- A value class over an interface holds an `IDisposable` interface value. Dispose a Kotlin-backed
+  one you read out (`using IRumbler rumbler = voice.Rumbler`). A C#-implemented one you pass in
+  comes back as the same instance.
+- `default(PawPrint)`, and `default` of a struct over a collection or an interface, carries a
+  `null` payload that Kotlin could never have built. Crossing one throws `ArgumentException`
+  naming the struct, as a parameter, nullable value, collection element or member receiver. A struct
+  over `Instant`, `Duration` or `Uuid` has no null payload, so its `default` crosses and `init`
+  decides whether Kotlin accepts it.
 
 ## A generic value class
 

@@ -398,3 +398,9 @@ build, `List<Nick?>` binds as a parameter and keeps `Nick(null)` as a result, an
 underlying no longer feeds a non-null string import (CS8604).
 [ADR-226](226-generic-value-class-nullable-and-collections.md) carries the same value classes to
 ordinary positions through this pair.
+
+## Amendment, 2026-10-22: see ADR-235
+
+[ADR-235](235-value-class-wire-underlyings.md) binds a value class over `Instant`, `Duration`,
+`Uuid`, `ByteArray`, a collection, another value class or a plain interface at ordinary positions, so
+those seven are no longer REFUSED there. The REFUSED list above is the one that applied to ADR-171.

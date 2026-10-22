@@ -430,8 +430,7 @@ class Tier1MutableSharedFlowValueClassElementTest {
     val pkg = "tier1.sharedvcrefused"
     mapOf(
       "Bulletin.initials:" to listOf("`$pkg.Initial`", "`kotlin.Char`"),
-      "Bulletin.stamps:" to listOf("`$pkg.Stamp`", "`kotlin.time.Instant`"),
-      "Bulletin.outers:" to listOf("`$pkg.Outer`", "`$pkg.Inner`"),
+
       "Bulletin.oopses:" to listOf("`$pkg.Oops`", "`kotlin.Throwable`"),
     ).forEach { (member, named) ->
       val skips: List<String> = refusing.kspWarnings.filter {
@@ -442,6 +441,14 @@ class Tier1MutableSharedFlowValueClassElementTest {
       named.forEach { text ->
         assertContains(skips.single(), text, message = "expected $member to name $text")
       }
+    }
+    // ADR-235: an `Instant` underlying and a nested value class have a record struct now, over
+    // the underlying's own C# spelling, but no box/unbox pair: refused as an element by that.
+    listOf("Bulletin.stamps:", "Bulletin.outers:").forEach { member ->
+      val skips: List<String> = refusing.kspWarnings.filter {
+        it.contains(member) && it.contains("those are the underlyings it has a boxed form for")
+      }
+      assertEquals(1, skips.size, "expected $member skipped once; got: ${refusing.kspWarnings}")
     }
     assertFalse(
       refusing.kspWarnings.any { it.contains("has no write arm") },

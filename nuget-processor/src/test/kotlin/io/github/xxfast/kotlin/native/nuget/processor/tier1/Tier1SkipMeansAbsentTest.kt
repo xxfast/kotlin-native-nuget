@@ -24,8 +24,9 @@ import kotlin.test.assertTrue
  * ADR-208 deleted that route outright (a generic-class return is planned like any other type), so
  * these cells now pin that a plan skip leaves nothing behind it.
  *
- * `Instant` is the probe rather than `ByteArray` on purpose: it is still a refused component after
- * this item ships, so these cells keep testing the general hole rather than one type's arms.
+ * `Pair` is the probe rather than `ByteArray` on purpose: it is a refused component with no
+ * planned route, so these cells keep testing the general hole rather than one type's arms
+ * (`Instant`, the probe until ADR-235 made it a component, no longer is).
  */
 class Tier1SkipMeansAbsentTest {
 
@@ -35,11 +36,9 @@ class Tier1SkipMeansAbsentTest {
       """
       package tier1.skipabsent
 
-      import kotlin.time.Instant
-
-      fun stamps(): List<Instant> = emptyList()
-      fun grids(): List<List<Instant>> = emptyList()
-      fun tally(): Map<String, Instant> = emptyMap()
+      fun stamps(): List<Pair<Int, Int>> = emptyList()
+      fun grids(): List<List<Pair<Int, Int>>> = emptyList()
+      fun tally(): Map<String, Pair<Int, Int>> = emptyMap()
 
       fun control(): List<String> = listOf("oreo")
       """.trimIndent()
@@ -53,7 +52,7 @@ class Tier1SkipMeansAbsentTest {
     )
     // Belt and braces: the two exact spellings the legacy route used to produce.
     assertTrue(
-      "IReadOnlyList<Instant>" !in result.generatedCSharp &&
+      "IReadOnlyList<Pair>" !in result.generatedCSharp &&
           "IReadOnlyList<List>" !in result.generatedCSharp,
       "a component must never be spelled by its Kotlin simple name; " +
           "generatedCSharp=${result.generatedCSharp}",
@@ -75,7 +74,6 @@ class Tier1SkipMeansAbsentTest {
       """
       package tier1.skipabsentparam
 
-      import kotlin.time.Instant
       ${witness.importLine}
 
       class Cat(val name: String)
@@ -90,7 +88,7 @@ class Tier1SkipMeansAbsentTest {
       fun boxCat(cat: Cat): Box<Int> = Box(cat.name.length)
 
       // ...and the collection-return twin, skipped for its PARAMETER rather than its return.
-      fun indices(stamps: List<Instant>): List<Int> = stamps.indices.toList()
+      fun indices(stamps: List<Pair<Int, Int>>): List<Int> = stamps.indices.toList()
       """.trimIndent()
     )
 
