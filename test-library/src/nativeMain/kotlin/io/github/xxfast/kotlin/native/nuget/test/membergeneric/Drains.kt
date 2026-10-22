@@ -70,8 +70,8 @@ class Siphon {
   suspend fun <T> dribble(item: T): T = item
 
   /**
-   * A `suspend` member taking a plain (non-suspend) lambda over `T`. Not bound: the legacy suspend
-   * route lowers no plain lambda, `T` or not, so this is a named `SKIPPED_UNSUPPORTED_INPUT`.
+   * A `suspend` member taking a plain (non-suspend) lambda over `T`: `DecantAsync<T>(T, Func<T, T>)`.
+   * The delegate's callback context is released when the coroutine ends (ADR-231).
    */
   suspend fun <T> decant(value: T, pour: (T) -> T): T = pour(value)
 }

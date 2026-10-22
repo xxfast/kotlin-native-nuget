@@ -33,6 +33,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedCallbackMember
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedInterfaceBridgePair
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParameterShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyParameterShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.valueClassWithoutStruct
 import io.github.xxfast.kotlin.native.nuget.processor.forward.hasErasedCrossing
@@ -165,6 +167,11 @@ internal fun KSFunctionDeclaration.refusedLegacyLambdaShape(
     val expanded: KSType = param.type.resolve().expandAliases()
     val expandedName: String? = expanded.declaration.qualifiedName?.asString()
     if (expandedName !in LAMBDA_TYPES) return@firstNotNullOfOrNull null
+    // ADR-231: a lambda the `suspend` or Flow route binds as a plain callback is not on this route.
+    val async: ForwardLegacyParameterShape? = classifier.legacyParameterShape(param)
+    val asyncType: BridgeType? = (async as? ForwardLegacyParameterShape.Async)?.type
+    val boundAsync: Boolean = asyncType is BridgeType.Callback
+    if (boundAsync) return@firstNotNullOfOrNull null
     val paramName: String = param.name?.asString() ?: "_"
     // Every argument, the last of which is the lambda's RETURN type: both positions are refused,
     // and they are dropped by separate lines of the route's own selector, so neither is redundant.
@@ -237,16 +244,16 @@ internal fun KSFunctionDeclaration.refusedLegacyLambdaShape(
     if (result.declaration.qualifiedName?.asString() in LEGACY_LAMBDA_RESULTS) {
       return@firstNotNullOfOrNull null
     }
-    // ADR-215 lane A: a `T` result is legal on an ordinary member's per-call lambda (the plan's
-    // callback); a member reaching this hand-written route (a `suspend` member, a stored callback)
-    // is refused for where the lambda sits, not for returning `T`.
+    // ADR-215 "lambda parameter on the plan": a `T` result is legal on a per-call lambda (the plan's callback, and since
+    // ADR-231 a `suspend` or Flow member's); a member reaching this hand-written route (a stored
+    // callback) is refused for where the lambda sits, not for returning `T`.
     if (result.declaration is KSTypeParameter) {
       return@firstNotNullOfOrNull LegacyRefusedInterfaceBridgePair(
         kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
-        reason = "a callback returning a type parameter binds only as a per-call lambda on an " +
-            "ordinary (non-suspend) member, but $spelled returns " +
+        reason = "a callback returning a type parameter binds only as a per-call lambda (on an " +
+            "ordinary, `suspend` or Flow-returning member), but $spelled returns " +
             "`${result.kotlinSpelling()}` from a member that lambda route does not carry",
-        hint = "take the lambda on a non-suspend member that does not store it, or return " +
+        hint = "take the lambda as a per-call parameter the member does not store, or return " +
             "`Unit`, a primitive or a `String` from it",
       )
     }

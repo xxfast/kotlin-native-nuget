@@ -68,9 +68,7 @@ Complete.
 
 ## Phase 6: Async support
 
-One open item.
-
-- [ ] A plain (non-suspend) lambda parameter on a `suspend` member has no route for any payload, `T` or not: the per-call callback context would have to outlive the P/Invoke until the `Task` completes; found by [ADR-215](docs/adr/215-type-parameter-in-lambda-and-flow.md)
+Complete.
 
 ## Phase 7: Bidirectional support (C# → Kotlin)
 

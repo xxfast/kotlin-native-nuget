@@ -1366,6 +1366,8 @@ internal class ForwardBridgeTypeClassifier(
   /** The result shapes both callback halves lower, out. See [callbackType]. */
   private fun BridgeType.isCallbackResult(): Boolean = when (this) {
     BridgeType.Unit, is BridgeType.Primitive, BridgeType.String -> true
+    // ADR-231: an exported class, over the owned box C# mints with `WrapOwned<T>`.
+    is BridgeType.ObjectHandle -> true
     // ADR-201 amendment: the managed-exception text over the `String` result box, so only a
     // declaration that can hold a `NugetManagedException`.
     is BridgeType.Throwable -> acceptsManagedException
@@ -1374,7 +1376,6 @@ internal class ForwardBridgeTypeClassifier(
     BridgeType.Duration,
     BridgeType.Uuid,
     is BridgeType.Enum,
-    is BridgeType.ObjectHandle,
     is BridgeType.Interface,
     is BridgeType.BoundInterface,
     is BridgeType.ValueClass,

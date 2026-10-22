@@ -53,6 +53,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isLegacyNullableSl
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOptInRefused
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyNames
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCallbackReleased
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyInvocation
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyKotlinNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyParameterShapes
@@ -674,10 +675,13 @@ private fun buildFlowMethodCollectBody(
     "return collectForCSharp($scope, ${names.onNext}, ${names.onComplete}, ${names.onError}, " +
         "${names.userData}, ::nugetMappedType) { $emit ->"
   )
-  appendLine("  ${memberAccessor(call, memberNullable)}.collect { value ->")
-  appendLine("    val itemRef = ${itemBoxExpr(elementNullable, elementCollection, envelope)}")
-  appendLine("    $emit(itemRef)")
-  appendLine("  }")
+  // ADR-231: a plain callback's key is released when the collection ends, on every arm.
+  val collected: String = "${memberAccessor(call, memberNullable)}.collect { value ->\n" +
+      "  val itemRef = ${itemBoxExpr(elementNullable, elementCollection, envelope)}\n" +
+      "  $emit(itemRef)\n" +
+      "}"
+  names.legacyCallbackReleased(collected).trimEnd().lines()
+    .forEach { line -> appendLine("  $line") }
   append("}")
 }
 

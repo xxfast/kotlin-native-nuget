@@ -434,26 +434,25 @@ public class MemberGenericAsyncTests
 
     // --- suspend fun <T> decant(value: T, pour: (T) -> T): T, a plain lambda on the suspend route ---
 
-    // Refused, a Phase 6 gap rather than generics: the suspend route lowers no plain lambda, any payload.
-    // [Fact]
-    // public async Task Decant_PlainLambdaOverT_RunsInsideTheSuspendCall()
-    // {
-        // using var siphon = new Siphon();
-        // using var oreo = new Tabby("Oreo", 3);
-        // using var mylo = new Tabby("Mylo", 5);
+    [Fact]
+    public async Task Decant_PlainLambdaOverT_RunsInsideTheSuspendCall()
+    {
+        using var siphon = new Siphon();
+        using var oreo = new Tabby("Oreo", 3);
+        using var mylo = new Tabby("Mylo", 5);
 
-        // Assert.Equal(6, await siphon.DecantAsync(3, n => n * 2));
-        // Assert.Equal("Oreo and Mylo", await siphon.DecantAsync("Oreo", name => $"{name} and Mylo"));
-        // Assert.Null(await siphon.DecantAsync<string?>(null, seat => seat));
-        // using Tabby swapped = await siphon.DecantAsync(oreo, cat =>
-        // {
-            // cat.Dispose();
-            // return mylo;
-        // });
-        // Assert.Equal("Mylo", swapped.Name);
-        // // Mylo was only lent to Kotlin: this test still owns him.
-        // Assert.Equal(5, mylo.Tricks);
-    // }
+        Assert.Equal(6, await siphon.DecantAsync(3, n => n * 2));
+        Assert.Equal("Oreo and Mylo", await siphon.DecantAsync("Oreo", name => $"{name} and Mylo"));
+        Assert.Null(await siphon.DecantAsync<string?>(null, seat => seat));
+        using Tabby swapped = await siphon.DecantAsync(oreo, cat =>
+        {
+            cat.Dispose();
+            return mylo;
+        });
+        Assert.Equal("Mylo", swapped.Name);
+        // Mylo was only lent to Kotlin: this test still owns him.
+        Assert.Equal(5, mylo.Tricks);
+    }
 
     // --- class Cistern<T>(seed: T): the owner's T ---
 

@@ -896,6 +896,9 @@ internal data class CirCallbackDelegateHelper(
   // ADR-215 lane C: a `suspend` lambda's `T` result or a `Flow<T>` element crosses as an owned
   // box, so `NugetTasks` gains `BeginBoxed`/`EndBoxed` and the enumeration `CurrentBoxed`.
   val boxesObjects: Boolean = false,
+  // ADR-231: a plain lambda on a legacy `suspend` or Flow member, whose key Kotlin releases through
+  // `NugetAsyncReleaseContext` even when no suspend lambda or `Flow` parameter emits it.
+  val includesReleaseContext: Boolean = false,
 ) : CirDeclaration
 
 internal data class CirEnumEntry(
@@ -1481,6 +1484,10 @@ internal data class CirParameter(
   // native call has returned and unregisters it in the `finally`.
   val asyncKeyLocal: String? = null,
   val asyncKeyRegister: String? = null,
+  // ADR-231: a plain lambda on a `suspend` member returning a flow. Its key is also kept in this
+  // method-scope local, which the completion closure attaches to the returned flow's handle so the
+  // `KotlinFlow` releases it; null for every other parameter.
+  val flowHeldKey: String? = null,
   // ADR-211 (#557): the extern's spelling of this parameter when it differs from [name]: a user
   // `value` keeps its name in the public signature while its ABI slot stays `value_`. Read only
   // where an extern is derived from the public parameters ([nativeName]). Null means [name].

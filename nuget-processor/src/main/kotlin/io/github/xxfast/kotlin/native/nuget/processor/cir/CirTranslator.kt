@@ -1095,6 +1095,7 @@ internal fun translate(
   val plannedCallbackDelegates: List<CirCallbackDelegate> = callableCatalog.plans
     .flatMap { plan -> plan.publicSignature.parameters }
     .mapNotNull { parameter -> parameter.type as? BridgeType.Callback }
+    .plus(tracker.asyncPlainCallbacks)
     .map { callback -> callback.forwardCallbackDelegate() }
   tracker.callbackDelegates.addAll(
     plannedCallbackDelegates.filter { delegate ->
@@ -1179,7 +1180,8 @@ internal fun translate(
         tracker.flowSources
       ).map { flow -> flow.copy(nullable = false) }.distinct()
   // ADR-215 lane C: a `suspend` lambda's `T` result or a `Flow<T>` element is an owned box too.
-  val boxesAsync: Boolean = (asyncCallbacks + flowSources).any { type -> type.boxesIntoKotlin() }
+  val boxesAsync: Boolean = (asyncCallbacks + flowSources + tracker.asyncPlainCallbacks)
+    .any { type -> type.boxesIntoKotlin() }
   val helpers: MutableList<CirDeclaration> = mutableListOf(
     CirMarshalHelper(
       context.libraryName,
@@ -1249,6 +1251,7 @@ internal fun translate(
         asyncCurrents = flowSources.map { flow -> flow.forwardAsyncCurrent() }
           .distinctBy { current -> current.name },
         boxesObjects = boxesAsync,
+        includesReleaseContext = tracker.asyncPlainCallbacks.isNotEmpty(),
       ),
     )
   }

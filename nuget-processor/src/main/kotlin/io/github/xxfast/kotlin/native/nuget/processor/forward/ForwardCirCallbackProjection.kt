@@ -81,11 +81,36 @@ internal fun forwardCallbackPrelude(
 ): ForwardCirHandleStep {
   val delegateName: String = type.forwardCallbackDelegateName()
   val lambdaNames: List<String> = type.forwardCallbackLambdaNames(name)
+  val body: String = forwardCallbackBody(name, type, omittable, lambdaNames)
+  return forwardCallbackPreludeSteps(name, type, omittable, local, delegateName, lambdaNames, body)
+}
+
+/**
+ * ADR-231: the managed delegate over the consumer's lambda [name] as one expression, for a legacy
+ * `suspend` or Flow member whose key `collectionScopedCall` registers. A `null` delegate throws
+ * `ArgumentNullException` before anything is registered.
+ */
+internal fun forwardCallbackDelegateExpression(name: String, type: BridgeType.Callback): String {
+  val lambdaNames: List<String> = type.forwardCallbackLambdaNames(name)
+  val body: String = forwardCallbackBody(name, type, omittable = false, lambdaNames)
+  val parameters: String = type.forwardCallbackDelegateParameterList(lambdaNames)
+  val delegate: String = "new ${type.forwardCallbackDelegateName()}($parameters => { $body })"
+  val bare: String = name.removePrefix("@")
+  return "$name is null ? throw new ArgumentNullException(\"$bare\") : $delegate"
+}
+
+/** The delegate body that calls the consumer's lambda [name] and hands its result to the wire. */
+private fun forwardCallbackBody(
+  name: String,
+  type: BridgeType.Callback,
+  omittable: Boolean,
+  lambdaNames: List<String>,
+): String {
   val arguments: String = type.parameters
     .mapIndexed { index, parameter -> parameter.callbackArgumentExpression(lambdaNames[index]) }
     .joinToString(", ")
   val call: String = if (omittable) "$name!($arguments)" else "$name($arguments)"
-  val body: String = when (val result: BridgeType = type.result) {
+  return when (val result: BridgeType = type.result) {
     BridgeType.Unit -> "$call;"
     // `WrapString` mints a StableRef box over the managed string; the Kotlin side reads it and
     // releases it (ADR-036's return-box rule, unchanged by ADR-160).
@@ -104,7 +129,8 @@ internal fun forwardCallbackPrelude(
     }
     // ADR-215 lane A: always an OWNED box, since the thunk returns before Kotlin reads it: a
     // borrowed wrapper handle is retained through the generated `<lib>__retain_handle`.
-    is BridgeType.TypeParameter, is BridgeType.Nullable ->
+    // ADR-231: an exported class result is the same owned box, read back at its class.
+    is BridgeType.TypeParameter, is BridgeType.Nullable, is BridgeType.ObjectHandle ->
       "return NugetMarshal.WrapOwned<${result.forwardPublicCsharpType()}>($call);"
 
     BridgeType.Char,
@@ -112,7 +138,6 @@ internal fun forwardCallbackPrelude(
     BridgeType.Duration,
     BridgeType.Uuid,
     is BridgeType.Enum,
-    is BridgeType.ObjectHandle,
     is BridgeType.Interface,
     is BridgeType.BoundInterface,
     is BridgeType.ValueClass,
@@ -128,6 +153,17 @@ internal fun forwardCallbackPrelude(
     is BridgeType.RawCollection,
       -> error("Forward CIR callback projection has no result lowering for $result")
   }
+}
+
+private fun forwardCallbackPreludeSteps(
+  name: String,
+  type: BridgeType.Callback,
+  omittable: Boolean,
+  local: String,
+  delegateName: String,
+  lambdaNames: List<String>,
+  body: String,
+): ForwardCirHandleStep {
   val declarations: List<String> = listOf(
     "$delegateName ${local}Native = ${type.forwardCallbackDelegateParameterList(lambdaNames)} =>",
     "{",
@@ -427,7 +463,12 @@ internal fun BridgeType.FlowSource.forwardAsyncCurrent(): CirAsyncEnd {
  * the closure does, and each call of it is one `GetAsyncEnumerator` (one Kotlin `collect`).
  */
 internal fun forwardAsyncRegistration(name: String, type: BridgeType): String =
-  when (type.asyncKind()) {
+  when (type.legacyAsyncKind()) {
+    // ADR-231: the ADR-160 delegate, registered into the same key table its thunk reads.
+    ForwardAsyncKind.CALLBACK ->
+      "NugetThunks.RegisterCtx(" +
+          "${forwardCallbackDelegateExpression(name, type as BridgeType.Callback)})"
+
     ForwardAsyncKind.LAMBDA ->
       forwardAsyncCallbackRegistration(name, type as BridgeType.AsyncCallback)
 
@@ -462,7 +503,10 @@ internal fun forwardAsyncArguments(
   key: String,
   slots: ForwardAsyncSlots,
 ): List<String> {
-  val own: List<String> = when (type.asyncKind()) {
+  val own: List<String> = when (type.legacyAsyncKind()) {
+    ForwardAsyncKind.CALLBACK ->
+      listOf("NugetThunks.${(type as BridgeType.Callback).forwardCallbackDelegateName()}Ptr")
+
     ForwardAsyncKind.LAMBDA -> {
       val callback: BridgeType.AsyncCallback = type as BridgeType.AsyncCallback
       listOf(

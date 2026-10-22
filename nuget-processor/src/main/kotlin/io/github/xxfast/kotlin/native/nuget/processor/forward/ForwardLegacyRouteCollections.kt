@@ -309,6 +309,12 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
         if (flow.boxesIntoKotlin()) boxedAsyncHost = boxedAsyncHost ?: host
         return ForwardLegacyParameterShape.Async(flow.readThroughTrampoline(host))
       }
+      // ADR-231: a plain lambda rides the same slots, its key released when the coroutine (or the
+      // collection) ends rather than by a cleaner.
+      (classify(type) as? BridgeType.Callback)?.let { callback ->
+        if (callback.boxesIntoKotlin()) boxedAsyncHost = boxedAsyncHost ?: host
+        return ForwardLegacyParameterShape.Async(callback.readThroughTrampoline(host))
+      }
     }
   }
   val expanded: KSType = type.expandAliases()
@@ -380,6 +386,8 @@ internal fun BridgeType.readThroughTrampoline(host: KSFunctionDeclaration): Brid
     is BridgeType.AsyncCallback ->
       BridgeType.AsyncCallback(parameters.map { parameter -> parameter.mark() }, result.mark())
     is BridgeType.FlowSource -> copy(element = element.mark())
+    is BridgeType.Callback ->
+      BridgeType.Callback(parameters.map { parameter -> parameter.mark() }, result.mark())
     BridgeType.Unit,
     is BridgeType.Primitive,
     BridgeType.Char,
@@ -396,7 +404,6 @@ internal fun BridgeType.readThroughTrampoline(host: KSFunctionDeclaration): Brid
     BridgeType.ByteArray,
     is BridgeType.Collection,
     is BridgeType.Nullable,
-    is BridgeType.Callback,
     is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -1483,6 +1490,13 @@ internal class ForwardLegacyNames(
    */
   var trampolineVariables: Set<String> = emptySet()
 
+  /**
+   * ADR-231: a `suspend` member returning a flow. Its plain callbacks' keys go back to C# with the
+   * flow on success (the returned `KotlinFlow` releases them when it is disposed), so Kotlin
+   * releases them only on a fault or a cancellation.
+   */
+  var handsCallbacksBack: Boolean = false
+
   private fun mint(base: String): String = freshName(base, taken).also { taken += it }
 
   /**
@@ -1517,7 +1531,7 @@ internal class ForwardLegacyNames(
    */
   val asyncSlots: List<ForwardAsyncSlots?> = mintAsyncSlots(
     parameters.mapIndexed { index, name ->
-      name to (shapes[index] as? ForwardLegacyParameterShape.Async)?.type?.asyncKind()
+      name to (shapes[index] as? ForwardLegacyParameterShape.Async)?.type?.legacyAsyncKind()
     },
   ) { base -> mint(base) }
 
@@ -1662,6 +1676,14 @@ internal fun ForwardLegacyParameterShape.isLegacyLowered(): Boolean = when (this
  */
 internal fun ForwardLegacyNames.legacyArgument(index: Int, parameter: String): String {
   val shape: ForwardLegacyParameterShape = shapes[index]
+  // ADR-231: a plain callback is one self-contained lambda over its two slots, built at the call so
+  // the member's own parameter type types it; it mints and owns nothing.
+  val asyncType: BridgeType? = (shape as? ForwardLegacyParameterShape.Async)?.type
+  val callback: BridgeType.Callback? = asyncType as? BridgeType.Callback
+  if (callback != null) {
+    val slots: ForwardAsyncSlots = requireNotNull(asyncSlots[index])
+    return loweredCallbackExpression(parameter.trim('`'), callback, slots.begin, slots.key)
+  }
   loweredLocals[index]?.let { local ->
     // ADR-214: ADR-015's checked bound cast, evaluated inside the launch so it faults the Task.
     if (shape is ForwardLegacyParameterShape.Boxed) {
@@ -1788,6 +1810,47 @@ internal fun ForwardLegacyNames.legacyPrelude(parameters: List<String>): String 
 }
 
 /**
+ * ADR-210 / ADR-231: the legacy route's [ForwardAsyncKind] for an asynchronous parameter's type. A
+ * plain callback is [ForwardAsyncKind.CALLBACK] here only; the plan route keeps it off
+ * [asyncKind], since an ordinary member's callback is call-scoped (ADR-160).
+ */
+internal fun BridgeType.legacyAsyncKind(): ForwardAsyncKind? =
+  if (this is BridgeType.Callback) ForwardAsyncKind.CALLBACK else asyncKind()
+
+/** ADR-231: the slots of every plain callback parameter, in declaration order. */
+internal val ForwardLegacyNames.callbackSlots: List<ForwardAsyncSlots>
+  get() = asyncSlots.filterNotNull().filter { slots -> slots.kind == ForwardAsyncKind.CALLBACK }
+
+/**
+ * ADR-231: [body], the statements a `suspend` export launches or a Flow export collects, wrapped so
+ * every plain callback's C# key is released when they end. C# owned the key until the export
+ * returned; from then on Kotlin does. The launch is `CoroutineStart.ATOMIC`, so the `finally` runs
+ * on completion, on a fault and on cancellation, and always before the completion callback tells
+ * C# the `Task` is done. A key C# already removed is a no-op (`TryRemove`). The last statement of
+ * [body] stays the block's value. `null` in the error slot is the cleaner's convention: the release
+ * cannot throw.
+ */
+internal fun ForwardLegacyNames.legacyCallbackReleased(body: String): String {
+  val slots: List<ForwardAsyncSlots> = callbackSlots
+  if (slots.isEmpty()) return body
+  val release: String = slots.first().releaseContext
+  val function: String =
+    "kotlinx.cinterop.CFunction<(kotlinx.cinterop.COpaquePointer, " +
+      "kotlinx.cinterop.COpaquePointer?) -> Unit>"
+  return buildString {
+    appendLine("try {")
+    body.trimEnd().lines().forEach { line -> appendLine("  $line") }
+    // A returned flow hands the keys back to C# on success; only a fault or a cancel releases here.
+    appendLine(if (handsCallbacksBack) "} catch (nuget: Throwable) {" else "} finally {")
+    slots.forEach { callback ->
+      appendLine("  $release.reinterpret<$function>().invoke(${callback.key}, null)")
+    }
+    if (handsCallbacksBack) appendLine("  throw nuget")
+    appendLine("}")
+  }
+}
+
+/**
  * Issue #299: the C# arguments a fanned-out nullable scalar [name] is passed to the native call as,
  * matching its two slots (the plan route's `ForwardCirPlanProjection` text). An enum's value half
  * is its ordinal (ADR-080).
@@ -1813,7 +1876,8 @@ internal fun ForwardLegacyParameterShape.legacyPrelude(
   async: ForwardAsyncSlots? = null,
 ): String? = when (this) {
   // ADR-210: built on the calling thread, so Kotlin owns the C# key before the coroutine launches.
-  is ForwardLegacyParameterShape.Async -> {
+  // ADR-231: a plain callback is lowered at the call instead ([legacyArgument]).
+  is ForwardLegacyParameterShape.Async -> if (type is BridgeType.Callback) null else {
     val expression: String =
       asyncParameterExpression(parameter.trim('`'), type, requireNotNull(async))
     "val ${requireNotNull(local)}: ${asyncParameterKotlinType(type)} = $expression"

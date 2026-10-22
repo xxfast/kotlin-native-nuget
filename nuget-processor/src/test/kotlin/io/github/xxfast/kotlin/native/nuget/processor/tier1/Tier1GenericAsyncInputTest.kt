@@ -123,24 +123,22 @@ class Tier1GenericAsyncInputTest {
   }
 
   /**
-   * A plain lambda on a `suspend` member reaches the hand-written callback route, which lowers no
-   * `T` result. The refusal names the lambda's position, not `T` itself: lane A binds a `T` result
-   * on an ordinary member's per-call lambda.
+   * ADR-231: a plain lambda over `T` on a `suspend` member binds as a C# delegate. Its `T` result
+   * is the owned box lane A reads on an ordinary member's per-call lambda, and its context key is
+   * released by the launched body's `finally`. No warning names the member.
    */
   @Test
-  fun `a T callback result on a suspend member names the position, not the type`() {
+  fun `a T callback on a suspend member binds as a delegate`() {
     val result: Tier1Result = run()
-    val named: List<String> = result.kspWarnings.filter { warning ->
-      warning.contains("Siphon.decant") && warning.contains("SKIPPED_UNSUPPORTED_RETURN")
-    }
-    assertEquals(1, named.size, "expected one return warning naming Siphon.decant; got: $named")
+    assertKotlinCompiles(result)
+    val named: List<String> =
+      result.kspWarnings.filter { warning -> warning.contains("Siphon.decant") }
+    assertEquals(emptyList(), named)
     assertContains(
-      named.single(),
-      "a callback returning a type parameter binds only as a per-call lambda on an ordinary " +
-        "(non-suspend) member, but `pour: (T) -> T` returns `T` from a member that lambda " +
-        "route does not carry",
+      result.generatedCSharp,
+      "public Task<T> DecantAsync<T>(T value, Func<T, T> pour, CancellationToken cancellationToken = default)",
     )
-    assertFalse(named.single().contains("a callback can return `Unit`"), "stale text: $named")
-    assertFalse(result.generatedCSharp.contains("DecantAsync"), "a refused member binds")
+    assertContains(result.generatedCSharp, "return NugetMarshal.WrapOwned<T>(pour(")
+    assertContains(result.generated, ".invoke(pourCtx, null)")
   }
 }

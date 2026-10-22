@@ -2218,7 +2218,7 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
  * the box with `WrapString` and no C# owner ever frees it, so this side releases it after reading.
  * A by-value scalar (and an enum ordinal) mints nothing in either direction.
  */
-private fun loweredCallbackExpression(
+internal fun loweredCallbackExpression(
   name: String,
   type: BridgeType.Callback,
   // The planner-minted slot names (`ForwardPublicParameter.callbackPtrSlot` / `...UserDataSlot`).
@@ -2388,12 +2388,20 @@ private fun loweredCallbackExpression(
         appendLine("  ${name}Value")
       }
 
+      // ADR-231: an exported class comes back as the same owned box, read at its class.
+      is BridgeType.ObjectHandle -> {
+        val read: String = result.kotlinReadType ?: result.qualifiedName
+        appendLine("  val ${name}Box = $invocation!!")
+        appendLine("  val ${name}Value = ${name}Box.asStableRef<Any>().get() as $read")
+        appendLine("  NugetHandles.release(${name}Box)")
+        appendLine("  ${name}Value")
+      }
+
       BridgeType.Char,
       BridgeType.Instant,
       BridgeType.Duration,
       BridgeType.Uuid,
       is BridgeType.Enum,
-      is BridgeType.ObjectHandle,
       is BridgeType.Interface,
       is BridgeType.BoundInterface,
       is BridgeType.ValueClass,
