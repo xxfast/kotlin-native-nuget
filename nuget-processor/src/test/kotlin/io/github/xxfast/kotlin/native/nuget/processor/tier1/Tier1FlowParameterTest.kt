@@ -494,7 +494,7 @@ class Tier1FlowParameterTest {
           (ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT to "but not faults: Flow<Throwable>"),
       "WaterFountain.mishapsNow:" to
           (ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT to
-              "a `Flow<T>` of a primitive or String at a parameter"),
+              "a `Flow<T>` at a parameter"),
       "Bowl.Ceramic.spill:" to
           (ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_COMBINATION to
               "a FLOW_PROTOCOL member of a sealed subclass"),

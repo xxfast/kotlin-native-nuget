@@ -881,6 +881,9 @@ internal data class CirCallbackDelegateHelper(
   // ADR-210: one Current thunk per `Flow<T>` parameter element type; empty when no bound member
   // takes one, which also keeps the shared enumeration thunks and classes out.
   val asyncCurrents: List<CirAsyncEnd> = emptyList(),
+  // ADR-215 lane C: a `suspend` lambda's `T` result or a `Flow<T>` element crosses as an owned
+  // box, so `NugetTasks` gains `BeginBoxed`/`EndBoxed` and the enumeration `CurrentBoxed`.
+  val boxesObjects: Boolean = false,
 ) : CirDeclaration
 
 internal data class CirEnumEntry(

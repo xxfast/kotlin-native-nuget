@@ -312,6 +312,11 @@ internal fun BridgeType.AsyncCallback.forwardAsyncEnd(): CirAsyncEnd {
       CirAsyncEnd(name, type, "NugetTasks.End<$type>(a0)")
     }
 
+    // ADR-215 lane C: the Begin registration stored a `NugetBoxedTask<T>`, which boxes the result
+    // through `WrapOwned<T>` on the read, so Kotlin always owns the box it reads.
+    is BridgeType.TypeParameter, is BridgeType.Nullable ->
+      CirAsyncEnd(name, "IntPtr", "NugetTasks.EndBoxed(a0)")
+
     BridgeType.Char,
     BridgeType.Instant,
     BridgeType.Duration,
@@ -324,7 +329,6 @@ internal fun BridgeType.AsyncCallback.forwardAsyncEnd(): CirAsyncEnd {
     is BridgeType.ValueClass,
     BridgeType.ByteArray,
     is BridgeType.Collection,
-    is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
     is BridgeType.FlowSource,
@@ -333,7 +337,6 @@ internal fun BridgeType.AsyncCallback.forwardAsyncEnd(): CirAsyncEnd {
     is BridgeType.RawKSType,
     is BridgeType.Unsupported,
     is BridgeType.RawCollection,
-    is BridgeType.TypeParameter,
       -> error("Forward CIR projection has no suspend lambda result lowering for $result")
   }
 }
@@ -367,9 +370,15 @@ internal fun forwardAsyncCallbackRegistration(
         parameter.callbackArgumentExpression(payloads[index])
       } + token
       ).joinToString(", ")
+  // ADR-215 lane C: a `T` result is stored as a `NugetBoxedTask<T>`, which `EndBoxed` reads.
+  val begin: String = if (type.boxesIntoKotlin()) {
+    "NugetTasks.BeginBoxed<${type.result.forwardPublicCsharpType()}>"
+  } else {
+    "NugetTasks.Begin"
+  }
   val delegate: String = "(${type.forwardAsyncBeginName()})(" +
       "(${(payloads + callback + awaitCtx).joinToString(", ")}) => " +
-      "NugetTasks.Begin($token => $name($arguments), $callback, $awaitCtx))"
+      "$begin($token => $name($arguments), $callback, $awaitCtx))"
   return "NugetTasks.Register($name, nameof($name), $delegate)"
 }
 
@@ -400,6 +409,10 @@ internal fun BridgeType.FlowSource.forwardAsyncCurrent(): CirAsyncEnd {
       "IntPtr",
       "NugetMarshal.WrapString(NugetAsyncEnumeration.Current<string>(a0))",
     )
+
+    // ADR-215 lane C: an owned box per element read (`WrapOwned<T>`), nothing for one never read.
+    element.unwrapNullable() is BridgeType.TypeParameter ->
+      CirAsyncEnd(name, "IntPtr", "NugetAsyncEnumeration.CurrentBoxed(a0)")
 
     element is BridgeType.Primitive && element.kind == PrimitiveKind.BOOLEAN ->
       CirAsyncEnd(name, "byte", "NugetAsyncEnumeration.Current<bool>(a0) ? (byte)1 : (byte)0")

@@ -322,10 +322,15 @@ private fun StringBuilder.renderAsyncCallbackDeclarations(helper: CirCallbackDel
   appendLine("            return NugetThunks.RegisterCtx(begin);")
   appendLine("        }")
   appendLine()
-  appendLine("        internal static void Attach($task task, IntPtr callback, IntPtr ctx)")
+  appendLine("        internal static void Attach($task task, IntPtr callback, IntPtr ctx) =>")
+  appendLine("            Attach(task, task, callback, ctx);")
+  appendLine()
+  // ADR-215 lane C: the handle Kotlin's End thunk reads may hold a `NugetBoxedTask<T>` over the
+  // task rather than the task itself; the continuation is attached to the task either way.
+  appendLine("        internal static void Attach($task task, object target, IntPtr callback, IntPtr ctx)")
   appendLine("        {")
   appendLine("            ArgumentNullException.ThrowIfNull(task);")
-  appendLine("            IntPtr handle = GCHandle.ToIntPtr(GCHandle.Alloc(task));")
+  appendLine("            IntPtr handle = GCHandle.ToIntPtr(GCHandle.Alloc(target));")
   appendLine("            try")
   appendLine("            {")
   appendLine("                task.ContinueWith(")
@@ -392,6 +397,43 @@ private fun StringBuilder.renderAsyncCallbackDeclarations(helper: CirCallbackDel
   appendLine("            }")
   appendLine("        }")
   appendLine()
+  if (helper.boxesObjects) {
+    // ADR-215 lane C: a `suspend` lambda's `T` result. `Begin` with the task wrapped in a
+    // `NugetBoxedTask<T>`, so the non-generic End thunk can box the result (`WrapOwned<T>`, an
+    // owned box Kotlin reads and releases) without naming `T`. The box is minted only on the read,
+    // after the result is certain, as `End<string>` does (ADR-210 alternative 8).
+    appendLine(
+      "        internal static IntPtr BeginBoxed<T>(Func<$token, $task<T>> start, IntPtr callback, IntPtr ctx)"
+    )
+    appendLine("        {")
+    appendLine("            $source cts = new $source();")
+    appendLine("            try")
+    appendLine("            {")
+    appendLine("                $task<T> task = start(cts.Token);")
+    appendLine("                Attach(task, new NugetBoxedTask<T>(task), callback, ctx);")
+    appendLine("            }")
+    appendLine("            catch")
+    appendLine("            {")
+    appendLine("                cts.Dispose();")
+    appendLine("                throw;")
+    appendLine("            }")
+    appendLine("            return GCHandle.ToIntPtr(GCHandle.Alloc(cts));")
+    appendLine("        }")
+    appendLine()
+    appendLine("        internal static IntPtr EndBoxed(IntPtr task)")
+    appendLine("        {")
+    appendLine("            GCHandle handle = GCHandle.FromIntPtr(task);")
+    appendLine("            try")
+    appendLine("            {")
+    appendLine("                return ((NugetBoxedTask)handle.Target!).EndBoxed();")
+    appendLine("            }")
+    appendLine("            finally")
+    appendLine("            {")
+    appendLine("                handle.Free();")
+    appendLine("            }")
+    appendLine("        }")
+    appendLine()
+  }
   appendLine("        internal static void ReleaseCancellation(IntPtr handle, int cancel)")
   appendLine("        {")
   appendLine("            GCHandle h = GCHandle.FromIntPtr(handle);")
@@ -409,7 +451,25 @@ private fun StringBuilder.renderAsyncCallbackDeclarations(helper: CirCallbackDel
   appendLine("        }")
   appendLine("    }")
   appendLine()
-  if (helper.asyncCurrents.isNotEmpty()) appendAsyncEnumerationClasses()
+  if (helper.boxesObjects) {
+    appendLine("    internal abstract class NugetBoxedTask")
+    appendLine("    {")
+    appendLine("        internal abstract IntPtr EndBoxed();")
+    appendLine("    }")
+    appendLine()
+    appendLine("    internal sealed class NugetBoxedTask<T> : NugetBoxedTask")
+    appendLine("    {")
+    appendLine("        private readonly $task<T> _task;")
+    appendLine()
+    appendLine("        internal NugetBoxedTask($task<T> task) => _task = task;")
+    appendLine()
+    appendLine(
+      "        internal override IntPtr EndBoxed() => NugetMarshal.WrapOwned(_task.GetAwaiter().GetResult());"
+    )
+    appendLine("    }")
+    appendLine()
+  }
+  if (helper.asyncCurrents.isNotEmpty()) appendAsyncEnumerationClasses(helper.boxesObjects)
 }
 
 /**
@@ -490,7 +550,7 @@ private fun StringBuilder.appendAsyncCallbackThunks(helper: CirCallbackDelegateH
  * `Task.Run` with an outer catch-all, never an `async` work item: an exception escaping an
  * `async void` shape terminates the .NET host.
  */
-private fun StringBuilder.appendAsyncEnumerationMembers() {
+private fun StringBuilder.appendAsyncEnumerationMembers(boxesObjects: Boolean) {
   val task = "global::System.Threading.Tasks.Task"
   val source = "global::System.Threading.CancellationTokenSource"
   val generic = "global::System.Collections.Generic"
@@ -519,6 +579,14 @@ private fun StringBuilder.appendAsyncEnumerationMembers() {
     "            ((NugetAsyncEnumeration<T>)GCHandle.FromIntPtr(enumeration).Target!)" +
         ".Enumerator.Current;"
   )
+  if (boxesObjects) {
+    // ADR-215 lane C: a `Flow<T>` element, boxed on the read as an owned box Kotlin releases.
+    appendLine()
+    appendLine("        internal static IntPtr CurrentBoxed(IntPtr enumeration) =>")
+    appendLine(
+      "            ((NugetAsyncEnumeration)GCHandle.FromIntPtr(enumeration).Target!).CurrentBoxed();"
+    )
+  }
   appendLine()
   appendLine(
     "        internal static void MoveNextBegin(IntPtr enumeration, IntPtr callback, IntPtr ctx)"
@@ -561,7 +629,7 @@ private fun StringBuilder.appendAsyncEnumerationMembers() {
  * `<root>.NugetReverse`): the enumerator, the source whose token it was started with, and the
  * in-flight step. The non-generic base is what lets the three shared thunks step any element type.
  */
-private fun StringBuilder.appendAsyncEnumerationClasses() {
+private fun StringBuilder.appendAsyncEnumerationClasses(boxesObjects: Boolean) {
   val tasks = "global::System.Threading.Tasks"
   val source = "global::System.Threading.CancellationTokenSource"
   val enumerator = "global::System.Collections.Generic.IAsyncEnumerator<T>"
@@ -574,7 +642,11 @@ private fun StringBuilder.appendAsyncEnumerationClasses() {
   appendLine("        internal abstract $tasks.ValueTask<bool> MoveNext();")
   appendLine()
   appendLine("        internal abstract $tasks.ValueTask Dispose();")
-  appendAsyncEnumerationMembers()
+  if (boxesObjects) {
+    appendLine()
+    appendLine("        internal abstract IntPtr CurrentBoxed();")
+  }
+  appendAsyncEnumerationMembers(boxesObjects)
   appendLine("    }")
   appendLine()
   appendLine("    internal sealed class NugetAsyncEnumeration<T> : NugetAsyncEnumeration")
@@ -592,6 +664,12 @@ private fun StringBuilder.appendAsyncEnumerationClasses() {
   )
   appendLine()
   appendLine("        internal override $tasks.ValueTask Dispose() => Enumerator.DisposeAsync();")
+  if (boxesObjects) {
+    appendLine()
+    appendLine(
+      "        internal override IntPtr CurrentBoxed() => NugetMarshal.WrapOwned(Enumerator.Current);"
+    )
+  }
   appendLine("    }")
   appendLine()
 }

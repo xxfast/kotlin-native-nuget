@@ -1,8 +1,8 @@
 # ADR-215: Forward, a type parameter inside a lambda or `Flow`: `fun <T> map(value: T, transform: (T) -> T): T` as `T Map<T>(T value, Func<T, T> transform)`
 
 ## Status
-Proposed. Lane A (lambda) and lane B (`Flow` out of Kotlin) have landed; lane C (asynchronous `T`
-into Kotlin) follows in the same release and accepts this ADR.
+Accepted. Lanes A (lambda), B (`Flow` out of Kotlin) and C (asynchronous `T` into Kotlin) have
+landed.
 
 Extends [ADR-212](212-type-parameter-as-collection-element.md) (Deferred: "`T` in a lambda or
 `Flow`"), [ADR-147](147-generic-class-methods.md) (a generic class has no legacy route),
@@ -273,16 +273,72 @@ keep the `GENERIC` refusal, whose reason blames the type parameter although the 
 cause; once a static route exists, the `fun <T>` form is this lane's mechanism unchanged. ROADMAP
 Phase 6 carries the line.
 
-### Lane C: `T` flowing into Kotlin asynchronously (after lane A, follows in the same release)
+### Lane C: `T` flowing into Kotlin asynchronously
 
-- `Flow<T>` parameter: `flowSourceOrNull` admits a `T` element; the abstract base gains
-  `IntPtr CurrentBoxed()`, implemented in `NugetAsyncEnumeration<T>` as
-  `NugetMarshal.WrapOwned(Enumerator.Current)`; a shared `NugetAsyncObjectCurrent` thunk calls it.
-  Boxing on the read keeps ADR-210 alternative 8 (nothing minted for an element nobody reads).
-- `suspend (T) -> T` result: the Begin registration stores a `NugetBoxedTask<T>` (non-generic base,
-  `IntPtr EndBoxed()`) in place of the bare `Task<T>`; a shared `NugetAsyncObjectEnd` calls it.
-- `suspend (T) -> Unit` payload: free with lane A's payload admission.
-- Kotlin reads each box exactly as lane A's result. All **inferred** (designed, not built).
+As built. Where this section differs from the draft, the red tests decided it (noted inline).
+
+- **Gate.** `carriesProtocol` is deleted. `carriesOwn` admits every lambda, suspend lambda and
+  `Flow` (`isProtocolCarrier`, `forward/ForwardMemberTypeParameters.kt`), so the refusal reason
+  "its signature carries a suspend lambda or a Flow" is gone and each asynchronous route owns its
+  own refusal. The `GENERIC` sentence is unchanged. Tier 1: `Tier1MemberGenericMethodTest`'s
+  `Depot.lambda` (a non-suspend member with a `suspend (Int) -> Unit`) moved from the declined
+  cell to a bound one.
+- **The draft's precondition did not hold.** ADR-214, built after the lane C red was written,
+  already carries a member's own bare `T` on the suspend route: `dribble(item: T): T` and the
+  `value: T` of `brew` bind with no lane C change. Verified (xunit `Dribble_*`).
+- **Admission.** `asyncCallbackOrNull` admits every `T`/`T?` payload and result, `flowSourceOrNull`
+  every `T`/`T?` element (`isAsyncBoxed`, `forward/ForwardBridgeTypeClassifier.kt`), trampolined
+  and multi-bound included. The generated lambda and flow declare their
+  component type, so a `T` with one closed spelling is spelled at its bound
+  (`suspend (kotlin.Any?) -> kotlin.Any?`, `Flow<Furry>`, from which the member's call infers
+  `T`), and any other `T` as the trampoline's own type variable (`Flow<T>`, `suspend (T) -> T`).
+- **Trampolined and multi-bound `T` (built on ADR-219: the lambda and flow spell `T` as the trampoline's own type
+  variable).** ADR-217's type-variable rule (`needsTypeVariable`,
+  `forward/ForwardMemberTypeParameters.kt`) also sends a multi-bound or generic-bound `T` that sits
+  inside a suspend lambda or a `Flow` through the trampoline, since no intersection is spellable
+  there. The legacy route marks each component `trampolined` exactly when the export declares it
+  (`readThroughTrampoline`, `forward/ForwardLegacyRouteCollections.kt`: the member's own `T` with
+  trampoline bounds, an owner's multi-bound `T`), and `flowTrampoline` re-declares an owner
+  parameter an asynchronous parameter names; the plan route marks them in `readThrough`
+  (`forward/ForwardKotlinPlanEmitter.kt`). A marked box is checked against each bound, then cast to
+  the variable (`bounded as kotlin.Enum<*>; bounded as T`). C#: no change. Verified (Tier 1
+  `Tier1GenericAsyncInputTest`: `tints`, `retint`, multi-bound `stars`; xunit `Tints_*`,
+  `Retint_*`). Not exercised: a trampolined single-bound OWNER `T` only an asynchronous parameter
+  names (`flowTrampoline` re-declares only multi-bound owner parameters), inferred to spell the
+  star bound over the erased receiver.
+- **`Flow<T>` element.** As drafted: the abstract `NugetAsyncEnumeration` gains
+  `IntPtr CurrentBoxed()`, `NugetAsyncEnumeration<T>` implements it as
+  `NugetMarshal.WrapOwned(Enumerator.Current)`, and the shared `NugetAsyncObjectCurrent` thunk calls
+  `NugetAsyncEnumeration.CurrentBoxed(a0)`. Boxing on the read keeps ADR-210 alternative 8.
+  Verified (xunit `Gulp_*`, `Skim_*`, `Names_*`, `Sip_*`, `Lap_*`, leak row).
+- **`suspend (T) -> T` result.** The Begin delegate calls `NugetTasks.BeginBoxed<T>`, which
+  attaches the continuation to the task but stores a `NugetBoxedTask<T>` (non-generic base,
+  `IntPtr EndBoxed()`) in the GC handle Kotlin's End thunk reads (`Attach(task, target, ...)`);
+  the shared `NugetAsyncObjectEnd` calls `NugetTasks.EndBoxed(a0)`, which frees the handle in its
+  `finally`. Verified (xunit `Brew_*`, `Slosh_*`, leak row).
+- **Kotlin read.** Each box is lane A's result read: the box (`!!` for a non-null `T`), the value
+  through `forwardBoundedRead`, the release, the value (`asyncBoxedRead`,
+  `forward/ForwardAsyncCallback.kt`). A null `T` crosses as `IntPtr.Zero` and mints nothing.
+- **`suspend (T) -> Unit` payload.** Lane A's boxed payload (`NugetHandles.retain`, null-guarded
+  for `T?`), C# `FromHandle<T>(a0)`. Verified (xunit `Tip_*`).
+- **Retain export.** `<lib>__retain_handle` is now needed by a legacy route too, so both halves
+  widen their gate: Kotlin emits it when a plan carries a boxed `T` INTO Kotlin (`boxesIntoKotlin`,
+  `forward/ForwardRetainHandle.kt`) or when the legacy suspend route sighted one
+  (`ForwardBridgeTypeClassifier.boxedAsyncHost`, the export's ADR-117 owner); C# imports it when
+  a plan does or when an emitted suspend lambda or `Flow` boxes one. The C# set is a subset of the
+  Kotlin one, so the one-directional contract holds. Tier 1 `Tier1GenericAsyncInputTest` pins it
+  with no lambda plan in the module.
+- **Generic owners (ADR-219).** `Cistern<T>` and `Spill.Puddle<T>`
+  bind their `Flow<T>`, `suspend (T) -> T` and `suspend (T) -> Unit` members over the erased
+  receiver with no lane C change beyond the above. Verified (xunit `Cistern_*`, `Puddle_*`).
+- **Not bound, found by the red run.** A `suspend` member taking a plain lambda
+  (`decant(value: T, pour: (T) -> T)`) is refused for any payload, `T` or not: the legacy suspend
+  route lowers no ADR-036 callback, and its per-call key would have to outlive the P/Invoke until
+  the task completes. A Phase 6 gap, not generics. Fixture kept (named skip); its xunit fact is
+  commented out. Its
+  `SKIPPED_UNSUPPORTED_RETURN` used to say a callback cannot return `T`, stale since lane A; a
+  `T` result now names the position instead ("binds only as a per-call lambda on an ordinary
+  (non-suspend) member", `exports/ClassExports.kt`), pinned by `Tier1GenericAsyncInputTest`.
 
 ### Leak harness
 

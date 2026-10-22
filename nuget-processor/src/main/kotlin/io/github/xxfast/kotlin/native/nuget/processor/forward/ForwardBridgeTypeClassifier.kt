@@ -100,6 +100,12 @@ internal class ForwardBridgeTypeClassifier(
   internal val flowSources: MutableSet<BridgeType.FlowSource> = linkedSetOf()
 
   /**
+   * ADR-215 lane C: the first legacy-route member whose `Flow<T>` element or `suspend` lambda
+   * result hands a `T` box INTO Kotlin, the owner of `<lib>__retain_handle` when no plan is.
+   */
+  internal var boxedAsyncHost: KSFunctionDeclaration? = null
+
+  /**
    * ADR-208 part E: every declared `MutableStateFlow<E>` type argument, by its Kotlin spelling,
    * with the generic class first seen holding it. It binds as a read-only `KotlinStateFlow<E>`
    * (ADR-071's write seam is keyed on a member), so its dropped setter is named once.
@@ -1128,8 +1134,13 @@ internal class ForwardBridgeTypeClassifier(
     }
     val parameters: List<BridgeType> = components.dropLast(1)
     val result: BridgeType = components.last()
-    if (!parameters.all { parameter -> parameter.isCallbackPayload() }) return null
-    if (result is BridgeType.Throwable || !result.isCallbackResult()) return null
+    // ADR-215 lane C: a `T` payload rides lane A's boxed payload, a `T` result an owned box.
+    val boxed: Boolean = parameters.all { parameter ->
+      parameter.isCallbackPayload() || parameter.isAsyncBoxed()
+    }
+    if (!boxed) return null
+    if (result is BridgeType.Throwable) return null
+    if (!result.isCallbackResult() && !result.isAsyncBoxed()) return null
     return BridgeType.AsyncCallback(parameters, result).also { minted -> asyncCallbacks += minted }
   }
 
@@ -1146,7 +1157,10 @@ internal class ForwardBridgeTypeClassifier(
     if (qualifiedName !in PLAIN_FLOW_TYPES) return null
     val argument: KSType = expanded.arguments.singleOrNull()?.type?.resolve() ?: return null
     val element: BridgeType = classify(argument)
-    if (element != BridgeType.String && element !is BridgeType.Primitive) return null
+    // ADR-215 lane C: a `T` element is read as an owned box (`CurrentBoxed()`).
+    val readable: Boolean =
+      element == BridgeType.String || element is BridgeType.Primitive || element.isAsyncBoxed()
+    if (!readable) return null
     return BridgeType.FlowSource(element).also { minted -> flowSources += minted }
   }
 
@@ -1161,6 +1175,14 @@ internal class ForwardBridgeTypeClassifier(
    * their own sets (lane C widens the suspend one).
    */
   private fun BridgeType.isBoxedTypeParameter(): Boolean = unwrapNullable() is BridgeType.TypeParameter
+
+  /**
+   * ADR-215 lane C: a `T` or `T?` a `suspend` lambda or a `Flow<T>` parameter carries on the boxed
+   * `Object` wire, trampolined or bounded however. The generated lambda and flow
+   * declare their component: a `T` with one closed spelling as its bound, any other one as the
+   * trampoline's own type variable (ADR-198, ADR-217's rule, ADR-219's suspend trampoline).
+   */
+  private fun BridgeType.isAsyncBoxed(): Boolean = unwrapNullable() is BridgeType.TypeParameter
 
   /** The payload shapes both callback halves lower, in. See [callbackType]. */
   internal fun BridgeType.isCallbackPayload(): Boolean = when (this) {

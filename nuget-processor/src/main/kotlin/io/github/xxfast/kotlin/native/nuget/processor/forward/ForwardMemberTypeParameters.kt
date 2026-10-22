@@ -103,9 +103,8 @@ internal fun KSFunctionDeclaration.forwardMethodTypeParameters(): List<ForwardMe
  *    no closed spelling, `Enum<T>`, `Node<T>`, routes through ADR-198's trampoline instead);
  *  - a multi-bound `T` no parameter mentions, since no type argument spells it and nothing infers
  *    it (one witnessed only inside a generic class takes the ADR-217 trampoline);
- *  - a `T` nested in a type that is neither a collection, an exported generic class nor a
- *    non-suspend lambda (ADR-215) over them (a value class, `kotlin.Array`), and a suspend lambda
- *    or `Flow` anywhere in the signature, whose own routes are keyed to non-generic members.
+ *  - a `T` nested in a type that is neither a collection, an exported generic class, a lambda nor
+ *    a `Flow` (ADR-215) over them (a value class, `kotlin.Array`).
  */
 internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
   if (typeParameters.isEmpty()) return null
@@ -158,44 +157,19 @@ internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
   // classifier's `genericReference` owns every further refusal (a projection, an unexported
   // class, an argument the erased wire cannot read).
   // ADR-215 lane A: so does a non-suspend lambda, whose payloads and result ride the plan's
-  // callback on the boxed `Object` wire.
+  // callback on the boxed `Object` wire. Lane C: so does every lambda and `Flow` (each
+  // asynchronous route owns its own refusal of a component it cannot carry).
   fun KSType.carriesOwn(): Boolean = ownParameter() ||
       (declaration.qualifiedName?.asString() in OWN_PARAMETER_COLLECTIONS ||
-          declaration.isOwnParameterCarrierClass() || isPlainLambda()) &&
+          declaration.isOwnParameterCarrierClass() || isProtocolCarrier()) &&
       arguments.all { argument ->
         val type: KSType? = argument.type?.resolve()?.expandAliases()
         type != null && (!type.mentionsOwn() || type.carriesOwn())
       }
 
-  // ADR-215 lane A: a non-suspend lambda is no longer a protocol here; its components are still
-  // walked, so a `Flow` or a suspend lambda inside one keeps the refusal.
-  fun KSType.carriesProtocol(): Boolean {
-    val qualifiedName: String? = declaration.qualifiedName?.asString()
-    return isSuspendFunctionType || qualifiedName in SUSPEND_LAMBDA_TYPES ||
-        qualifiedName in FLOW_TYPES || qualifiedName in STATE_FLOW_TYPES ||
-        arguments.any { argument ->
-          argument.type?.resolve()?.expandAliases()?.carriesProtocol() == true
-        }
-  }
-
   val parameterTypes: List<KSType> =
     parameters.map { parameter -> parameter.type.resolve().expandAliases() }
-  val declaredReturn: KSType? = returnType?.resolve()?.expandAliases()
-  // ADR-215: a class member's `Flow`/`StateFlow` return rides the legacy Flow route, which boxes
-  // each element erased: the element is the own `T` (or `T?`), or a type that does not mention
-  // it. What is checked below is that element, never the flow around it.
-  val flowElement: KSType? = declaredReturn
-    ?.takeIf { (parentDeclaration as? KSClassDeclaration)?.classKind == ClassKind.CLASS }
-    ?.takeIf { type ->
-      val qualified: String? = type.declaration.qualifiedName?.asString()
-      qualified in FLOW_TYPES || qualified in STATE_FLOW_TYPES
-    }
-    ?.arguments?.singleOrNull()?.type?.resolve()?.expandAliases()
-    ?.takeIf { element -> element.ownParameter() || !element.mentionsOwn() }
-  val returned: KSType? = flowElement ?: declaredReturn
-  if ((parameterTypes + listOfNotNull(returned)).any { type -> type.carriesProtocol() }) {
-    return "its signature carries a suspend lambda or a Flow"
-  }
+  val returned: KSType? = returnType?.resolve()?.expandAliases()
   parameterTypes.forEach { type ->
     if (type.mentionsOwn() && !type.carriesOwn()) {
       return "its type parameter is nested in `$type`"
@@ -228,11 +202,26 @@ internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
  * `Box<A>` cannot infer `T : A, T : B`. An unspellable bound takes the trampoline regardless.
  */
 private fun KSFunctionDeclaration.needsTypeVariable(parameter: KSTypeParameter): Boolean {
-  if (parameter.forwardBoundSpellings().size <= 1) return false
   val name: String = parameter.simpleName.asString()
   val types: List<KSType> = parameters.map { it.type.resolve().expandAliases() }
+  // ADR-215 lane C: the generated suspend lambda and flow declare their `T` component, and a
+  // multi-bound or generic-bound `T` has no closed spelling there, so it takes the type variable.
+  val bounds: List<String> = parameter.forwardBoundSpellings()
+  val unspelled: Boolean = bounds.size > 1 || bounds.any { bound -> '<' in bound }
+  if (unspelled && types.any { type -> type.carriesInsideAsync(name) }) return true
+  if (bounds.size <= 1) return false
   return types.any { type -> type.mentionsTypeParameter(name) } &&
       types.none { type -> type.witnessesTypeParameter(name) }
+}
+
+/** ADR-215 lane C: whether `T` [name] sits inside a suspend lambda or a `Flow` in this type. */
+private fun KSType.carriesInsideAsync(name: String): Boolean {
+  val qualifiedName: String? = declaration.qualifiedName?.asString()
+  val async: Boolean = isSuspendFunctionType || qualifiedName in SUSPEND_LAMBDA_TYPES ||
+      qualifiedName in FLOW_TYPES || qualifiedName in STATE_FLOW_TYPES
+  return if (async) mentionsTypeParameter(name) else arguments.any { argument ->
+    argument.type?.resolve()?.expandAliases()?.carriesInsideAsync(name) == true
+  }
 }
 
 private fun KSType.namesTypeParameter(name: String): Boolean =
@@ -278,7 +267,13 @@ private val OWN_PARAMETER_COLLECTIONS: Set<String> = setOf(
 internal fun KSFunctionDeclaration.isReifiedWithUnspellableBound(): Boolean =
   typeParameters.any { parameter -> parameter.isReified && parameter.isTrampolined() }
 
-/** ADR-215 lane A: a non-suspend `kotlin.FunctionN`, the shape the plan's callback carries. */
-private fun KSType.isPlainLambda(): Boolean =
-  !isSuspendFunctionType &&
-      (isFunctionType || declaration.qualifiedName?.asString() in LAMBDA_TYPES)
+/**
+ * ADR-215: a lambda (lane A, the plan's callback), a suspend lambda or a `Flow` (lane C, the legacy
+ * suspend and `Flow` routes), each of which carries a `T` component on its own boxed wire.
+ */
+private fun KSType.isProtocolCarrier(): Boolean {
+  val qualifiedName: String? = declaration.qualifiedName?.asString()
+  return isFunctionType || isSuspendFunctionType || qualifiedName in LAMBDA_TYPES ||
+      qualifiedName in SUSPEND_LAMBDA_TYPES || qualifiedName in FLOW_TYPES ||
+      qualifiedName in STATE_FLOW_TYPES
+}

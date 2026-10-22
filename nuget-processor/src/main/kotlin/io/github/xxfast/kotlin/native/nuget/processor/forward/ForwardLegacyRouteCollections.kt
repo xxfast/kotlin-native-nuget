@@ -295,7 +295,8 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
     val suspends: Boolean = Modifier.SUSPEND in host.modifiers
     if (suspends) {
       asyncCallbackOrNull(type)?.let { callback ->
-        return ForwardLegacyParameterShape.Async(callback)
+        if (callback.boxesIntoKotlin()) boxedAsyncHost = boxedAsyncHost ?: host
+        return ForwardLegacyParameterShape.Async(callback.readThroughTrampoline(host))
       }
     }
     // A `Flow<T>` binds on a `suspend` member and on a member that itself returns a plain `Flow`,
@@ -304,7 +305,10 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
       host.returnType?.resolve()?.expandAliases()?.declaration?.qualifiedName?.asString() in
           PLAIN_FLOW_TYPES
     if (suspends || returnsPlainFlow) {
-      flowSourceOrNull(type)?.let { flow -> return ForwardLegacyParameterShape.Async(flow) }
+      flowSourceOrNull(type)?.let { flow ->
+        if (flow.boxesIntoKotlin()) boxedAsyncHost = boxedAsyncHost ?: host
+        return ForwardLegacyParameterShape.Async(flow.readThroughTrampoline(host))
+      }
     }
   }
   val expanded: KSType = type.expandAliases()
@@ -324,6 +328,117 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
     if (!admitted) return ForwardLegacyParameterShape.Refused(expanded.legacyDescription())
   }
   return shape
+}
+
+/**
+ * ADR-215 lane C: the `T` components of a suspend lambda or `Flow` parameter, each marked
+ * `trampolined` exactly when [host]'s export declares it as a type variable: the member's own `T`
+ * with trampoline bounds (ADR-198, ADR-217) and an owner's multi-bound `T` (`flowTrampoline`
+ * re-declares an owner parameter an asynchronous parameter names). The Kotlin lowering spells a
+ * marked `T` as that variable and every other one at its bound.
+ */
+internal fun BridgeType.readThroughTrampoline(host: KSFunctionDeclaration): BridgeType {
+  val own: Set<String> = host.forwardMethodTypeParameters()
+    .filter { parameter -> parameter.trampolineBounds.isNotEmpty() }
+    .map { parameter -> parameter.kotlinName }
+    .toSet()
+  val owner: Set<String> = (host.parentDeclaration as? KSClassDeclaration)
+    ?.forwardGenericOwner()?.typeParameters.orEmpty()
+    .filter { parameter -> parameter.erased == null }
+    .map { parameter -> parameter.kotlinName }
+    .toSet()
+  val variables: Set<String> = own + owner
+  fun BridgeType.mark(): BridgeType = when (this) {
+    is BridgeType.TypeParameter -> copy(trampolined = kotlinName in variables)
+    is BridgeType.Nullable -> BridgeType.Nullable(type.mark())
+    BridgeType.Unit,
+    is BridgeType.Primitive,
+    BridgeType.Char,
+    BridgeType.String,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    is BridgeType.Throwable,
+    BridgeType.Uuid,
+    is BridgeType.Enum,
+    is BridgeType.ObjectHandle,
+    is BridgeType.Interface,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    BridgeType.ByteArray,
+    is BridgeType.Collection,
+    is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+      -> this
+  }
+  return when (this) {
+    is BridgeType.AsyncCallback ->
+      BridgeType.AsyncCallback(parameters.map { parameter -> parameter.mark() }, result.mark())
+    is BridgeType.FlowSource -> BridgeType.FlowSource(element.mark())
+    BridgeType.Unit,
+    is BridgeType.Primitive,
+    BridgeType.Char,
+    BridgeType.String,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    is BridgeType.Throwable,
+    BridgeType.Uuid,
+    is BridgeType.Enum,
+    is BridgeType.ObjectHandle,
+    is BridgeType.Interface,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    BridgeType.ByteArray,
+    is BridgeType.Collection,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> this
+  }
+}
+
+/** ADR-215 lane C: the `T` names a suspend lambda or `Flow` parameter type carries. */
+internal fun BridgeType.asyncTypeParameterNames(): Set<String> {
+  fun BridgeType.name(): String? = (unwrapNullable() as? BridgeType.TypeParameter)?.kotlinName
+  return when (this) {
+    is BridgeType.AsyncCallback ->
+      (parameters + result).mapNotNull { component -> component.name() }
+    is BridgeType.FlowSource -> listOfNotNull(element.name())
+    BridgeType.Unit,
+    is BridgeType.Primitive,
+    BridgeType.Char,
+    BridgeType.String,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    is BridgeType.Throwable,
+    BridgeType.Uuid,
+    is BridgeType.Enum,
+    is BridgeType.ObjectHandle,
+    is BridgeType.Interface,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    BridgeType.ByteArray,
+    is BridgeType.Collection,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> emptyList()
+  }.toSet()
 }
 
 /**

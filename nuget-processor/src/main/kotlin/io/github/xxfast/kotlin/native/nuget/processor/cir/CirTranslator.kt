@@ -28,6 +28,7 @@ import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Modifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardFlowArgumentKind
+import io.github.xxfast.kotlin.native.nuget.processor.forward.boxesIntoKotlin
 import io.github.xxfast.kotlin.native.nuget.processor.forward.objectCallbackResultOwner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.retainHandleExport
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
@@ -994,6 +995,23 @@ internal fun translate(
   // and the public `KotlinException` surface too; that is accepted, and is what keeps this a
   // deletion rather than a longer list to forget. The per-feature flags below (`includesList`,
   // `needsAsync`, `bridgePlans`, ...) are untouched.
+  // ADR-210: the suspend lambda parameters the plan owns, plus the ones the legacy suspend routes
+  // registered as they translated. Their thunks share the ADR-161 key table, so the helper is
+  // emitted for them even when the module declares no other callback delegate.
+  val asyncCallbacks: List<BridgeType.AsyncCallback> = (
+      callableCatalog.plans
+        .flatMap { plan -> plan.publicSignature.parameters }
+        .mapNotNull { parameter -> parameter.type as? BridgeType.AsyncCallback } +
+        tracker.asyncCallbacks
+      ).distinct()
+  val flowSources: List<BridgeType.FlowSource> = (
+      callableCatalog.plans
+        .flatMap { plan -> plan.publicSignature.parameters }
+        .mapNotNull { parameter -> parameter.type as? BridgeType.FlowSource } +
+        tracker.flowSources
+      ).distinct()
+  // ADR-215 lane C: a `suspend` lambda's `T` result or a `Flow<T>` element is an owned box too.
+  val boxesAsync: Boolean = (asyncCallbacks + flowSources).any { type -> type.boxesIntoKotlin() }
   val helpers: MutableList<CirDeclaration> = mutableListOf(
     CirMarshalHelper(
       context.libraryName,
@@ -1017,7 +1035,7 @@ internal fun translate(
       enumBoxers = enumBoxers(namespaces),
       flowArgumentImports = flowArguments.flatMap { flow -> flow.imports },
       retainHandleExport = context.symbols.retainHandleExport()
-        .takeIf { callableCatalog.objectCallbackResultOwner() != null },
+        .takeIf { callableCatalog.objectCallbackResultOwner() != null || boxesAsync },
     ),
   )
   if (bridgePlans.isNotEmpty()) helpers.add(CirBridgeHelper(context.libraryName, bridgePlans))
@@ -1050,21 +1068,6 @@ internal fun translate(
   if (tracker.needsSuspendStateFlow) {
     helpers.add(CirStateFlowHandleHelper(context.libraryName))
   }
-  // ADR-210: the suspend lambda parameters the plan owns, plus the ones the legacy suspend routes
-  // registered as they translated. Their thunks share the ADR-161 key table, so the helper is
-  // emitted for them even when the module declares no other callback delegate.
-  val asyncCallbacks: List<BridgeType.AsyncCallback> = (
-      callableCatalog.plans
-        .flatMap { plan -> plan.publicSignature.parameters }
-        .mapNotNull { parameter -> parameter.type as? BridgeType.AsyncCallback } +
-        tracker.asyncCallbacks
-      ).distinct()
-  val flowSources: List<BridgeType.FlowSource> = (
-      callableCatalog.plans
-        .flatMap { plan -> plan.publicSignature.parameters }
-        .mapNotNull { parameter -> parameter.type as? BridgeType.FlowSource } +
-        tracker.flowSources
-      ).distinct()
   val hasCallbackDelegates: Boolean = tracker.callbackDelegates.isNotEmpty()
   val hasAsyncParameters: Boolean = asyncCallbacks.isNotEmpty() || flowSources.isNotEmpty()
   if (hasCallbackDelegates || hasAsyncParameters) {
@@ -1077,6 +1080,7 @@ internal fun translate(
           .distinctBy { end -> end.name },
         asyncCurrents = flowSources.map { flow -> flow.forwardAsyncCurrent() }
           .distinctBy { current -> current.name },
+        boxesObjects = boxesAsync,
       ),
     )
   }

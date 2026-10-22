@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.exports
 
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
+import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardExportOwnerTag
@@ -16,13 +17,21 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.retainHandleExport
 internal fun FileSpec.Builder.addRetainHandleExport(
   catalog: ForwardCallablePlanCatalog,
   symbols: ForwardSymbolTable,
+  // ADR-215 lane C: the legacy suspend route's sighting, when no plan owns the export.
+  legacyHost: KSFunctionDeclaration? = null,
 ) {
-  val owner: String = catalog.objectCallbackResultOwner() ?: return
+  val planOwner: String? = catalog.objectCallbackResultOwner()
+  if (planOwner == null && legacyHost == null) return
+  val owner: ForwardExportOwnerTag = if (planOwner != null) {
+    ForwardExportOwnerTag(symbol = planOwner, role = "lambda result retain")
+  } else {
+    ForwardExportOwnerTag(declaration = legacyHost, role = "lambda result retain")
+  }
   val name: String = symbols.retainHandleExport()
   addFunction(
     FunSpec.builder("export_$name")
       .addAnnotation(
-        cNameAnnotation(name, ForwardExportOwnerTag(symbol = owner, role = "lambda result retain")),
+        cNameAnnotation(name, owner),
       )
       .addParameter("handle", cOpaquePointer)
       .returns(cOpaquePointer)

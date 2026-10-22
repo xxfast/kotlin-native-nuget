@@ -351,9 +351,9 @@ inherent to erasure. The same identity rule applies to a lambda argument
 `T` is admitted at a parameter, a return, a constructor parameter, or a property (getter and setter), optionally
 nullable, and as the element of a `List`, `Set` or `Map` at those positions (`List<T>` binds as
 `IReadOnlyList<T>`; see [A type parameter as an element](#a-type-parameter-as-an-element)). It is refused, named,
-everywhere else: nested in a `Flow` parameter or a `suspend` lambda, a
-stored-callback member, and a method's own type parameter when its signature carries a `suspend` lambda or a `Flow` parameter
-(a plain `fun <U> swap(next: U): U` [binds](#generic-methods), and so does a [`T` in a lambda](#a-type-parameter-in-a-lambda)). A
+everywhere else: a stored-callback member, and `T` nested inside another generic type. A `T` in a lambda
+([non-suspend](#a-type-parameter-in-a-lambda) or [`suspend`](coroutines-and-flow.md#flow-and-suspend-lambda-type-parameter))
+and in a `Flow` parameter binds. A
 type parameter declared on an `interface` rather than a `class` is unaffected by this and keeps
 its own, unrelated named refusal.
 
@@ -649,7 +649,7 @@ What differs from a generic class:
 These stay a named skip, with the specific reason in the warning: a generic method on an interface,
 an `enum class`, a value class, or an extension function; a `reified` type parameter on a member (a top-level `fun <T>` binds one); a bound that
 is itself a type parameter; a `T` nested in a generic value class or in a type that is not an exported generic class
-(`List`, `Set`, `Map` and `Result` aside); a `suspend` lambda anywhere in the signature or a `Flow` parameter; a multi-bound `T` that no parameter mentions; and a
+(`List`, `Set`, `Map` and `Result` aside); a multi-bound `T` that no parameter mentions; and a
 `T` that shadows a type parameter in scope (the owner's, or one an `inner` class captures). A
 generic method on an `inner` class or a type nested in a generic owner binds like any other.
 Expose a non-generic wrapper for any of the refused shapes. The warning
@@ -695,7 +695,7 @@ foreach (Tabby cat in deck.Shuffle(new[] { oreo })) cat.Dispose();           // 
 A passed wrapper element is borrowed, and each wrapper element Kotlin returns is yours to dispose.
 `List<List<T>>` works, and a bounded `T` keeps its `where` clause. A `Map` key must be non-null:
 `fun <K : Any, V> tally(map: Map<K, V>)` binds, while an unconstrained `K` is skipped as
-`NULLABLE_MAP_KEY`. Declare `K : Any`. A `T` inside a `Flow` parameter is still skipped. A
+`NULLABLE_MAP_KEY`. Declare `K : Any`. A
 `T` with an enum or self-referencing bound is a valid element
 ([An enum bound](#an-enum-bound)), and so is one with several bounds that no bare parameter
 mentions:
@@ -755,8 +755,8 @@ hold or a fresh one, needs no extra step: Kotlin takes its own reference, so you
 wrapper you hold. A `T?` payload, or a `T` that is `null`, arrives as `null`. A [bound with no closed
 spelling](#an-enum-bound) (`T : Enum<T>`) works in both directions.
 
-Still named skips: a `suspend` lambda or a `Flow` parameter in the signature, and a stored callback or
-listener pair over `T` (`addTaste(listener: (T) -> Unit)`). A generic sealed arm's per-call lambda
+A `suspend` lambda or a `Flow` parameter over `T` [binds too](coroutines-and-flow.md#flow-and-suspend-lambda-type-parameter).
+Still a named skip: a stored callback or listener pair over `T` (`addTaste(listener: (T) -> Unit)`). A generic sealed arm's per-call lambda
 member binds like the class's.
 
 ### A type parameter inside a generic class or a Result {id="a-type-parameter-inside-a-generic-class"}

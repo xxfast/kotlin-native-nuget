@@ -884,8 +884,8 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
       HOT_FLOW_INPUT_DETAIL -> HOT_FLOW_INPUT_REASON
 
       ForwardPlanSkipReason.FLOW_PROTOCOL.name ->
-        "a Flow/StateFlow binds at a class-method return and a property, and a `Flow<T>` of a " +
-            "primitive or String at a parameter, but not at this position"
+        "a Flow/StateFlow binds at a class-method return and a property, and a `Flow<T>` at a " +
+            "parameter, but not at this position"
 
       // ADR-160: a per-call lambda PARAMETER now binds off the ADR-062 plan at every ordinary
       // position (class method, sealed arm, object member, top-level function, extension), so the
@@ -1402,7 +1402,7 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
 
     ForwardPlanSkipReason.FLOW_PROTOCOL.name ->
       "return the Flow from a method on an ordinary class (or expose it as a property), or " +
-          "take a `Flow<T>` of a primitive or String as a parameter; no object, interface, " +
+          "take a `Flow<T>` as a parameter; no object, interface, " +
           "extension or constructor route carries a returned one"
 
     ForwardPlanSkipReason.CALLBACK_PROTOCOL.name ->

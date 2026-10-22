@@ -18,6 +18,7 @@ started. `Flow<T>` becomes `IAsyncEnumerable<T>`, and `StateFlow<T>` adds a sync
 | `StateFlow<T>` | `KotlinStateFlow<T> : KotlinFlow<T>`, adds a synchronous `.Value` |
 | `MutableStateFlow<T>` (declared, not narrowed to `StateFlow<T>`) | `KotlinMutableStateFlow<T> : KotlinStateFlow<T>`, `.Value` is settable |
 | `Flow<T>` with a type parameter of a class or method | `KotlinFlow<T>`, see [below](#flow-type-parameter) |
+| `Flow<T>` or `suspend (T) -> R` parameter over a type parameter | `IAsyncEnumerable<T>` / `Func<T, CancellationToken, Task<T>>`, see [below](#flow-and-suspend-lambda-type-parameter) |
 | coroutine cancellation | `CancellationToken` |
 | structured concurrency | `Dispose()` cancels in-flight work; `DisposeAsync()` drains it |
 
@@ -625,7 +626,8 @@ unaffected.
   `stateIn(scope)` or `shareIn` on it in Kotlin. A member that itself returns a `StateFlow` or
   `SharedFlow` does not admit a `Flow` parameter either; its diagnostic still reads `but not
   <name>: Flow<Int>`, which is about that host and not about `Flow` parameters in general.
-- **Other elements.** Only the primitives and `String` bind. `Char`, `Throwable`, an enum, an
+- **Other elements.** Only the primitives, `String` and a method's or class's own
+  [type parameter](#flow-and-suspend-lambda-type-parameter) bind. `Char`, `Throwable`, an enum, an
   object, a collection or a nullable element is refused, and so is a nullable `Flow<T>?`.
 - **Enum and value class members, and a data class `copy`.** A member of an enum or value class
   that takes a `Flow` is not generated, and a data class `copy` omits a `Flow` component.
@@ -1376,7 +1378,58 @@ Not every shape binds:
 - A `var` flow property's setter is skipped, named, as on any class.
 - A `Flow` return on an `object`, a companion or a top-level function has no route at all, generic
   or not. The generic form is named with the sentence that blames the type parameter.
-- A `Flow<T>` or `suspend` lambda *parameter* that mentions `T` is still skipped.
+- A `Flow<T>` or `suspend` lambda *parameter* that mentions `T` [binds too](#flow-and-suspend-lambda-type-parameter).
+
+## A type parameter in a `Flow` or `suspend` lambda parameter {id="flow-and-suspend-lambda-type-parameter"}
+
+A method's own `T`, or a generic class's `T`, can be the element of a `Flow<T>` parameter or the
+payload and result of a `suspend` lambda. `T` is inferred from the arguments, as on any
+[generic method](generics.md#generic-methods).
+
+```kotlin
+class Siphon {
+  suspend fun <T> gulp(source: Flow<T>): List<T> = source.toList()
+  suspend fun <T> brew(value: T, step: suspend (T) -> T): T = step(value)
+  suspend fun <T> tip(items: List<T>, cup: suspend (T) -> Unit): Int { /* ... */ }
+  suspend fun <T : Enum<T>> retint(tint: T, step: suspend (T) -> T): String = step(tint).name
+}
+
+class Cistern<T>(val seed: T) {
+  suspend fun gulp(source: Flow<T>): List<T> = listOf(seed) + source.toList()
+  suspend fun brew(step: suspend (T) -> T): T = step(seed)
+}
+```
+
+```C#
+public Task<IReadOnlyList<T>> GulpAsync<T>(IAsyncEnumerable<T> source, CancellationToken cancellationToken = default)
+public Task<T> BrewAsync<T>(T value, Func<T, CancellationToken, Task<T>> step, CancellationToken cancellationToken = default)
+public Task<int> TipAsync<T>(IReadOnlyList<T> items, Func<T, CancellationToken, Task> cup, CancellationToken cancellationToken = default)
+public Task<string> RetintAsync<T>(T tint, Func<T, CancellationToken, Task<T>> step, CancellationToken cancellationToken = default) where T : struct, Enum
+```
+
+```C#
+using var siphon = new Siphon();
+using var oreo = new Tabby("Oreo", 3);
+using var mylo = new Tabby("Mylo", 5);
+
+IReadOnlyList<Tabby> drank = await siphon.GulpAsync(Pour(oreo, mylo));   // Pour yields from an async iterator
+using Tabby brewed = await siphon.BrewAsync(oreo, (cat, _) => Task.FromResult(cat));
+
+using var cistern = new Cistern<int>(1);
+await cistern.GulpAsync(Pour(2, 3));   // 1, 2, 3
+```
+
+- A builtin, a `string`, a wrapper, a nullable `T` and an enum or multi-bound `T` all work, on a
+  class, a generic class and a generic sealed arm. An explicit `Flow<T?>` under a `T : Any` bound
+  drops the `null` elements in Kotlin.
+- Wrappers follow the rules of the matching non-generic shape. A wrapper element your source
+  yields is borrowed, so you still dispose it. A wrapper payload your `suspend` lambda receives is
+  yours to dispose. A wrapper the lambda returns, borrowed or fresh, needs no extra step: Kotlin
+  takes its own reference. Each wrapper Kotlin returns in a `List<T>` is yours to dispose.
+- The enumerator lifetime, cancellation and error rules of a [`Flow` parameter](#flow-parameter-behaviour)
+  and a [`suspend` lambda parameter](#suspend-lambda-parameter-behaviour) apply unchanged.
+- A `suspend` member that also takes a plain (non-suspend) lambda, over `T` or not, is skipped,
+  named. Take a `suspend` lambda instead.
 
 
 ## Parameters on `Flow`, `StateFlow`, and `suspend` members {id="parameters-on-flow-stateflow-and-suspend-members"}

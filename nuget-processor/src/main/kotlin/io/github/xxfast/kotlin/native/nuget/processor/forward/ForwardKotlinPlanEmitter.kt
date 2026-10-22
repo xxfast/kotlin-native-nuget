@@ -1270,6 +1270,13 @@ private fun ForwardCallablePlan.withTypeVariables(): ForwardCallablePlan {
 private fun BridgeType.readThrough(variables: Set<String>): BridgeType = when (this) {
   is BridgeType.TypeParameter -> if (kotlinName in variables) copy(trampolined = true) else this
   is BridgeType.Nullable -> BridgeType.Nullable(type.readThrough(variables))
+  // ADR-215 lane C: the generated suspend lambda and flow spell a declared `T` as its variable.
+  is BridgeType.AsyncCallback -> copy(
+    parameters = parameters.map { parameter -> parameter.readThrough(variables) },
+    result = result.readThrough(variables),
+  )
+
+  is BridgeType.FlowSource -> copy(element = element.readThrough(variables))
   is BridgeType.Collection -> copy(
     element = element?.readThrough(variables),
     key = key?.readThrough(variables),
@@ -1297,8 +1304,6 @@ private fun BridgeType.readThrough(variables: Set<String>): BridgeType = when (t
   is BridgeType.BoundInterface,
   BridgeType.ByteArray,
   is BridgeType.Callback,
-  is BridgeType.AsyncCallback,
-  is BridgeType.FlowSource,
   is BridgeType.ReturnedLambda,
   is BridgeType.SpecializedProtocol,
   is BridgeType.RawKSType,

@@ -214,6 +214,8 @@ private fun BridgeType.asyncKotlinType(): String = when (this) {
   // A function type is contravariant in its parameters, so the widest spelling is assignable to
   // whichever of `Throwable` / `Exception` / `RuntimeException` the member declared.
   is BridgeType.Throwable -> "kotlin.Throwable"
+  // ADR-215 lane C: `T` at its one bound (`kotlin.Any` when none), so the member's call infers it.
+  is BridgeType.TypeParameter, is BridgeType.Nullable -> asyncBoxedKotlinType()
   BridgeType.Char,
   BridgeType.Instant,
   BridgeType.Duration,
@@ -222,7 +224,6 @@ private fun BridgeType.asyncKotlinType(): String = when (this) {
   is BridgeType.ValueClass,
   BridgeType.ByteArray,
   is BridgeType.Collection,
-  is BridgeType.Nullable,
   is BridgeType.Callback,
   is BridgeType.AsyncCallback,
   is BridgeType.FlowSource,
@@ -231,8 +232,66 @@ private fun BridgeType.asyncKotlinType(): String = when (this) {
   is BridgeType.RawKSType,
   is BridgeType.Unsupported,
   is BridgeType.RawCollection,
-  is BridgeType.TypeParameter,
     -> error("ADR-210 admits no suspend lambda component $this")
+}
+
+/**
+ * ADR-215 lane C: a `T` or `T?` component at its one bound, `kotlin.Any` when it has none, so a
+ * `Flow<Furry>` or a `suspend (Any?) -> Any?` is what the member's call infers `T` from. A `T` the
+ * export's trampoline declares ([BridgeType.TypeParameter.trampolined]: ADR-198's unspellable
+ * bound, ADR-217's multi-bound rule) is spelled as that type variable; a `T` nullable only from
+ * its bound is already nullable there, so it takes no `?`.
+ */
+private fun BridgeType.asyncBoxedKotlinType(): String {
+  val parameter: BridgeType.TypeParameter = unwrapNullable() as BridgeType.TypeParameter
+  val nullable: Boolean = this is BridgeType.Nullable
+  if (parameter.trampolined) {
+    val mark: String = if (nullable && !parameter.nullableFromBound) "?" else ""
+    return "${parameter.kotlinName}$mark"
+  }
+  check(parameter.additionalBounds.isEmpty()) {
+    "ADR-215: a multi-bound `${parameter.kotlinName}` in a suspend lambda or Flow must run under " +
+        "the trampoline (forwardMethodTypeParameters)"
+  }
+  val mark: String = if (nullable) "?" else ""
+  return "${parameter.boundQualifiedName ?: "kotlin.Any"}$mark"
+}
+
+/**
+ * ADR-215 lane C: the read of an owned box C# handed INTO Kotlin ([invocation], a `suspend`
+ * lambda's End or a `Flow` element's Current), as lane A's lambda result reads it: the box, the
+ * value cast to the bound ([forwardBoundedRead]), the release of the box, then the value. A null
+ * `T` crossed as `IntPtr.Zero` and has no box to release; a non-null `T` asserts the box first.
+ */
+private fun asyncBoxedRead(
+  type: BridgeType,
+  invocation: String,
+  box: String,
+  value: String,
+): List<String> {
+  val parameter: BridgeType.TypeParameter = type.unwrapNullable() as BridgeType.TypeParameter
+  val nullable: Boolean = type is BridgeType.Nullable
+  val bounds: List<String> =
+    listOfNotNull(parameter.boundQualifiedName) + parameter.additionalBounds
+  // A trampolined `T` checks each (star-projected) bound, then casts to the type variable the
+  // component is spelled with ([asyncBoxedKotlinType]).
+  val read: String = if (parameter.trampolined) {
+    val mark: String = if (nullable) "?" else ""
+    val variable: String = parameter.kotlinName +
+        if (nullable && !parameter.nullableFromBound) "?" else ""
+    val casts: String = bounds.joinToString("") { bound -> "bounded as $bound$mark; " }
+    val raw: String =
+      if (nullable) "$box?.asStableRef<Any>()?.get()" else "$box.asStableRef<Any>().get()"
+    "$raw.let { bounded -> ${casts}bounded as $variable }"
+  } else {
+    forwardBoundedRead(box, bounds, nullable)
+  }
+  return listOf(
+    "val $box = ${if (nullable) invocation else "$invocation!!"}",
+    "val $value = $read",
+    if (nullable) "if ($box != null) NugetHandles.release($box)" else "NugetHandles.release($box)",
+    value,
+  )
 }
 
 /** The Kotlin `CFunction` spelling of one component on the wire. */
@@ -244,6 +303,8 @@ private fun BridgeType.asyncKotlinWire(): String = when (this) {
   is BridgeType.Enum -> "Int"
   BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface,
   is BridgeType.Throwable -> "$POINTER?"
+  // ADR-215 lane C: the boxed `Object` wire, `IntPtr.Zero` for a null `T`.
+  is BridgeType.TypeParameter, is BridgeType.Nullable -> "$POINTER?"
   BridgeType.Char,
   BridgeType.Instant,
   BridgeType.Duration,
@@ -252,7 +313,6 @@ private fun BridgeType.asyncKotlinWire(): String = when (this) {
   is BridgeType.ValueClass,
   BridgeType.ByteArray,
   is BridgeType.Collection,
-  is BridgeType.Nullable,
   is BridgeType.Callback,
   is BridgeType.AsyncCallback,
   is BridgeType.FlowSource,
@@ -261,7 +321,6 @@ private fun BridgeType.asyncKotlinWire(): String = when (this) {
   is BridgeType.RawKSType,
   is BridgeType.Unsupported,
   is BridgeType.RawCollection,
-  is BridgeType.TypeParameter,
     -> error("ADR-210 admits no suspend lambda wire for $this")
 }
 
@@ -274,6 +333,9 @@ private fun BridgeType.asyncPayloadArgument(argument: String): String = when (th
   BridgeType.String -> "NugetHandles.retain($argument as Any)"
   is BridgeType.Throwable -> "NugetHandles.retain(buildError($argument, ::nugetMappedType))"
   is BridgeType.ObjectHandle, is BridgeType.Interface -> "NugetHandles.retain($argument)"
+  // ADR-215 lane C: lane A's boxed payload; a null `T` mints nothing.
+  is BridgeType.TypeParameter -> "NugetHandles.retain($argument)"
+  is BridgeType.Nullable -> "$argument?.let { NugetHandles.retain(it) }"
   BridgeType.Unit,
   BridgeType.Char,
   BridgeType.Instant,
@@ -283,7 +345,6 @@ private fun BridgeType.asyncPayloadArgument(argument: String): String = when (th
   is BridgeType.ValueClass,
   BridgeType.ByteArray,
   is BridgeType.Collection,
-  is BridgeType.Nullable,
   is BridgeType.Callback,
   is BridgeType.AsyncCallback,
   is BridgeType.FlowSource,
@@ -292,7 +353,6 @@ private fun BridgeType.asyncPayloadArgument(argument: String): String = when (th
   is BridgeType.RawKSType,
   is BridgeType.Unsupported,
   is BridgeType.RawCollection,
-  is BridgeType.TypeParameter,
     -> error("ADR-210 admits no suspend lambda payload $this")
 }
 
@@ -383,6 +443,11 @@ internal fun asyncCallbackExpression(
         appendLine("    $value")
       }
 
+      // ADR-215 lane C: `EndBoxed()` always hands back an owned box: read it, cast it to the
+      // bound, release it, exactly lane A's lambda result.
+      is BridgeType.TypeParameter, is BridgeType.Nullable ->
+        asyncBoxedRead(result, end, box, value).forEach { line -> appendLine("    $line") }
+
       BridgeType.Char,
       BridgeType.Instant,
       BridgeType.Duration,
@@ -395,7 +460,6 @@ internal fun asyncCallbackExpression(
       is BridgeType.ValueClass,
       BridgeType.ByteArray,
       is BridgeType.Collection,
-      is BridgeType.Nullable,
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
       is BridgeType.FlowSource,
@@ -404,7 +468,6 @@ internal fun asyncCallbackExpression(
       is BridgeType.RawKSType,
       is BridgeType.Unsupported,
       is BridgeType.RawCollection,
-      is BridgeType.TypeParameter,
         -> error("ADR-210 admits no suspend lambda result $result")
     }
     appendLine("  }")
@@ -489,6 +552,13 @@ internal fun flowSourceExpression(
         appendLine("    },")
       }
 
+      // ADR-215 lane C: `CurrentBoxed()` hands back an owned box per element: read, cast, release.
+      is BridgeType.TypeParameter, is BridgeType.Nullable -> {
+        appendLine("    current = { nugetEnumeration ->")
+        asyncBoxedRead(element, read, box, value).forEach { line -> appendLine("      $line") }
+        appendLine("    },")
+      }
+
       BridgeType.Unit,
       BridgeType.Char,
       BridgeType.Instant,
@@ -502,7 +572,6 @@ internal fun flowSourceExpression(
       is BridgeType.ValueClass,
       BridgeType.ByteArray,
       is BridgeType.Collection,
-      is BridgeType.Nullable,
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
       is BridgeType.FlowSource,
@@ -511,7 +580,6 @@ internal fun flowSourceExpression(
       is BridgeType.RawKSType,
       is BridgeType.Unsupported,
       is BridgeType.RawCollection,
-      is BridgeType.TypeParameter,
         -> error("ADR-210 admits no Flow parameter element $element")
     }
     appendLine(
