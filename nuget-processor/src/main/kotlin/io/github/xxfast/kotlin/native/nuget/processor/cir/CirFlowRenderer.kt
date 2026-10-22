@@ -567,6 +567,7 @@ private fun StringBuilder.openFlowBody(method: CirMethod) {
   if (method.flowReceiverLocal != null) {
     appendLine("            var ${method.flowReceiverLocal} = ${method.flowReceiverArgument};")
   }
+  method.flowRegistrations.forEach { struct -> appendLine("            $struct.NugetRegister();") }
 }
 
 /** ADR-230: the [openFlowBody] twin. */
@@ -843,9 +844,15 @@ private fun StringBuilder.renderHeldStateFlowMethod(method: CirMethod, className
   if (write.rejectsNull) {
     appendLine("                    if (v is null) throw new ArgumentNullException(nameof(v));")
   }
-  appendLine("                    ${method.stateFlowSetValueNativeName}($owned, ${write.arguments}, out IntPtr error);")
-  appendLine("                    if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
-  appendLine("                    NugetErrorNative.ClearManagedFault();")
+  // ADR-228: a boxed element (a generic value class) wraps `v` around the call.
+  write.boxedCall(
+    listOf("v"),
+    "${method.stateFlowSetValueNativeName}(" +
+      "$owned, ${write.boxedArgument("v")}, out IntPtr error); " +
+      "if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error); " +
+      "NugetErrorNative.ClearManagedFault();",
+    "                    ",
+  ).forEach { line -> appendLine(line) }
   appendLine("                },")
   appendLine(
     stateFlowCompareAndSetLambda(
@@ -975,4 +982,48 @@ private fun StringBuilder.renderMutableStateFlowCompareAndSetMembers() {
     appendLine("            }")
     appendLine("        }")
   }
+}
+
+/**
+ * ADR-228: [text] with every extern call that passes [local] first rewritten to run inside
+ * `NugetMarshal.WithBox`, which mints the generic value class underlying's box for that one call
+ * and releases it once the export returns. A static flow export reads its receiver before it
+ * launches anything, so the box never outlives the call.
+ */
+internal fun boxedReceiverCalls(text: String, local: String): String {
+  val call = Regex("""([A-Za-z_][A-Za-z0-9_]*)\(${Regex.escape(local)}\b""")
+  val out = StringBuilder()
+  var cursor = 0
+  while (true) {
+    val match: MatchResult = call.find(text, cursor) ?: break
+    val open: Int = match.range.first + match.groupValues[1].length
+    var depth = 0
+    var close: Int = open
+    while (close < text.length) {
+      when (text[close]) {
+        '(' -> depth++
+        ')' -> depth--
+      }
+      if (depth == 0) break
+      close++
+    }
+    check(close < text.length) { "unbalanced extern call over $local in a static flow member" }
+    val arguments: String = text.substring(open + 1, close).replaceFirst(local, "${local}Box")
+    out.append(text, cursor, match.range.first)
+    // A call with an error slot keeps it: the box call reports it through `WithBox`'s own `out`.
+    val error: MatchResult? = Regex("""out IntPtr (\w+)""").find(arguments)
+    if (error == null) {
+      out.append("NugetMarshal.WithBox($local, ${local}Box => ${match.groupValues[1]}($arguments))")
+    } else {
+      val name: String = error.groupValues[1]
+      val inner: String = arguments.replaceRange(error.range, "out ${name}Boxed")
+      out.append(
+        "NugetMarshal.WithBox($local, (IntPtr ${local}Box, out IntPtr ${name}Boxed) => " +
+          "${match.groupValues[1]}($inner), out IntPtr $name)",
+      )
+    }
+    cursor = close + 1
+  }
+  out.append(text, cursor, text.length)
+  return out.toString()
 }

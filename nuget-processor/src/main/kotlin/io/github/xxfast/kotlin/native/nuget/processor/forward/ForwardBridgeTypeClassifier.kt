@@ -755,6 +755,7 @@ internal class ForwardBridgeTypeClassifier(
     }
     var closed = true
     val openArguments: MutableList<BridgeType.ObjectHandle> = mutableListOf()
+    val openValueClasses: MutableList<String> = mutableListOf()
     val spelled: List<String> = slots.map { (argument, parameter) ->
       if (argument.isNothing()) {
         // C6: the marker is a plain class, so it fails any bound but `notnull`.
@@ -800,6 +801,10 @@ internal class ForwardBridgeTypeClassifier(
           openArguments += nested.openArguments
           if (nested.open) openArguments += nested
         }
+        if (nested is BridgeType.ObjectHandle) openValueClasses += nested.openValueClasses
+        if (nested is BridgeType.ValueClass && nested.isDeclaredGeneric()) {
+          openValueClasses += nested.csharpType
+        }
       }
       classified.forwardPublicCsharpType()
     }
@@ -829,6 +834,7 @@ internal class ForwardBridgeTypeClassifier(
       kotlinReadType = kotlinReadType,
       constructType = constructType,
       openArguments = openArguments.distinctBy { it.csharpType },
+      openValueClasses = openValueClasses.distinct(),
       open = !closed,
       kotlinTypeVariableReadType =
         if (closed) null else type.makeNotNullable().forwardKotlinDeclaredSpelling(),
@@ -1049,14 +1055,23 @@ internal class ForwardBridgeTypeClassifier(
       }
       classified.forwardPublicCsharpType()
     }
+    val classifiedArguments: List<BridgeType> = resolved.map { argument -> classify(argument) }
+    val csharpType = "${csharpTypeNameFor(declaration)}<${spelled.joinToString(", ")}>"
+    // ADR-228: a closed instantiation reads back at an erased position through one static
+    // `Factories` line, so a Kotlin-made value is readable before C# ever touched its struct type.
+    val declaredUnderlying = BridgeType.ValueClass(qualifiedName, classify(underlying))
+    val open: Boolean = classifiedArguments.any { argument ->
+      argument.unwrapNullable() is BridgeType.TypeParameter
+    }
+    if (!open && declaredUnderlying.hasErasedCrossing()) {
+      closedInstantiations[csharpType.removePrefix("global::")] = "$csharpType.NugetUnbox(handle)"
+    }
     return BridgeType.ValueClass(
       qualifiedName,
       classifiedUnderlying,
       underlyingPropertyName,
-      csharpType = "${csharpTypeNameFor(declaration)}<${spelled.joinToString(", ")}>",
-      // Non-empty, which is what keeps it off every erased position (ADR-171 mints no box pair for
-      // a generic value class; `isErasedTypeArgument` and `isLambdaTypeArgument` read this).
-      typeArguments = resolved.map { argument -> classify(argument) },
+      csharpType = csharpType,
+      typeArguments = classifiedArguments,
     )
   }
 
@@ -1125,7 +1140,14 @@ internal class ForwardBridgeTypeClassifier(
       // spells a type argument by its bare name), so it rides the plan's callback as its handle.
       val generic: Boolean =
         (resolved.expandAliases().declaration as? KSClassDeclaration)?.isGenericSealedType() == true
-      if (generic) classify(resolved).sealedAsHandle() else classify(resolved)
+      val classified: BridgeType =
+        if (generic) classify(resolved).sealedAsHandle() else classify(resolved)
+      // ADR-228: a value class with a box pair rides the boxed `T` wire as its own box.
+      classified.valueClassBoxParameter(resolved.expandAliases())
+        ?.let { boxed ->
+          if (classified is BridgeType.Nullable) BridgeType.Nullable(boxed) else boxed
+        }
+        ?: classified
     }
     val parameters: List<BridgeType> = components.dropLast(1)
     val result: BridgeType = components.last()
@@ -1242,7 +1264,13 @@ internal class ForwardBridgeTypeClassifier(
     val qualifiedName: String = expanded.declaration.qualifiedName?.asString() ?: return null
     if (qualifiedName !in PLAIN_FLOW_TYPES) return null
     val argument: KSType = expanded.arguments.singleOrNull()?.type?.resolve() ?: return null
-    val element: BridgeType = classify(argument)
+    val classified: BridgeType = classify(argument)
+    // ADR-228: a value class element crosses as its own box, the boxed `T` wire.
+    val element: BridgeType = classified.valueClassBoxParameter(argument.expandAliases())
+      ?.let { boxed ->
+        if (classified is BridgeType.Nullable) BridgeType.Nullable(boxed) else boxed
+      }
+      ?: classified
     // ADR-215 lane C: a `T` element is read as an owned box (`CurrentBoxed()`).
     val readable: Boolean =
       element == BridgeType.String || element is BridgeType.Primitive || element.isAsyncBoxed()

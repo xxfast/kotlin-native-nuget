@@ -63,11 +63,14 @@ internal fun ForwardStaticFlowCall.slots(
   val prelude: String = when (val receiver = receiver) {
     is ForwardStaticSuspendReceiver.Handle ->
       legacyHandleStatement(slot, names.obj, receiver.type, receiver.nullable) + "\n"
-    // ADR-225: a generic value class own `T` box, read through its bound checks first.
+    // ADR-228: a generic value class's own `T` box, read through its bound checks first.
     is ForwardStaticSuspendReceiver.Box -> {
       val bounds: List<String> = listOfNotNull(receiver.type.boundQualifiedName) +
         receiver.type.additionalBounds
-      "val ${names.obj} = ${forwardBoundedRead(slot, bounds, receiver.nullable)}\n"
+      // ADR-228: a `T` with no erased spelling reads as the trampoline's own variable.
+      val variable: String? =
+        receiver.type.kotlinName.takeIf { receiver.trampolineBounds.isNotEmpty() }
+      "val ${names.obj} = ${forwardBoundedRead(slot, bounds, receiver.nullable, variable)}\n"
     }
     is ForwardStaticSuspendReceiver.Scalar, is ForwardStaticSuspendReceiver.Enum, null -> ""
   }
@@ -143,7 +146,9 @@ internal fun FileSpec.Builder.addStaticFlowExports(
     is ForwardStaticFlowOwner.ValueClass -> {
       importIfDefaultPackage(owner.valueClass)
       val qualified: String = owner.valueClass.kotlinQualifiedReference()
-      ForwardStaticFlowCall(owner.stem, { read -> "$qualified($read)." }, owner.underlying)
+      ForwardStaticFlowCall(
+        owner.stem, { read -> "${owner.construction ?: qualified}($read)." }, owner.underlying,
+      )
     }
   }
   addFlowMethodExports(

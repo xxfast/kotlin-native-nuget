@@ -84,9 +84,9 @@ Decal<Cat> decal = Stickers.OreoDecal();                // Serial stays a long
 - `default(Sticker<string>)` passed to a non-null `Sticker<String>` parameter throws
   `ArgumentException` in C#. For an unconstrained `T`, `default` carries `null`.
 - A KDoc `[Sticker]` link renders as plain `<c>Sticker</c>`, as it does for a generic class.
-- A closed instantiation works as a `List`, `Set` or `Map` component and under `?`. These skip,
-  named: `Sticker<T>?` or `List<Sticker<T>>` over a function's own `T`, and an erased position (`Box<Sticker<Int>>`, a lambda payload
-  or result, a `Flow` element, an awaited `suspend` result).
+- A closed instantiation works as a `List`, `Set` or `Map` component and under `?`, and at an
+  [erased position](#a-generic-value-class-at-an-erased-position). `Sticker<T>?` or `List<Sticker<T>>` over a function's own `T` skips,
+  named.
 - A generic value class over `List<T>` or any other shape that is not `T` or a phantom stays
   refused by name.
 
@@ -303,13 +303,78 @@ using var nameless = new Patient("");
 Assert.ThrowsAny<ArgumentException>(() => new Box<WardBand>(new WardBand(nameless)));
 ```
 
-Not every declared value class crosses here: a value class whose underlying is itself nullable or
-an ineligible sealed interface has no crossing at this position. A lambda payload, a bare
-`Flow`/`StateFlow`/`SharedFlow` element or an awaited result over one is a named skip (inside a
-`List` it still binds), and so is a `Box<V>` member over one. But `Box<T>` is an
-open C# generic with no build-time gate of its own, so `new Box<V>(v)` written in your C# code for
-such a `V` still compiles and throws `NotSupportedException` at the call, as it does for an
-unsupported `T` of any other kind.
+Not every declared value class crosses here: a value class over an ineligible sealed interface has
+no crossing at this position. A lambda payload, a bare `Flow`/`StateFlow`/`SharedFlow` element or an
+awaited result over one is a named skip (inside a `List` it still binds), and so is a `Box<V>`
+member over one. But `Box<T>` is an open C# generic with no build-time gate of its own, so
+`new Box<V>(v)` written in your C# code for such a `V` still compiles and throws
+`NotSupportedException` at the call.
+
+A value class over a nullable underlying (`value class Nick(val name: String?)`) crosses here too.
+`null` and `Nick(null)` stay distinct: a `Box<Nick?>` or a `Flow<Nick?>` element holds either no
+`Nick` or a `Nick` with a null name.
+
+```C#
+using Box<Nick?> present = StickerSwaps.NickBoxOrNone(true);   // Nick(null)
+using Box<Nick?> absent = StickerSwaps.NickBoxOrNone(false);   // null
+Assert.Equal(new Nick(null), present.Value);
+Assert.Null(absent.Value);
+```
+
+### A generic value class at an erased position {id="a-generic-value-class-at-an-erased-position"}
+
+A generic value class crosses at every erased position for any instantiation: inside a generic
+class, as a lambda payload or result (nullable too), as a `Flow`, `StateFlow`, `MutableStateFlow`
+or `SharedFlow` element, as a `Flow` parameter, and as an awaited `suspend` result or parameter. A
+function's own `T` inside the struct works as well. Reads and writes both bind, so you can set a
+`MutableStateFlow<Sticker<Int>>` and pass your own `Sticker<T>` elements in a `Flow` parameter.
+
+```kotlin
+class Box<T>(val value: T)
+
+fun <T> boxedOf(value: T): Box<Sticker<T>> = Box(Sticker(value))
+fun boxedBlank(): Box<Sticker<String?>?> = Box(Sticker(null))
+fun boxedNone(): Box<Sticker<String?>?> = Box(null)
+
+class StickerCourier(val desk: String) {
+  val onSticker: (Sticker<String>) -> Sticker<Int> = { Sticker(it.value.length) }
+  val board: MutableStateFlow<Sticker<Int>> = MutableStateFlow(Sticker(2))
+  fun stream(): Flow<Sticker<Cat>> = flowOf(Sticker(Cat("Oreo")), Sticker(Cat("Mylo")))
+  suspend fun bumpLater(sticker: Sticker<Int>): Sticker<Int> = Sticker(sticker.value + 1)
+}
+```
+
+```C#
+using Box<Sticker<string>> names = StickerSwaps.BoxedOf("Oreo");
+Assert.Equal("Oreo", names.Value.Value);
+
+using Box<Sticker<string?>?> blank = StickerSwaps.BoxedBlank();
+using Box<Sticker<string?>?> none = StickerSwaps.BoxedNone();
+Assert.Equal(new Sticker<string?>(null), blank.Value);   // present, with a null value
+Assert.Null(none.Value);                                 // no sticker at all
+
+using var courier = new StickerCourier("Oreo's desk");
+using KotlinFunc<Sticker<string>, Sticker<int>> onSticker = courier.OnSticker;
+Assert.Equal(new Sticker<int>(4), onSticker.Invoke(new Sticker<string>("Oreo")));
+
+courier.Board.Value = new Sticker<int>(8);
+Assert.Equal(new Sticker<int>(9), await courier.BumpLaterAsync(new Sticker<int>(8)));
+
+await foreach (Sticker<Cat> sticker in courier.Stream())
+{
+  using Cat cat = sticker.Value;   // an object-handle T is yours to dispose
+}
+```
+
+- `init` runs in Kotlin when a value crosses in, so `new Box<Sticker<int>>(new Sticker<int>(-1))`
+  and `courier.Board.Value = new Sticker<int>(-1)` throw `ArgumentException`, and a C# lambda that
+  returns such a `Sticker` throws inside the Kotlin call.
+- A phantom `Decal<Cat>` crosses the same way and keeps its `Serial` as a `long`.
+- A Kotlin `Sticker<ulong>` that your code has never constructed reads back fine: the generated
+  member registers the instantiation before it returns.
+- A generic value class's own `Flow`, `StateFlow` and `SharedFlow` members and properties bind as
+  on any [value class](coroutines-and-flow.md#flow-static-owners), including an enum-bound `T`:
+  `new Sticker<string>("Mylo").Glow.Value`, `await foreach (string v in new Sticker<string>("Oreo").Trail())`.
 
 ## As an extension receiver
 

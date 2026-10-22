@@ -1968,11 +1968,14 @@ internal object ForwardCirPlanProjection {
    */
   private fun CirResultProjection.fillingOpenSlots(result: BridgeType): CirResultProjection {
     val open: List<BridgeType.ObjectHandle> = result.openSlotHandles().distinctBy { it.csharpType }
-    if (open.isEmpty() || !hasCustomBody) return this
+    // ADR-228: and register every open generic value class instantiation it nests.
+    val structs: List<String> = (result.unwrapNullable() as? BridgeType.ObjectHandle)
+      ?.openValueClasses.orEmpty()
+    if ((open.isEmpty() && structs.isEmpty()) || !hasCustomBody) return this
     val fills: String = open.joinToString("") { handle ->
       "            NugetFactory<${handle.csharpType}>.Create ??= " +
           "static handle => new ${handle.constructType ?: handle.csharpType}(handle, out _);\n"
-    }
+    } + structs.joinToString("") { struct -> "            $struct.NugetRegister();\n" }
     return copy(body = fills + body)
   }
 
@@ -2031,7 +2034,9 @@ internal object ForwardCirPlanProjection {
     BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.TypeParameter -> "IntPtr"
     // ADR-220: an own `T?` inside a generic value class, the same null-pointer box wire.
     is BridgeType.Nullable ->
-      if (underlying.type is BridgeType.TypeParameter) "IntPtr"
+      // ADR-228: and a nullable String underlying (`Nick(val name: String?)`), null in-band.
+      if (underlying.type is BridgeType.TypeParameter || underlying.type == BridgeType.String)
+        "IntPtr"
       else error("Forward CIR plan projection has no value-class underlying wire for $underlying")
     is BridgeType.Enum -> "int"
     is BridgeType.Primitive -> underlying.kind.csharpType()
@@ -2072,7 +2077,10 @@ internal object ForwardCirPlanProjection {
       is BridgeType.Primitive -> wireValue
       // ADR-220: a member's own `T` inside a generic value class, read like a bare `T` result.
       is BridgeType.TypeParameter -> "NugetMarshal.FromHandle<${underlying.name}>($wireValue)"
-      is BridgeType.Nullable -> {
+      // ADR-228: a nullable String underlying, the null pointer read back as null.
+      is BridgeType.Nullable -> if (underlying.type == BridgeType.String) {
+        "Marshal.PtrToStringUTF8($wireValue)"
+      } else {
         val inner: BridgeType.TypeParameter = underlying.type as? BridgeType.TypeParameter
           ?: error("Forward CIR plan projection has no value-class reconstruction for $underlying")
         "NugetMarshal.FromHandle<${inner.nullableRead()}>($wireValue)"

@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isValueClass
+import io.github.xxfast.kotlin.native.nuget.processor.forward.mentionsAnyTypeParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticFlowGetter
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.getConstructors
@@ -2063,7 +2065,6 @@ internal fun flowProperty(
     isFlowType || isStateFlowType ->
       classifier.legacyGenericElement(flowElementTypeResolved, isNullableElement)
         ?: qualifiedElementCsType(flowElementTypeResolved, context, isNullableElement)
-
     else -> null
   }
   val flowElementRead: String? = flowElementCollection
@@ -2251,7 +2252,7 @@ internal fun flowMembers(
 ): List<CirMember> {
   // ADR-230: the owner slots every extern of these members starts with.
   val ownerSlots: List<CirParameter> =
-    if (staticFlow) listOfNotNull(staticReceiver).nativeImportParameters()
+    if (staticFlow) listOfNotNull(staticReceiver?.copy(name = "receiver")).nativeImportParameters()
     else listOf(CirParameter("handle", KOTLIN_HANDLE))
   // A struct receiver is read into this local first: a struct's lambdas cannot capture `this`.
   val receiverLocal: String? = staticReceiver?.let { "receiverValue" }
@@ -2331,6 +2332,15 @@ internal fun flowMembers(
       ?: flowElementInterface?.let { it.csharpType + if (isNullableElement) "?" else "" }
       ?: classifier.legacyGenericElement(flowElementTypeResolved, isNullableElement)
       ?: qualifiedElementCsType(flowElementTypeResolved, context, isNullableElement)
+    // ADR-228: a generic value class element over a type parameter is registered before the
+    // flow hands one out, since nothing else may have constructed that instantiation.
+    val elementClass: KSClassDeclaration? =
+      flowElementTypeResolved?.expandAliases()?.declaration as? KSClassDeclaration
+    val flowRegistrations: List<String> = if (
+      elementClass != null && elementClass.isValueClass() &&
+      elementClass.typeParameters.isNotEmpty() &&
+      flowElementTypeResolved.mentionsAnyTypeParameter()
+    ) listOf(flowCsElementType.removeSuffix("?")) else emptyList()
     val flowElementRead: String? = flowElementCollection
       ?.let { collection -> legacyFlowElementReadArgument(collection) }
       ?: flowElementInterface
@@ -2378,7 +2388,9 @@ internal fun flowMembers(
         isStaticFlow = staticFlow,
         isStatic = staticFlow && staticReceiver == null,
         isFlowProperty = method is ForwardStaticFlowGetter,
-        flowReceiverArgument = staticReceiver?.nativeArgument,
+        flowReceiverArgument = staticReceiver?.let { it.boxedRead ?: it.nativeArgument },
+        flowReceiverBox = staticReceiver?.boxedRead != null,
+        flowRegistrations = flowRegistrations,
         flowReceiverLocal = receiverLocal,
         typeParameters = ownTypeParameters,
         flowElementType = flowCsElementType,
@@ -2441,7 +2453,9 @@ internal fun flowMembers(
         isStaticFlow = staticFlow,
         isStatic = staticFlow && staticReceiver == null,
         isFlowProperty = method is ForwardStaticFlowGetter,
-        flowReceiverArgument = staticReceiver?.nativeArgument,
+        flowReceiverArgument = staticReceiver?.let { it.boxedRead ?: it.nativeArgument },
+        flowReceiverBox = staticReceiver?.boxedRead != null,
+        flowRegistrations = flowRegistrations,
         flowReceiverLocal = receiverLocal,
         typeParameters = ownTypeParameters,
         isStateFlow = true,
@@ -2536,7 +2550,9 @@ internal fun flowMembers(
         isStaticFlow = staticFlow,
         isStatic = staticFlow && staticReceiver == null,
         isFlowProperty = method is ForwardStaticFlowGetter,
-        flowReceiverArgument = staticReceiver?.nativeArgument,
+        flowReceiverArgument = staticReceiver?.let { it.boxedRead ?: it.nativeArgument },
+        flowReceiverBox = staticReceiver?.boxedRead != null,
+        flowRegistrations = flowRegistrations,
         flowReceiverLocal = receiverLocal,
         typeParameters = ownTypeParameters,
         isStateFlow = true,
@@ -2586,7 +2602,9 @@ internal fun flowMembers(
       isStaticFlow = staticFlow,
       isStatic = staticFlow && staticReceiver == null,
       isFlowProperty = method is ForwardStaticFlowGetter,
-      flowReceiverArgument = staticReceiver?.nativeArgument,
+      flowReceiverArgument = staticReceiver?.let { it.boxedRead ?: it.nativeArgument },
+        flowReceiverBox = staticReceiver?.boxedRead != null,
+        flowRegistrations = flowRegistrations,
       flowReceiverLocal = receiverLocal,
       typeParameters = ownTypeParameters,
       flowElementType = flowCsElementType,
@@ -5195,6 +5213,7 @@ internal fun translateValueClass(
           "NugetMarshal.Wrap<$genericUnderlyingType>($read!, out bool receiverOwned)",
         collectionHandle = "receiverBox",
         boxOwnedLocal = "receiverOwned",
+        boxedRead = read,
       )
     } else {
       val enumUnderlying: Boolean =
@@ -5243,6 +5262,10 @@ internal fun translateValueClass(
       typeParameters = cls.typeParameters.map { it.name.asString() },
       routeMembers = routeMembers,
       asyncMembers = asyncMembers,
+      // ADR-228: the one box/unbox pair every instantiation shares.
+      boxing = callableCatalog.valueClassBoxing(cls.qualifiedName?.asString().orEmpty())
+        ?.let { (box, unbox) -> ForwardCirPlanProjection.valueClassBoxing(box, unbox, libraryName) }
+        ?.copy(ownUnderlying = genericUnderlyingType.takeIf { isOwnTypeParameter }),
     )
   }
   // ADR-077 sub-item 4 prerequisite: an enum underlying is a *value* underlying (ordinal over the

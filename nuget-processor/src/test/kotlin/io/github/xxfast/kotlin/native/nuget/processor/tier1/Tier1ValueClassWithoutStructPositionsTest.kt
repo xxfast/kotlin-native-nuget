@@ -169,18 +169,18 @@ class Tier1ValueClassWithoutStructPositionsTest {
   }
 
   /**
-   * A lambda payload is read back through `NugetMarshal.Factories`, like a flow element. `Nick`
-   * wraps a `String?`: a record struct but no ADR-171 box/unbox pair, so no entry, and
-   * `FromHandle<Nick>` would throw inside the callback. Refused by name; `Tag`, which has the
-   * pair, keeps binding.
+   * A lambda payload is read back through `NugetMarshal.Factories`, like a flow element. ADR-228:
+   * `Nick` wraps a `String?` and has its box/unbox pair now, so it crosses the per-call callback as
+   * its own box and binds beside `Tag`.
    */
   @Test
-  fun `a lambda payload with no boxed form is a named skip`() {
+  fun `a lambda payload over a nullable String underlying binds`() {
     assertClean()
-    val named: List<String> = result.kspWarnings.filter { it.contains("Tracker.onNick:") }
-    assertEquals(1, named.size, "expected onNick named once; got: ${result.kspWarnings}")
-    assertContains(named.single(), "has no boxed form to cross a callback in")
-    assertFalse(Regex("""Action<[\w.:]*Nick>""").containsMatchIn(code), "Nick payload spelled")
+    assertTrue(
+      result.kspWarnings.none { it.contains("Tracker.onNick:") },
+      "expected onNick to bind silently; got: ${result.kspWarnings}",
+    )
+    assertContains(code, Regex("""OnNick\([\w<>.:, ]*Nick[\w<>.:, ]* pick\)"""))
     assertContains(code, Regex("""public void OnTag\(Action<[\w.:]*Tag> pick\)"""))
   }
 

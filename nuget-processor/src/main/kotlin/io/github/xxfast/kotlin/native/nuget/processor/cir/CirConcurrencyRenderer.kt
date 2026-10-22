@@ -477,9 +477,15 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
         if (write.rejectsNull) {
           appendLine("$indent                            if (v is null) throw new ArgumentNullException(nameof(v));")
         }
-        appendLine("$indent                            ${method.stateFlowSetValueNativeName}(flowHandle, ${write.arguments}, out IntPtr error);")
-        appendLine("$indent                            if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
-        appendLine("$indent                            NugetErrorNative.ClearManagedFault();")
+        // ADR-228: a boxed element wraps `v` around the call.
+        write.boxedCall(
+          listOf("v"),
+          "${method.stateFlowSetValueNativeName}(" +
+            "flowHandle, ${write.boxedArgument("v")}, out IntPtr error); " +
+            "if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error); " +
+            "NugetErrorNative.ClearManagedFault();",
+          "$indent                            ",
+        ).forEach { line -> appendLine(line) }
         appendLine("$indent                        },")
         appendLine(
           stateFlowCompareAndSetLambda(

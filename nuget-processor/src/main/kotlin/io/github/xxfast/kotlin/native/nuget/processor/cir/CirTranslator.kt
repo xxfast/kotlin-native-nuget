@@ -1563,7 +1563,9 @@ private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry
  */
 private fun valueClassNames(namespaces: List<CirNamespace>): List<String> {
   fun CirDeclaration.walk(path: String): List<String> = when (this) {
-    is CirValueClass -> if (boxing != null) listOf("$path.$name") else emptyList()
+    // ADR-228: a generic one has no single `Type` key; it registers per instantiation instead.
+    is CirValueClass ->
+      if (boxing != null && typeParameters.isEmpty()) listOf("$path.$name") else emptyList()
     is CirClass -> nestedDeclarations.flatMap { it.walk("$path.$name") }
     is CirInterface -> nestedDeclarations.flatMap { it.walk("$path.$name") }
     is CirObject -> nestedDeclarations.flatMap { it.walk("$path.$name") }
@@ -1976,6 +1978,8 @@ private fun reportUnreadableConst(prop: KSPropertyDeclaration, logger: KSPLogger
 private fun CirDeclaration.fillsFactorySlot(): Boolean {
   if (this is CirSealedClass && typeParameters.isNotEmpty()) return true
   if (this is CirClass && typeParameters.isNotEmpty() && !isAbstract) return true
+  // ADR-228: a generic value class with a box pair registers its instantiations.
+  if (this is CirValueClass && typeParameters.isNotEmpty() && boxing != null) return true
   val nested: List<CirDeclaration> = when (this) {
     is CirSealedClass -> nestedDeclarations
     is CirClass -> nestedDeclarations

@@ -38,6 +38,13 @@ internal class CirRenderer {
     appendLine("    IntPtr Handle { get; }")
     appendLine("}")
     appendLine()
+    // ADR-228: a generic value class struct mints its own Kotlin box through this, so
+    // `NugetMarshal.Wrap<T>` needs no per-instantiation key.
+    appendLine("internal interface INugetGenericValue")
+    appendLine("{")
+    appendLine("    IntPtr NugetBox();")
+    appendLine("}")
+    appendLine()
     renderKotlinHandle()
     // ROADMAP line 26: `Interop.cs` compiles into the consumer, so `internal` does not hide the
     // handle constructor from overload resolution. A trailing `out` parameter of this type is one

@@ -43,6 +43,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.isMutableStateFlowElem
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardKotlinArgumentSpelling
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticSuspendReceiver
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardArmMemberProjectedByBase
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParameterShape
@@ -373,7 +374,18 @@ internal fun FileSpec.Builder.addFlowMethodExports(
   val names: ForwardLegacyNames = legacyKotlinNames(method.parameters, paramShapes)
   // ADR-215: the trampoline (ADR-198) a `T` parameter needs: a trampolined own `T`, or a
   // multi-bound owner `T`, which the erased receiver (`Pride<*>`) cannot be called with.
-  val trampoline: ForwardFlowTrampoline? = flowTrampoline(method, owner, paramShapes)
+  val declared: ForwardFlowTrampoline? = flowTrampoline(method, owner, paramShapes)
+  // ADR-228: a static value-class receiver's `T` with no erased spelling (`Doze<T : Enum<T>>`)
+  // is re-declared on the trampoline too, as the suspend route does, so the receiver reads as `T`.
+  val receiverVariable: Pair<String, List<String>>? =
+    (static?.receiver as? ForwardStaticSuspendReceiver.Box)
+      ?.takeIf { box -> box.trampolineBounds.isNotEmpty() }
+      ?.let { box -> box.type.kotlinName to box.trampolineBounds }
+  val trampoline: ForwardFlowTrampoline? = when {
+    receiverVariable == null -> declared
+    declared == null -> ForwardFlowTrampoline(listOf(receiverVariable), emptySet(), null)
+    else -> declared.copy(variables = listOf(receiverVariable) + declared.variables)
+  }
   names.trampolineVariables = trampoline?.ownerVariables.orEmpty()
 
   // The whole call on `names.obj`, positional or dispatched; every body below reads it as is.

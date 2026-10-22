@@ -370,6 +370,12 @@ internal data class CirValueClassBoxing(
   val boxParameter: String,
   val boxArguments: List<String>,
   val unboxResult: String,
+  /**
+   * ADR-228: a generic value class's own `T` underlying as C# spells it (`T`, `T?`): the box
+   * passes its `NugetMarshal.Wrap<T>` box and the unbox reads `FromHandle<T>`. Null for a phantom
+   * or non-generic underlying, which crosses on its own wire.
+   */
+  val ownUnderlying: String? = null,
 )
 
 internal data class CirValueClassConstructor(
@@ -1089,6 +1095,10 @@ internal data class CirMethod(
   val flowReceiverArgument: String? = null,
   /** ADR-230: the local [flowReceiverArgument] is copied to first, so no lambda captures `this`. */
   val flowReceiverLocal: String? = null,
+  /** ADR-228: [flowReceiverLocal] holds an unboxed generic value class underlying. */
+  val flowReceiverBox: Boolean = false,
+  /** ADR-228: generic value class instantiations the member registers before handing one out. */
+  val flowRegistrations: List<String> = emptyList(),
   // ADR-065: true when this is a StateFlow-returning method. Reuses isFlow's whole legacy route
   // (the _collect export + KotlinFlow substrate) and additionally renders a KotlinStateFlow<T>
   // wrapper plus a synchronous `_value` native import (see [stateFlowValueNativeName]).
@@ -1510,6 +1520,9 @@ internal data class CirParameter(
   // a minted box in. Its `finally` disposes the box only when it is set, and otherwise keeps the
   // borrowed wrapper alive past the call. Null for every other parameter.
   val boxOwnedLocal: String? = null,
+  // ADR-228: the unboxed C# read a static flow receiver copies into its local before any lambda
+  // captures it; the extern call then mints and releases the box around itself. Null otherwise.
+  val boxedRead: String? = null,
 ) {
   /** The parameter as an extern derived from the public signature spells it. */
   val nativeName: String get() = abiName ?: name

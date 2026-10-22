@@ -169,10 +169,18 @@ internal fun sharedFlowArguments(
       "NugetErrorNative.Check(${mutable.subscriptionCount}($receiver, out IntPtr $error), " +
           "$error)",
     ),
-    "$indent($v, $callback, $userData) => { ${guard}return ${mutable.emit}($receiver, $scope, " +
-        "${write.arguments}, $callback, $userData); }",
-    "$indent$v => { ${guard}return NugetErrorNative.Check(${mutable.tryEmit}($receiver, " +
-        "${write.arguments}, out IntPtr $error), $error); }",
+    // ADR-228: a boxed element (a generic value class) wraps `v` around each call.
+    "$indent($v, $callback, $userData) => { $guard" + write.boxedCall(
+      listOf(v),
+      "return ${mutable.emit}($receiver, $scope, ${write.boxedArgument(v)}, $callback, $userData);",
+      "",
+    ).joinToString(" ") + " }",
+    "$indent$v => { $guard" + write.boxedCall(
+      listOf(v),
+      "return NugetErrorNative.Check(${mutable.tryEmit}($receiver, ${write.boxedArgument(v)}, " +
+        "out IntPtr $error), $error);",
+      "",
+    ).joinToString(" ") + " }",
   )
 }
 

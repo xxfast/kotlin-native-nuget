@@ -266,7 +266,7 @@ class Tier1MutableStateFlowEnumElementTest {
   }
 
   @Test
-  fun `a value class element over a nullable underlying is skipped by name`() {
+  fun `a value class element over a nullable underlying binds through its box`() {
     val result = Tier1Harness.run(source, libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore))
 
     assertTrue(result.compiledClean, "got: ${result.compileErrors} ${result.kspErrors}")
@@ -274,29 +274,16 @@ class Tier1MutableStateFlowEnumElementTest {
     val kotlin: String = result.generated
     val csharp: String = result.generatedCSharp
 
-    // `Tag` wraps a `String?`: a record struct with no box/unbox pair, so nothing could read a
-    // bare element back and the flow route drops the member instead of binding it read-only.
-    assertFalse(
-      Regex("""Flow<[\w.:]*Tag\??>""").containsMatchIn(csharp),
-      "expected no holder of a value class element with no boxed form; generatedCSharp=$csharp",
-    )
-    assertFalse(
-      "tracker_set_tag_value" in kotlin || "tracker_tagDial_set_value" in kotlin,
-      "expected no Kotlin setter for a value class element; generated=$kotlin",
+    // ADR-228: `Tag` wraps a `String?` and has its box/unbox pair now, so a bare element reads
+    // back through `Factories` and writes as its own box, on a property and on a held holder.
+    assertContains(csharp, Regex("""Flow<[\w.:]*Tag\??>"""))
+    assertTrue(
+      "tracker_set_tag_value" in kotlin && "tracker_tagDial_set_value" in kotlin,
+      "expected a Kotlin setter for each value class element; generated=$kotlin",
     )
     assertTrue(
-      result.kspWarnings.any {
-        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name) &&
-            it.contains("Tracker.tag:") && it.contains("a value class is a Flow or StateFlow")
-      },
-      "expected a named skip of Tracker.tag; kspWarnings=${result.kspWarnings}",
-    )
-    assertTrue(
-      result.kspWarnings.any {
-        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN.name) &&
-            it.contains("Tracker.tagDial") && it.contains("a value class is a Flow or StateFlow")
-      },
-      "expected a named skip of Tracker.tagDial; kspWarnings=${result.kspWarnings}",
+      result.kspWarnings.none { it.contains("Tracker.tag:") || it.contains("Tracker.tagDial") },
+      "expected both to bind silently; kspWarnings=${result.kspWarnings}",
     )
   }
 }

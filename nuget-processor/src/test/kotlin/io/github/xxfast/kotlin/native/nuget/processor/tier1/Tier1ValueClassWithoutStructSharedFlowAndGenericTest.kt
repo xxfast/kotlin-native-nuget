@@ -16,10 +16,9 @@ import kotlin.test.assertTrue
  *    return and parameter, inside a `List`, as a `MutableStateFlow` element) and a `Flow` or
  *    `StateFlow` as a generic type argument (`Box<Flow<Initial>>`, `Box<StateFlow<Nick>>`).
  *
- * `Initial` wraps a `Char`, so it has no C# record struct at all; `Nick` wraps a `String?`, so it
- * has a struct but no ADR-171 box/unbox pair, and nothing could read it back out of a flow or an
- * erased generic slot. Neither may be spelled at any of these positions; each member is a named
- * skip, and `Tag`, which has both, keeps binding. The proof is a real `dotnet build`.
+ * `Initial` wraps a `Char`, so it has no C# record struct at all and may not be spelled at any of
+ * these positions; each member is a named skip. `Tag` and (ADR-228) `Nick`, which wraps a
+ * `String?` and now has its box/unbox pair, keep binding. The proof is a real `dotnet build`.
  */
 class Tier1ValueClassWithoutStructSharedFlowAndGenericTest {
 
@@ -96,14 +95,6 @@ class Tier1ValueClassWithoutStructSharedFlowAndGenericTest {
       "expected no C# spelling of the undeclared Initial; got:\n" +
         code.lines().filter { Regex("""\bInitial\b""").containsMatchIn(it) }.joinToString("\n"),
     )
-    // `Nick` is declared (its record struct and constructor), but never as a flow element or a
-    // generic type argument.
-    assertFalse(
-      Regex("""<[\w.:<]*\bNick\b""").containsMatchIn(code),
-      "expected no flow holder or generic instantiation over Nick; got:\n" +
-        code.lines().filter { Regex("""<[\w.:<]*\bNick\b""").containsMatchIn(it) }
-          .joinToString("\n"),
-    )
     Tier1CSharpCompile.assertCompiles(
       result,
       """
@@ -142,33 +133,34 @@ class Tier1ValueClassWithoutStructSharedFlowAndGenericTest {
     ).forEach { member ->
       assertContains(namedOnce(member), "`tier1.vcstack.Initial` has no C# record struct")
     }
+    // ADR-228: `Nick` (a `String?` underlying) has its box pair now, so its members bind.
     listOf(
       "Tracker.sharedNick:", "Tracker.mutableSharedNick:", "Tracker.sharedNickHeld:",
       "Tracker.awaitSharedNick:",
     ).forEach { member ->
-      assertContains(namedOnce(member), "those are the underlyings it has a boxed form for")
+      assertTrue(result.kspWarnings.none { it.contains(member) }, "expected $member to bind")
     }
   }
 
   @Test
-  fun `a generic instantiation over either value class is a named skip at every position`() {
+  fun `a generic instantiation over the struct-less value class is a named skip everywhere`() {
     assertClean()
     listOf(
       "Tracker.box:", "Tracker.boxVar:", "Tracker.boxes:", "Tracker.boxState:",
-      "Tracker.boxNick:", "Tracker.boxed:", "Tracker.takeBox:",
+      "Tracker.boxed:", "Tracker.takeBox:",
     ).forEach(::namedOnce)
   }
 
   @Test
-  fun `a Flow or StateFlow type argument over either value class is a named skip`() {
+  fun `a Flow or StateFlow type argument over the struct-less value class is a named skip`() {
     assertClean()
-    listOf("Tracker.boxFlow:", "Tracker.boxStateNick:", "Tracker.boxFlowOf:").forEach(::namedOnce)
+    listOf("Tracker.boxFlow:", "Tracker.boxFlowOf:").forEach(::namedOnce)
     // No per-instantiation collect export was generated for either refused flow argument.
     assertFalse(
-      Regex("""Flow<[\w.:]*(Initial|Nick)>""").containsMatchIn(result.generated),
-      "expected no flow-argument export over Initial or Nick; got:\n" +
+      Regex("""Flow<[\w.:]*Initial>""").containsMatchIn(result.generated),
+      "expected no flow-argument export over Initial; got:\n" +
         result.generated.lines()
-          .filter { Regex("""Flow<[\w.:]*(Initial|Nick)>""").containsMatchIn(it) }
+          .filter { Regex("""Flow<[\w.:]*Initial>""").containsMatchIn(it) }
           .joinToString("\n"),
     )
   }
@@ -183,7 +175,11 @@ class Tier1ValueClassWithoutStructSharedFlowAndGenericTest {
       csharp,
       Regex("""public [\w.:]*Box<[\w.:]*KotlinFlow<[\w.:]*Tag>> BoxFlowTag\b"""),
     )
-    listOf("Tracker.sharedTag:", "Tracker.boxTag:", "Tracker.boxFlowTag:").forEach { member ->
+    // ADR-228: and so does `Nick`, which has its box pair now.
+    listOf(
+      "Tracker.sharedTag:", "Tracker.boxTag:", "Tracker.boxFlowTag:", "Tracker.boxNick:",
+      "Tracker.boxStateNick:",
+    ).forEach { member ->
       assertFalse(
         result.kspWarnings.any { it.contains(member) },
         "expected $member to bind without a diagnostic; kspWarnings=${result.kspWarnings}",

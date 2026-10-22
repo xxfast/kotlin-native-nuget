@@ -757,7 +757,13 @@ private fun StringBuilder.renderMethodBody(method: CirMethod, className: String)
   }
 
   if (method.isFlow) {
-    renderFlowMethod(method, disposedName)
+    if (!method.flowReceiverBox) {
+      renderFlowMethod(method, disposedName)
+      return
+    }
+    // ADR-228: every extern call over the receiver local mints its box and releases it after.
+    val rendered: String = buildString { renderFlowMethod(method, disposedName) }
+    append(boxedReceiverCalls(rendered, requireNotNull(method.flowReceiverLocal)))
     return
   }
 

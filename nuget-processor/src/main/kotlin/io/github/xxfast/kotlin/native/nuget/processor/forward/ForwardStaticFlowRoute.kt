@@ -50,6 +50,8 @@ internal sealed interface ForwardStaticFlowOwner {
     override val stem: String,
     val valueClass: KSClassDeclaration,
     val underlying: ForwardStaticSuspendReceiver,
+    /** ADR-228: the constructor the receiver is rewrapped through (`pkg.Decal<Nothing>`). */
+    val construction: String? = null,
   ) : ForwardStaticFlowOwner
 }
 

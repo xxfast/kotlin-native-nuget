@@ -295,7 +295,11 @@ private fun addValueClassOrdinaryResult(
       )
     }
 
-    is BridgeType.Nullable -> {
+    // ADR-228: a nullable String underlying ships the null pointer for a null name.
+    is BridgeType.Nullable -> if (underlying.type == BridgeType.String) {
+      builder.returns(kotlinType("String").copy(nullable = true))
+      builder.addCode(errorHandlingValueBody(unboxed, errorName, "null"), *errorTypes(errorName))
+    } else {
       require(underlying.type is BridgeType.TypeParameter) {
         "Forward Kotlin plan emitter has no ordinary value-class result for underlying $underlying"
       }
@@ -1558,6 +1562,8 @@ private fun BridgeType.mentionsAnywhere(typeParameter: ForwardGenericOwnerParame
   }
   // An open generic class (`Box<T>`): an invariant `Box<Pet>` cannot type `Arena<*>.swap` either.
   if (type is BridgeType.ObjectHandle) return typeParameter.kotlinName in type.typeVariables
+  // ADR-228: a generic value class's box export takes the struct over its own `T`.
+  if (type is BridgeType.ValueClass) return type.underlying.mentionsAnywhere(typeParameter)
   return (type as? BridgeType.TypeParameter)?.kotlinName == typeParameter.kotlinName
 }
 
@@ -1832,8 +1838,13 @@ private fun invocationExpression(
     // then mints the handle through `NugetHandles.retain` like any other owned result.
     ForwardCallableOrigin.ENUM_ARM_BOX -> arguments
 
-    // ADR-171: the same identity, for a value class's box/unbox pair.
-    ForwardCallableOrigin.VALUE_CLASS_BOX -> arguments
+    // ADR-171: the same identity, for a value class's box/unbox pair. ADR-228: a phantom generic
+    // one spells its `Nothing` arguments on the constructor.
+    ForwardCallableOrigin.VALUE_CLASS_BOX -> plan.invocation.valueClassConstruction
+      ?.let { construction ->
+        arguments.replaceFirst("${requireNotNull(plan.invocation.target)}(", "$construction(")
+      }
+      ?: arguments
 
     // ADR-094 (write side): the same identity, on the enum's lowered ordinal.
     ForwardCallableOrigin.ENUM_BOX -> arguments

@@ -131,6 +131,13 @@ internal sealed interface BridgeType {
      * the consumer may never have touched that instantiation. Empty otherwise.
      */
     val openArguments: List<ObjectHandle> = emptyList(),
+    /**
+     * ADR-228: the open generic value class instantiations nested in this one's type arguments
+     * (`Sticker<T>` in `Box<Sticker<T>>`), C#-spelled. A member returning this type calls each
+     * one's `NugetRegister()` first, since a Kotlin-made value of it may be read before C# ever
+     * constructed that instantiation.
+     */
+    val openValueClasses: List<kotlin.String> = emptyList(),
     /** ADR-216 amendment: an instantiation whose arguments mention a type parameter. */
     val open: kotlin.Boolean = false,
     /**
@@ -477,6 +484,11 @@ internal sealed interface BridgeType {
      * back as the enum's first entry.
      */
     val valueType: kotlin.Boolean = false,
+    /**
+     * ADR-228: the box carries a value class (`Sticker<int>`, `Nick`) rather than a type parameter:
+     * [name] is its C# struct and [boundQualifiedName] its Kotlin spelling, read back by one cast.
+     */
+    val valueClass: kotlin.Boolean = false,
   ) : BridgeType
 }
 

@@ -342,34 +342,22 @@ class Tier1MutableSharedFlowValueClassElementTest {
   }
 
   /**
-   * `Nick` wraps a `String?`: a record struct but no ADR-171 box/unbox pair, so nothing could
-   * read a bare `Nick` element back (`FromHandle<Nick>` has no `Factories` entry). It used to
-   * bind as a read-only `KotlinSharedFlow<Nick>` whose collect and `ReplayCache` would throw; the
-   * flow route now drops the member and names it, and the write refusal, which describes a
-   * member that survives read-only, stays silent.
+   * ADR-228: `Nick` wraps a `String?` and now has its box/unbox pair, so a bare `Nick` element
+   * reads back through its `Factories` entry and writes as its own box (`Wrap<Nick>`), and the
+   * member binds as a writable shared flow with no diagnostic.
    */
   @Test
-  fun `a value class over an underlying the setter refuses is skipped by name`() {
+  fun `a value class over a nullable String underlying binds as a writable element`() {
     assertClean()
-    val kotlin: String = result.generated
     val csharp: String = result.generatedCSharp
-    assertFalse(
-      Regex("""SharedFlow<[\w.:]*Nick\??>""").containsMatchIn(csharp),
-      "expected no holder of a bare Nick element; generatedCSharp=$csharp",
-    )
-    assertFalse("try_emit_nicks" in kotlin, "expected no Kotlin tryEmit export for Nick")
-    assertFalse("nickDesk_try_emit" in kotlin, "expected no held tryEmit export for Nick")
-    assertFalse("get_nicks_replay_cache" in kotlin, "expected no replay-cache export for Nick")
+    assertContains(csharp, Regex("""SharedFlow<[\w.:]*Nick\??>"""))
+    assertContains(csharp, "NugetMarshal.Wrap<global::Interop.Nick")
     listOf("Bulletin.nicks:", "Bulletin.nickDesk:").forEach { member ->
-      val named: List<String> = result.kspWarnings.filter { it.contains(member) }
-      assertEquals(1, named.size, "expected $member named once; got: ${result.kspWarnings}")
-      assertContains(named.single(), "Nick")
-      assertContains(named.single(), "those are the underlyings it has a boxed form for")
+      assertTrue(
+        result.kspWarnings.none { it.contains(member) },
+        "expected $member to bind silently; got: ${result.kspWarnings}",
+      )
     }
-    assertFalse(
-      result.kspWarnings.any { it.contains("Nick") && it.contains("has no write arm") },
-      "a dropped member has no read-only surface to describe; got: ${result.kspWarnings}",
-    )
     // Every writable element is silent: nothing names Tag, Naps, MoodRing, Collar or Flag.
     listOf(
       "Bulletin.tags:", "Bulletin.naps:", "Bulletin.spareTags:", "Bulletin.flags:",

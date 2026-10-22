@@ -97,3 +97,11 @@ Alternatives rejected:
 - Collectability rows in `LeakTests/CollectabilityTests.cs`:
   `StaticFlow_CollectedToCompletion_TheFlowAndTokenAreCollected` and
   `StaticFlow_CancelledByTheToken_TheFlowAndTokenAreCollected`.
+
+## Amendment 2026-10-22: generic value classes
+
+[ADR-228](228-generic-value-class-erased-positions.md) extends the value-class owner to a generic
+value class (`Sticker<T>`, the phantom `Decal<T>`). Its `Flow` and `StateFlow` members and
+properties bind on this route, over the class's own `T` or with the struct as the element, and a
+`SharedFlow` property reads its replay cache. A `T : Enum<T>` receiver is read through the ADR-198
+trampoline.

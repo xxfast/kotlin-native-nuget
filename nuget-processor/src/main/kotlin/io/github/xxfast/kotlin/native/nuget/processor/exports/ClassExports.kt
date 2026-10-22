@@ -36,6 +36,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.valueClassWithoutStruct
 import io.github.xxfast.kotlin.native.nuget.processor.forward.hasErasedCrossing
+import io.github.xxfast.kotlin.native.nuget.processor.forward.unwrapNullable
 import io.github.xxfast.kotlin.native.nuget.processor.forward.sealedAsHandle
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
@@ -165,6 +166,14 @@ internal fun KSFunctionDeclaration.refusedLegacyLambdaShape(
     val expanded: KSType = param.type.resolve().expandAliases()
     val expandedName: String? = expanded.declaration.qualifiedName?.asString()
     if (expandedName !in LAMBDA_TYPES) return@firstNotNullOfOrNull null
+    // ADR-228: a lambda over a boxed value class rides the plan's per-call callback, which this
+    // hand-written route's refusals do not describe.
+    val callback: BridgeType.Callback? =
+      classifier.classify(param.type.resolve()) as? BridgeType.Callback
+    val boxesValueClass: Boolean = callback != null && (callback.parameters + callback.result).any {
+      component -> (component.unwrapNullable() as? BridgeType.TypeParameter)?.valueClass == true
+    }
+    if (boxesValueClass) return@firstNotNullOfOrNull null
     val paramName: String = param.name?.asString() ?: "_"
     // Every argument, the last of which is the lambda's RETURN type: both positions are refused,
     // and they are dropped by separate lines of the route's own selector, so neither is redundant.

@@ -476,29 +476,31 @@ class Tier1GenericInstanceMemberPositionTest {
   )
 
   /**
-   * The [crates] members at an erased position (ADR-171 mints no box pair for a generic value
-   * class): inside `Box<...>`, an awaited `suspend` result or parameter, and a flow element. Each
-   * stays a named skip, absent on both halves.
+   * The [crates] members at an erased position: inside `Box<...>`, an awaited `suspend` result or
+   * parameter, and a flow element. ADR-228: each crosses through the generic value class's one
+   * box/unbox pair now, so each binds on both halves with no diagnostic.
    */
-  private val crateSkipped: List<String> =
+  private val crateErased: List<String> =
     listOf("boxed", "later", "laterWith", "stream", "state", "mutable", "streamOf", "dial")
 
   /**
    * A generic VALUE class (`@JvmInline value class Crate<T>`) is not a handle-carrying object, so
-   * an instantiation of it is not an ADR-208 handle at any position: it has no `_handle`, no
-   * `asStableRef` read and no `Factories` line. ADR-220: it is a record struct, so every ordinary
-   * position binds over the substituted underlying, and every erased one stays a named skip.
+   * an instantiation of it is not an ADR-208 handle at any position: it has no `_handle` and no
+   * `asStableRef` read at its own type. ADR-220: it is a record struct, so every ordinary position
+   * binds over the substituted underlying; ADR-228: every erased one binds through its box pair,
+   * read back by a `NugetUnbox` `Factories` line rather than a handle constructor.
    */
   @Test
-  fun `a generic value class instantiation is never a handle and binds at an ordinary position`() {
+  fun `a generic value class instantiation is never a handle and binds at every position`() {
     assertTrue(crates.kspErrors.isEmpty(), "expected no KSP errors; got: ${crates.kspErrors}")
     assertTrue(crates.compiledClean, "expected a clean compile; got: ${crates.compileErrors}")
     val cs: String = crates.generatedCSharp.withoutDocComments()
-    assertContains(cs, "public readonly record struct Crate<T>(T Item)")
+    assertContains(cs, "public readonly record struct Crate<T>(T Item) : INugetGenericValue")
     assertFalse(
-      Regex("""Crate<[^>]*>\(handle, out _\)|Crate<[^>]*>\)\]""").containsMatchIn(cs),
-      "a generic value class has no Factories or Boxers line",
+      Regex("""Crate<[^>]*>\(handle, out _\)""").containsMatchIn(cs),
+      "a generic value class is never constructed over a handle",
     )
+    assertContains(cs, "Crate<int>.NugetUnbox(handle)")
     assertFalse(
       Regex("""asStableRef<tier1\.crates\.Crate""").containsMatchIn(crates.generated),
       "expected no Kotlin export reading a Crate as a handle",
@@ -507,26 +509,19 @@ class Tier1GenericInstanceMemberPositionTest {
       assertContains(cs, signature, message = "expected $member to bind")
     }
     val declarations: List<String> = cs.lines().filter { it.trimStart().startsWith("public") }
-    crateSkipped.forEach { member ->
+    crateErased.forEach { member ->
       val csName: String = member.replaceFirstChar { it.uppercase() }
       val declared: List<String> =
         declarations.filter { Regex("""\b$csName(Async)?\b""").containsMatchIn(it) }
-      assertTrue(declared.isEmpty(), "expected no $csName declaration; got: $declared")
+      assertTrue(declared.isNotEmpty(), "expected a $csName declaration")
       assertTrue(
-        crates.kspWarnings.any { it.contains("[nuget:") && it.contains(".$member: ") },
-        "expected a skip naming $member; kspWarnings=${crates.kspWarnings}",
+        crates.kspWarnings.none { it.contains("[nuget:") && it.contains(".$member: ") },
+        "expected $member to bind silently; kspWarnings=${crates.kspWarnings}",
       )
     }
-    // The ADR-208 refusal sentence belongs to a generic CLASS. Only `Box<Crate<Int>>` gets it, for
-    // its argument; the value class itself never reaches that seam.
     assertFalse(
       crates.kspWarnings.any { it.contains("generic class `tier1.crates.Crate`") },
       "a generic value class is not a generic class reference; kspWarnings=${crates.kspWarnings}",
-    )
-    assertContains(
-      crates.kspWarnings.single { it.contains(".boxed: ") },
-      "its generic class `tier1.crates.Box` has no C# spelling here: the erased wire cannot " +
-        "read its type argument `Crate<Int>`",
     )
     Tier1CSharpCompile.assertCompiles(
       crates,
@@ -552,27 +547,22 @@ class Tier1GenericInstanceMemberPositionTest {
   }
 
   /**
-   * ADR-208's read-only gate on a generic `MutableStateFlow` element is for a generic CLASS, whose
-   * refusal is silent because the member still binds. A generic value class element is not a
-   * flow element at all (no record struct): the member is dropped and named once, by that reason,
-   * on a property and on a returned holder. ADR-071's write refusal describes a member that
-   * survives read-only, so it must not also fire for one that is gone.
+   * ADR-228: a `MutableStateFlow` of a generic value class is writable, on a property and on a
+   * returned holder: C# boxes the struct with `NugetMarshal.Wrap<Crate<int>>` (its box export
+   * re-runs `init`), and Kotlin reads that box back at the applied spelling.
    */
   @Test
-  fun `a MutableStateFlow of a generic value class is one named skip, not a write refusal`() {
+  fun `a MutableStateFlow of a generic value class is writable through its box`() {
     listOf("mutable", "dial").forEach { member ->
-      val named: List<String> = crates.kspWarnings.filter { it.contains(".$member: ") }
-      assertEquals(1, named.size, "expected $member named once; kspWarnings=${crates.kspWarnings}")
-      // ADR-220: the struct is declared; a flow element still needs the box pair it has not got.
-      assertContains(named.single(), "not the generic type Crate<Int>")
+      assertTrue(
+        crates.kspWarnings.none { it.contains(".$member: ") },
+        "expected $member to bind silently; kspWarnings=${crates.kspWarnings}",
+      )
     }
-    assertFalse(
-      crates.kspWarnings.any { it.contains("has no write arm") },
-      "a dropped member has no read-only surface to describe; got: ${crates.kspWarnings}",
-    )
-    assertFalse(
-      Regex("""depot_set_\w+_value""").containsMatchIn(crates.generated),
-      "expected no Kotlin setter for a generic value class element",
+    assertContains(crates.generated, "as tier1.crates.Crate<kotlin.Int>)")
+    assertContains(
+      crates.generatedCSharp,
+      "NugetMarshal.Wrap<global::Interop.Crates.Crate<int>>(v!",
     )
   }
 
