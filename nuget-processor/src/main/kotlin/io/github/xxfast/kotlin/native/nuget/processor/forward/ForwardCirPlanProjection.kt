@@ -64,6 +64,13 @@ internal object ForwardCirPlanProjection {
       // ADR-150 amendment: the same `cirDoc()` every other planned callable projects, so a value
       // class's constructor documents itself exactly as an ordinary class's does.
       doc = plan.publicSignature.cirDoc(),
+      // The plan's has-value result: `bool` plus the `valueOut` slot the Kotlin export writes.
+      valueOut = nativeCall.parameters
+        .firstOrNull { parameter -> parameter.role == ForwardAbiRole.VALUE_OUT }
+        ?.let { parameter ->
+          val type: String = parameter.transfer.type.csharpType()
+          CirParameter(parameter.csharpName, type, "out $type")
+        },
     )
   }
 

@@ -164,17 +164,20 @@ internal fun BridgeType.isPubliclySpellable(
  * `NugetCompileInteropTask` builds the generated file with -- even though the marshalling is
  * identical either way.
  *
- * Three shapes qualify, and they are the same three on both routes:
+ * Four shapes qualify, and they are the same four on both routes:
  *  - `String?` (ADR-043), whose argument is the nullable value itself;
  *  - `Uuid?` (ADR-106), whose argument is `x?.ToString()`;
  *  - a nullable value class over a `String` underlying (ADR-077 sub-items 3/4), whose argument is
  *    `x?.Value`. An `ObjectHandle` underlying stays on the plain `IntPtr` wire and does not.
+ *  - a value class whose underlying is itself `String?` (`Nick(val name: String?)`, a closed
+ *    `Sticker<String?>`), whose argument `x.Name` may be null at a non-null outer.
  *
  * Shared deliberately: the callable route (`ForwardCirPlanProjection.nativeCsharpType`) had the
  * rule and the property route (`ForwardCirPropertyProjection.extension`'s receiver import) did not,
  * which is exactly how an extension property over a `String?` receiver failed to compile.
  */
 internal fun BridgeType.isNullableStringWire(): Boolean {
+  if ((this as? BridgeType.ValueClass)?.underlying == BridgeType.Nullable(BridgeType.String)) return true
   val inner: BridgeType = (this as? BridgeType.Nullable)?.type ?: return false
   return inner == BridgeType.String || inner == BridgeType.Uuid || inner is BridgeType.Throwable ||
       (inner as? BridgeType.ValueClass)?.underlying == BridgeType.String

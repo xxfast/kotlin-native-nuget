@@ -119,6 +119,15 @@ internal fun collectionComponentRead(
   // ADR-083: the null pointer *is* the null component. The cast on the null arm is what gives the
   // conditional a common type when the present arm is a value type (`int`, a record struct).
   val nullArm: String = "(${csharpType(component)})null"
+  // A nullable value class over a nullable underlying crossed as its own box handle: the null
+  // pointer is `null`, and a live handle unboxes (and is disposed) through the class's own pair.
+  val boxed: BridgeType.ValueClass? = component.boxedValueClassComponent()
+  if (boxed != null) {
+    return CirComponentRead(
+      "IntPtr $local = $handle;",
+      "$local == IntPtr.Zero ? $nullArm : ${csharpType(boxed)}.NugetUnbox($local)",
+    )
+  }
   val present: String = componentReadExpression(local, component.type, csharpType, depth)
   return CirComponentRead(
     "IntPtr $local = $handle;",
@@ -186,6 +195,7 @@ private fun componentWireCsharpType(
   // `Nullable.GetUnderlyingType`.
   if (component.unwrapNullable() == BridgeType.ByteArray) return "IntPtr$suffix"
   // ADR-201 amendment: an input `Throwable` component crosses as its managed-exception text.
+  if (component.boxedValueClassComponent() != null) return csharpType(component)
   if (component.unwrapNullable() is BridgeType.Throwable) return "string$suffix"
   if (component.componentEnum() != null) return "int$suffix"
   val valueClass: BridgeType.ValueClass =
@@ -239,6 +249,7 @@ private fun componentWireExpression(
   // the caller passed: a null element used to reach Kotlin and surface as its
   // `NullPointerException`. A `String?` element is a legitimate null and passes through.
   if (component == BridgeType.String) return nonNullStringOrThrow(access, root)
+  if (component.boxedValueClassComponent() != null) return access
   val valueClass: BridgeType.ValueClass = component.componentValueClass() ?: return access
   val property: String = valueClass.underlyingPropertyName.replaceFirstChar { it.uppercase() }
   val isEnum: Boolean = valueClass.underlying is BridgeType.Enum
@@ -258,6 +269,19 @@ private fun componentWireExpression(
 
     else -> "$access?.$property"
   }
+}
+
+/**
+ * A nullable value class whose underlying can itself be null (`Nick?` over `String?`, a closed
+ * `Sticker<String?>?`), as a collection component. Projecting it to its underlying would send
+ * `null` and `Nick(null)` as the same null pointer, so it crosses as the value class's own box
+ * handle instead: the null pointer is `null`, a live handle is the boxed value. Only a class with
+ * the ADR-228 box/unbox pair qualifies; `null` otherwise.
+ */
+internal fun BridgeType.boxedValueClassComponent(): BridgeType.ValueClass? {
+  val valueClass: BridgeType.ValueClass =
+    (this as? BridgeType.Nullable)?.type as? BridgeType.ValueClass ?: return null
+  return valueClass.takeIf { it.underlying is BridgeType.Nullable && it.hasErasedCrossing() }
 }
 
 /** The value class a component projects through, seeing past ADR-083's nullable spelling; `null`
@@ -327,6 +351,8 @@ internal fun BridgeType.componentEnum(): BridgeType.Enum? = when (this) {
  *  per-element projection on both sides of the seam. ADR-099: a nested collection needs one only
  *  when something *inside* it does: the Kotlin side boxes the inner container object as-is. */
 internal fun BridgeType.componentNeedsProjection(): Boolean = when {
+  // A nullable value class over a nullable underlying crosses as its own box handle, untouched.
+  boxedValueClassComponent() != null -> false
   componentValueClass() != null || componentEnum() != null -> true
   // ADR-201: a Throwable crosses as its envelope, never as itself.
   unwrapNullable() is BridgeType.Throwable -> true
