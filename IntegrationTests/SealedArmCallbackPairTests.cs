@@ -32,6 +32,7 @@ namespace IntegrationTests;
 /// fire a stale bridge into a freed <c>GCHandle</c>.
 /// </para>
 /// </summary>
+[Collection(JobIdleWatchersCollection.Name)]
 public class SealedArmCallbackPairTests
 {
     /// <summary>A C#-side <c>IJobWatcher</c>, the <c>RecordingCatListener</c> shape one arity down.</summary>
@@ -167,4 +168,16 @@ public class SealedArmCallbackPairTests
 
         Assert.Empty(members);
     }
+}
+
+/// <summary>
+/// <c>Job.Idle</c> is a Kotlin <c>data object</c>, so its watcher list is process-global and every
+/// <c>Wake</c> reaches every subscription alive at that moment. The test classes that subscribe on
+/// it share this collection, so xunit runs them one after another rather than beside each other,
+/// and no class records a reason another class woke Mylo with.
+/// </summary>
+[CollectionDefinition(Name)]
+public class JobIdleWatchersCollection
+{
+    public const string Name = "JobIdleWatchers";
 }

@@ -143,6 +143,11 @@ private fun componentReadExpression(
   csharpType: (BridgeType) -> String,
   depth: Int = 0,
 ): String {
+  // ADR-235: a WIRE value class element is read as its bare underlying, then wrapped.
+  val wire: BridgeType.ValueClass? = (component as? BridgeType.ValueClass)?.wireOrNull()
+  if (wire != null) {
+    return "new ${csharpType(wire)}(${componentReadExpression(handle, wire.underlying, csharpType, depth)})"
+  }
   // ADR-099: a nested component's box IS the inner collection's own handle, so the read recurses
   // through the `ReadList`/`ReadSet`/`ReadMap` helpers. They are helpers rather than inlined loops
   // because the shipped read uses fixed local names (`listHandle`, `count`, `result`, `i`) that
@@ -156,6 +161,12 @@ private fun componentReadExpression(
   // own `finally`. Decided BEFORE `componentWireCsharpType` below, which would otherwise hand this
   // handle to `FromHandle<IntPtr>` -- a spelling that compiles and throws at the first element.
   if (component == BridgeType.ByteArray) return "NugetMarshal.ReadBytes($handle)"
+  // ADR-235: an `Instant`/`Duration` element is boxed as its ticks, a `Uuid` as its text.
+  if (component == BridgeType.Instant) return instantLiftCs("NugetMarshal.FromHandle<long>($handle)")
+  if (component == BridgeType.Duration) return durationLiftCs("NugetMarshal.FromHandle<long>($handle)")
+  if (component == BridgeType.Uuid) {
+    return "global::System.Guid.Parse(NugetMarshal.FromHandle<string>($handle)!)"
+  }
   // ADR-201: the box IS the element's ADR-107 envelope, and `BuildException` disposes it.
   if (component is BridgeType.Throwable) return "NugetErrorNative.BuildException($handle)"
   val wireType: String = componentWireCsharpType(component, csharpType)
@@ -197,9 +208,21 @@ private fun componentWireCsharpType(
   // ADR-201 amendment: an input `Throwable` component crosses as its managed-exception text.
   if (component.boxedValueClassComponent() != null) return csharpType(component)
   if (component.unwrapNullable() is BridgeType.Throwable) return "string$suffix"
+  // ADR-235: the parameter wires, ticks for `Instant`/`Duration` and text for `Uuid`.
+  val narrow: BridgeType = component.unwrapNullable()
+  if (narrow == BridgeType.Instant || narrow == BridgeType.Duration) return "long$suffix"
+  if (narrow == BridgeType.Uuid) return "string$suffix"
   if (component.componentEnum() != null) return "int$suffix"
   val valueClass: BridgeType.ValueClass =
     component.componentValueClass() ?: return csharpType(component)
+  // ADR-235: a WIRE value class element crosses on its underlying's wire.
+  if (valueClass.wireOrNull() != null) {
+    val underlying: BridgeType = valueClass.underlying
+    return componentWireCsharpType(
+      if (component is BridgeType.Nullable) BridgeType.Nullable(underlying) else underlying,
+      csharpType,
+    )
+  }
   return if (valueClass.underlying is BridgeType.Enum) "int$suffix"
   else "${csharpType(valueClass.underlying)}$suffix"
 }
@@ -238,6 +261,19 @@ private fun componentWireExpression(
   if (component.unwrapNullable() is BridgeType.Throwable) {
     return managedExceptionTextCs(access, nullable = component is BridgeType.Nullable)
   }
+  // ADR-235: an `Instant`/`Duration` element crosses as its ticks, a `Uuid` as its text.
+  val narrow: BridgeType = component.unwrapNullable()
+  if (narrow == BridgeType.Instant || narrow == BridgeType.Duration) {
+    val ticks: String = if (narrow == BridgeType.Instant) "UtcTicks" else "Ticks"
+    return if (component is BridgeType.Nullable) {
+      "$access == null ? (long?)null : $access.Value.$ticks"
+    } else {
+      "$access.$ticks"
+    }
+  }
+  if (narrow == BridgeType.Uuid) {
+    return if (component is BridgeType.Nullable) "$access?.ToString()" else "$access.ToString()"
+  }
   if (component.componentEnum() != null) {
     return if (component is BridgeType.Nullable) {
       "$access == null ? (int?)null : (int)$access.Value"
@@ -252,6 +288,17 @@ private fun componentWireExpression(
   if (component.boxedValueClassComponent() != null) return access
   val valueClass: BridgeType.ValueClass = component.componentValueClass() ?: return access
   val property: String = valueClass.underlyingPropertyName.replaceFirstChar { it.uppercase() }
+  // ADR-235: a WIRE value class element is unwrapped, then projected as its bare underlying.
+  if (valueClass.wireOrNull() != null) {
+    // A reference-typed underlying refuses `default(V)` in the unwrap itself, as above.
+    val view = ForwardValueClassView(component)
+    val underlying: BridgeType = view.chain.last().underlying
+    return componentWireExpression(
+      view.csharpUnwrap(access, parameter = null),
+      if (view.isNullable) BridgeType.Nullable(underlying) else underlying,
+      csharpType, depth, root,
+    )
+  }
   val isEnum: Boolean = valueClass.underlying is BridgeType.Enum
   // A String or handle underlying refuses `default(V)` in the unwrap itself: the element sits in
   // a `Select` lambda, so there is no parameter to name, and `CreateList`/`CreateSet`/`CreateMap`
@@ -356,6 +403,9 @@ internal fun BridgeType.componentNeedsProjection(): Boolean = when {
   componentValueClass() != null || componentEnum() != null -> true
   // ADR-201: a Throwable crosses as its envelope, never as itself.
   unwrapNullable() is BridgeType.Throwable -> true
+  // ADR-235: an `Instant`, `Duration` or `Uuid` crosses as its ticks or text.
+  unwrapNullable() == BridgeType.Instant || unwrapNullable() == BridgeType.Duration ||
+      unwrapNullable() == BridgeType.Uuid -> true
   this is BridgeType.Collection -> element?.componentNeedsProjection() == true ||
       key?.componentNeedsProjection() == true || value?.componentNeedsProjection() == true
 

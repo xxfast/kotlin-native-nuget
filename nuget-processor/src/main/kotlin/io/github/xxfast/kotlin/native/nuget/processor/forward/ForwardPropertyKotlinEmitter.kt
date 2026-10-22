@@ -32,7 +32,7 @@ internal fun FileSpec.Builder.addForwardPropertyPlanExports(plan: ForwardPropert
 
 private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardNativeCall) {
   val builder: FunSpec.Builder = exportBuilder(call, plan.receiver, plan.ownerTag())
-  val access: String = plan.accessExpression()
+  val access: String = plan.readExpression()
   // ADR-202: a suspend lambda handed out is invoked through the runtime-owned
   // `nuget_suspend_func*`, which maps a thrown exception through this module's classifier.
   if ((plan.type.unwrapNullable() as? BridgeType.ReturnedLambda)?.suspend == true) {
@@ -289,7 +289,7 @@ private fun FileSpec.Builder.addNullablePresenceGetter(
   val builder: FunSpec.Builder =
     exportBuilder(call, plan.receiver, plan.ownerTag()).returns(kotlinType("Boolean"))
   builder.addCode(
-    valueBody("${plan.accessExpression()} != null", "errorOut", "false"),
+    valueBody("${plan.readExpression()} != null", "errorOut", "false"),
     cOpaquePointerVar,
     nugetHandles,
   )
@@ -306,7 +306,7 @@ private fun FileSpec.Builder.addNullableValueGetter(
       val getterBuilder: FunSpec.Builder = exportBuilder(call, plan.receiver, plan.ownerTag())
         .returns(kotlinType(inner))
       getterBuilder.addCode(
-        valueBody("${plan.accessExpression()}!!", "errorOut", primitiveDefault(inner)),
+        valueBody("${plan.readExpression()}!!", "errorOut", primitiveDefault(inner)),
         cOpaquePointerVar,
         nugetHandles,
       )
@@ -320,7 +320,7 @@ private fun FileSpec.Builder.addNullableValueGetter(
     BridgeType.Char -> exportBuilder(call, plan.receiver, plan.ownerTag())
       .returns(kotlinType("Char"))
       .addCode(
-        valueBody("${plan.accessExpression()}!!", "errorOut", "'\\u0000'"),
+        valueBody("${plan.readExpression()}!!", "errorOut", "'\\u0000'"),
         cOpaquePointerVar,
         nugetHandles,
       )
@@ -332,7 +332,7 @@ private fun FileSpec.Builder.addNullableValueGetter(
       val getterBuilder: FunSpec.Builder = exportBuilder(call, plan.receiver, plan.ownerTag())
         .returns(kotlinType("Long"))
       getterBuilder.addCode(
-        valueBody("${plan.accessExpression()}!!.toDotNetTicks()", "errorOut", "0L"),
+        valueBody("${plan.readExpression()}!!.toDotNetTicks()", "errorOut", "0L"),
         cOpaquePointerVar,
         nugetHandles,
       )
@@ -343,7 +343,7 @@ private fun FileSpec.Builder.addNullableValueGetter(
     is BridgeType.Enum -> exportBuilder(call, plan.receiver, plan.ownerTag())
       .returns(kotlinType("Int"))
       .addCode(
-        valueBody("${plan.accessExpression()}!!.ordinal", "errorOut", "0"),
+        valueBody("${plan.readExpression()}!!.ordinal", "errorOut", "0"),
         cOpaquePointerVar,
         nugetHandles,
       )
@@ -351,7 +351,7 @@ private fun FileSpec.Builder.addNullableValueGetter(
     // ADR-079: a Primitive/Enum-underlying value class rides the same LegacyTwoCall `_value` call,
     // unboxed to the underlying (the ordinal for an enum underlying).
     is BridgeType.ValueClass -> {
-      val unboxed = "${plan.accessExpression()}!!.${inner.underlyingPropertyName}"
+      val unboxed = "${plan.readExpression()}!!.${inner.underlyingPropertyName}"
       val getterBuilder: FunSpec.Builder = exportBuilder(call, plan.receiver, plan.ownerTag())
       when (val underlying: BridgeType = inner.underlying) {
         is BridgeType.Primitive -> getterBuilder
@@ -549,7 +549,17 @@ private fun ForwardPropertyPlan.accessExpression(
   }
 }
 
-private fun ForwardPropertyPlan.valueExpression(): String = inputLowering(type, "value")
+/** ADR-235: the setter value, re-wrapped in its WIRE value class so `init` runs on the write. */
+private fun ForwardPropertyPlan.valueExpression(): String {
+  val lowered: String = inputLowering(type, "value")
+  return view?.kotlinWrap(lowered) ?: lowered
+}
+
+/** ADR-235: the getter read, unwrapped to the underlying of a WIRE value class. */
+private fun ForwardPropertyPlan.readExpression(): String {
+  val access: String = accessExpression()
+  return view?.kotlinUnwrap(access) ?: access
+}
 
 /**
  * ADR-218: the owner parameter a `T` setter value names when that parameter has no single erased

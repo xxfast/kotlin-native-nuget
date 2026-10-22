@@ -76,6 +76,10 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardLegacyRou
 import io.github.xxfast.kotlin.native.nuget.processor.exports.refusedLegacyLambdaShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardValueClassUnderlying
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardValueClassView
+import io.github.xxfast.kotlin.native.nuget.processor.forward.valueClassViewOrNull
+import io.github.xxfast.kotlin.native.nuget.processor.forward.valueClassUnderlying
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInheritedOutcome
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceHierarchy
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isErasedInterfaceMember
@@ -5211,6 +5215,8 @@ internal fun translateValueClass(
   // collection helpers like any other route's (CS0246 on `IReadOnlyList<>` otherwise); null for a
   // unit caller.
   tracker: CollectionHelperTracker? = null,
+  /** ADR-235: decides a WIRE underlying; null for a unit caller, which renders the others only. */
+  classifier: ForwardBridgeTypeClassifier? = null,
   /**
    * ADR-229: this value class's members on the static suspend route, translated against the
    * struct receiver it is handed (the underlying's wire, read off `this`).
@@ -5319,6 +5325,28 @@ internal fun translateValueClass(
       boxing = callableCatalog.valueClassBoxing(cls.qualifiedName?.asString().orEmpty())
         ?.let { (box, unbox) -> ForwardCirPlanProjection.valueClassBoxing(box, unbox, libraryName) }
         ?.copy(ownUnderlying = genericUnderlyingType.takeIf { isOwnTypeParameter }),
+    )
+  }
+  // ADR-235: a WIRE underlying is a positional record struct over the underlying's own C#
+  // spelling; `init` runs in Kotlin when a value crosses, so no `CreateChecked` is rendered.
+  val wireUnderlying: BridgeType? = classifier
+    ?.takeIf { it.valueClassUnderlying(cls) == ForwardValueClassUnderlying.WIRE }
+    ?.classify(underlyingResolved)
+  if (wireUnderlying != null) {
+    // ADR-235: every member and secondary constructor is on the ADR-225 route, [routeMembers].
+    return CirValueClass(
+      name = name,
+      libraryName = libraryName,
+      nativePrefix = prefix,
+      underlyingType = wireUnderlying.forwardPublicCsharpType(),
+      underlyingName = underlyingName,
+      underlyingNativeType = "nint",
+      underlyingIsReference = true,
+      properties = emptyList(),
+      methods = emptyList(),
+      doc = cls.forwardKdoc(expects)?.toCirDoc(),
+      underlyingDoc = underlyingProp.forwardKdoc(expects)?.toCirDoc(),
+      routeMembers = routeMembers,
     )
   }
   // ADR-077 sub-item 4 prerequisite: an enum underlying is a *value* underlying (ordinal over the

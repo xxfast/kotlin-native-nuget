@@ -33,8 +33,9 @@ import kotlin.uuid.Uuid
  * (ADR-106 calls the object `ChipRegistry`; that name is already taken by the ADR-069 fixture in
  * this same package, so it is `MicrochipRegistry` here.)
  *
- * Deliberately absent, because ADR-106 defers them: `List<Uuid>` and any other collection
- * component, `Flow<Uuid>`, `Uuid` as an extension receiver, and any `Instant`/`Duration` cell.
+ * Deliberately absent: `Flow<Uuid>`, `Uuid` as an extension receiver, and any `Instant`/`Duration`
+ * cell. `List<Uuid>` and every other collection component of a `Uuid` cross since ADR-235, pinned
+ * by `furcoat/NapLog.kt`.
  *
  * Oreo and Mylo are both chipped; Oreo has been re-chipped once, Mylo never has.
  */

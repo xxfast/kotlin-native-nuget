@@ -164,8 +164,23 @@ using var record = new ChipRecord(minted);
 `record.Id` equals `minted`. All 128 bits are preserved, and `Uuid.NIL` maps to `Guid.Empty`.
 
 `Instant`, `Duration`, and `Uuid` work as properties, constructor and method parameters, and
-function results. They are not supported as collection elements. For extension receiver support,
-see [Extensions](extensions.md).
+function results. They also work as `List`, `Set` and `Map` elements, keys and values, nullable
+included: each element crosses as ticks (`Instant`, `Duration`) or text (`Uuid`).
+
+```kotlin
+fun napStarts(count: Int): List<Instant>
+fun napsByChip(): Map<Uuid, Duration>
+fun chipsByNap(naps: Map<Instant, Uuid>): String
+```
+
+```C#
+IReadOnlyList<DateTimeOffset> starts = NapLog.NapStarts(2);
+IReadOnlyDictionary<Guid, TimeSpan> naps = NapLog.NapsByChip();
+```
+
+See [Collections](collections.md) for the shared rules. A value class over one of these types binds
+too (see [Value classes](value-classes.md#over-instant-bytearray-collection-interface)). For
+extension receiver support, see [Extensions](extensions.md).
 
 ## ByteArray
 

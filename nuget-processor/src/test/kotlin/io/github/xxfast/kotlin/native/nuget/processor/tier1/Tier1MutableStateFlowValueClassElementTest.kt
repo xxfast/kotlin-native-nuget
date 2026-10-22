@@ -301,8 +301,7 @@ class Tier1MutableStateFlowValueClassElementTest {
     )
     mapOf(
       "Tracker.initial:" to listOf("`tier1.vcrefused.Initial`", "`kotlin.Char`"),
-      "Tracker.stamp:" to listOf("`tier1.vcrefused.Stamp`", "`kotlin.time.Instant`"),
-      "Tracker.outer:" to listOf("`tier1.vcrefused.Outer`", "`tier1.vcrefused.Inner`"),
+
       "Tracker.oops:" to listOf("`tier1.vcrefused.Oops`", "`kotlin.Throwable`"),
     ).forEach { (member, named) ->
       val skips: List<String> = refusing.kspWarnings.filter {
@@ -319,6 +318,14 @@ class Tier1MutableStateFlowValueClassElementTest {
       refusing.kspWarnings.none { it.contains("Tracker.crate:") },
       "expected Tracker.crate to bind; got: ${refusing.kspWarnings}",
     )
+    // ADR-235: an `Instant` underlying and a nested value class have a record struct over the
+    // underlying's own C# spelling; ADR-228's box pair carries each as an element too.
+    listOf("Tracker.stamp:", "Tracker.outer:").forEach { member ->
+      assertTrue(
+        refusing.kspWarnings.none { it.contains(member) },
+        "expected $member to bind; got: ${refusing.kspWarnings}",
+      )
+    }
     assertFalse(
       refusing.kspWarnings.any { it.contains("has no write arm") },
       "a dropped member has no read-only surface to describe; got: ${refusing.kspWarnings}",

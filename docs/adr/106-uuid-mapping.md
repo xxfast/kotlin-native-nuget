@@ -482,3 +482,9 @@ public C# surface; a surface addition.
 4. **ObjC export surfaces `Uuid` as an opaque wrapper** (§6). Prior art only.
 5. **Alternative 2's runtime behaviour identical on net8.0/net10.0** (observed on 9.0.17).
    Load-bearing only if Alternative 2 is later adopted.
+
+## Amendment, 2026-10-22: see ADR-235
+
+[ADR-235](235-value-class-wire-underlyings.md) binds `Uuid` as a `List`, `Set` and `Map` component
+(`List<Uuid>`, `Map<Uuid, Duration>`) on the text wire, per element. The deferral above no longer
+applies to collections.

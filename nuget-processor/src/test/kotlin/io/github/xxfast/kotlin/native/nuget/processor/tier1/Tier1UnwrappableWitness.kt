@@ -60,8 +60,8 @@ internal object Tier1UnwrappableWitness {
       ),
       readable = true,
     ),
-    // ADR-076 / ADR-103: readable as a property component, but neither is a bridgeable component
-    // at an input position, so they only ever witness the setter cells.
+    // ADR-076 / ADR-103: readable as a property component. ADR-235 made both wrappable, so they
+    // no longer witness anything; kept so the list records what moved.
     Tier1UnwrappableCandidate(
       kotlin = "Instant",
       type = BridgeType.Instant,
@@ -88,14 +88,6 @@ internal object Tier1UnwrappableWitness {
       readable && !type.isWrappableComponent()
     }
 
-  /**
-   * [setterComponent], further restricted to a legal map KEY. A nullable key is refused at the
-   * READ position too (ADR-083 amendment), which would drop the getter the setter cells assert.
-   */
-  val setterMapKey: Tier1UnwrappableCandidate
-    get() = select("a readable, non-null map key (the both-sides setter-drop cell)") {
-      readable && type !is BridgeType.Nullable && !type.isWrappableComponent()
-    }
 
   /**
    * A component a collection INPUT accepts as bridgeable but cannot write, so the callable skips
