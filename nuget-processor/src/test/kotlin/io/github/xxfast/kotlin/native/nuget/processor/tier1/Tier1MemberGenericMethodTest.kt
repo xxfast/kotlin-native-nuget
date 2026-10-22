@@ -421,7 +421,6 @@ class Tier1MemberGenericMethodTest {
       "tier1.membergeneric.Crate.shadow" to "(here, its type parameter `T` shadows its owner's)",
       "tier1.membergeneric.Kennel.structural" to "(here, it is declared on an interface)",
       "tier1.membergeneric.Weather.echo" to "(here, it is declared on an enum class)",
-      "tier1.membergeneric.Tag.echo" to "(here, it is declared on a value class)",
       "tier1.membergeneric.extended" to "(here, it is an extension function)",
     ).forEach { (member, refusal) ->
       val named: List<String> = result.kspWarnings.filter { warning ->
@@ -444,6 +443,12 @@ class Tier1MemberGenericMethodTest {
       "expected the ADR-217 Rank binding",
     )
     assertContains(result.generated, ".rank<T>(")
+    // ADR-225: a value class member's own `T` binds, its receiver the struct itself.
+    assertTrue(
+      declarations.any { line -> line.startsWith("public T Echo<T>(T item)") },
+      "expected the value class Tag.Echo binding",
+    )
+    assertContains(result.generated, "tier1.membergeneric.Tag(value).echo<Any?>(")
     listOf(
       "Kind", "Conjure", "Narrow", "Sort", "Shadow", "Structural",
       "Extended",

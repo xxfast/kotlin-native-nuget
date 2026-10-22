@@ -55,6 +55,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyHandleStatem
 import com.squareup.kotlinpoet.MemberName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMemberGenericRefusal
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardBoundedRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMethodTypeParameters
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardUncheckedCastSuppression
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBounds
@@ -143,7 +144,7 @@ internal fun FileSpec.Builder.addStaticSuspendExports(
     }
     is ForwardStaticSuspendOwner.ValueClass -> {
       importIfDefaultPackage(owner.valueClass)
-      val qualified: String = owner.valueClass.kotlinQualifiedReference()
+      val qualified: String = owner.construction ?: owner.valueClass.kotlinQualifiedReference()
       ({ read -> "$qualified($read).$name" })
     }
   }
@@ -204,16 +205,35 @@ private fun FileSpec.Builder.addStaticSuspendExport(
   val receiverPrelude: String = when (receiver) {
     is ForwardStaticSuspendReceiver.Handle ->
       legacyHandleStatement(receiverSlot, names.obj, receiver.type, receiver.nullable) + "\n"
+    // ADR-225: a `T` box is read the same way, through its bound checks, before the launch.
+    is ForwardStaticSuspendReceiver.Box -> {
+      val bounds: List<String> = listOfNotNull(receiver.type.boundQualifiedName) +
+        receiver.type.additionalBounds
+      val variable: String? = receiver.type.kotlinName
+        .takeIf { receiver.trampolineBounds.isNotEmpty() }
+      val read: String = forwardBoundedRead(receiverSlot, bounds, receiver.nullable, variable)
+      "val ${names.obj} = $read\n"
+    }
     is ForwardStaticSuspendReceiver.Scalar, is ForwardStaticSuspendReceiver.Enum, null -> ""
   }
   val receiverRead: String = when (receiver) {
-    is ForwardStaticSuspendReceiver.Handle -> names.obj
+    is ForwardStaticSuspendReceiver.Handle, is ForwardStaticSuspendReceiver.Box -> names.obj
     is ForwardStaticSuspendReceiver.Scalar, is ForwardStaticSuspendReceiver.Enum, null ->
       receiverSlot
   }
   // ADR-219: a trampolined `T` (ADR-198) needs the type variable the launch lambda reads, so the
   // whole export, launch included, runs inside the trampoline.
-  val trampoline: ForwardFlowTrampoline? = flowTrampoline(func, owner = null, paramShapes)
+  val declared: ForwardFlowTrampoline? = flowTrampoline(func, owner = null, paramShapes)
+  // ADR-225: a value-class receiver's `T` with no erased spelling is re-declared there too.
+  val receiverVariable: Pair<String, List<String>>? =
+    (receiver as? ForwardStaticSuspendReceiver.Box)
+      ?.takeIf { box -> box.trampolineBounds.isNotEmpty() }
+      ?.let { box -> box.type.kotlinName to box.trampolineBounds }
+  val trampoline: ForwardFlowTrampoline? = when {
+    receiverVariable == null -> declared
+    declared == null -> ForwardFlowTrampoline(listOf(receiverVariable), emptySet(), null)
+    else -> declared.copy(variables = listOf(receiverVariable) + declared.variables)
+  }
   val call: String = names.legacyInvocation(
     callee(receiverRead) + func.legacyTypeArguments(),
     func.legacyParameterNames(),
@@ -236,6 +256,8 @@ private fun FileSpec.Builder.addStaticSuspendExport(
     is ForwardStaticSuspendReceiver.Scalar ->
       builder.addParameter(receiverSlot, ClassName.bestGuess(receiver.kotlinType))
     is ForwardStaticSuspendReceiver.Enum -> builder.addParameter(receiverSlot, INT)
+    is ForwardStaticSuspendReceiver.Box ->
+      builder.addParameter(receiverSlot, cOpaquePointer.copy(nullable = receiver.nullable))
     null -> Unit
   }
   builder

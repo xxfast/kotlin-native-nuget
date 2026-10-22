@@ -79,18 +79,56 @@ Decal<Cat> decal = Stickers.OreoDecal();                // Serial stays a long
   ```
 
   A `Comparable<T>` bound is not spelled as a C# constraint, so Kotlin checks it.
-- `init` does not run at `new Sticker<int>(-1)` in C#. It runs when the value first crosses into
+- `init` does not run at the primary constructor `new Sticker<int>(-1)` in C#. It runs when the value first crosses into
   Kotlin, so the call that receives it throws. A non-generic value class validates at construction.
 - `default(Sticker<string>)` passed to a non-null `Sticker<String>` parameter throws
   `ArgumentException` in C#. For an unconstrained `T`, `default` carries `null`.
 - A KDoc `[Sticker]` link renders as plain `<c>Sticker</c>`, as it does for a generic class.
-- The struct has no members of its own and no secondary constructors. Each one is a named skip
-  (`SKIPPED_UNSUPPORTED_TYPE`); read `Value` or expose a top-level function instead.
 - A closed instantiation works as a `List`, `Set` or `Map` component and under `?`. These skip,
   named: `Sticker<T>?` or `List<Sticker<T>>` over a function's own `T`, and an erased position (`Box<Sticker<Int>>`, a lambda payload
   or result, a `Flow` element, an awaited `suspend` result).
 - A generic value class over `List<T>` or any other shape that is not `T` or a phantom stays
   refused by name.
+
+### Members, properties and constructors
+
+The struct carries the class's own members, properties, secondary constructors and `suspend`
+members, on every instantiation including a phantom one.
+
+```kotlin
+value class Sticker<T>(val value: T) {
+  constructor(label: String, times: Int) : this(label.repeat(times) as T)
+  val shiny: Boolean get() = value != null
+  fun describe(): String = "sticker of $value"
+  fun swap(other: T): Sticker<T> = Sticker(other)
+  fun <R> pairWith(other: R): String = "$value+$other"
+  suspend fun peelLater(): T = value
+}
+
+value class Decal<T>(val serial: Long) {
+  constructor(label: String) : this(label.toLong())
+  fun describe(): String = "decal #$serial"
+}
+```
+
+```C#
+string text = new Sticker<int>(3).Describe();              // "sticker of 3"
+bool shiny = new Sticker<string?>(null).Shiny;             // false
+Sticker<string> doubled = new Sticker<string>("ab", 2);    // Value is "abab"
+string pair = new Sticker<string>("Oreo").PairWith(7);     // "Oreo+7"
+int later = await new Sticker<int>(3).PeelLaterAsync();
+Decal<Cat> decal = new Decal<Cat>("42");                   // Serial is 42
+```
+
+- A secondary constructor runs in Kotlin at `new Sticker<string>("ab", 2)`, so `init` runs there. The
+  primary constructor still does not.
+- A member that throws, or whose receiver fails `init`, throws in C# (`KotlinArgumentException` for
+  `new Sticker<int>(-1).Describe()`). A `suspend` member faults its `Task` instead.
+- A member on `default(Badge<string>)` over a non-null `T` throws `ArgumentException` ("carries no
+  Value; construct a Badge instead") before reaching Kotlin.
+- A member's own `<R>` binds on any value class, generic or not, and is renamed if it would clash with
+  the struct's `T`.
+- A `T` you pass or return is a bare `T`, so a `Cat` you read back from `Swap(...)` is yours to dispose.
 
 ## As an ordinary parameter, property, or return type
 

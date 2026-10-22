@@ -333,7 +333,28 @@ internal data class CirValueClass(
    * header (`Sticker<T>(T Value)`). Empty for every non-generic value class.
    */
   val typeParameters: List<String> = emptyList(),
+  /**
+   * ADR-225: the members planned on the ordinary route, rendered on the struct with `this` as the
+   * receiver: every member and secondary constructor of a generic value class, and a member with
+   * its own type parameters on any value class. A generic struct hoists their externs (CS7042).
+   */
+  val routeMembers: List<CirValueClassRouteMember> = emptyList(),
 ) : CirDeclaration
+
+/**
+ * ADR-225: one ordinary-route member of a value-class struct: its extern, and the C# member that
+ * calls it. A [CirValueClassRouteKind.CONSTRUCTOR]'s [method] is the private static
+ * `CreateChecked_N` helper the public constructor chains through (`: this(CreateChecked_2(...))`).
+ */
+internal data class CirValueClassRouteMember(
+  val import: CirDllImport,
+  val method: CirMethod,
+  val kind: CirValueClassRouteKind,
+  /** The public constructor's doc, for a [CirValueClassRouteKind.CONSTRUCTOR]. */
+  val doc: CirDoc? = null,
+)
+
+internal enum class CirValueClassRouteKind { METHOD, PROPERTY, CONSTRUCTOR }
 
 /**
  * ADR-171: the two private externs and the two `internal static` helpers (`NugetBox`,

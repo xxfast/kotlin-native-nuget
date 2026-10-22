@@ -898,6 +898,15 @@ internal enum class ForwardCallableOrigin {
   VALUE_CLASS_BOX,
 
   /**
+   * ADR-225: a generic value class's own member, property or secondary constructor. Planned on the
+   * ordinary route (error slot included, so `init` and a throwing member surface in C#), with the
+   * receiver crossing as the underlying at the class's own `T` and re-wrapped in Kotlin through
+   * [ForwardInvocation.valueClassConstruction]. C# renders it on the struct itself, its externs
+   * hoisted out of the generic type (CS7042).
+   */
+  VALUE_CLASS_MEMBER,
+
+  /**
    * ADR-094 (write side): an exported enum's box, the erased-generic crossing of an enum
    * (`new Box<Mood>(Mood.Calm)`, `Echo<Mood>(...)`). The identity on the lowered ordinal, like
    * [ENUM_ARM_BOX]: `Mood.entries[entry]` retained as an opaque [BridgeType.TypeParameter]
@@ -943,6 +952,13 @@ internal data class ForwardInvocation(
    * origin.
    */
   val extensionImportAlias: String? = null,
+  /**
+   * ADR-225: for a [ForwardCallableOrigin.VALUE_CLASS_MEMBER] plan, the Kotlin constructor of the
+   * generic value class as the export spells it: bare when Kotlin infers every argument from the
+   * underlying (`pkg.Sticker`), with `Nothing` for a phantom one (`pkg.Decal<Nothing>`), or with
+   * the erased arguments for a secondary constructor no parameter witnesses (`pkg.Sticker<Any?>`).
+   */
+  val valueClassConstruction: String? = null,
 )
 
 /**

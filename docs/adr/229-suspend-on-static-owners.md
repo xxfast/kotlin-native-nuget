@@ -83,3 +83,11 @@ awaited flow result is now the same wrapper there: a `suspend` member returning
 `MutableStateFlow<T>` awaits to a settable `KotlinMutableStateFlow<T>` on every owner this ADR
 covers, the top level included, and `SharedFlow` results follow. The top-level route used to hand
 back a read-only `KotlinStateFlow<T>`.
+
+## Amendment 2026-10-22: a generic value class receiver
+
+The value-class row also covers a generic value class ([ADR-225](225-generic-value-class-members.md)).
+The receiver crosses as a boxed `T` (a plain scalar for a phantom) and Kotlin rewraps it inside the
+coroutine, so a failing `init` faults the returned `Task` instead of throwing from the call. The C#
+member is an instance method on the generic record struct, and the box is released when the task
+settles.

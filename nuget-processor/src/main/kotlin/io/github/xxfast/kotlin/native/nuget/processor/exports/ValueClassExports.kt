@@ -28,7 +28,10 @@ internal fun FileSpec.Builder.addValueClassExports(
   // planner called them values, and KSP aborted on the missing Kotlin half.
   val role: ForwardValueClassUnderlying = classifier.valueClassUnderlying(cls)
   if (role == ForwardValueClassUnderlying.REFUSED) return
-  // ADR-220: the planner plans nothing for a generic value class; see `valueClassEntries`.
+  // ADR-225: a generic value class's members and secondary constructors, and any value class's
+  // members with their own type parameters, ride the ordinary route.
+  callableCatalog.valueClassRouteMembers(qualifiedName).forEach { addForwardKotlinPlanExport(it) }
+  // ADR-220: no primary `_create` and no box pair for a generic value class.
   if (role == ForwardValueClassUnderlying.GENERIC) return
   val isReferenceUnderlying: Boolean = role == ForwardValueClassUnderlying.REFERENCE
 

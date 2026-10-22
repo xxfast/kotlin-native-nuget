@@ -108,7 +108,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpMemberName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.NUGET_BINDING_MARKER
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardValueClassUnderlying
 import io.github.xxfast.kotlin.native.nuget.processor.forward.validateCSharpNames
-import io.github.xxfast.kotlin.native.nuget.processor.forward.genericValueClassMemberSkips
 import io.github.xxfast.kotlin.native.nuget.processor.forward.valueClassUnderlying
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeContext
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
@@ -2492,14 +2491,6 @@ internal class NugetProcessor(
           owner = null,
         )
       },
-      logger,
-    )
-    // ADR-220: a generic value class is declared as a positional struct with no members, since a
-    // member would need a receiver substituted per instantiation. Each own member says so.
-    ForwardDiagnosticSink.emit(
-      valueClasses
-        .filter { cls -> cls.typeParameters.isNotEmpty() }
-        .flatMap { cls -> cls.genericValueClassMemberSkips() },
       logger,
     )
     val exportedValueClasses: Set<String> = buildSet {

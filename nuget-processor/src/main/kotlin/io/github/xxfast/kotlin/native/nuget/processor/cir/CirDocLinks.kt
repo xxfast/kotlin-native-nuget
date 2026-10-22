@@ -198,6 +198,12 @@ private fun CirDeclaration.resolveDocLinks(index: DocLinkIndex): CirDeclaration 
       methods = methods.map { it.copy(doc = it.doc.resolve(index)) },
       doc = doc.resolve(index),
       underlyingDoc = underlyingDoc.resolve(index),
+      routeMembers = routeMembers.map { member ->
+        member.copy(
+          method = member.method.copy(doc = member.method.doc.resolve(index)),
+          doc = member.doc.resolve(index),
+        )
+      },
     )
 
     is CirEnum -> copy(

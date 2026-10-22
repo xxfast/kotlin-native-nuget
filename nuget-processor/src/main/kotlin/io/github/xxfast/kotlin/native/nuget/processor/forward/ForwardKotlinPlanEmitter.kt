@@ -1259,6 +1259,17 @@ private fun ForwardCallablePlan.needsTypeVariable(
   typeParameter: ForwardGenericOwnerParameter,
 ): Boolean {
   val parameters: List<ForwardPublicParameter> = publicSignature.parameters
+  // ADR-225: a value-class member's receiver is a value in too, re-wrapped as `Doze(read as T)`.
+  val receiverMentions: Boolean = invocation.origin == ForwardCallableOrigin.VALUE_CLASS_MEMBER &&
+      (publicSignature.receiver?.type as? BridgeType.ValueClass)?.underlying
+        ?.mentionsAnywhere(typeParameter) == true
+  if (receiverMentions) return typeParameter.trampolined
+  // ADR-225: a secondary constructor no parameter witnesses names the type variable itself.
+  val constructs: Boolean = invocation.origin == ForwardCallableOrigin.VALUE_CLASS_MEMBER &&
+      publicSignature.receiver == null &&
+      invocation.valueClassConstruction?.substringAfter('<', "")?.removeSuffix(">")
+        ?.split(',')?.any { argument -> argument.trim() == typeParameter.kotlinName } == true
+  if (constructs) return true
   if (parameters.none { parameter -> parameter.type.mentionsAnywhere(typeParameter) }) return false
   if (typeParameter.trampolined) return true
   return typeParameter.erased == null && parameters.none { parameter ->
@@ -1281,7 +1292,11 @@ private fun ForwardCallablePlan.withTypeVariables(): ForwardCallablePlan {
   val parameters: List<ForwardPublicParameter> = publicSignature.parameters.map { parameter ->
     parameter.copy(type = parameter.type.readThrough(variables))
   }
-  return copy(publicSignature = publicSignature.copy(parameters = parameters))
+  val receiver: ForwardPublicParameter? = publicSignature.receiver
+    ?.takeIf { invocation.origin == ForwardCallableOrigin.VALUE_CLASS_MEMBER }
+    ?.let { self -> self.copy(type = self.type.readThrough(variables)) }
+    ?: publicSignature.receiver
+  return copy(publicSignature = publicSignature.copy(parameters = parameters, receiver = receiver))
 }
 
 private fun BridgeType.readThrough(variables: Set<String>): BridgeType = when (this) {
@@ -1825,6 +1840,28 @@ private fun invocationExpression(
 
     ForwardCallableOrigin.VALUE_CLASS ->
       error("VALUE_CLASS plans use addForwardValueClassPlanExport, not invocationExpression")
+
+    // ADR-225: the struct's own member. A secondary constructor returns the underlying of the
+    // value it builds; a member re-wraps its receiver (running `init`) and calls on it.
+    ForwardCallableOrigin.VALUE_CLASS_MEMBER -> {
+      val construction: String = requireNotNull(plan.invocation.valueClassConstruction) {
+        "Value-class member plan ${plan.invocation.symbol} carries no constructor spelling"
+      }
+      if (receiver == null) {
+        val underlying: String = requireNotNull(plan.invocation.receiver) {
+          "Value-class constructor plan ${plan.invocation.symbol} names no underlying property"
+        }
+        "$construction($arguments).${underlying.kotlinIdentifier()}"
+      } else {
+        val self: ForwardPublicParameter = requireNotNull(plan.publicSignature.receiver) {
+          "Value-class member plan ${plan.invocation.symbol} has no public receiver"
+        }
+        val type: BridgeType.ValueClass = self.type as BridgeType.ValueClass
+        val rewrapped = "$construction(${valueClassUnderlyingLowering(self.ref, type.underlying)})"
+        if (plan.invocation.target?.endsWith("#property") == true) "$rewrapped.$declaredName"
+        else "$rewrapped.$functionName($arguments)"
+      }
+    }
   }
 }
 

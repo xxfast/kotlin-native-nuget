@@ -16,6 +16,8 @@ import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSTypeArgument
 import com.google.devtools.ksp.symbol.KSTypeParameter
+import io.github.xxfast.kotlin.native.nuget.processor.forward.hasEnumConstraint
+import io.github.xxfast.kotlin.native.nuget.processor.forward.hasNullableBound
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Variance
 import com.google.devtools.ksp.symbol.Visibility
@@ -5158,9 +5160,16 @@ internal fun translateValueClass(
   val underlyingName: String =
     underlyingProp.simpleName.asString().replaceFirstChar { it.uppercase() }
 
-  // ADR-220: a generic value class is one positional record struct for every instantiation. It
-  // has no `CreateChecked` (one constructor cannot call a per-instantiation export), so `init`
-  // runs in Kotlin when a value first crosses, and no members (named skips upstream).
+  // ADR-225: the members planned on the ordinary route, on both struct shapes.
+  val routeMembers: List<CirValueClassRouteMember> =
+    callableCatalog.valueClassRouteMembers(qualifiedName)
+      .onEach { plan -> tracker?.trackPlan(plan) }
+      .map { plan -> ForwardCirPlanProjection.valueClassRouteMember(plan, libraryName) }
+
+  // ADR-220: a generic value class is one positional record struct for every instantiation. Its
+  // primary has no `CreateChecked` (one constructor cannot call a per-instantiation export), so
+  // `init` runs in Kotlin when a value first crosses. ADR-225: its own members and secondary
+  // constructors ride the ordinary route.
   if (cls.typeParameters.isNotEmpty()) {
     val isOwnTypeParameter: Boolean = underlyingResolved.declaration is KSTypeParameter
     val genericUnderlyingType: String = if (isOwnTypeParameter) {
@@ -5168,6 +5177,57 @@ internal fun translateValueClass(
     } else {
       qualifiedElementCsType(underlyingResolved, context, underlyingResolved.isMarkedNullable)
     }
+    // ADR-225: the static suspend route's receiver slot. An own `T` is the ADR-214 box over
+    // `this.Value` (a non-null slot refuses `default(V)` first); a phantom passes its underlying
+    // as a non-generic value class does.
+    val ownParameter: KSTypeParameter? = underlyingResolved.declaration as? KSTypeParameter
+    val suspendReceiver: CirParameter = if (ownParameter != null) {
+      val guarded: Boolean = !underlyingResolved.isMarkedNullable &&
+          !ownParameter.hasNullableBound() && !ownParameter.hasEnumConstraint()
+      val read: String = if (guarded) valueClassUnderlyingOrThrow("this", underlyingName, name)
+      else "this.$underlyingName"
+      CirParameter(
+        "this",
+        genericUnderlyingType,
+        nativeType = "IntPtr",
+        isReferenceType = false,
+        collectionCreate =
+          "NugetMarshal.Wrap<$genericUnderlyingType>($read!, out bool receiverOwned)",
+        collectionHandle = "receiverBox",
+        boxOwnedLocal = "receiverOwned",
+      )
+    } else {
+      val enumUnderlying: Boolean =
+        (underlyingResolved.declaration as? KSClassDeclaration)?.classKind == ClassKind.ENUM_CLASS
+      val scalar: Boolean = enumUnderlying || underlyingType in KOTLIN_TO_CSHARP_PARAM
+      val read: String =
+        if (underlyingType == "String" && !underlyingResolved.isMarkedNullable) {
+          valueClassUnderlyingOrThrow("this", underlyingName, name)
+        } else {
+          "this.$underlyingName"
+        }
+      CirParameter(
+        "receiver",
+        genericUnderlyingType,
+        nativeType = when {
+          enumUnderlying -> "int"
+          scalar -> mapParamType(underlyingType)
+          else -> KOTLIN_HANDLE
+        },
+        nativeArgumentExpression = when {
+          enumUnderlying -> "(int)$read"
+          scalar -> read
+          else -> "$read._handle"
+        },
+      )
+    }
+    val asyncMembers: List<CirMember> = staticSuspend(suspendReceiver)
+    emitMemberNameCollisions(
+      name, "value class $name", cls,
+      listOf(CsMemberName(underlyingName, CsMemberKind.VALUE)) + routeMembers.csMemberNames() +
+        asyncMembers.csMemberNames(),
+      KotlinSpellings.ofClass(cls), logger,
+    )
     return CirValueClass(
       name = name,
       libraryName = libraryName,
@@ -5181,6 +5241,8 @@ internal fun translateValueClass(
       doc = cls.forwardKdoc(expects)?.toCirDoc(),
       underlyingDoc = underlyingProp.forwardKdoc(expects)?.toCirDoc(),
       typeParameters = cls.typeParameters.map { it.name.asString() },
+      routeMembers = routeMembers,
+      asyncMembers = asyncMembers,
     )
   }
   // ADR-077 sub-item 4 prerequisite: an enum underlying is a *value* underlying (ordinal over the
@@ -5288,6 +5350,7 @@ internal fun translateValueClass(
       add(CsMemberName(underlyingName, CsMemberKind.VALUE))
     }
     addAll((properties + methods).csMemberNames())
+    addAll(routeMembers.csMemberNames())
   }
   emitMemberNameCollisions(
     name, "value class $name", cls, valueClassNames, KotlinSpellings.ofClass(cls), logger,
@@ -5339,8 +5402,19 @@ internal fun translateValueClass(
     boxing = callableCatalog.valueClassBoxing(qualifiedName)?.let { (box, unbox) ->
       ForwardCirPlanProjection.valueClassBoxing(box, unbox, libraryName)
     },
+    routeMembers = routeMembers,
   )
 }
+
+/** ADR-225: the public C# names the ordinary-route members declare; a constructor names none. */
+private fun List<CirValueClassRouteMember>.csMemberNames(): List<CsMemberName> =
+  mapNotNull { member ->
+    when (member.kind) {
+      CirValueClassRouteKind.METHOD -> CsMemberName(member.method.name, CsMemberKind.METHOD)
+      CirValueClassRouteKind.PROPERTY -> CsMemberName(member.method.name, CsMemberKind.VALUE)
+      CirValueClassRouteKind.CONSTRUCTOR -> null
+    }
+  }
 
 private fun translateCallbackMethod(
   method: KSFunctionDeclaration,
