@@ -121,39 +121,13 @@ internal fun BridgeType.ValueClass.underlyingCs(struct: String, parameter: Strin
   val property: String = underlyingPropertyName.replaceFirstChar { it.uppercase() }
   if (!hasNullDefault()) return "$struct.$property"
   val structName: String = qualifiedName.substringAfterLast('.')
-  return valueClassUnderlyingOrThrow(struct, property, structName, parameter)
+  val explicit: String? = parameter.takeIf { it != VALUE_CLASS_SELF }
+  return valueClassUnderlyingOrThrow(struct, property, structName, explicit)
 }
 
+
 /**
- * ADR-220: one named skip per public own member or secondary constructor of a generic value class.
- * The struct is declared positional and memberless, because a member would need its receiver
- * substituted per instantiation, which the value-class member route has no spelling for.
+ * ADR-225: the C# local a value-class struct member copies `this` into, its receiver. A
+ * `default(V)` receiver is refused without a `nameof`: it is no parameter the caller passed.
  */
-internal fun KSClassDeclaration.genericValueClassMemberSkips(): List<ForwardDiagnostic> {
-  val name: String = qualifiedName?.asString() ?: simpleName.asString()
-  val underlying: String? = primaryConstructor?.parameters?.singleOrNull()?.name?.asString()
-  val members: List<KSDeclaration> = declarations
-    .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter { member ->
-      when (member) {
-        is KSFunctionDeclaration -> member != primaryConstructor
-        is KSPropertyDeclaration -> member.simpleName.asString() != underlying
-        else -> false
-      }
-    }
-    .toList()
-  return members.map { member ->
-    val memberName: String = member.simpleName.asString()
-      .let { if (it == "<init>") "constructor" else it }
-    ForwardDiagnostic(
-      kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
-      symbol = member.takeIf { it.containingFile != null },
-      declaration = "$name.$memberName",
-      reason = "`$memberName` is declared on the generic value class `$name`, whose C# record " +
-          "struct carries no members: a member needs its receiver substituted per instantiation",
-      hint = "move it to a top-level function over a closed instantiation " +
-          "(`fun bumped(sticker: Sticker<Int>)`), which binds",
-      owner = null,
-    )
-  }
-}
+internal const val VALUE_CLASS_SELF: String = "nugetSelf"

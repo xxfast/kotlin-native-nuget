@@ -220,12 +220,26 @@ class Tier1GenericValueClassTest {
   @Test
   fun `a generic value class outside the ordinary wire stays a named skip`() {
     listOf(
-      "maybeStick", "stickAll", "boxed", "later", "shine", "initial", "starred",
+      "maybeStick", "stickAll", "boxed", "later", "initial", "starred",
     ).forEach { member ->
       assertTrue(result.skipped(member), "expected $member named; kspWarnings=${result.kspWarnings}")
     }
-    val named = Regex("""\b(MaybeStick|StickAll|Boxed|Later|Shine|Initial|Starred)\(""")
+    val named = Regex("""\b(MaybeStick|StickAll|Boxed|Later|Initial|Starred)\(""")
     assertFalse(named.containsMatchIn(code))
+  }
+
+  /** ADR-225: the struct's own member binds on it, its receiver re-wrapped so `init` runs. */
+  @Test
+  fun `a generic value class own member binds on the struct`() {
+    assertFalse(
+      result.skipped("shine"),
+      "expected shine to bind; kspWarnings=${result.kspWarnings}",
+    )
+    assertContains(code, "public string Shine()")
+    assertContains(
+      result.generated,
+      "tier1.stickers.Sticker(value?.asStableRef<Any>()?.get()).shine()",
+    )
   }
 
   @Test
@@ -258,6 +272,7 @@ class Tier1GenericValueClassTest {
               using var book = new StickerBook(new Sticker<string>("Mylo's"), three);
               Sticker<Mood> booked = book.NapOf(napped);
               string bookRanked = book.Ranked(new Sticker<string>("Oreo"));
+              string shine = three.Shine();
           }
       }
       """.trimIndent(),

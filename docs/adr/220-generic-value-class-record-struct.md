@@ -176,7 +176,7 @@ A `T` whose bound needs ADR-198's trampoline is bound inside `Sticker<T>` too; s
 | `fun <T> f(): Sticker<T>?` | "nested in `Sticker<T>?`" | `null` and `Sticker(null)` would both be the null pointer; same open question as the pre-existing `Nullable(ObjectHandle)` underlying refusal |
 | `List<Sticker<T>>` (own `T`) | "nested in" | ADR-212's element box plus this ADR's re-wrap; budget only |
 | `Box<Sticker<Int>>`, lambda payload/result, flow element, awaited `suspend` result or value-class parameter on a `suspend` member | named skip | no per-instantiation ADR-171 box pair |
-| own members and secondary constructors of a generic value class | named skip, per member | needs a receiver substituted per instantiation |
+| own members and secondary constructors of a generic value class | bound by ADR-225 | see the 2026-10-22 amendment below |
 | underlying `List<T>` or any non-bare, non-phantom shape | unchanged `REFUSED` | pre-existing |
 
 ## Consequences
@@ -192,7 +192,7 @@ A `T` whose bound needs ADR-198's trampoline is bound inside `Sticker<T>` too; s
 - The diagnostics `GENERIC` hint keeps its final sentence ("... and a `T` inside a generic
   value class under `?`, inside a `List`, `Set` or `Map`, or at an erased position").
 - Deferred, each a ROADMAP line citing this ADR: `V<T>?` or `List<V<T>>` with an own `T`; erased
-  positions (a per-instantiation box pair); own members and secondary constructors.
+  positions (a per-instantiation box pair). Own members and secondary constructors were deferred here and bind under ADR-225.
 
 ### Corrections to the draft, from execution
 
@@ -232,3 +232,12 @@ The named-skip row for a trampolined bound is gone. Leak row
 `GenericValueClass_BoundedOwnTypeParameter_ReturnsToBaseline`. This amendment is **verified** by
 the Tier 1 cells in `Tier1GenericValueClassTest` and the integration rows in
 `GenericValueClassTests.cs`.
+
+## Amendment 2026-10-22: own members and secondary constructors bind
+
+[ADR-225](225-generic-value-class-members.md) supersedes the statements above that a generic value
+class plans "no members" and names each public own member or secondary constructor as
+`SKIPPED_UNSUPPORTED_TYPE`. Members, properties, secondary constructors and `suspend` members now
+bind on the record struct for every instantiation, phantom ones included, and a member's own `<R>`
+binds on any value class. The primary constructor still plans no `_create`, and `init` still runs
+at the first crossing for it.

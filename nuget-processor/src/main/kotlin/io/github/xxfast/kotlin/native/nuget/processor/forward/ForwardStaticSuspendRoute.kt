@@ -28,6 +28,19 @@ internal sealed interface ForwardStaticSuspendReceiver {
   /** An exported enum, crossing by ordinal (ADR-080). */
   data class Enum(val type: BridgeType.Enum, override val kotlinType: String) :
     ForwardStaticSuspendReceiver
+
+  /**
+   * ADR-225: a generic value class's own `T` underlying, crossing as its `NugetMarshal.Wrap<T>`
+   * box (ADR-147). Read before the launch; C# releases the box once the export returns.
+   */
+  data class Box(
+    val type: BridgeType.TypeParameter,
+    val nullable: Boolean,
+    /** ADR-198: the declared bounds the trampoline re-states, for a `T` with no erased spelling. */
+    val trampolineBounds: List<String> = emptyList(),
+  ) : ForwardStaticSuspendReceiver {
+    override val kotlinType: String = "kotlin.Any"
+  }
 }
 
 /**
@@ -71,6 +84,11 @@ internal sealed interface ForwardStaticSuspendOwner {
     override val stem: String,
     val valueClass: KSClassDeclaration,
     val underlying: ForwardStaticSuspendReceiver,
+    /**
+     * ADR-225: the constructor the receiver is rewrapped through, `pkg.Decal<Nothing>` for a
+     * phantom `T` (no argument infers it); null spells the qualified name bare.
+     */
+    val construction: String? = null,
   ) : ForwardStaticSuspendOwner
 }
 

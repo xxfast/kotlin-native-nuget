@@ -29,7 +29,8 @@ internal fun KSFunctionDeclaration.isForwardGenericMemberOwner(): Boolean {
   if (parentDeclaration == null) return true
   val owner: KSClassDeclaration = parentDeclaration as? KSClassDeclaration ?: return false
   return when (owner.classKind) {
-    ClassKind.CLASS -> !owner.isValueClass() || suspends
+    // ADR-225: a value class too, generic or not, suspending or not; its receiver is the struct.
+    ClassKind.CLASS -> true
     ClassKind.OBJECT -> true
     ClassKind.ENUM_CLASS -> suspends
     else -> false
@@ -122,7 +123,6 @@ internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
       owner == null -> "it is not a member of a class"
       owner.classKind == ClassKind.INTERFACE -> "it is declared on an interface"
       owner.classKind == ClassKind.ENUM_CLASS -> "it is declared on an enum class"
-      owner.isValueClass() -> "it is declared on a value class"
       else -> "its owner has no generic-method route"
     }
   }
@@ -273,7 +273,7 @@ private fun KSType.carriesInsideAsync(name: String): Boolean {
 private fun KSType.namesTypeParameter(name: String): Boolean =
   (declaration as? KSTypeParameter)?.simpleName?.asString() == name
 
-private fun KSType.mentionsTypeParameter(name: String): Boolean = namesTypeParameter(name) ||
+internal fun KSType.mentionsTypeParameter(name: String): Boolean = namesTypeParameter(name) ||
     arguments.any { argument ->
       argument.type?.resolve()?.expandAliases()?.mentionsTypeParameter(name) == true
     }

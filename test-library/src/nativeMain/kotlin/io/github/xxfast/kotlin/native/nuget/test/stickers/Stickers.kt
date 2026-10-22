@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget.test.stickers
 
 import io.github.xxfast.kotlin.native.nuget.test.cat.Cat
 import io.github.xxfast.kotlin.native.nuget.test.cat.Mood
+import kotlinx.coroutines.yield
 
 /**
  * ADR-220: a generic value class renders as a positional `readonly record struct Sticker<T>(T Value)`.
@@ -18,13 +19,105 @@ value class Sticker<T>(val value: T) {
   init {
     require(value != -1) { "Mylo peeled this sticker already" }
   }
+
+  /**
+   * ADR-225: a secondary constructor whose parameters do not mention `T`. It runs in Kotlin at C#
+   * construction (`new Sticker<string>("ab", 2)`), so [init] runs there too. The cast is the
+   * author's, unchecked.
+   */
+  @Suppress("UNCHECKED_CAST")
+  constructor(label: String, times: Int) : this(label.repeat(times) as T)
+
+  /** ADR-225: a secondary constructor over the class's own `T`: Oreo or Mylo gets the sticker. */
+  constructor(oreo: T, mylo: T, pickMylo: Boolean) : this(if (pickMylo) mylo else oreo)
+
+  /** ADR-225: a member property that converts nothing on the way out. */
+  val shiny: Boolean get() = value != null
+
+  /** ADR-225: a member property typed at the class's own `T`, read back through the `T` wire. */
+  val peeled: T get() = value
+
+  /** ADR-225: a member reading the receiver, returning a plain `String`. */
+  fun describe(): String = "sticker of $value"
+
+  /** ADR-225: the class's own `T` in and the struct out: `Sticker<T> Swap(T other)`. */
+  fun swap(other: T): Sticker<T> = Sticker(other)
+
+  /** ADR-225: a member with its own `<R>` on a generic value class, de-clashed from `T`. */
+  fun <R> pairWith(other: R): String = "$value+$other"
+
+  /** ADR-225: a member with its own `<R>` in and out: Oreo hands the item straight back. */
+  fun <R> hand(item: R): R = item
+
+  /** ADR-225: a member that throws: Mylo tears a sticker that says `"torn"`. */
+  fun tear(): String =
+    if (value == "torn") throw IllegalStateException("Mylo tore it") else "intact"
+
+  /** ADR-225: a `suspend` member over the class's own `T`: `Task<T> PeelLaterAsync()`. */
+  suspend fun peelLater(): T {
+    yield()
+    return value
+  }
+
+  /** ADR-225: a `suspend` member converting nothing: `Task<string> DescribeLaterAsync()`. */
+  suspend fun describeLater(): String {
+    yield()
+    return describe()
+  }
 }
 
 /**
  * A phantom type parameter: the underlying mentions no `T`, so it crosses as a plain `Long` and only
  * the C# spelling is generic (`Decal<Cat>`).
  */
-value class Decal<T>(val serial: Long)
+value class Decal<T>(val serial: Long) {
+  /**
+   * ADR-225: a secondary constructor on a phantom: Kotlin cannot infer `T`, so the export spells
+   * one. A label that is not a number throws in Kotlin at C# construction.
+   */
+  constructor(label: String) : this(label.toLong())
+
+  /** ADR-225: a member property on a phantom, converting nothing. */
+  val doubled: Long get() = serial * 2
+
+  /** ADR-225: a member on a phantom. */
+  fun describe(): String = "decal #$serial"
+
+  /** ADR-225: a member with its own `<R>` on a phantom. */
+  fun <R> stickOn(item: R): String = "decal #$serial on $item"
+
+  /** ADR-225: a `suspend` member on a phantom. */
+  suspend fun serialLater(): Long {
+    yield()
+    return serial
+  }
+}
+
+/**
+ * ADR-225: a bound own `T` (`T : Any`), so a member on `default(Badge<string>)` must throw in C#
+ * rather than send a null receiver into Kotlin.
+ */
+value class Badge<T : Any>(val value: T) {
+  fun describe(): String = "badge of $value"
+}
+
+/**
+ * ADR-225: an `Enum<T>` own `T` has no erased spelling, so a member on it runs its receiver
+ * re-wrap inside the ADR-198 trampoline.
+ */
+value class Doze<T : Enum<T>>(val value: T) {
+  fun label(): String = "dozing ${value.name}"
+}
+
+/**
+ * ADR-225: a member with its own type parameter on a non-generic value class. Mylo wears the
+ * collar.
+ */
+value class Collar(val id: String) {
+  fun <R> tagged(item: R): String = "$id:$item"
+
+  fun <R> wear(item: R): R = item
+}
 
 /** Closed `Sticker<Int>` at a return. */
 fun count(): Sticker<Int> = Sticker(3)
@@ -119,3 +212,12 @@ class StickerBook(val cover: Sticker<String>, var pages: Sticker<Int>) {
   /** A member's `Comparable<T>` own `T` inside the struct, erased, no trampoline. */
   fun <T : Comparable<T>> ranked(sticker: Sticker<T>): T = sticker.value
 }
+
+/** ADR-225: a closed `Badge<String>` at a return. */
+fun badge(): Badge<String> = Badge("Oreo")
+
+/** ADR-225: a closed `Doze<Mood>` at a return, whose member runs through the trampoline. */
+fun doze(): Doze<Mood> = Doze(Mood.SLEEPY)
+
+/** ADR-225: a non-generic value class whose members have their own type parameters. */
+fun collar(id: String): Collar = Collar(id)

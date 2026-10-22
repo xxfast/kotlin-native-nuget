@@ -420,7 +420,6 @@ class Tier1MemberGenericMethodTest {
       "tier1.membergeneric.Depot.sort" to "(here, its type parameter is nested in `Array<T>`)",
       "tier1.membergeneric.Crate.shadow" to "(here, its type parameter `T` shadows its owner's)",
       "tier1.membergeneric.Weather.echo" to "(here, it is declared on an enum class)",
-      "tier1.membergeneric.Tag.echo" to "(here, it is declared on a value class)",
       "tier1.membergeneric.extended" to "(here, it is an extension function)",
     ).forEach { (member, refusal) ->
       val named: List<String> = result.kspWarnings.filter { warning ->
@@ -448,6 +447,12 @@ class Tier1MemberGenericMethodTest {
       declarations.any { line -> "object? Structural(object? item)" in line },
       "expected the erased Structural binding; got: ${declarations.filter { "Structural(" in it }}",
     )
+    // ADR-225: a value class member's own `T` binds, its receiver the struct itself.
+    assertTrue(
+      declarations.any { line -> line.startsWith("public T Echo<T>(T item)") },
+      "expected the value class Tag.Echo binding",
+    )
+    assertContains(result.generated, "tier1.membergeneric.Tag(value).echo<Any?>(")
     listOf(
       "Kind", "Conjure", "Narrow", "Sort", "Shadow",
       "Extended",

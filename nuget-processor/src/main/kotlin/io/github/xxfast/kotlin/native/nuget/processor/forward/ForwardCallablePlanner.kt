@@ -939,6 +939,16 @@ internal data class ForwardCallablePlanCatalog(
       .toSet()
   }
 
+  /**
+   * ADR-225: the value-receiver members of [owner] on the ordinary route, in planning order:
+   * every member and secondary constructor of a generic value class, and a member with its own
+   * type parameters on any value class.
+   */
+  fun valueClassRouteMembers(owner: String): List<ForwardCallablePlan> = plans.filter { plan ->
+    plan.invocation.origin == ForwardCallableOrigin.VALUE_CLASS_MEMBER &&
+        plan.invocation.target?.removeSuffix("#property") == owner
+  }
+
   private fun valueClassMembers(owner: String): List<ForwardCallablePlan> = plans.filter { plan ->
     plan.invocation.origin == ForwardCallableOrigin.VALUE_CLASS &&
         plan.invocation.symbol.substringBeforeLast('.') == owner &&
@@ -1219,8 +1229,11 @@ internal class ForwardCallablePlanner(
     val role: ForwardValueClassUnderlying = classifier.valueClassUnderlying(cls)
     if (role == ForwardValueClassUnderlying.REFUSED) return emptyList()
     // ADR-220: a generic value class is a positional struct C# constructs itself; it has no
-    // `_create` (Kotlin cannot infer a phantom `T` there) and its own members are named skips.
-    if (role == ForwardValueClassUnderlying.GENERIC) return emptyList()
+    // primary `_create` (Kotlin cannot infer a phantom `T` there). ADR-225: its own members and
+    // secondary constructors plan on the value-receiver route below.
+    if (role == ForwardValueClassUnderlying.GENERIC) {
+      return genericValueClassEntries(cls, owner, prefix, underlyingPropName, underlyingType)
+    }
     val isReferenceUnderlying: Boolean = role == ForwardValueClassUnderlying.REFERENCE
 
     val receiver: ForwardReceiver = if (isReferenceUnderlying) {
@@ -1255,9 +1268,201 @@ internal class ForwardCallablePlanner(
       addAll(
         valueClassPropertyEntries(cls, owner, prefix, underlyingPropName, receiver, inherited),
       )
-      addAll(valueClassMethodEntries(cls, owner, prefix, receiver, inherited))
+      // ADR-225: a member with its own type parameters takes the generic value class route, whose
+      // receiver is the struct itself, re-wrapped in Kotlin.
+      val memberReceiver = ForwardReceiver.Value(
+        BridgeType.ValueClass(owner, underlyingType, underlyingPropertyName = underlyingPropName),
+        name = "value",
+      )
+      addAll(valueClassMethodEntries(cls, owner, prefix, receiver, memberReceiver, inherited))
       addAll(valueClassBoxingEntries(cls, owner, prefix))
     }
+  }
+
+  /**
+   * ADR-225: a generic value class's own secondary constructors, properties and methods. One export
+   * per member serves every instantiation: Kotlin erases the class to one runtime type, and the
+   * receiver crosses as the underlying at the class's own `T` (the ADR-220 bare-`T` box for
+   * `Sticker<T>`, a plain `Long` for the phantom `Decal<T>`), re-wrapped in Kotlin through
+   * [ForwardInvocation.valueClassConstruction] so `init` runs inside the export's error slot.
+   */
+  private fun genericValueClassEntries(
+    cls: KSClassDeclaration,
+    owner: String,
+    prefix: String,
+    underlyingPropName: String,
+    underlying: BridgeType,
+  ): List<ForwardCallableCatalogEntry> {
+    val underlyingName: String? =
+      (cls.primaryConstructor?.parameters?.singleOrNull()?.type?.resolve()?.declaration
+        as? KSTypeParameter)?.simpleName?.asString()
+    val receiverType = BridgeType.ValueClass(
+      qualifiedName = owner,
+      underlying = underlying,
+      underlyingPropertyName = underlyingPropName,
+    )
+    val receiver = ForwardReceiver.Value(receiverType, name = "value")
+    val genericOwner: ForwardGenericOwner? = cls.forwardGenericOwner()
+    // Inferred from the underlying for its own `T`; a phantom one is `Nothing`, which satisfies
+    // every bound and which no member's signature can observe, since it never reaches a value.
+    val arguments: List<String> = cls.typeParameters.map { parameter ->
+      if (parameter.simpleName.asString() == underlyingName) "_" else "Nothing"
+    }
+    val receiverConstruction: String =
+      if (arguments.all { it == "_" }) owner else "$owner${arguments.joinToString(", ", "<", ">")}"
+    val inherited: ForwardSupertypeMembers = ForwardSupertypeMembers.of(cls)
+
+    val constructors: List<ForwardCallableCatalogEntry> = cls.declarations
+      .filterIsInstance<KSFunctionDeclaration>()
+      .filter { it.simpleName.asString() == "<init>" }
+      .filter { it != cls.primaryConstructor }
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .toList()
+      .mapIndexed { index, ctor ->
+        val suffix = "_${index + 2}"
+        // A parameter mentioning the underlying's `T` infers it; none does in
+        // `constructor(label: String, times: Int) : this(label.repeat(times) as T)`, the author's
+        // unchecked cast, so that one is spelled at the erased bound.
+        val witnessed: Boolean = ctor.parameters.any { parameter ->
+          underlyingName != null && parameter.type.resolve().mentionsTypeParameter(underlyingName)
+        }
+        val spelled: List<String> = cls.typeParameters.mapIndexed { position, parameter ->
+          when {
+            parameter.simpleName.asString() != underlyingName -> "Nothing"
+            witnessed -> "_"
+            // No erased argument is within an unspellable or multiple bound: the export runs
+            // under the ADR-198 trampoline and names its type variable instead.
+            else -> genericOwner?.typeParameters?.getOrNull(position)?.erased
+              ?: parameter.simpleName.asString()
+          }
+        }
+        val construction: String =
+          if (spelled.all { it == "_" }) owner else "$owner${spelled.joinToString(", ", "<", ">")}"
+        planOrSkip(
+          symbol = "$owner.<init>$suffix",
+          publicName = "Create$suffix",
+          exportName = "${prefix}_create$suffix",
+          receiver = ForwardReceiver.Static,
+          parameters = ctor.parameters.map { parameter ->
+            parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
+          },
+          result = underlying,
+          origin = ForwardCallableOrigin.VALUE_CLASS_MEMBER,
+          target = owner,
+          ownerType = genericOwner,
+          invocationReceiver = underlyingPropName,
+          node = ctor,
+          doc = ctor.forwardKdoc(expects).forParameters(ctor.parameters),
+        ).withValueClassConstruction(construction)
+      }
+
+    val properties: List<ForwardCallableCatalogEntry> = cls.getAllProperties()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { it.simpleName.asString() != underlyingPropName }
+      .map { prop ->
+        val name: String = prop.simpleName.asString()
+        if (prop.parentDeclaration != cls || inherited.declares(prop)) {
+          return@map ForwardCallableCatalogEntry.Skipped(
+            "$owner.$name", ForwardPlanSkipReason.INHERITED_MEMBER, node = prop,
+          )
+        }
+        planOrSkip(
+          symbol = "$owner.$name",
+          publicName = prop.csharpMemberName(),
+          exportName = "${prefix}_get_$name",
+          receiver = receiver,
+          parameters = emptyList(),
+          result = classifier.classify(prop.type.resolve()),
+          origin = ForwardCallableOrigin.VALUE_CLASS_MEMBER,
+          target = owner,
+          ownerType = genericOwner,
+          valueClassProperty = true,
+          member = name,
+          node = prop,
+          doc = prop.forwardKdoc(expects),
+        ).withValueClassConstruction(receiverConstruction)
+      }
+      .toList()
+
+    val excluded: Set<String> = setOf("equals", "hashCode", "toString", "<init>")
+    val occurrences: MutableMap<String, Int> = mutableMapOf()
+    val methods: List<ForwardCallableCatalogEntry> = cls.getAllFunctions()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { it.simpleName.asString() !in excluded }
+      .filter { method -> !method.isCompilerOwnedMember(cls) }
+      .map { method ->
+        val name: String = method.simpleName.asString()
+        if (method.parentDeclaration != cls || inherited.declares(method)) {
+          return@map ForwardCallableCatalogEntry.Skipped(
+            "$owner.$name", ForwardPlanSkipReason.INHERITED_MEMBER, node = method,
+          )
+        }
+        val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
+        val suffix: String = if (occurrence == 1) "" else "_$occurrence"
+        val symbol = "$owner.$name$suffix"
+        val structuralReason: ForwardPlanSkipReason? = when {
+          method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
+          method.forwardMemberGenericRefusal() != null -> ForwardPlanSkipReason.GENERIC
+          else -> null
+        }
+        if (structuralReason != null) {
+          return@map ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = method)
+        }
+        planOrSkip(
+          symbol = symbol,
+          publicName = method.csharpMemberName(),
+          exportName = "${prefix}_$name$suffix",
+          receiver = receiver,
+          parameters = method.parameters.map { parameter ->
+            parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
+          },
+          result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
+          origin = ForwardCallableOrigin.VALUE_CLASS_MEMBER,
+          target = owner,
+          ownerType = genericOwner,
+          member = name,
+          node = method,
+          doc = method.forwardKdoc(expects).forParameters(method.parameters),
+        ).withMethodTypeParameters(method).withValueClassConstruction(receiverConstruction)
+      }
+      // ADR-225: a suspend member binds on the ADR-229 static suspend route, the receiver the own
+      // `T` box (or a phantom's plain underlying), rewrapped through the same constructor spelling.
+      .map { entry ->
+        val function: KSFunctionDeclaration? = entry.node as? KSFunctionDeclaration
+        val stem: String = function
+          ?.let { "${prefix}_${it.simpleName.asString()}${entry.overloadTail(it)}" }.orEmpty()
+        entry.onStaticSuspendRoute(
+          genericSuspendReceiver(cls, underlying)?.let { slot ->
+            ForwardStaticSuspendOwner.ValueClass(stem, cls, slot, receiverConstruction)
+          },
+        )
+      }
+      .toList()
+      .nameUnroutedPositions()
+
+    return constructors + properties + methods
+  }
+
+  /**
+   * ADR-225: the static suspend receiver slot of a generic value class: the own `T` box, or a
+   * phantom's underlying on the slot a non-generic one takes. A trampolined `T` (ADR-198) carries
+   * its declared bounds, which the export's trampoline re-declares to read the box as `T`.
+   */
+  private fun genericSuspendReceiver(
+    cls: KSClassDeclaration,
+    underlying: BridgeType,
+  ): ForwardStaticSuspendReceiver? {
+    val own: BridgeType.TypeParameter? = underlying as? BridgeType.TypeParameter
+      ?: (underlying as? BridgeType.Nullable)?.type as? BridgeType.TypeParameter
+    if (own != null) {
+      val bounds: List<String> = if (!own.trampolined) emptyList() else cls.typeParameters
+        .firstOrNull { parameter -> parameter.simpleName.asString() == own.kotlinName }
+        ?.bounds?.map { bound -> bound.resolve().forwardKotlinDeclaredSpelling() }?.toList()
+        .orEmpty()
+      return ForwardStaticSuspendReceiver.Box(own, underlying is BridgeType.Nullable, bounds)
+    }
+    return cls.primaryConstructor?.parameters?.firstOrNull()?.type?.resolve()
+      ?.let(classifier::staticSuspendReceiver)
   }
 
   /**
@@ -1442,6 +1647,7 @@ internal class ForwardCallablePlanner(
     owner: String,
     prefix: String,
     receiver: ForwardReceiver,
+    memberReceiver: ForwardReceiver.Value,
     inherited: ForwardSupertypeMembers,
   ): List<ForwardCallableCatalogEntry> {
     val excluded: Set<String> = setOf(
@@ -1476,13 +1682,31 @@ internal class ForwardCallablePlanner(
         val symbol: String = "$owner.$name$suffix"
         val structuralReason: ForwardPlanSkipReason? = when {
           method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
-          method.typeParameters.isNotEmpty() -> ForwardPlanSkipReason.GENERIC
+          method.forwardMemberGenericRefusal() != null -> ForwardPlanSkipReason.GENERIC
           // ADR-230 amendment: the static flow route's `_has_value` probe binds it.
           method.hasNullableLegacyFlowReturn() -> ForwardPlanSkipReason.FLOW_PROTOCOL
           else -> null
         }
         if (structuralReason != null) {
           ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = method)
+        } else if (method.typeParameters.isNotEmpty()) {
+          // ADR-225: a member's own `T` rides ADR-197's boxed wire on the ordinary route, which
+          // the shipped no-error-slot value-class emitter has no result arm for.
+          planOrSkip(
+            symbol = symbol,
+            publicName = method.csharpMemberName(),
+            exportName = "${prefix}_$name$suffix",
+            receiver = memberReceiver,
+            parameters = method.parameters.map { parameter ->
+              parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
+            },
+            result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
+            origin = ForwardCallableOrigin.VALUE_CLASS_MEMBER,
+            target = owner,
+            member = name,
+            node = method,
+            doc = method.forwardKdoc(expects).forParameters(method.parameters),
+          ).withMethodTypeParameters(method).withValueClassConstruction(owner)
         } else {
           planOrSkip(
             symbol = symbol,
@@ -2849,6 +3073,15 @@ internal class ForwardCallablePlanner(
     pairMembers: Set<KSFunctionDeclaration>,
   ): Boolean = typeParameters.isNotEmpty() &&
       (forwardMemberGenericRefusal() != null || this in pairMembers)
+
+  /** ADR-225: stamps the Kotlin constructor spelling a value-class member re-wraps through. */
+  private fun ForwardCallableCatalogEntry.withValueClassConstruction(
+    spelling: String,
+  ): ForwardCallableCatalogEntry {
+    if (this !is ForwardCallableCatalogEntry.Planned) return this
+    val invocation: ForwardInvocation = plan.invocation.copy(valueClassConstruction = spelling)
+    return copy(plan = plan.copy(invocation = invocation))
+  }
 
   /** ADR-197: stamps [method]'s own type parameters onto a planned entry's public signature. */
   private fun ForwardCallableCatalogEntry.withMethodTypeParameters(

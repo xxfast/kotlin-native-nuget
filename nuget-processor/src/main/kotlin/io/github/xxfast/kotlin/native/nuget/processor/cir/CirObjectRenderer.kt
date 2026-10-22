@@ -34,11 +34,12 @@ private fun StringBuilder.dropTrailingBlankLine() {
 }
 
 internal fun StringBuilder.renderValueClass(cls: CirValueClass) {
-  // ADR-237: a generic struct cannot declare an extern (CS7042), so its box pair's imports move
-  // to a sibling `{Name}Native`, the move `renderClass` makes for a generic class.
-  if (cls.typeParameters.isNotEmpty() && cls.boxing != null) {
-    val carrier: String = "${cls.name}Native"
-    val body: String = buildString { renderReferenceValueClass(cls) }
+  // ADR-225, ADR-237: a generic struct cannot declare an extern (CS7042), so its members' and box pair's imports move to
+  // a sibling `{Name}Native`, the mechanical move `renderClass` makes for a generic class.
+  if (cls.typeParameters.isNotEmpty() &&
+    (cls.boxing != null || cls.routeMembers.isNotEmpty() || cls.asyncMembers.isNotEmpty())) {
+    val carrier = "${cls.name}Native"
+    val body: String = StringBuilder().apply { renderReferenceValueClass(cls) }.toString()
     val hoisted: HoistedDllImports = hoistDllImports(body, carrier)
     appendLine("    internal static class $carrier")
     appendLine("    {")
@@ -231,6 +232,7 @@ private fun StringBuilder.renderValueClassBoxing(cls: CirValueClass) {
 
 private fun StringBuilder.renderValueClassMembers(cls: CirValueClass) {
   renderValueClassBoxing(cls)
+  cls.routeMembers.forEach { member -> renderValueClassRouteMember(cls, member) }
   cls.properties.forEach { prop ->
     renderDllImport(cls.propertyNativeImport(prop))
     renderDoc(prop.doc, "        ", generated = prop.remarks)
@@ -266,6 +268,49 @@ private fun StringBuilder.renderValueClassMembers(cls: CirValueClass) {
   }
   // ADR-229: the static suspend route's members, rendered as any class's async members are.
   cls.asyncMembers.forEach { member -> renderMember(member) }
+}
+
+/**
+ * ADR-225: an ordinary-route member of the struct, after its extern. A method renders through the
+ * shared [renderMethod]; a property wraps the same block body in a getter; a secondary constructor
+ * is its private static `CreateChecked_N` helper plus the public constructor chaining through it.
+ */
+private fun StringBuilder.renderValueClassRouteMember(
+  cls: CirValueClass,
+  member: CirValueClassRouteMember,
+) {
+  renderDllImport(member.import)
+  val method: CirMethod = member.method
+  when (member.kind) {
+    CirValueClassRouteKind.METHOD -> renderMethod(method, cls.name)
+    CirValueClassRouteKind.PROPERTY -> {
+      renderDoc(method.doc, "        ")
+      appendLine("        public ${method.returnType} ${method.identifier}")
+      appendLine("        {")
+      appendLine("            get")
+      append("            {")
+      method.body.lines().forEach { line -> appendLine(if (line.isBlank()) line else "    $line") }
+      appendLine("            }")
+      appendLine("        }")
+      appendLine()
+    }
+
+    CirValueClassRouteKind.CONSTRUCTOR -> {
+      // Rendered here, not through [renderMethod]: its static-only `<T>` fallback would declare a
+      // second `T` on the helper (CS0693) that the constructor initializer cannot infer.
+      val parameters: String = method.parameters.joinToString(", ") { it.declaration }
+      appendLine("        private static ${method.returnType} ${method.name}($parameters)")
+      appendLine("        {${method.body}")
+      appendLine("        }")
+      appendLine()
+      val arguments: String = method.parameters.joinToString(", ") { it.name }
+      renderDoc(member.doc, "        ")
+      appendLine("        public ${cls.name}($parameters) : this(${method.name}($arguments))")
+      appendLine("        {")
+      appendLine("        }")
+      appendLine()
+    }
+  }
 }
 
 /**

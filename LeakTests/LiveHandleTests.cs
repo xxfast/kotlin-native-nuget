@@ -8169,4 +8169,76 @@ public class LiveHandleTests
                 new TestLibrary.Stickers.Sticker<Mood>(Mood.Happy)).Value);
         });
     }
+
+    // ADR-225
+    // A generic value class member: the receiver crosses on the class's own `T` wire, so a
+    // `Sticker<string>` or `Sticker<Cat>` receiver mints one box per call and releases it, a `T`
+    // parameter does the same, and a `T` result is read back once. A secondary constructor returns
+    // the underlying, and a phantom receiver is a plain `long` that owns nothing. Ledger per
+    // iteration: oreo and mylo +1 each, every box +1/-1, every returned cat +1 and its dispose -1,
+    // the two disposes -1 each. Net zero.
+    [Fact]
+    public void GenericValueClassMembers_ReceiverParameterAndResultBoxes_ReturnToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var oreo = new Cat("Oreo", 4);
+            using var mylo = new Cat("Mylo", 5);
+            Assert.Equal("sticker of Oreo", new TestLibrary.Stickers.Sticker<string>("Oreo").Describe());
+            Assert.True(new TestLibrary.Stickers.Sticker<Cat>(oreo).Shiny);
+            using (Cat peeled = new TestLibrary.Stickers.Sticker<Cat>(oreo).Peeled)
+                Assert.Equal("Oreo", peeled.Name);
+            using (Cat swapped = new TestLibrary.Stickers.Sticker<Cat>(oreo).Swap(mylo).Value)
+                Assert.Equal("Mylo", swapped.Name);
+            using (Cat handed = new TestLibrary.Stickers.Sticker<string>("x").Hand(mylo))
+                Assert.Equal("Mylo", handed.Name);
+            Assert.Equal("abab", new TestLibrary.Stickers.Sticker<string>("ab", 2).Value);
+            using (Cat picked = new TestLibrary.Stickers.Sticker<Cat>(oreo, mylo, false).Value)
+                Assert.Equal("Oreo", picked.Name);
+            Assert.Equal("decal #7 on Oreo", new TestLibrary.Stickers.Decal<Cat>(7L).StickOn("Oreo"));
+            Assert.Equal(9L, new TestLibrary.Stickers.Decal<Cat>("9").Serial);
+            using (Cat worn = TestLibrary.Stickers.Stickers.Collar("t1").Wear(oreo))
+                Assert.Equal("Oreo", worn.Name);
+            Assert.Equal("dozing SLEEPY", TestLibrary.Stickers.Stickers.Doze().Label());
+        });
+    }
+
+    // ADR-225
+    // A faulting generic value class member, constructor and default receiver: the receiver box is
+    // released on the throw path, the secondary constructor's argument boxes too, and a default
+    // `Badge<string>` is refused in C# before any box is minted. Net zero.
+    [Fact]
+    public void GenericValueClassMembers_FaultPaths_ReturnToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            Assert.Throws<KotlinInvalidOperationException>(
+                () => new TestLibrary.Stickers.Sticker<string>("torn").Tear());
+            Assert.Throws<KotlinArgumentException>(
+                () => new TestLibrary.Stickers.Sticker<int>(3, -1, true));
+            Assert.Throws<KotlinArgumentException>(
+                () => new TestLibrary.Stickers.Sticker<int>(3).Swap(-1));
+            Assert.Throws<KotlinFormatException>(() => new TestLibrary.Stickers.Decal<Cat>("Oreo"));
+            Assert.Throws<ArgumentException>(
+                () => default(TestLibrary.Stickers.Badge<string>).Describe());
+        });
+    }
+
+    // ADR-225
+    // A `suspend` member of a generic value class: the receiver box lives until the export reads it,
+    // and the `T` result is read back once through the task. Net zero.
+    [Fact]
+    public async Task GenericValueClassSuspendMembers_ReturnToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var oreo = new Cat("Oreo", 4);
+            using (Cat later = await new TestLibrary.Stickers.Sticker<Cat>(oreo).PeelLaterAsync())
+                Assert.Equal("Oreo", later.Name);
+            Assert.Equal("sticker of Mylo",
+                await new TestLibrary.Stickers.Sticker<string>("Mylo").DescribeLaterAsync());
+            await Assert.ThrowsAsync<KotlinArgumentException>(
+                () => new TestLibrary.Stickers.Sticker<int>(-1).PeelLaterAsync());
+        });
+    }
 }

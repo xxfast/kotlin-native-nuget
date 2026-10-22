@@ -222,25 +222,25 @@ class Tier1ValueClassNullableResultTest {
     assertTrue(generic.kspSucceeded, "expected KSP to succeed; got: ${generic.kspErrors}")
     assertTrue(generic.compiledClean, "expected a clean compile; got: ${generic.compileErrors}")
     val cs: String = generic.generatedCSharp
-    // Answered: not planned at all. ADR-220 declares the struct (`Box<T>(T Item)`) with no members,
-    // since a member would need its receiver substituted per instantiation, and names each one.
+    // ADR-225: both bind on the struct, on the ordinary route's null-pointer wire for each result.
     assertContains(cs, "public readonly record struct Box<T>(T Item)")
     assertContains(cs, "public static global::Interop.Vcgeneric.Box<string> Box()")
+    assertContains(cs, "public T? Maybe()")
+    assertContains(cs, "public string? Label()")
     assertTrue(
-      !Regex("""public [^\n]* (Maybe|Label)\(""").containsMatchIn(cs),
-      "expected no Box.Maybe or Box.Label member; generated=$cs",
+      generic.kspWarnings.none { it.contains("tier1.vcgeneric.Box.") },
+      "expected no Box member named; kspWarnings=${generic.kspWarnings}",
     )
-    listOf("maybe", "label").forEach { member ->
-      assertTrue(
-        generic.kspWarnings.any {
-          it.contains("Skipping tier1.vcgeneric.Box.$member:") &&
-            it.contains("declared on the generic value class")
-        },
-        "expected Box.$member to skip by name; kspWarnings=${generic.kspWarnings}",
-      )
-    }
     Tier1CSharpCompile.assertCompiles(
-      generic, "public static class Consumer { }", allowUnsafe = true,
+      generic,
+      """
+      using Interop.Vcgeneric;
+      public static class Consumer
+      {
+          public static string? Run() => new Box<string>("Mylo").Maybe() + Fixture.Box().Label();
+      }
+      """.trimIndent(),
+      allowUnsafe = true,
     )
   }
 }
