@@ -200,8 +200,17 @@ internal fun asyncCallbackHolderType(): TypeSpec {
 }
 
 /** `NugetAsyncContext(releaseContext, key)`: the holder taking ownership of the C# key. */
-internal fun asyncCallbackHolderConstruction(slots: ForwardAsyncSlots): String =
-  "$ASYNC_CALLBACK_HOLDER(${slots.releaseContext}, ${slots.key})"
+internal fun asyncCallbackHolderConstruction(
+  slots: ForwardAsyncSlots,
+  // ADR-210 amendment: a `Flow<T>?` whose C# source was `null` has a zero key and no holder.
+  nullable: Boolean = false,
+): String {
+  val holder = "$ASYNC_CALLBACK_HOLDER(${slots.releaseContext}, ${slots.key})"
+  return if (nullable) "if (${slots.key} == null) null else $holder" else holder
+}
+
+/** ADR-210 amendment: whether [this] parameter type is a `Flow<T>?` whose key may be zero. */
+internal fun BridgeType.isNullableFlowSource(): Boolean = (this as? BridgeType.FlowSource)?.nullable == true
 
 /** The Kotlin spelling of one component of the function type, as the member declares it. */
 private fun BridgeType.asyncKotlinType(): String = when (this) {
@@ -478,7 +487,7 @@ internal fun asyncCallbackExpression(
 
 /** `kotlinx.coroutines.flow.Flow<kotlin.Int>`. */
 internal fun BridgeType.FlowSource.kotlinFlowType(): String =
-  "kotlinx.coroutines.flow.Flow<${element.asyncKotlinType()}>"
+  "kotlinx.coroutines.flow.Flow<${element.asyncKotlinType()}>" + if (nullable) "?" else ""
 
 /**
  * ADR-210: the Kotlin `Flow<T>` over the C# caller's `IAsyncEnumerable<T>`, as one self-contained
@@ -509,10 +518,10 @@ internal fun flowSourceExpression(
   val read: String = "nugetCallbackCall { nugetErr -> " +
       "${slots.end}.reinterpret<$CFUNCTION<($POINTER, $POINTER?) -> $wire>>()" +
       ".invoke(nugetEnumeration, nugetErr) }"
-  return buildString {
+  val body: String = buildString {
     appendLine("run {")
-    if (!holderBuilt) appendLine("  val $holder = ${asyncCallbackHolderConstruction(slots)}")
-    appendLine("  val $flow: ${type.kotlinFlowType()} = $RUNTIME.flowForKotlin(")
+    if (!holderBuilt && !type.nullable) appendLine("  val $holder = ${asyncCallbackHolderConstruction(slots)}")
+    appendLine("  val $flow: ${type.copy(nullable = false).kotlinFlowType()} = $RUNTIME.flowForKotlin(")
     appendLine(
       "    release = { nugetTask -> ${slots.releaseTask}" +
           ".reinterpret<$CFUNCTION<($POINTER) -> Unit>>().invoke(nugetTask) },"
@@ -589,6 +598,17 @@ internal fun flowSourceExpression(
     )
     appendLine("  )")
     appendLine("  $flow")
+    append("}")
+  }
+  if (!type.nullable) return body
+  // ADR-210 amendment: a zero key is a C# `null`, so no holder and no flow. The body runs with
+  // the holder smart-cast to non-null.
+  return buildString {
+    appendLine("run {")
+    if (!holderBuilt) {
+      appendLine("  val $holder = ${asyncCallbackHolderConstruction(slots, nullable = true)}")
+    }
+    appendLine("  if ($holder == null) null else ${body.replace("\n", "\n  ")}")
     append("}")
   }
 }

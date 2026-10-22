@@ -676,6 +676,10 @@ the routes where the non-null `Flow<T>` already binds:
 Not changed: a top-level non-suspend `fun f(): Flow<T>?` and object or companion members still have
 no Flow route and stay named skips.
 
+Amended 2026-10-22 ([ADR-230](230-flow-on-static-owners.md)): no longer true. A top-level, object,
+companion, enum and value-class `Flow<T>?` member binds as `KotlinFlow<T>?` on the static flow
+route, behind the same `_has_value` probe.
+
 Separate fix in the same change: `fun f(): StateFlow<T>?` was both bound and warned
 `SKIPPED_UNSUPPORTED_RETURN`, because the planner classed it as a nullable drop. It now takes the
 silent `FLOW_PROTOCOL` skip its non-null twin takes, so the legacy route owns it and no warning is

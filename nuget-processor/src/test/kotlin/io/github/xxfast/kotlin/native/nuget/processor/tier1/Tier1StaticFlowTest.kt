@@ -100,4 +100,50 @@ class Tier1StaticFlowTest {
       "kspWarnings=${result.kspWarnings}",
     )
   }
+
+  /** ADR-230 amendment: a nullable flow binds on every static owner behind `_has_value`. */
+  @Test
+  fun `a nullable flow on every static owner binds as a nullable holder`() {
+    val result: Tier1Result = Tier1Harness.run(
+      """
+      package tier1.nullablestaticflow
+
+      import kotlinx.coroutines.flow.Flow
+      import kotlinx.coroutines.flow.flowOf
+
+      fun maybe(home: Boolean): Flow<Int>? = if (home) flowOf(1) else null
+      fun <T> echo(value: T): Flow<T>? = flowOf(value)
+
+      object Clock {
+        fun ticks(): Flow<Int>? = null
+      }
+
+      enum class Chime {
+        BONG;
+
+        fun play(): Flow<Int>? = null
+      }
+
+      value class Pendulum(val millis: Int) {
+        fun beats(): Flow<Int>? = null
+        val pulse: Flow<Int>? get() = null
+      }
+      """.trimIndent(),
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    assertTrue(result.kspErrors.isEmpty(), "kspErrors=${result.kspErrors}")
+    assertTrue(
+      result.kspWarnings.none { "nullablestaticflow" in it },
+      "no nullable static flow may be named; kspWarnings=${result.kspWarnings}",
+    )
+    val cs: String = result.generatedCSharp
+    assertContains(cs, "public static KotlinFlow<int>? Maybe(bool home)")
+    assertContains(cs, "public static KotlinFlow<T>? Echo<T>(T value)")
+    assertContains(cs, "public static KotlinFlow<int>? Ticks()")
+    assertContains(cs, "public static KotlinFlow<int>? Play(this ")
+    assertContains(cs, "public KotlinFlow<int>? Beats()")
+    assertContains(cs, "public KotlinFlow<int>? Pulse")
+    assertContains(result.generated, "_clock_ticks_has_value")
+  }
 }

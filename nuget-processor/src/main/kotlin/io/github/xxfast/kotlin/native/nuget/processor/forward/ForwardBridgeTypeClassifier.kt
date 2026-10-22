@@ -1238,7 +1238,8 @@ internal class ForwardBridgeTypeClassifier(
    */
   fun flowSourceOrNull(type: KSType): BridgeType.FlowSource? {
     val expanded: KSType = type.expandAliases()
-    if (type.isMarkedNullable || expanded.isMarkedNullable) return null
+    // ADR-210 amendment: a `Flow<T>?` is the same source, a C# `null` crossing as a zero key.
+    val nullable: Boolean = type.isMarkedNullable || expanded.isMarkedNullable
     val qualifiedName: String = expanded.declaration.qualifiedName?.asString() ?: return null
     if (qualifiedName !in PLAIN_FLOW_TYPES) return null
     val argument: KSType = expanded.arguments.singleOrNull()?.type?.resolve() ?: return null
@@ -1247,7 +1248,7 @@ internal class ForwardBridgeTypeClassifier(
     val readable: Boolean =
       element == BridgeType.String || element is BridgeType.Primitive || element.isAsyncBoxed()
     if (!readable) return null
-    return BridgeType.FlowSource(element).also { minted -> flowSources += minted }
+    return BridgeType.FlowSource(element, nullable).also { minted -> flowSources += minted }
   }
 
   /** [classify] at a parameter position: ADR-210's two asynchronous shapes first. */

@@ -15,8 +15,9 @@ import kotlin.test.assertTrue
  * The control is the return half: a nullable specialized protocol at a return position still has
  * nowhere to put the absence, so it keeps `SKIPPED_UNSUPPORTED_RETURN` and the unnamed sentence.
  *
- * ADR-164: a trailing defaulted `Flow<Int>?` is dropped from the widened signature, so
- * `hubWithEvents` binds without it and says nothing. The skip is exercised by `relay`, whose
+ * ADR-164: a trailing defaulted `(suspend () -> Int)?` is dropped from the widened signature, so
+ * `hubWithEvents` binds without it and says nothing. (A `Flow<Int>?` was the example until the
+ * ADR-210 amendment bound it.) The skip is exercised by `relay`, whose
  * unroutable default sits before a required parameter and so still leaves the callable unroutable.
  *
  * `hub` / `Hub` are the second half of the issue (part 2): a nullable exported class handle *is* a
@@ -39,12 +40,14 @@ class Tier1NullableParameterDiagnosticTest {
     fun hub(settings: Settings = Settings(), logger: Logger? = null, note: String? = null): Hub =
       Hub(settings, logger, note)
 
-    fun hubWithEvents(settings: Settings = Settings(), events: Flow<Int>? = null): Hub =
+    fun hubWithEvents(settings: Settings = Settings(), events: (suspend () -> Int)? = null): Hub =
       Hub(settings, null)
 
-    fun relay(events: Flow<Int>? = null, settings: Settings): Hub = Hub(settings, null)
+    fun relay(events: (suspend () -> Int)? = null, settings: Settings): Hub = Hub(settings, null)
 
-    fun latest(): Flow<Int>? = null
+    // ADR-230 amendment: a nullable `Flow<Int>?` return binds now, so the unwired nullable return
+    // is a nullable suspend lambda.
+    fun latest(): (suspend (Int) -> String)? = null
   """.trimIndent()
 
   private fun diagnostic(result: Tier1Result, kind: ForwardDiagnosticKind, member: String): String =
@@ -108,8 +111,10 @@ class Tier1NullableParameterDiagnosticTest {
       diagnostic(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN, "latest")
     // ADR-064 amendment (2026-09-29): the return half names the declared type the author wrote.
     assertTrue(
-      diagnostic.contains("the nullable return type `Flow<Int>?` has no wire at a return position"),
-      "expected the return-position hint to name `Flow<Int>?`; got: $diagnostic",
+      diagnostic.contains(
+        "the nullable return type `(suspend (Int) -> String)?` has no wire at a return position",
+      ),
+      "expected the return-position hint to name `(suspend (Int) -> String)?`; got: $diagnostic",
     )
     assertFalse(
       diagnostic.contains("nullable parameter"),

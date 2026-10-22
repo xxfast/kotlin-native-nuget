@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardFlowType
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 
@@ -1406,6 +1407,13 @@ internal class ForwardCallablePlanner(
           "$owner.$name", ForwardPlanSkipReason.INHERITED_MEMBER, node = prop,
         )
       }
+      // ADR-230 amendment: a nullable flow property binds on the static flow route.
+      val flowType = prop.type.resolve().expandAliases()
+      if (flowType.isMarkedNullable && flowType.isForwardFlowType()) {
+        return@map ForwardCallableCatalogEntry.Skipped(
+          "$owner.$name", ForwardPlanSkipReason.FLOW_PROTOCOL, node = prop,
+        )
+      }
       planOrSkip(
         symbol = "$owner.$name",
         publicName = prop.csharpMemberName(),
@@ -1478,6 +1486,8 @@ internal class ForwardCallablePlanner(
         val structuralReason: ForwardPlanSkipReason? = when {
           method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
           method.typeParameters.isNotEmpty() -> ForwardPlanSkipReason.GENERIC
+          // ADR-230 amendment: the static flow route's `_has_value` probe binds it.
+          method.hasNullableLegacyFlowReturn() -> ForwardPlanSkipReason.FLOW_PROTOCOL
           else -> null
         }
         if (structuralReason != null) {
@@ -2618,6 +2628,8 @@ internal class ForwardCallablePlanner(
       val structural: ForwardPlanSkipReason? = when {
         function.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
         function.typeParameters.isNotEmpty() -> ForwardPlanSkipReason.GENERIC
+        // ADR-230 amendment: the static flow route's `_has_value` probe binds it.
+        function.hasNullableLegacyFlowReturn() -> ForwardPlanSkipReason.FLOW_PROTOCOL
         else -> null
       }
       if (structural != null) {
@@ -2799,6 +2811,10 @@ internal class ForwardCallablePlanner(
       function.typeParameters.isNotEmpty() &&
           (!routesGeneric || function.forwardMemberGenericRefusal() != null) ->
         ForwardPlanSkipReason.GENERIC
+
+      // ADR-230 amendment: a nullable flow return binds on the static flow route, behind the
+      // `_has_value` probe, as the class route's does (ADR-026 amendment 2026-10-09).
+      function.hasNullableLegacyFlowReturn() -> ForwardPlanSkipReason.FLOW_PROTOCOL
 
       else -> null
     }

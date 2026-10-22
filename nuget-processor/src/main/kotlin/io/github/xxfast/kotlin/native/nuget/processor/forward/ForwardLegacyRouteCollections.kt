@@ -379,7 +379,7 @@ internal fun BridgeType.readThroughTrampoline(host: KSFunctionDeclaration): Brid
   return when (this) {
     is BridgeType.AsyncCallback ->
       BridgeType.AsyncCallback(parameters.map { parameter -> parameter.mark() }, result.mark())
-    is BridgeType.FlowSource -> BridgeType.FlowSource(element.mark())
+    is BridgeType.FlowSource -> copy(element = element.mark())
     BridgeType.Unit,
     is BridgeType.Primitive,
     BridgeType.Char,
