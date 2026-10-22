@@ -965,12 +965,93 @@ internal class ForwardBridgeTypeClassifier(
     val typeArguments: List<BridgeType> = arguments.mapNotNull { argument ->
       argument.type?.let { reference -> classify(reference.resolve()) }
     }
+    if (declaration.typeParameters.isNotEmpty() && qualifiedName != RESULT_QUALIFIED_NAME) {
+      return genericValueClass(
+        declaration,
+        qualifiedName,
+        arguments,
+        underlyingParam.type.resolve(),
+        underlyingPropertyName,
+      )
+    }
     return BridgeType.ValueClass(
       qualifiedName,
       classify(underlyingParam.type.resolve()),
       underlyingPropertyName,
       csharpType = csharpTypeNameFor(declaration),
       typeArguments = typeArguments,
+    )
+  }
+
+  /**
+   * ADR-220: a use of a declared generic value class. The matching use-site argument is
+   * substituted into an own-`T` underlying, so `Sticker<Int>` is a value class over `Int` to every
+   * planner and emitter downstream; a phantom underlying (`Decal<T>(val serial: Long)`) is
+   * classified as declared. Only the C# spelling carries the arguments (`Sticker<int>`).
+   */
+  private fun genericValueClass(
+    declaration: KSClassDeclaration,
+    qualifiedName: String,
+    arguments: List<KSTypeArgument>,
+    underlying: KSType,
+    underlyingPropertyName: String,
+  ): BridgeType {
+    val resolved: List<KSType> = arguments.map { argument ->
+      val reference = argument.type
+      if (argument.variance != Variance.INVARIANT || reference == null) {
+        return BridgeType.Unsupported(
+          qualifiedName,
+          "a use-site projection of a generic value class has no C# spelling",
+        )
+      }
+      reference.resolve()
+    }
+    val index: Int = declaration.typeParameters.indexOfFirst { parameter ->
+      underlying.declaration is KSTypeParameter &&
+          parameter.name.asString() == underlying.declaration.simpleName.asString()
+    }
+    val substituted: KSType = if (index < 0) {
+      underlying
+    } else {
+      val argument: KSType = resolved[index]
+      if (underlying.isMarkedNullable) argument.makeNullable() else argument
+    }
+    val classifiedUnderlying: BridgeType = classify(substituted)
+    // An own-`T` instantiation over an underlying no value-class wire carries (`Sticker<Char>`,
+    // `Sticker<List<Int>>`) is exactly the non-generic refusal, so it skips the same way.
+    val isOwnTypeParameter: Boolean = classifiedUnderlying is BridgeType.TypeParameter ||
+        (classifiedUnderlying as? BridgeType.Nullable)?.type is BridgeType.TypeParameter
+    val role: ForwardValueClassUnderlying = classifiedUnderlying.valueClassUnderlyingRole()
+    if (!isOwnTypeParameter && role == ForwardValueClassUnderlying.REFUSED) {
+      return BridgeType.Unsupported(
+        qualifiedName,
+        "a value class with no C# record struct declared for it",
+        isUndeclaredValueClass = true,
+        valueClassUnderlying = substituted.kotlinSpelling(keepProjections = true),
+      )
+    }
+    val spelled: List<String> = resolved.map { argument ->
+      val classified: BridgeType = classify(argument).sealedAsHandle()
+      val unspellable: Boolean = classified is BridgeType.SpecializedProtocol ||
+          classified is BridgeType.RawKSType || classified is BridgeType.Unsupported ||
+          classified is BridgeType.RawCollection
+      if (unspellable) {
+        return BridgeType.Unsupported(
+          qualifiedName,
+          "its type argument `${argument.kotlinSpelling(keepProjections = true)}` has no C# " +
+              "spelling",
+        )
+      }
+      classified.forwardPublicCsharpType()
+    }
+    return BridgeType.ValueClass(
+      qualifiedName,
+      classifiedUnderlying,
+      underlyingPropertyName,
+      csharpType = "${csharpTypeNameFor(declaration)}<${spelled.joinToString(", ")}>",
+      // Non-empty, which is what keeps it off every erased position (ADR-171 mints no box pair for
+      // a generic value class; `isErasedTypeArgument` and `isLambdaTypeArgument` read this).
+      typeArguments = resolved.map { argument -> classify(argument) },
     )
   }
 

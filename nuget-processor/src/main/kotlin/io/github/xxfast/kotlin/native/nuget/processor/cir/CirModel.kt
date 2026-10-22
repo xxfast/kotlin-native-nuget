@@ -323,6 +323,11 @@ internal data class CirValueClass(
    * gated on it, so a struct with no pair keeps today's erased-position behaviour.
    */
   val boxing: CirValueClassBoxing? = null,
+  /**
+   * ADR-220: a generic value class's own type parameters, rendered on the positional record
+   * header (`Sticker<T>(T Value)`). Empty for every non-generic value class.
+   */
+  val typeParameters: List<String> = emptyList(),
 ) : CirDeclaration
 
 /**

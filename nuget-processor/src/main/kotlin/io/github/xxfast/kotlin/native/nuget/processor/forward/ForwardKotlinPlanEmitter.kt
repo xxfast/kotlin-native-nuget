@@ -286,6 +286,25 @@ private fun addValueClassOrdinaryResult(
       )
     }
 
+    // ADR-220: a member's own `T` inside a generic value class rides the bare-`T` handle result,
+    // null in-band for an unconstrained or `T?` underlying.
+    is BridgeType.TypeParameter -> {
+      builder.returns(cOpaquePointer.copy(nullable = true))
+      builder.addCode(
+        handleResultBody(unboxed, errorName), nugetHandles, *errorTypes(errorName),
+      )
+    }
+
+    is BridgeType.Nullable -> {
+      require(underlying.type is BridgeType.TypeParameter) {
+        "Forward Kotlin plan emitter has no ordinary value-class result for underlying $underlying"
+      }
+      builder.returns(cOpaquePointer.copy(nullable = true))
+      builder.addCode(
+        nullableHandleResultBody(unboxed, errorName), nugetHandles, *errorTypes(errorName),
+      )
+    }
+
     BridgeType.Unit,
     BridgeType.Char,
     BridgeType.Instant,
@@ -297,7 +316,6 @@ private fun addValueClassOrdinaryResult(
     is BridgeType.ValueClass,
     BridgeType.ByteArray,
     is BridgeType.Collection,
-    is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
     is BridgeType.FlowSource,
@@ -306,7 +324,6 @@ private fun addValueClassOrdinaryResult(
     is BridgeType.RawKSType,
     is BridgeType.Unsupported,
     is BridgeType.RawCollection,
-    is BridgeType.TypeParameter,
       -> error(
       "Forward Kotlin plan emitter has no ordinary value-class result for underlying $underlying",
     )
@@ -2388,6 +2405,14 @@ internal fun valueClassUnderlyingLowering(name: String, underlying: BridgeType):
     is BridgeType.Enum -> "${underlying.qualifiedName}.entries[$name]"
     is BridgeType.ObjectHandle ->
       "$name.asStableRef<${underlying.kotlinReadType ?: underlying.qualifiedName}>().get()"
+    // ADR-220: a member's own `T` inside a generic value class, read like a bare `T`.
+    is BridgeType.TypeParameter ->
+      forwardBoundedRead(name, underlying.bounds(), nullable = false, underlying.typeVariable())
+    is BridgeType.Nullable -> {
+      val inner: BridgeType.TypeParameter? = underlying.type as? BridgeType.TypeParameter
+      if (inner == null) name
+      else forwardBoundedRead(name, inner.bounds(), nullable = true, inner.typeVariable())
+    }
     BridgeType.Unit,
     is BridgeType.Primitive,
     BridgeType.Char,
@@ -2401,7 +2426,6 @@ internal fun valueClassUnderlyingLowering(name: String, underlying: BridgeType):
     is BridgeType.ValueClass,
     BridgeType.ByteArray,
     is BridgeType.Collection,
-    is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
     is BridgeType.FlowSource,
@@ -2410,7 +2434,6 @@ internal fun valueClassUnderlyingLowering(name: String, underlying: BridgeType):
     is BridgeType.RawKSType,
     is BridgeType.Unsupported,
     is BridgeType.RawCollection,
-    is BridgeType.TypeParameter,
       -> name
   }
 

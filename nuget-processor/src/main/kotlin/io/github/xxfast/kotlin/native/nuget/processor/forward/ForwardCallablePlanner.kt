@@ -1209,6 +1209,9 @@ internal class ForwardCallablePlanner(
     // the constructors planned here, so the two can no longer disagree about a `_create` export.
     val role: ForwardValueClassUnderlying = classifier.valueClassUnderlying(cls)
     if (role == ForwardValueClassUnderlying.REFUSED) return emptyList()
+    // ADR-220: a generic value class is a positional struct C# constructs itself; it has no
+    // `_create` (Kotlin cannot infer a phantom `T` there) and its own members are named skips.
+    if (role == ForwardValueClassUnderlying.GENERIC) return emptyList()
     val isReferenceUnderlying: Boolean = role == ForwardValueClassUnderlying.REFERENCE
 
     val receiver: ForwardReceiver = if (isReferenceUnderlying) {
@@ -4551,7 +4554,16 @@ internal class ForwardCallablePlanner(
    */
   private fun BridgeType.isOrdinaryValueClassUnderlying(): Boolean =
     this == BridgeType.String || this is BridgeType.Primitive ||
-        this is BridgeType.Enum || this is BridgeType.ObjectHandle
+        this is BridgeType.Enum || this is BridgeType.ObjectHandle || isOwnTypeParameterUnderlying()
+
+  /**
+   * ADR-220: a member's own `T` substituted into a generic value class (`Sticker<T>`), either
+   * nullability: it crosses on the bare-`T` handle wire, null in-band. Admitted under a non-null
+   * value class only, since `null` and `Sticker(null)` would both be the null pointer.
+   */
+  private fun BridgeType.isOwnTypeParameterUnderlying(): Boolean =
+    this is BridgeType.TypeParameter ||
+        (this is BridgeType.Nullable && type is BridgeType.TypeParameter)
 
   /**
    * ADR-079: the value-class underlyings whose wire has no in-band null, so a
@@ -4754,8 +4766,14 @@ internal class ForwardCallablePlanner(
       // fans out to the has-value pair instead; either way the nullable spelling is plannable
       // exactly when the underlying is (`isOrdinaryValueClassUnderlying`, the non-null rule).
       is BridgeType.ValueClass ->
-        if (inner.underlying.isOrdinaryValueClassUnderlying()) null
-        else ForwardPlanSkipReason.VALUE_CLASS
+        if (
+          inner.underlying.isOrdinaryValueClassUnderlying() &&
+          !inner.underlying.isOwnTypeParameterUnderlying()
+        ) {
+          null
+        } else {
+          ForwardPlanSkipReason.VALUE_CLASS
+        }
 
       // ROADMAP Phase 3: `Shape?` is not skipped *because* it is nullable -- a bare `Shape` is
       // just as unmarshallable at an input position -- so the NULLABLE bucket's "expose a
@@ -4958,7 +4976,10 @@ internal class ForwardCallablePlanner(
    */
   private fun BridgeType.underlyingWireType(): ForwardAbiWireType = when (this) {
     is BridgeType.Enum -> ForwardAbiWireType.INT32
-    is BridgeType.ObjectHandle -> ForwardAbiWireType.POINTER
+    // ADR-220: a member's own `T` inside a generic value class is the bare-`T` box pointer.
+    is BridgeType.ObjectHandle, is BridgeType.TypeParameter -> ForwardAbiWireType.POINTER
+    is BridgeType.Nullable ->
+      if (type is BridgeType.TypeParameter) ForwardAbiWireType.POINTER else wireType()
     BridgeType.Unit,
     is BridgeType.Primitive,
     BridgeType.Char,
@@ -4972,7 +4993,6 @@ internal class ForwardCallablePlanner(
     is BridgeType.ValueClass,
     BridgeType.ByteArray,
     is BridgeType.Collection,
-    is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
     is BridgeType.FlowSource,
@@ -4981,7 +5001,6 @@ internal class ForwardCallablePlanner(
     is BridgeType.RawKSType,
     is BridgeType.Unsupported,
     is BridgeType.RawCollection,
-    is BridgeType.TypeParameter,
       -> wireType()
   }
 }

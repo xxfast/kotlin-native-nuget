@@ -648,8 +648,8 @@ What differs from a generic class:
 
 These stay a named skip, with the specific reason in the warning: a generic method on an interface,
 an `enum class`, a value class, or an extension function; a `reified` type parameter on a member (a top-level `fun <T>` binds one); a bound that
-is itself a type parameter; a `T` nested in a generic value class or in a type that is not an exported generic class
-(`List`, `Set`, `Map` and `Result` aside); a multi-bound `T` that no parameter mentions; and a
+is itself a type parameter; a `T` nested in a type that is not an exported generic class or
+[generic value class](value-classes.md#a-generic-value-class) (`List`, `Set`, `Map` and `Result` aside); a multi-bound `T` that no parameter mentions; and a
 `T` that shadows a type parameter in scope (the owner's, or one an `inner` class captures). A
 generic method on an `inner` class or a type nested in a generic owner binds like any other.
 Expose a non-generic wrapper for any of the refused shapes. The warning
@@ -800,7 +800,8 @@ class-`T` member (`Basket<Basket<T>>`) and reads its inner basket without the co
 
 What still skips, named:
 
-- A `T` inside a generic value class, and `kotlin.Array<T>`.
+- `kotlin.Array<T>`, and a `T` inside a [generic value class](value-classes.md#a-generic-value-class)
+  under `?` or in a `List`, `Set` or `Map`.
 - A nested generic class argument the wire cannot read, such as `Box<List<T>>`.
 - An open instantiation nested two or more levels deep that you read through a property getter,
   or any position outside a member's result, before you hold one yourself. It throws

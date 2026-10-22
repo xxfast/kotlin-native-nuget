@@ -158,6 +158,8 @@ private fun CirDeclaration.isGenericDeclaration(): Boolean = when (this) {
   is CirInterface -> typeParameters.isNotEmpty()
   is CirClass -> typeParameters.isNotEmpty()
   is CirSealedClass -> typeParameters.isNotEmpty()
+  // ADR-220: a generic value class is a generic record struct.
+  is CirValueClass -> typeParameters.isNotEmpty()
   else -> false
 }
 

@@ -77,7 +77,10 @@ private fun StringBuilder.renderReferenceValueClass(cls: CirValueClass) {
   // `renderValueClass` skipped `renderDoc`), so a reference-underlying value class silently lost
   // its `<summary>`. Fixed here, together with the underlying property's only legal spelling.
   renderDoc(cls.recordHeaderDoc(), generated = cls.remarks)
-  appendLine("    public readonly record struct ${cls.name}(${cls.underlyingType} ${cls.underlyingName})")
+  val typeParameters: String =
+    if (cls.typeParameters.isEmpty()) "" else cls.typeParameters.joinToString(", ", "<", ">")
+  val header: String = "${cls.name}$typeParameters(${cls.underlyingType} ${cls.underlyingName})"
+  appendLine("    public readonly record struct $header")
   appendLine("    {")
 
   cls.constructors.forEach { ctor ->

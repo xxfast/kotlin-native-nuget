@@ -307,7 +307,6 @@ class Tier1MutableStateFlowValueClassElementTest {
       "Tracker.stamp:" to listOf("`tier1.vcrefused.Stamp`", "`kotlin.time.Instant`"),
       "Tracker.outer:" to listOf("`tier1.vcrefused.Outer`", "`tier1.vcrefused.Inner`"),
       "Tracker.oops:" to listOf("`tier1.vcrefused.Oops`", "`kotlin.Throwable`"),
-      "Tracker.crate:" to listOf("`tier1.vcrefused.Crate`"),
     ).forEach { (member, named) ->
       val skips: List<String> = refusing.kspWarnings.filter {
         it.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE.name}]") &&
@@ -318,6 +317,11 @@ class Tier1MutableStateFlowValueClassElementTest {
         assertContains(skips.single(), text, message = "expected $member to name $text")
       }
     }
+    // ADR-220: a generic value class IS declared now, so its flow element is refused as a generic
+    // type with no box pair, not as an undeclared struct.
+    val crate: List<String> = refusing.kspWarnings.filter { it.contains("Tracker.crate:") }
+    assertEquals(1, crate.size, "expected Tracker.crate skipped once; got: ${refusing.kspWarnings}")
+    assertContains(crate.single(), "not the generic type Crate<Int>")
     assertFalse(
       refusing.kspWarnings.any { it.contains("has no write arm") },
       "a dropped member has no read-only surface to describe; got: ${refusing.kspWarnings}",

@@ -28,6 +28,8 @@ internal fun FileSpec.Builder.addValueClassExports(
   // planner called them values, and KSP aborted on the missing Kotlin half.
   val role: ForwardValueClassUnderlying = classifier.valueClassUnderlying(cls)
   if (role == ForwardValueClassUnderlying.REFUSED) return
+  // ADR-220: the planner plans nothing for a generic value class; see `valueClassEntries`.
+  if (role == ForwardValueClassUnderlying.GENERIC) return
   val isReferenceUnderlying: Boolean = role == ForwardValueClassUnderlying.REFERENCE
 
   val secondaryConstructors: List<KSFunctionDeclaration> = cls.declarations

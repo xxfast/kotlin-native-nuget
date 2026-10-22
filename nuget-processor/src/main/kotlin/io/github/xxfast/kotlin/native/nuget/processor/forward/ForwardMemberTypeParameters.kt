@@ -151,6 +151,37 @@ internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
   fun KSType.mentionsOwn(): Boolean = ownParameter() ||
       arguments.any { argument -> argument.type?.resolve()?.expandAliases()?.mentionsOwn() == true }
 
+  // ADR-220: the struct's re-wrap and unwrap sit outside ADR-198's trampoline, so a `T` that
+  // needs one (`T : Enum<T>`, an intersection) keeps the named refusal inside `Sticker<T>`.
+  fun KSType.hasSpellableBound(): Boolean {
+    val bounds: List<KSType> = (declaration as KSTypeParameter).bounds.map { it.resolve() }.toList()
+    return bounds.size <= 1 && bounds.none { bound -> bound.mentionsAnyTypeParameter() }
+  }
+
+  // ADR-220: a generic value class whose underlying is its own type parameter, instantiated at
+  // the member's own `T` (or `T?`) at the top of a parameter or the result, non-null outer. Not a
+  // component of [carriesOwn]: `List<Sticker<T>>` and `Sticker<T>?` keep the named refusal.
+  fun KSType.isOwnInsideGenericValueClass(): Boolean {
+    if (isMarkedNullable) return false
+    val cls: KSClassDeclaration = declaration as? KSClassDeclaration ?: return false
+    if (!cls.isValueClass() || cls.typeParameters.isEmpty()) return false
+    val underlying: KSType =
+      cls.primaryConstructor?.parameters?.singleOrNull()?.type?.resolve() ?: return false
+    val index: Int = cls.typeParameters.indexOfFirst { parameter ->
+      underlying.declaration is KSTypeParameter &&
+          parameter.name.asString() == underlying.declaration.simpleName.asString()
+    }
+    if (index < 0) return false
+    return arguments.withIndex().all { (position, argument) ->
+      val type: KSType = argument.type?.resolve()?.expandAliases() ?: return false
+      if (position == index) {
+        type.ownParameter() && type.hasSpellableBound()
+      } else {
+        !type.mentionsOwn()
+      }
+    }
+  }
+
   // ADR-212: a `List`/`Set`/`Map` (or a mutable kind) whose every component is the own `T`, a
   // type that does not mention it, or such a collection again, carries `T` per element.
   // ADR-216: so does an exported generic class (`Box<T>`, a generic sealed `Outcome<T>`); the
@@ -171,11 +202,13 @@ internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
     parameters.map { parameter -> parameter.type.resolve().expandAliases() }
   val returned: KSType? = returnType?.resolve()?.expandAliases()
   parameterTypes.forEach { type ->
-    if (type.mentionsOwn() && !type.carriesOwn()) {
+    if (type.mentionsOwn() && !type.carriesOwn() && !type.isOwnInsideGenericValueClass()) {
       return "its type parameter is nested in `$type`"
     }
   }
-  if (returned != null && returned.mentionsOwn() && !returned.carriesOwn()) {
+  if (returned != null && returned.mentionsOwn() && !returned.carriesOwn() &&
+    !returned.isOwnInsideGenericValueClass()
+  ) {
     val resultPayload: KSType? = returned
       .takeIf { type -> type.declaration.qualifiedName?.asString() == "kotlin.Result" }
       ?.arguments?.singleOrNull()?.type?.resolve()?.expandAliases()
