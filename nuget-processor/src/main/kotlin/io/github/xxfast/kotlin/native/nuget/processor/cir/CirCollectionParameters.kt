@@ -21,6 +21,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionCreate
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyParameterShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.simpleKotlinName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.unwrapNullable
 
 /**
  * ADR-114: the C# half of a collection parameter on a legacy Flow/StateFlow or suspend route.
@@ -142,7 +144,7 @@ internal fun List<CirParameter>.collectionScopedCall(
       val owned: String? = parameter.boxOwnedLocal
       if (owned != null) {
         add("$indent        if ($owned) NugetMarshal.Dispose($handle);")
-        add("$indent        else GC.KeepAlive(${parameter.name});")
+        add("$indent        else GC.KeepAlive(${parameter.keepAlive ?: parameter.name});")
         return@forEach
       }
       add("$indent        if ($handle != IntPtr.Zero) NugetMarshal.Dispose($handle);")
@@ -390,6 +392,13 @@ private fun legacyRouteParameter(
       )
     }
 
+    is ForwardLegacyParameterShape.Wire -> legacyWireParameter(
+      name, shape, tracker,
+      hasValue = names.hasValueSlots[index],
+      handle = names.handleLocals[index],
+      owned = names.ownedLocals[index],
+    )
+
     // ADR-201 amendment: the sync route's wire, one `string` slot of managed-exception text.
     is ForwardLegacyParameterShape.ManagedException -> CirParameter(
       name,
@@ -421,5 +430,126 @@ private fun legacyRouteParameter(
         nativeArgumentExpression = if (type == "string") nonNullStringOrThrow(name) else null,
       )
     }
+  }
+}
+
+/**
+ * ADR-240: the C# half of a [ForwardLegacyParameterShape.Wire] parameter. The public type is the
+ * declared one (`DateTimeOffset`, `byte[]`, `IDoorbell`, `PostPrint?`); a value class is unwrapped
+ * to its innermost underlying first (refusing a reference-typed `default(V)`), and that underlying
+ * crosses on the ordinary route's wire. A bytes, collection or interface handle is minted before
+ * the extern and released in its `finally` by [collectionScopedCall].
+ */
+internal fun legacyWireParameter(
+  name: String,
+  shape: ForwardLegacyParameterShape.Wire,
+  tracker: CollectionHelperTracker?,
+  hasValue: String?,
+  handle: String?,
+  owned: String?,
+  // The C# expression the value is read from (`this` for a struct's own member), and the
+  // parameter a refused `default(V)` names, null for none.
+  source: String = name,
+  named: String? = name,
+  // What a refused null collection element names: a parameter, or a struct's own property.
+  root: String = named ?: name,
+): CirParameter {
+  val public: String = shape.declared.forwardPublicCsharpType()
+  val value: String = shape.view?.csharpUnwrap(source, named) ?: source
+  val planned: BridgeType = shape.planned
+  val nullable: Boolean = planned is BridgeType.Nullable
+  // Only a bare `byte[]` or interface is a C# reference type; a struct or `Nullable<T>` is not.
+  val declared: BridgeType = shape.declared.unwrapNullable()
+  val reference: Boolean = declared == BridgeType.ByteArray || declared is BridgeType.Interface
+  fun scalar(nativeType: String, argument: String): CirParameter = CirParameter(
+    name,
+    type = public,
+    nativeType = nativeType,
+    isReferenceType = reference,
+    nativeArgumentExpression = argument,
+    hasValueSlot = hasValue,
+  )
+  fun pair(lowered: String): String = "($value).HasValue, ($value).GetValueOrDefault()$lowered"
+  fun minted(create: String, owned: String? = null): CirParameter = CirParameter(
+    name,
+    type = public,
+    nativeType = "IntPtr",
+    isReferenceType = reference,
+    collectionCreate = create,
+    collectionHandle = requireNotNull(handle),
+    boxOwnedLocal = owned,
+    keepAlive = source.takeIf { source != name },
+  )
+  return when (val inner: BridgeType = planned.unwrapNullable()) {
+    is BridgeType.Primitive -> {
+      val type: String = mapParamType(inner.kind.simpleKotlinName())
+      if (nullable) scalar(type, pair("")) else scalar(type, value)
+    }
+    is BridgeType.Enum ->
+      if (nullable) scalar("int", "($value).HasValue, (int)($value).GetValueOrDefault()")
+      else scalar("int", "(int)$value")
+    BridgeType.Instant -> if (nullable) scalar("long", pair(".UtcTicks"))
+    else scalar("long", "$value.UtcTicks")
+    BridgeType.Duration -> if (nullable) scalar("long", pair(".Ticks"))
+    else scalar("long", "$value.Ticks")
+    BridgeType.String -> if (nullable) scalar("string?", value)
+    else scalar("string", nonNullStringOrThrow(value, named ?: name))
+    BridgeType.Uuid -> if (nullable) scalar("string?", "($value)?.ToString()")
+    else scalar("string", "$value.ToString()")
+    is BridgeType.ObjectHandle -> CirParameter(
+      name,
+      type = public,
+      nativeType = KOTLIN_HANDLE,
+      isReferenceType = reference,
+      nativeArgumentExpression = if (nullable) "($value)?._handle ?? NugetKotlinHandle.Null"
+      else "$value._handle",
+    )
+    BridgeType.ByteArray -> {
+      tracker?.needsBytes = true
+      val bytes = "${name}Bytes"
+      minted(
+        if (nullable) "($value) is { } $bytes ? NugetMarshal.CreateBytes($bytes) : IntPtr.Zero"
+        else "NugetMarshal.CreateBytes($value)",
+      )
+    }
+    is BridgeType.Collection -> {
+      tracker?.trackCollection(inner)
+      // A nullable source binds to a local first, so the null-state analysis sees it non-null.
+      if (nullable) {
+        val items = "${name}Items"
+        val create = legacyCollectionCreate(items, inner, root = root)
+        minted("($value) is { } $items ? $create : IntPtr.Zero")
+      } else {
+        minted(legacyCollectionCreate(value, inner, root = root))
+      }
+    }
+    is BridgeType.Interface -> {
+      val owned: String = requireNotNull(owned)
+      val entry: String? = inner.bridgeEntry
+      val create: String = when {
+        entry != null && nullable ->
+          "($value) is null ? IntPtr.Zero : $entry($value, out bool $owned)"
+        entry != null -> "$entry($value, out bool $owned)"
+        nullable -> "NugetMarshal.HandleOfOrZero($value, out bool $owned)"
+        else -> "NugetMarshal.HandleOf($value, out bool $owned)"
+      }
+      minted(create, owned)
+    }
+    BridgeType.Unit,
+    BridgeType.Char,
+    is BridgeType.Throwable,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> error("ADR-240: no legacy wire argument for $planned")
   }
 }

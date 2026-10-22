@@ -60,6 +60,8 @@ using Catsitter = TestLibrary.Catsitter;
 using Cattery = TestLibrary.Cattery;
 using Hoards = TestLibrary.Hoard;
 using Furcoat = TestLibrary.Furcoat;
+using Pawpost = TestLibrary.Pawpost;
+using TestLibrary.Pawpost;
 
 namespace LeakTests;
 
@@ -8490,5 +8492,236 @@ public class LiveHandleTests
         public string Owner => "Mylo";
         public string Rumble(int times) => "Mylo: mrrp";
         public void Dispose() { }
+    }
+
+    // ADR-240
+    // The class suspend route, the top-level suspend route, the suspend extension route and the
+    // Flow routes over a handle-backed argument: a `ByteArray`, a collection, a plain interface and
+    // value classes over each. A bytes or list argument is a handle the C# `finally` releases once
+    // the extern returns; a C#-implemented interface argument is a bridge Kotlin drops after the
+    // call; a Kotlin-backed interface result is a wrapper the row disposes. Each call's job is
+    // released on completion. Net zero.
+    [Fact]
+    public async Task AsyncWireUnderlyings_HandleBacked_Completion_ReturnsToBaseline()
+    {
+        await using var slot = new Pawpost.Mailslot("Oreo");
+        // The slot mints its coroutine scope on its first `suspend` call (`GetOrCreateScope()`) and
+        // holds it until disposed, so it is warmed before the baseline, as the other class-route rows do.
+        Assert.Equal(new byte[] { 1, 9 }, await slot.ScanAsync(new byte[] { 1 }));
+        using Pawpost.IDoorbell oreo = Pawpost.PawpostSample.OreoBell();
+        var mylo = new PawpostDoorbell();
+        await AssertNoLeakAsync(async () =>
+        {
+            Assert.Equal(new byte[] { 1, 9 }, await slot.ScanAsync(new byte[] { 1 }));
+            Assert.Null(await slot.ScanOrNullAsync(null));
+            Assert.Equal("Oreo: ding", await slot.HearAsync(oreo, 1));
+            Assert.Equal("Mylo: mrrp", await slot.HearAsync(mylo, 1));
+            using (Pawpost.IDoorbell back = await slot.AnswerAsync(oreo)) Assert.Equal("Oreo", back.Owner);
+            Assert.Same(mylo, await slot.AnswerAsync(mylo));
+            Assert.Equal(new byte[] { 2, 1 }, (await slot.PressAsync(new Pawpost.PostPrint(new byte[] { 2 }))).Pads);
+            Assert.Single((await slot.PackAsync(new Pawpost.PostBundle(new List<string> { "bill" }))).Letters);
+            Assert.Same(mylo, (await slot.RelayAsync(new Pawpost.PostKnock(mylo))).Bell);
+            Assert.Equal(new byte[] { 1, 7 }, await Pawpost.PawpostSample.PostPadsAsync(new byte[] { 1 }));
+            Assert.Equal("Mylo: mrrp", await Pawpost.PawpostSample.PostRingAsync(mylo, 1));
+            Assert.Single((await Pawpost.PawpostSample.PackPostAsync(new Pawpost.PostBundle(new List<string> { "card" }))).Letters);
+            Assert.Equal(3, await new byte[] { 1, 2 }.PadTotalAsync());
+            Assert.Equal("Mylo: mrrpmrrp", await mylo.ChimeAsync());
+            Assert.Equal(1, await new Pawpost.PostPrint(new byte[] { 1 }).PadCountAsync());
+            Assert.Equal("bill", await new Pawpost.PostBundle(new List<string> { "bill" }).TopAsync());
+            Assert.Equal("Mylo: mrrp", await new Pawpost.PostKnock(mylo).KnockAsync(1));
+            using (KotlinFlow<byte[]> scans = slot.ScanEchoes(new byte[] { 4 }, 2))
+                await foreach (byte[] _ in scans) { }
+            using (KotlinFlow<string> rings = slot.Rings(mylo, 2))
+                await foreach (string _ in rings) { }
+            using (KotlinFlow<Pawpost.PostBundle> bundles = slot.PackEchoes(new Pawpost.PostBundle(new List<string> { "bill" }), 2))
+                await foreach (Pawpost.PostBundle _ in bundles) { }
+            using (KotlinFlow<Pawpost.PostPrint> prints = Pawpost.PawpostSample.PrintStream(new Pawpost.PostPrint(new byte[] { 3 }), 2))
+                await foreach (Pawpost.PostPrint _ in prints) { }
+        }, iterations: 50);
+    }
+
+    // ADR-240
+    // A fault with a handle-backed argument in flight: the argument handle goes in the C#
+    // `finally`, the job on the faulted arm, and the Kotlin throwable crosses as one envelope the
+    // C# exception owns. Net zero.
+    [Fact]
+    public async Task AsyncWireUnderlyings_HandleBacked_Fault_ReturnsToBaseline()
+    {
+        await using var slot = new Pawpost.Mailslot("Mylo");
+        // The slot mints its coroutine scope on its first `suspend` call (`GetOrCreateScope()`) and
+        // holds it until disposed, so it is warmed before the baseline, as the other class-route rows do.
+        Assert.Equal(new byte[] { 1, 9 }, await slot.ScanAsync(new byte[] { 1 }));
+        var mylo = new PawpostDoorbell();
+        await AssertNoLeakAsync(async () =>
+        {
+            await Assert.ThrowsAnyAsync<InvalidOperationException>(() => slot.JamScanAsync(new byte[] { 1 }));
+            await Assert.ThrowsAnyAsync<InvalidOperationException>(() => slot.JamAnswerAsync(mylo));
+            await Assert.ThrowsAnyAsync<InvalidOperationException>(
+                () => slot.JamPackAsync(new Pawpost.PostBundle(new List<string> { "bill" })));
+            await Assert.ThrowsAnyAsync<InvalidOperationException>(() => slot.JamRelayAsync(new Pawpost.PostKnock(mylo)));
+            await Assert.ThrowsAnyAsync<InvalidOperationException>(
+                () => Pawpost.PawpostSample.JamBundleAsync(new Pawpost.PostBundle(new List<string> { "bill" })));
+            // A failing `init` at the crossing, after the handle was minted.
+            await Assert.ThrowsAnyAsync<ArgumentException>(() => slot.PressAsync(new Pawpost.PostPrint(Array.Empty<byte>())));
+            await Assert.ThrowsAnyAsync<ArgumentException>(
+                () => new Pawpost.PostPrint(Array.Empty<byte>()).PadCountAsync());
+        }, iterations: 100);
+    }
+
+    // ADR-240
+    // Cancellation with a handle-backed argument in flight, on a pre-cancelled token and on one
+    // that fires while Kotlin is parked, and an endless flow over a handle argument stopped by the
+    // enumerator's token. Each argument handle, job and collection is released on the cancelled
+    // arm. Net zero.
+    [Fact]
+    public async Task AsyncWireUnderlyings_HandleBacked_Cancellation_ReturnsToBaseline()
+    {
+        await using var slot = new Pawpost.Mailslot("Oreo");
+        // The slot mints its coroutine scope on its first `suspend` call (`GetOrCreateScope()`) and
+        // holds it until disposed, so it is warmed before the baseline, as the other class-route rows do.
+        Assert.Equal(new byte[] { 1, 9 }, await slot.ScanAsync(new byte[] { 1 }));
+        using Pawpost.IDoorbell oreo = Pawpost.PawpostSample.OreoBell();
+        var mylo = new PawpostDoorbell();
+        await AssertNoLeakAsync(async () =>
+        {
+            using (var cancelled = new CancellationTokenSource())
+            {
+                cancelled.Cancel();
+                await CancelEveryWireUnderlying(slot, oreo, mylo, cancelled.Token);
+            }
+            using (var later = new CancellationTokenSource(TimeSpan.FromMilliseconds(1)))
+            {
+                await CancelEveryWireUnderlying(slot, oreo, mylo, later.Token);
+            }
+            using (KotlinFlow<byte[]> scans = slot.EndlessScans(new byte[] { 1 }))
+            using (var stop = new CancellationTokenSource())
+            {
+                await foreach (byte[] _ in scans.WithCancellation(stop.Token)) stop.Cancel();
+            }
+            using (KotlinFlow<string> rings = slot.EndlessRings(mylo))
+            using (var stop = new CancellationTokenSource())
+            {
+                await foreach (string _ in rings.WithCancellation(stop.Token)) stop.Cancel();
+            }
+        }, iterations: 30);
+    }
+
+    private static async Task CancelEveryWireUnderlying(
+        Pawpost.Mailslot slot, Pawpost.IDoorbell oreo, Pawpost.IDoorbell mylo, CancellationToken token)
+    {
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => slot.AwaitScanAsync(new byte[] { 1 }, token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => slot.AwaitAnswerAsync(oreo, token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => slot.AwaitAnswerAsync(mylo, token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => slot.AwaitPressAsync(new Pawpost.PostPrint(new byte[] { 1 }), token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => slot.AwaitPackAsync(new Pawpost.PostBundle(new List<string> { "bill" }), token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => slot.AwaitRelayAsync(new Pawpost.PostKnock(mylo), token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => Pawpost.PawpostSample.LingerPadsAsync(new byte[] { 1 }, token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => Pawpost.PawpostSample.LingerBundleAsync(new Pawpost.PostBundle(new List<string> { "bill" }), token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new byte[] { 1 }.LingerOnAsync(token));
+    }
+
+    // Mylo answers the mail-slot doorbell himself, so the interface bridge is crossed from C#.
+    private sealed class PawpostDoorbell : Pawpost.IDoorbell
+    {
+        public string Owner => "Mylo";
+        public string Ring(int times) => "Mylo: " + string.Concat(Enumerable.Repeat("mrrp", times));
+        public void Dispose() { }
+    }
+
+    // ADR-240
+    // A settable `MutableStateFlow`/`MutableSharedFlow` of a bare `ByteArray`, a collection and an
+    // interface: each C# write mints the bytes, container or bridge handle for the call and
+    // releases it in the `finally`; each read is a handle the read consumes; a Kotlin-backed
+    // interface read is a wrapper the row disposes. Net zero.
+    [Fact]
+    public async Task AsyncWireUnderlyings_SettableHandleHolders_ReturnToBaseline()
+    {
+        using var rack = new Pawpost.PostRack();
+        // The rack mints its coroutine scope on its first emit (`GetOrCreateScope()`) and holds it
+        // until disposed, so it is warmed before the baseline.
+        using (KotlinMutableSharedFlow<byte[]> warm = rack.PadFeed) await warm.EmitAsync(new byte[] { 1 });
+        await AssertNoLeakAsync(async () =>
+        {
+            var mylo = new PawpostDoorbell();
+            using (KotlinMutableStateFlow<byte[]> pads = rack.Pads)
+            {
+                pads.Value = new byte[] { 2, 3 };
+                Assert.Equal(2, pads.Value.Length);
+            }
+            using (KotlinMutableStateFlow<byte[]?> maybe = rack.MaybePads)
+            {
+                maybe.Value = null;
+                maybe.Value = new byte[] { 1 };
+            }
+            using (KotlinMutableStateFlow<IReadOnlyList<string>> letters = rack.Letters)
+            {
+                letters.Value = new List<string> { "card" };
+                Assert.True(letters.CompareAndSet(new List<string> { "card" }, new List<string> { "bill" }));
+                Assert.Single(letters.Value);
+            }
+            using (KotlinMutableStateFlow<Pawpost.IDoorbell> bell = rack.Bell)
+            {
+                bell.Value = mylo;
+                Assert.Same(mylo, bell.Value);
+                rack.KotlinWrites();
+                using (Pawpost.IDoorbell seen = bell.Value) Assert.Equal("Mylo", seen.Owner);
+            }
+            using (KotlinMutableSharedFlow<byte[]> feed = rack.PadFeed)
+            {
+                Assert.True(feed.TryEmit(new byte[] { 4 }));
+                await feed.EmitAsync(new byte[] { 5 });
+                Assert.Single(feed.ReplayCache);
+            }
+            Assert.NotEmpty(rack.Summary());
+        }, iterations: 30);
+    }
+
+    // ADR-240
+    // The awaited form of the settable handle holders: each `suspend` member hands back its flow
+    // handle, which the holder owns and the row disposes; each C# write through it mints the
+    // container, bytes or bridge handle for the call and releases it in the `finally`. Net zero.
+    [Fact]
+    public async Task AsyncWireUnderlyings_AwaitedSettableHandleHolders_ReturnToBaseline()
+    {
+        await using var shelf = new Pawpost.PostShelf();
+        // The shelf mints its coroutine scope on its first `suspend` call and holds it until
+        // disposed, so it is warmed before the baseline.
+        using (KotlinMutableStateFlow<byte[]> warm = await shelf.AwaitPadsAsync()) Assert.NotNull(warm.Value);
+        await AssertNoLeakAsync(async () =>
+        {
+            var mylo = new PawpostDoorbell();
+            using (KotlinMutableStateFlow<IReadOnlyList<string>> letters = await shelf.AwaitLettersAsync())
+            {
+                letters.Value = new List<string> { "card" };
+                Assert.True(letters.CompareAndSet(new List<string> { "card" }, new List<string> { "bill" }));
+                Assert.Single(letters.Value);
+            }
+            using (KotlinMutableStateFlow<byte[]> pads = await shelf.AwaitPadsAsync())
+            {
+                pads.Value = new byte[] { 2 };
+                Assert.Single(pads.Value);
+            }
+            using (KotlinMutableStateFlow<Pawpost.IDoorbell> bell = await shelf.AwaitBellAsync())
+            {
+                bell.Value = mylo;
+                Assert.Same(mylo, bell.Value);
+            }
+            using (KotlinMutableSharedFlow<IReadOnlyList<string>> feed = await shelf.AwaitLetterFeedAsync())
+            {
+                Assert.True(feed.TryEmit(new List<string> { "bill" }));
+                await feed.EmitAsync(new List<string> { "card" });
+                Assert.Single(feed.ReplayCache);
+            }
+            using (KotlinMutableSharedFlow<byte[]> feed = await shelf.AwaitPadFeedAsync())
+            {
+                await feed.EmitAsync(new byte[] { 5 });
+                Assert.Single(feed.ReplayCache);
+            }
+            Assert.NotEmpty(shelf.Summary());
+        }, iterations: 30);
     }
 }

@@ -19,14 +19,24 @@ import com.squareup.kotlinpoet.BOOLEAN
 import com.squareup.kotlinpoet.STRING
 import com.squareup.kotlinpoet.INT
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.simpleKotlinName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.unwrapNullable
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyInvocation
 import com.squareup.kotlinpoet.FunSpec
+import com.squareup.kotlinpoet.ParameterSpec
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyWireLowering
 import com.squareup.kotlinpoet.TypeName
 import com.squareup.kotlinpoet.ParameterizedTypeName.Companion.parameterizedBy
 import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.READ_ONLY_STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.MUTABLE_STATE_FLOW_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElement
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollection
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementWire
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyWireBox
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyFlowElementShape
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardExportOwnerTag
@@ -217,10 +227,13 @@ private fun FileSpec.Builder.addStaticSuspendExport(
       val read: String = forwardBoundedRead(receiverSlot, bounds, receiver.nullable, variable)
       "val ${names.obj} = $read\n"
     }
+    // ADR-240: the receiver's wire read into the local; a value class re-wraps at the call.
+    is ForwardStaticSuspendReceiver.Wire -> receiver.wirePrelude(receiverSlot, names.obj) + "\n"
     is ForwardStaticSuspendReceiver.Scalar, is ForwardStaticSuspendReceiver.Enum, null -> ""
   }
   val receiverRead: String = when (receiver) {
     is ForwardStaticSuspendReceiver.Handle, is ForwardStaticSuspendReceiver.Box -> names.obj
+    is ForwardStaticSuspendReceiver.Wire -> receiver.shape.view?.kotlinWrap(names.obj) ?: names.obj
     is ForwardStaticSuspendReceiver.Scalar, is ForwardStaticSuspendReceiver.Enum, null ->
       receiverSlot
   }
@@ -259,6 +272,8 @@ private fun FileSpec.Builder.addStaticSuspendExport(
     is ForwardStaticSuspendReceiver.Scalar ->
       builder.addParameter(receiverSlot, ClassName.bestGuess(receiver.kotlinType))
     is ForwardStaticSuspendReceiver.Enum -> builder.addParameter(receiverSlot, INT)
+    is ForwardStaticSuspendReceiver.Wire ->
+      builder.addParameters(receiver.wireParameters(receiverSlot))
     is ForwardStaticSuspendReceiver.Box ->
       builder.addParameter(receiverSlot, cOpaquePointer.copy(nullable = receiver.nullable))
     null -> Unit
@@ -372,6 +387,12 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
       }
       // ADR-114: a collection crosses as a handle to its boxed wire container.
       // ADR-122: so does a class/object/sealed parameter, as the borrowed handle C# already holds.
+      // ADR-240: a type riding its ordinary-route wire.
+      val wire = paramShapes[index] as? ForwardLegacyParameterShape.Wire
+      if (wire != null) {
+        builder.addLegacyWireParameter(paramName, wire, names.hasValueSlots[index])
+        return@forEachIndexed
+      }
       if (paramShapes[index].isLegacyLowered()) {
         val nullable: Boolean = paramShapes[index].isLegacyNullableSlot
         // ADR-164 rule 2: an optional handle's leading `IsSet` slot.
@@ -504,6 +525,8 @@ private fun legacyBoxedResult(shape: ForwardLegacyReturnShape): String = when (s
   is ForwardLegacyReturnShape.Envelope -> "buildError(result, ::nugetMappedType)"
   // ADR-214: a boxed `T` is pinned as it is, which is what `FromHandle<T>` reads.
   is ForwardLegacyReturnShape.Boxed -> "result"
+  // ADR-240: the innermost underlying on its ordinary-route result wire.
+  is ForwardLegacyReturnShape.Wire -> shape.legacyWireBox("result")
   else -> "result"
 }
 
@@ -548,6 +571,12 @@ private fun FunSpec.Builder.addLegacySuspendParameters(
     // ADR-210: a suspend lambda's flat thunk and key slots, in the planner's order.
     names.asyncSlots[index]?.let { slots ->
       slots.declared.forEach { slot -> addParameter(slot, names.asyncSlotType(index, slot)) }
+      return@forEachIndexed
+    }
+    // ADR-240: a type riding its ordinary-route wire.
+    val wire = shapes[index] as? ForwardLegacyParameterShape.Wire
+    if (wire != null) {
+      addLegacyWireParameter(name, wire, names.hasValueSlots[index])
       return@forEachIndexed
     }
     if (shapes[index].isLegacyLowered()) {
@@ -616,6 +645,7 @@ internal fun FileSpec.Builder.addAcquiredFlowCollectExport(
     element.isMarkedNullable || erased,
     collection,
     classifier.legacyFlowElementEnvelope(returnType),
+    classifier.legacyFlowElementWire(returnType),
   )
   addFunction(handleKeyedFlowCollectExport(prefix, ownedBy(method), type, boxed))
 }
@@ -686,17 +716,78 @@ private fun FileSpec.Builder.addAwaitedStateFlowCollectionExports(
   returnType: KSType?,
   classifier: ForwardBridgeTypeClassifier,
 ) {
-  if (returnType?.declaration?.qualifiedName?.asString() !in READ_ONLY_STATE_FLOW_TYPES) return
-  val collection: BridgeType.Collection =
-    classifier.legacyFlowElementCollection(returnType) ?: return
+  if (returnType?.declaration?.qualifiedName?.asString() !in STATE_FLOW_TYPES) return
+  val collection: BridgeType.Collection? = classifier.legacyFlowElementCollection(returnType)
+  // ADR-240: a wire element takes the same pair, boxed on its result wire; and an awaited
+  // `MutableStateFlow` of a `ByteArray`, whose box is the bytes handle itself.
+  val wire: ForwardLegacyFlowElementShape.Wire? = classifier.legacyFlowElementWire(returnType)
+  val bytes: Boolean = classifier.legacyFlowElementShape(legacyFlowElement(returnType)) is
+    ForwardLegacyFlowElementShape.Bytes &&
+    returnType?.declaration?.qualifiedName?.asString() in MUTABLE_STATE_FLOW_TYPES
+  if (collection == null && wire == null && !bytes) return
   val element: KSType = requireNotNull(returnType)
     .arguments.firstOrNull()?.type?.resolve()?.expandAliases()
     ?: error("Awaited StateFlow must declare an element type")
   val type: TypeName = ClassName("kotlinx.coroutines.flow", "StateFlow").parameterizedBy(
     element.toBridgeTypeName(),
   )
-  val boxed: String = itemBoxExpr(elementNullable = false, collection = collection)
+  val nullable: Boolean = wire != null && element.isMarkedNullable
+  val boxed: String = itemBoxExpr(elementNullable = nullable, collection = collection, wire = wire)
 
-  addFunction(handleKeyedStateFlowValueExport(prefix, ownedBy(method), type, boxed))
+  addFunction(handleKeyedStateFlowValueExport(prefix, ownedBy(method), type, boxed, nullable))
   addFunction(handleKeyedFlowCollectExport(prefix, ownedBy(method), type, boxed))
 }
+
+/**
+ * ADR-240: the ABI slots of a [ForwardLegacyParameterShape.Wire] parameter, the ordinary route's
+ * own for its planned wire: a has-value `BOOLEAN` before a nullable value type, then ticks as
+ * `Long`, hex-dash text as `String`, a bytes, collection, class or interface handle as a pointer,
+ * or the scalar itself.
+ */
+internal fun FunSpec.Builder.addLegacyWireParameter(
+  name: String,
+  shape: ForwardLegacyParameterShape.Wire,
+  hasValue: String?,
+): FunSpec.Builder {
+  val planned: BridgeType = shape.planned
+  val nullable: Boolean = planned is BridgeType.Nullable
+  if (hasValue != null) addParameter(hasValue, BOOLEAN)
+  val type: TypeName = when (val inner: BridgeType = planned.unwrapNullable()) {
+    is BridgeType.Primitive -> ClassName("kotlin", inner.kind.simpleKotlinName())
+    BridgeType.Instant, BridgeType.Duration -> ClassName("kotlin", "Long")
+    is BridgeType.Enum -> INT
+    BridgeType.String, BridgeType.Uuid -> STRING.copy(nullable = nullable)
+    BridgeType.ByteArray, is BridgeType.Interface, is BridgeType.Collection,
+    is BridgeType.ObjectHandle -> cOpaquePointer.copy(nullable = nullable)
+    BridgeType.Unit,
+    BridgeType.Char,
+    is BridgeType.Throwable,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> error("ADR-240: no legacy wire slot for $planned")
+  }
+  return addParameter(name, type)
+}
+
+/** ADR-240: the has-value slot a fanned-out wire receiver [slot] leads with, or null. */
+internal fun ForwardStaticSuspendReceiver.Wire.hasValueSlot(slot: String): String? =
+  if (shape.fansOut) "${slot}HasValue" else null
+
+/** ADR-240: the receiver's eager read into [local], before any coroutine launches. */
+internal fun ForwardStaticSuspendReceiver.Wire.wirePrelude(slot: String, local: String): String =
+  "val $local = ${legacyWireLowering(slot, shape.planned, hasValueSlot(slot))}"
+
+/** ADR-240: the receiver's ABI slots, in order. */
+internal fun ForwardStaticSuspendReceiver.Wire.wireParameters(slot: String): List<ParameterSpec> =
+  FunSpec.builder("receiver").addLegacyWireParameter(slot, shape, hasValueSlot(slot)).build()
+    .parameters

@@ -1103,3 +1103,10 @@ level, an `object`, a companion, an enum body and enum companion or a value clas
 [ADR-230](230-flow-on-static-owners.md) binds it as the same wrapper, static or as an extension, with
 the held `Mutable*` kinds taking a null collection scope. The `.Value` write, `CompareAndSet`,
 `Update`, `EmitAsync` and `TryEmit` are unchanged.
+
+## Amendment (2026-10-22): wire elements are settable
+
+[ADR-240](240-async-routes-carry-wire-underlyings.md): a `MutableStateFlow` or `MutableSharedFlow`
+of a bare `Instant`, `Duration` or `Uuid` (nullable too) is settable, writing ticks or text, and of a
+value class over any wire underlying writes through the value class box pair, refusing `default(V)`
+with `ArgumentException`. Verified by `SettableHolders_OfNarrowTypesAndWireValueClasses_ReadAndWrite`.

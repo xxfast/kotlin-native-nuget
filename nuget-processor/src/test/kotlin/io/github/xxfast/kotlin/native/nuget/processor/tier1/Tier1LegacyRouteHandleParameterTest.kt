@@ -98,7 +98,7 @@ class Tier1LegacyRouteHandleParameterTest {
       // An enum parameter binds by ordinal on this route (it was the refusal arm's instance).
       fun moods(mood: Mood): Flow<String> = flowOf(mood.name)
 
-      // Refusal arm: a `Duration` parameter is the same defect and has no wire shape here yet.
+      // ADR-240: a `Duration` parameter rides its ticks wire.
       fun waits(span: kotlin.time.Duration): Flow<String> = flowOf(span.toString())
 
       // Refusal arm: a NULLABLE handle. The type binds, the nullability does not (ADR-114's
@@ -326,37 +326,26 @@ class Tier1LegacyRouteHandleParameterTest {
    * here; it now binds by ordinal, `(int)mood` in C# and `Mood.entries[mood]` in Kotlin.
    */
   @Test
-  fun `a non-scalar non-handle parameter on a legacy route skips the member named`() {
+  fun `a Duration parameter on a legacy route binds on its ticks wire`() {
     val result = run()
 
     assertTrue(
       result.generatedCSharp.contains("(int)mood"),
       "expected Moods to bind by ordinal; got: ${csharpLinesFor(result, "Moods")}",
     )
-    assertFalse(
-      result.generatedCSharp.contains("Waits("),
-      "expected no Waits member: a Duration parameter has no wire shape on this route yet; got: " +
-          "${csharpLinesFor(result, "Waits")}",
-    )
-    assertFalse(
-      result.generated.contains("radio_waits_collect"),
-      "expected no _waits_collect export either; got: " +
-          "${result.generated.lines().filter { it.contains("waits") }.map(String::trim)}",
-    )
-
-    val diagnostic: String? = result.kspWarnings.firstOrNull {
-      it.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name}]") &&
-          it.contains("waits")
-    }
+    // ADR-240: a `Duration` rides the ordinary route's ticks wire on the legacy routes too.
     assertTrue(
-      diagnostic != null,
-      "expected a SKIPPED_UNSUPPORTED_INPUT naming Radio.waits rather than a silent vanish or a " +
-          "public IntPtr; kspWarnings=${result.kspWarnings}",
+      result.generatedCSharp.contains("Waits(global::System.TimeSpan span)"),
+      "expected Waits to bind over TimeSpan; got: ${csharpLinesFor(result, "Waits")}",
     )
     assertTrue(
-      diagnostic.contains("span: Duration"),
-      "expected the diagnostic to name the offending parameter and its type, so the author knows " +
-          "which one to change; got: $diagnostic",
+      result.generatedCSharp.contains("span.Ticks"),
+      "expected the TimeSpan to cross as ticks; got: ${csharpLinesFor(result, "Waits")}",
+    )
+    assertTrue(
+      result.generated.contains("durationFromDotNetTicks(span)"),
+      "expected Kotlin to read the ticks back; got: " +
+          "${result.generated.lines().filter { it.contains("span") }.map(String::trim)}",
     )
   }
 

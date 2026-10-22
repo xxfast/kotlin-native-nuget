@@ -320,8 +320,10 @@ function's own `T`) uses a single pair for every instantiation, see
 [A generic value class at an erased position](value-classes.md#a-generic-value-class-at-an-erased-position). A value class with no such pair (an ineligible sealed
 interface) still compiles at `T` but throws
 `NotSupportedException` at the call, since an open C# generic has no build-time way to refuse it.
-A Kotlin member that uses a value class with no C# record struct (over `Char`, `Instant`, and so
-on) at `T` is skipped by name instead.
+A value class over `Instant`, `Duration`, `Uuid`, `ByteArray`, a collection, a plain interface or
+another value class has a pair too, so `Box<PawPrint>` crosses like `Box<CatId>`. A Kotlin member
+that uses a value class with no C# record struct (over `Char`, a `Throwable`, and so on) at `T` is
+skipped by name instead.
 
 ### An interface at an erased position {id="an-interface-at-an-erased-position"}
 

@@ -45,7 +45,7 @@ internal data class ForwardStaticFlowSlots(
   val scopeRead: String,
   val scopeRoot: String,
   val scopeHandle: String,
-  val receiverParameter: ParameterSpec?,
+  val receiverParameter: List<ParameterSpec>,
 )
 
 internal fun ForwardStaticFlowCall.slots(
@@ -61,6 +61,7 @@ internal fun ForwardStaticFlowCall.slots(
   )
   val read: String = when (val receiver = receiver) {
     is ForwardStaticSuspendReceiver.Handle, is ForwardStaticSuspendReceiver.Box -> names.obj
+    is ForwardStaticSuspendReceiver.Wire -> receiver.shape.view?.kotlinWrap(names.obj) ?: names.obj
     is ForwardStaticSuspendReceiver.Enum -> "${receiver.kotlinType}.entries[$slot]"
     is ForwardStaticSuspendReceiver.Scalar, null -> slot
   }
@@ -76,9 +77,12 @@ internal fun ForwardStaticFlowCall.slots(
         receiver.type.kotlinName.takeIf { receiver.trampolineBounds.isNotEmpty() }
       "val ${names.obj} = ${forwardBoundedRead(slot, bounds, receiver.nullable, variable)}\n"
     }
+    is ForwardStaticSuspendReceiver.Wire -> receiver.wirePrelude(slot, names.obj) + "\n"
     is ForwardStaticSuspendReceiver.Scalar, is ForwardStaticSuspendReceiver.Enum, null -> ""
   }
-  val parameter: ParameterSpec? = when (val receiver = receiver) {
+  val parameter: List<ParameterSpec> = when (val receiver = receiver) {
+    is ForwardStaticSuspendReceiver.Wire ->
+      return slotsOf(qualifiedName, names, read, prelude, receiver.wireParameters(slot))
     is ForwardStaticSuspendReceiver.Handle ->
       ParameterSpec.builder(slot, cOpaquePointer.copy(nullable = receiver.nullable)).build()
     is ForwardStaticSuspendReceiver.Scalar ->
@@ -87,7 +91,17 @@ internal fun ForwardStaticFlowCall.slots(
     is ForwardStaticSuspendReceiver.Box ->
       ParameterSpec.builder(slot, cOpaquePointer.copy(nullable = receiver.nullable)).build()
     null -> null
-  }
+  }.let(::listOfNotNull)
+  return slotsOf(qualifiedName, names, read, prelude, parameter)
+}
+
+private fun ForwardStaticFlowCall.slotsOf(
+  qualifiedName: String,
+  names: ForwardLegacyNames,
+  read: String,
+  prelude: String,
+  parameter: List<ParameterSpec>,
+): ForwardStaticFlowSlots {
   return ForwardStaticFlowSlots(
     callee = qualifier(read),
     ownerRead = "val ${names.obj} = handle.asStableRef<$qualifiedName>().get()\n",
@@ -113,7 +127,7 @@ internal fun FunSpec.staticReceived(slots: ForwardStaticFlowSlots?): FunSpec {
   builder.parameters.removeAll { parameter ->
     parameter.name == "handle" || parameter.name == slots.scopeHandle
   }
-  slots.receiverParameter?.let { parameter -> builder.parameters.add(0, parameter) }
+  builder.parameters.addAll(0, slots.receiverParameter)
   return builder.build()
 }
 

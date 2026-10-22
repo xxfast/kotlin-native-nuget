@@ -318,6 +318,8 @@ internal data class CirValueClass(
    * `XAsync` method that passes the underlying's wire as the receiver.
    */
   val asyncMembers: List<CirMember> = emptyList(),
+  /** ADR-240: the content `Equals(V)` / `GetHashCode()` lines of a bytes or collection struct. */
+  val contentEquality: List<String> = emptyList(),
   // ADR-150: the author's KDoc, as plain text in tag slots; `renderDoc` owns the escaping.
   val doc: CirDoc? = null,
   /**
@@ -393,6 +395,13 @@ internal data class CirValueClassBoxing(
    * (`TreatCount(val count: Int?)`), whose export returns `bool`. Null otherwise.
    */
   val unboxValueOut: CirParameter? = null,
+  /**
+   * ADR-240: an ADR-235 WIRE struct's whole `NugetBox` body (the underlying's handle scope around
+   * the extern) and `NugetUnbox` body (the extern over `boxed`, read on the result wire). Null for
+   * every other value class, whose pair renders from [boxArguments] and [unboxResult].
+   */
+  val boxBody: String? = null,
+  val unboxBody: String? = null,
 )
 
 internal data class CirValueClassConstructor(
@@ -1309,6 +1318,17 @@ internal data class CirStateFlowWrite(
    * `finally` (a minted box disposed, a borrowed wrapper kept alive). Null for every other element.
    */
   val boxedType: String? = null,
+  /** ADR-240: the handle a bytes, collection or interface element is minted into for the call. */
+  val mint: CirStateFlowMint? = null,
+)
+
+/**
+ * ADR-240: [create] spells the expression minting `<variable>Box` from a variable, [release] the
+ * statement releasing it in the `finally`.
+ */
+internal class CirStateFlowMint(
+  val create: (String) -> String,
+  val release: (String) -> String,
 )
 
 /**
@@ -1320,6 +1340,21 @@ internal fun CirStateFlowWrite.boxedCall(
   call: String,
   indent: String,
 ): List<String> {
+  mint?.let { minted ->
+    return buildList {
+      variables.forEach { variable ->
+        add("${indent}IntPtr ${variable}Box = ${minted.create(variable)};")
+      }
+      add("${indent}try")
+      add("${indent}{")
+      add("$indent    $call")
+      add("${indent}}")
+      add("${indent}finally")
+      add("${indent}{")
+      variables.forEach { variable -> add("$indent    ${minted.release(variable)}") }
+      add("${indent}}")
+    }
+  }
   val type: String = boxedType ?: return listOf("$indent$call")
   return buildList {
     variables.forEach { variable ->
@@ -1344,7 +1379,7 @@ internal fun CirStateFlowWrite.boxedCall(
 
 /** ADR-215: the argument a boxed write passes for [variable], else [arguments] as they are. */
 internal fun CirStateFlowWrite.boxedArgument(variable: String): String =
-  if (boxedType == null) arguments else "${variable}Box"
+  if (boxedType == null && mint == null) arguments else "${variable}Box"
 
 /**
  * ADR-209: the externs a `KotlinSharedFlow<T>` / `KotlinMutableSharedFlow<T>` member's delegates
@@ -1606,6 +1641,9 @@ internal data class CirParameter(
   // ADR-228: the unboxed C# read a static flow receiver copies into its local before any lambda
   // captures it; the extern call then mints and releases the box around itself. Null otherwise.
   val boxedRead: String? = null,
+  // ADR-240: what the `finally` keeps alive past the call instead of the parameter itself, when
+  // the parameter is no C# variable (a struct's own member reads its receiver off `this`).
+  val keepAlive: String? = null,
 ) {
   /** The parameter as an extern derived from the public signature spells it. */
   val nativeName: String get() = abiName ?: name

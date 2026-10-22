@@ -416,15 +416,18 @@ class Tier1MutableSharedFlowValueClassElementTest {
     )
     assertEquals(emptyList(), refusing.kspErrors)
     assertTrue(refusing.compiledClean, "got: ${refusing.compileErrors}")
-    assertFalse(
-      Regex("""bulletin_(try_)?emit_\w+""").containsMatchIn(refusing.generated),
-      "expected no Kotlin emit export for a refused value class element",
+    // ADR-240: only the box-carried `Stamp` and `Outer` elements emit; the refused ones do not.
+    assertEquals(
+      setOf("stamps", "outers"),
+      Regex("""bulletin_(?:try_)?emit_(\w+)""").findAll(refusing.generated)
+        .map { it.groupValues[1] }.toSet(),
+      "expected a Kotlin emit export for the box-carried elements only",
     )
     val members: String = refusing.generatedCSharp.lines()
       .filter { line -> line.trimStart().startsWith("public Kotlin") }
       .joinToString("\n")
     assertFalse(
-      Regex("""Kotlin(Mutable)?SharedFlow<[^>\n]*> \w+\b""").containsMatchIn(members),
+      Regex("""Kotlin(Mutable)?SharedFlow<[^>\n]*(Initial|Oops)> \w+\b""").containsMatchIn(members),
       "expected no holder at all for a refused value class element; got:\n$members",
     )
     val pkg = "tier1.sharedvcrefused"
@@ -442,13 +445,13 @@ class Tier1MutableSharedFlowValueClassElementTest {
         assertContains(skips.single(), text, message = "expected $member to name $text")
       }
     }
-    // ADR-235: an `Instant` underlying and a nested value class have a record struct now, over
-    // the underlying's own C# spelling, but no box/unbox pair: refused as an element by that.
+    // ADR-235: an `Instant` underlying and a nested value class have a record struct over the
+    // underlying's own C# spelling; ADR-240 gives each a box pair, so each binds as an element.
     listOf("Bulletin.stamps:", "Bulletin.outers:").forEach { member ->
-      val skips: List<String> = refusing.kspWarnings.filter {
-        it.contains(member) && it.contains("those are the underlyings it has a boxed form for")
-      }
-      assertEquals(1, skips.size, "expected $member skipped once; got: ${refusing.kspWarnings}")
+      assertTrue(
+        refusing.kspWarnings.none { it.contains(member) },
+        "expected $member to bind; got: ${refusing.kspWarnings}",
+      )
     }
     assertFalse(
       refusing.kspWarnings.any { it.contains("has no write arm") },

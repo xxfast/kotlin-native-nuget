@@ -30,6 +30,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardBoundedRead
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.BOOLEAN
+import com.squareup.kotlinpoet.LONG
+import com.squareup.kotlinpoet.STRING
 import com.squareup.kotlinpoet.INT
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.CodeBlock
@@ -51,6 +53,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.flowSourceExpressi
 import io.github.xxfast.kotlin.native.nuget.processor.forward.mintAsyncSlots
 import io.github.xxfast.kotlin.native.nuget.processor.forward.asyncKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.mentionsAnyTypeParameter
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyWireLowering
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardKotlinArgumentSpelling
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticSuspendReceiver
@@ -63,6 +66,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isLegacyLowered
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isLegacyNullableSlot
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOptInRefused
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollection
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementWire
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyWireBox
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyFlowElementShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCallbackReleased
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyInvocation
@@ -257,6 +263,7 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
         buildFlowCollectBody(
           qualifiedName, propCall, flowElementQualified, elementNullable, memberNullable,
           flowElementCollection, flowElementEnvelope,
+          classifier.legacyFlowElementWire(propTypeResolved),
         )
       )
       .build()
@@ -343,7 +350,7 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
         .addCode(
           buildStateFlowValuePropertyBody(
             qualifiedName, propCall, elementNullable, memberNullable, flowElementCollection,
-            flowElementEnvelope,
+            flowElementEnvelope, classifier.legacyFlowElementWire(propTypeResolved),
           ),
         )
         .build()
@@ -485,6 +492,12 @@ internal fun FileSpec.Builder.addFlowMethodExports(
       // declared collection type, so the ABI slot is a COpaquePointer like every other handle.
       // ADR-122: so is a class/object/sealed parameter, which used to declare its real Kotlin
       // type here and cross as a pinned `kref` struct against C#'s `IntPtr` (issue #126).
+      // ADR-240: a type riding its ordinary-route wire.
+      val wire = paramShapes[index] as? ForwardLegacyParameterShape.Wire
+      if (wire != null) {
+        addLegacyWireParameter(paramName, wire, names.hasValueSlots[index])
+        return@forEachIndexed
+      }
       if (paramShapes[index].isLegacyLowered()) {
         val nullable: Boolean = paramShapes[index].isLegacyNullableSlot
         // ADR-164 rule 2: an optional handle's leading `IsSet` slot.
@@ -572,6 +585,7 @@ internal fun FileSpec.Builder.addFlowMethodExports(
       buildFlowMethodCollectBody(
         qualifiedName, call, paramPrelude, flowElementQualified,
         elementNullable, memberNullable, flowElementCollection, names, flowElementEnvelope,
+        classifier.legacyFlowElementWire(returnType),
       )
     )
   if (paramShapes.castsGenericBound()) builder.addAnnotation(forwardUncheckedCastSuppression)
@@ -650,6 +664,7 @@ internal fun FileSpec.Builder.addFlowMethodExports(
         buildStateFlowValueMethodBody(
           qualifiedName, call, paramPrelude, elementNullable, memberNullable,
           flowElementCollection, names.obj, flowElementEnvelope,
+          classifier.legacyFlowElementWire(returnType),
         )
       )
 
@@ -707,7 +722,12 @@ internal fun itemBoxExpr(
   collection: BridgeType.Collection?,
   // ADR-201 amendment: a Throwable element leaves as its ADR-107 envelope.
   envelope: Boolean = false,
+  // ADR-240: a wire element leaves on its ordinary-route result wire.
+  wire: ForwardLegacyFlowElementShape.Wire? = null,
 ): String = when {
+  wire != null && elementNullable ->
+    "if (value != null) NugetHandles.retain(${wire.legacyWireBox("value")}) else null"
+  wire != null -> "NugetHandles.retain(${wire.legacyWireBox("value")} as Any)"
   envelope && elementNullable ->
     "if (value != null) NugetHandles.retain(buildError(value, ::nugetMappedType)) else null"
   envelope -> "NugetHandles.retain(buildError(value, ::nugetMappedType))"
@@ -732,6 +752,7 @@ private fun buildFlowCollectBody(
   memberNullable: Boolean = false,
   elementCollection: BridgeType.Collection?,
   envelope: Boolean = false,
+  wire: ForwardLegacyFlowElementShape.Wire? = null,
 ): String = buildString {
   appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
   // ADR-128: the runtime's `collectForCSharp` owns the three reinterpreted callbacks, the ATOMIC
@@ -743,7 +764,7 @@ private fun buildFlowCollectBody(
     "return collectForCSharp(scope, onNextPtr, onCompletePtr, onErrorPtr, userData, ::nugetMappedType) { emit ->"
   )
   appendLine("  obj.${memberAccessor(propName, memberNullable)}.collect { value ->")
-  appendLine("    val itemRef = ${itemBoxExpr(elementNullable, elementCollection, envelope)}")
+  appendLine("    val itemRef = ${itemBoxExpr(elementNullable, elementCollection, envelope, wire)}")
   appendLine("    emit(itemRef)")
   appendLine("  }")
   append("}")
@@ -763,6 +784,7 @@ private fun buildFlowMethodCollectBody(
   // Every fixed slot and local below is minted apart from the member's own parameter names.
   names: ForwardLegacyNames,
   envelope: Boolean = false,
+  wire: ForwardLegacyFlowElementShape.Wire? = null,
 ): String = buildString {
   val obj: String = names.obj
   val scope: String = names.scope
@@ -780,7 +802,7 @@ private fun buildFlowMethodCollectBody(
   )
   // ADR-231: a plain callback's key is released when the collection ends, on every arm.
   val collected: String = "${memberAccessor(call, memberNullable)}.collect { value ->\n" +
-      "  val itemRef = ${itemBoxExpr(elementNullable, elementCollection, envelope)}\n" +
+      "  val itemRef = ${itemBoxExpr(elementNullable, elementCollection, envelope, wire)}\n" +
       "  $emit(itemRef)\n" +
       "}"
   names.legacyCallbackReleased(collected).trimEnd().lines()
@@ -799,14 +821,19 @@ private fun buildStateFlowValuePropertyBody(
   memberNullable: Boolean = false,
   elementCollection: BridgeType.Collection?,
   envelope: Boolean = false,
+  // ADR-240: a wire element's `.value` leaves on its result wire.
+  wire: ForwardLegacyFlowElementShape.Wire? = null,
 ): String = buildString {
   appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
   if (!elementNullable && !memberNullable) {
     val read: String = flowValueExpression("obj.$propName.value", elementCollection)
-    append("return NugetHandles.retain(${stateFlowBox(read, envelope)})")
+    val box: String =
+      wire?.let { "${it.legacyWireBox(read)} as Any" } ?: stateFlowBox(read, envelope)
+    append("return NugetHandles.retain($box)")
   } else {
     appendLine("val v = obj.${memberAccessor(propName, memberNullable)}.value")
-    append("return if (v != null) NugetHandles.retain(${stateFlowNullableBox(envelope)}) else null")
+    val box: String = wire?.legacyWireBox("v") ?: stateFlowNullableBox(envelope)
+    append("return if (v != null) NugetHandles.retain($box) else null")
   }
 }
 
@@ -819,15 +846,19 @@ private fun buildStateFlowValueMethodBody(
   elementCollection: BridgeType.Collection?,
   obj: String,
   envelope: Boolean = false,
+  wire: ForwardLegacyFlowElementShape.Wire? = null,
 ): String = buildString {
   appendLine("val $obj = handle.asStableRef<$qualifiedName>().get()")
   append(paramPrelude)
   if (!elementNullable && !memberNullable) {
     val read: String = flowValueExpression("$call.value", elementCollection)
-    append("return NugetHandles.retain(${stateFlowBox(read, envelope)})")
+    val box: String =
+      wire?.let { "${it.legacyWireBox(read)} as Any" } ?: stateFlowBox(read, envelope)
+    append("return NugetHandles.retain($box)")
   } else {
     appendLine("val v = ${memberAccessor(call, memberNullable)}.value")
-    append("return if (v != null) NugetHandles.retain(${stateFlowNullableBox(envelope)}) else null")
+    val box: String = wire?.legacyWireBox("v") ?: stateFlowNullableBox(envelope)
+    append("return if (v != null) NugetHandles.retain($box) else null")
   }
 }
 
@@ -934,6 +965,36 @@ internal fun mutableStateFlowWriteSlot(elementType: KSType?): MutableStateFlowWr
     }
 
     is MutableStateFlowElement.ValueClass -> valueClassWriteSlot(element, nullable)
+
+    // ADR-240: the minted handle, read (a container copied) before the export returns.
+    is MutableStateFlowElement.Minted -> MutableStateFlowWriteSlot(
+      listOf("value" to cOpaquePointer.copy(nullable = nullable)),
+      legacyWireLowering(
+        "value", if (nullable) BridgeType.Nullable(element.type) else element.type, hasValue = null,
+      ),
+    )
+
+    // ADR-240: ticks or text back into the narrow type, as the ordinary setter lowers it.
+    is MutableStateFlowElement.Narrow -> {
+      val lower: (String) -> String = { wire ->
+        when (element.qualifiedName) {
+          "kotlin.time.Instant" -> "instantFromDotNetTicks($wire)"
+          "kotlin.time.Duration" -> "durationFromDotNetTicks($wire)"
+          else -> "kotlin.uuid.Uuid.parse($wire)"
+        }
+      }
+      when {
+        element.qualifiedName == "kotlin.uuid.Uuid" -> MutableStateFlowWriteSlot(
+          listOf("value" to STRING.copy(nullable = nullable)),
+          if (nullable) "value?.let { ${lower("it")} }" else lower("value"),
+        )
+        nullable -> MutableStateFlowWriteSlot(
+          listOf("valueHasValue" to BOOLEAN, "value" to LONG),
+          "if (valueHasValue) ${lower("value")} else null",
+        )
+        else -> MutableStateFlowWriteSlot(listOf("value" to LONG), lower("value"))
+      }
+    }
   }
 }
 
@@ -995,6 +1056,9 @@ private fun valueClassWriteSlot(
 
     is MutableStateFlowElement.Boxed ->
       error("value class ${element.qualifiedName} over a type parameter has no write arm")
+
+    is MutableStateFlowElement.Narrow, is MutableStateFlowElement.Minted ->
+      error("value class ${element.qualifiedName} over a wire type writes as its own box")
   }
 }
 

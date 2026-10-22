@@ -289,15 +289,16 @@ class Tier1MutableStateFlowValueClassElementTest {
     )
     assertEquals(emptyList(), refusing.kspErrors)
     assertTrue(refusing.compiledClean, "got: ${refusing.compileErrors}")
-    // ADR-228: only the generic `Crate` element is writable, through its own box.
+    // ADR-228: the generic `Crate` element is writable through its own box; ADR-240: so are the
+    // `Stamp` and `Outer` elements, through theirs.
     assertEquals(
-      listOf("tracker_set_crate_value"),
+      listOf("tracker_set_stamp_value", "tracker_set_outer_value", "tracker_set_crate_value"),
       Regex("""tracker_set_\w+_value""")
         .findAll(refusing.generated)
         .map { it.value }
         .distinct()
         .toList(),
-      "expected a Kotlin setter for the generic value class element only",
+      "expected a Kotlin setter for each box-carried value class element",
     )
     mapOf(
       "Tracker.initial:" to listOf("`tier1.vcrefused.Initial`", "`kotlin.Char`"),

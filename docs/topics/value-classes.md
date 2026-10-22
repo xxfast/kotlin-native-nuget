@@ -84,15 +84,30 @@ var same = new PawPrint(7, 3);                   // secondary constructor, runs 
 These structs bind at parameters, results, properties and constructors, nullable included,
 exactly like the structs above, and as a `List`, `Set` or `Map` element, key or value. Unlike a
 [bare `ByteArray`](collections.md#bytearray-as-a-collection-component), a struct over a `ByteArray`
-or a collection is accepted as a `Set` element and a `Map` key, but it compares by reference (see
-below), so `Contains` or a lookup with a struct you just built never matches; read the elements
-or iterate the entries instead. Their methods, properties and
+or a collection is accepted as a `Set` element and a `Map` key, and compares by content (see
+below), so `Contains` or a lookup with a struct you just built matches. Their methods, properties and
 secondary constructors bind too. A failing `init` on the receiver throws the usual
 [exception](exceptions.md) from the member call.
 
 - A `ByteArray` or collection is copied at each crossing, so changing the array you passed in
-  does not reach Kotlin. Those two structs compare their payload by reference, so assert on
-  `Pads` or `Toys`, not on the struct.
+  does not reach Kotlin.
+- A struct over a `ByteArray` or a collection compares by content, so it works as a dictionary key
+  or `HashSet` element. A `byte[]` compares element by element, a list in order, a set ignoring
+  order, a map by the same keys with equal values, and a nested struct through its own members.
+  A struct over an interface keeps reference equality. `default` equals another `default` and
+  hashes to 0.
+
+```kotlin
+value class PostStack(val tags: Set<String>)
+```
+
+```C#
+var oreo = new PostStack(new HashSet<string> { "bill", "card" });
+var mylo = new PostStack(new HashSet<string> { "card", "bill" });
+bool same = oreo == mylo;                                    // true, order ignored
+var seen = new HashSet<PawPrint> { new(new byte[] { 3 }), new(new byte[] { 3 }) };   // one entry
+```
+
 - A value class over an interface holds an `IDisposable` interface value. Dispose a Kotlin-backed
   one you read out (`using IRumbler rumbler = voice.Rumbler`). A C#-implemented one you pass in
   comes back as the same instance.
@@ -101,6 +116,13 @@ secondary constructors bind too. A failing `init` on the receiver throws the usu
   naming the struct, as a parameter, nullable value, collection element or member receiver. A struct
   over `Instant`, `Duration` or `Uuid` has no null payload, so its `default` crosses and `init`
   decides whether Kotlin accepts it.
+
+A struct over any of these also crosses where C# sees only `T` or `object`, and on the `suspend` and
+`Flow` routes: `new Box<PawPrint>(paw)`, a `Flow<PawPrint>` element, an awaited result and a write to
+a `MutableStateFlow<PawPrint>` all work, and `new Box<PawPrint>(default)` throws `ArgumentException`.
+Its own `suspend` and `Flow` members bind as instance methods on the struct
+(`await paw.PadCountAsync()`). See
+[Instant, Duration, Uuid, ByteArray, interfaces and value classes](coroutines-and-flow.md#async-wire-types).
 
 ## A generic value class
 

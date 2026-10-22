@@ -198,38 +198,22 @@ class Tier1SharedFlowSurfaceTest {
   }
 
   @Test
-  fun `an element with no write arm binds read-only and the missing writes are named`() {
+  fun `a bytes, collection or interface element binds the mutable holder`() {
+    // ADR-240: each emits the handle the ordinary route mints for it.
     val cs: String = result.generatedCSharp
-    assertContains(cs, Regex("""public KotlinSharedFlow<[^\n]*> Lists\b"""))
-    assertContains(cs, "public KotlinSharedFlow<byte[]> Chunks")
-    val mutable = Regex("""public KotlinMutableSharedFlow<[^\n]*> (Lists|Chunks)\b""")
-    assertFalse(mutable.containsMatchIn(cs), "a refused element must not bind the mutable holder")
+    assertContains(cs, Regex("""public KotlinMutableSharedFlow<[^\n]*> Lists\b"""))
+    assertContains(cs, "public KotlinMutableSharedFlow<byte[]> Chunks")
+    assertContains(cs, Regex("""public KotlinMutableSharedFlow<[\w.:]*IFeed> Listeners\b"""))
     val kt: String = result.generated
-    assertFalse("try_emit_lists" in kt || "try_emit_chunks" in kt, "no write export expected")
-    assertContains(kt, "@CName(\"library_tier1_sharedsurface__bulletin_get_lists_replay_cache\")")
-    assertContains(cs, Regex("""public KotlinSharedFlow<[\w.:]*IFeed> Listeners\b"""))
-    assertFalse("try_emit_listeners" in kt, "no write export expected for an interface element")
-    // Every owner ADR-205 binds names it: class, interface (ADR-174) and top-level suspend. The
-    // sentence is the MutableStateFlow setter refusal's own, with this holder's name in it.
-    val container = "(the write seam does not build its wire container)"
-    mapOf(
-      "Bulletin.lists:" to "a List element of a MutableSharedFlow has no write arm $container",
-      "Bulletin.chunks:" to
-          "a ByteArray element of a MutableSharedFlow has no write arm $container",
-      "Bulletin.listeners:" to "an interface element of a MutableSharedFlow has no write arm " +
-          "(a C# implementation cannot be written into a Kotlin flow on the forward route)",
-      "Feed.batches:" to "a List element of a MutableSharedFlow has no write arm $container",
-      "bulletinBatches:" to "a List element of a MutableSharedFlow has no write arm $container",
-    ).forEach { (member, sentence) ->
-      val named: List<String> = result.kspWarnings.filter { warning ->
-        ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name in warning &&
-            "Skipping $member" in warning && "EmitAsync" in warning
-      }
-      assertEquals(1, named.size, "expected one named refusal for $member; got: $named")
-      assertContains(named.single(), sentence)
-      assertContains(named.single(), "read-only KotlinSharedFlow")
+    listOf("lists", "chunks", "listeners").forEach { member ->
+      assertContains(kt, "try_emit_$member")
     }
+    assertTrue(
+      result.kspWarnings.none { "no write arm" in it && "MutableSharedFlow" in it },
+      "expected no write refusal; got: ${result.kspWarnings}",
+    )
   }
+
 
   /**
    * ADR-209 over ADR-071's nullable arms: `emit`/`tryEmit` take the value the `MutableStateFlow`
