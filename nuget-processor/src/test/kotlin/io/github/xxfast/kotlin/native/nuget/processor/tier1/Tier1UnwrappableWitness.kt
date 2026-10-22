@@ -121,16 +121,7 @@ internal object Tier1UnwrappableWitness {
 
   /** Ordered: the first entry still deferred as an unrouted generic reference wins. */
   private val unroutedGenerics: List<Tier1GenericCandidate> = listOf(
-    // ADR-040 keeps a generic interface on the "generic declaration" route; ADR-208 declined it.
-    // ADR-222 binds it at an input position only, so [unroutedGenericInput] passes it over.
-    Tier1GenericCandidate(
-      kotlin = "Shelf<Int>",
-      declarations = "interface Shelf<T> { fun top(): T }",
-      type = { packageName ->
-        BridgeType.SpecializedProtocol("generic declaration $packageName.Shelf")
-      },
-      bindsAsInput = true,
-    ),
+    // ADR-224 binds a generic interface at every position, so it is no candidate any more.
     // ADR-196: an inner class captures its generic owner's `T`; ADR-208 declined it too.
     Tier1GenericCandidate(
       kotlin = "Tin<Int>.Latch",
@@ -138,6 +129,8 @@ internal object Tier1UnwrappableWitness {
       type = { packageName ->
         BridgeType.SpecializedProtocol("generic declaration $packageName.Tin.Latch")
       },
+      // The diagnostic spells the inner class with the owner's arguments on its own name.
+      diagnosticSpelling = "Latch<Int>",
     ),
   )
 
@@ -146,12 +139,8 @@ internal object Tier1UnwrappableWitness {
    * `UNROUTED_POSITION` (reason `GENERIC`), with the input or return kind of its position. Since
    * ADR-208 an exported generic CLASS (`Box<Int>`) is no such thing; it binds everywhere.
    */
-  /** [unroutedGeneric] at a parameter or receiver, where ADR-222 binds a generic interface. */
-  val unroutedGenericInput: Tier1GenericCandidate
-    get() = unroutedGenerics.firstOrNull { candidate ->
-      !candidate.bindsAsInput &&
-        candidate.type("tier1").skipReason() == ForwardPlanSkipReason.GENERIC
-    } ?: error("Tier1UnwrappableWitness: no candidate is left for an unrouted generic input")
+  /** [unroutedGeneric] at a parameter or receiver. */
+  val unroutedGenericInput: Tier1GenericCandidate get() = unroutedGeneric
 
   val unroutedGeneric: Tier1GenericCandidate
     get() = unroutedGenerics.firstOrNull { candidate ->
@@ -175,9 +164,9 @@ internal class Tier1GenericCandidate(
   val kotlin: String,
   val declarations: String,
   val type: (packageName: String) -> BridgeType,
-  /** ADR-222: binds at a parameter or an extension receiver (a generic interface). */
-  val bindsAsInput: Boolean = false,
+  /** How a skip diagnostic spells [kotlin], when it differs. */
+  val diagnosticSpelling: String = kotlin,
 ) {
   /** The declared type's simple name (`Shelf`), as generated names and diagnostics spell it. */
-  val simpleName: String get() = kotlin.substringBefore('<')
+  val simpleName: String get() = kotlin.replace(Regex("<[^>]*>"), "")
 }

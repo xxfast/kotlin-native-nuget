@@ -245,6 +245,13 @@ class Tier1GenericInstanceMemberPositionTest {
   @Test
   fun `each declined shape stays a named skip and absent from Interop cs`() {
     val cs: String = result.generatedCSharp.withoutDocComments()
+    // ADR-224: a generic interface return reads back through its generic backing wrapper.
+    assertTrue(
+      cs.lines().any { line ->
+        line.trimStart().startsWith("public") && "IShelf<string> ShelfOf(" in line
+      },
+      "expected ShelfOf to bind; got: ${cs.lines().filter { "ShelfOf(" in it }}",
+    )
     mapOf(
       "list" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
       "any" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
@@ -254,9 +261,9 @@ class Tier1GenericInstanceMemberPositionTest {
       "projected" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
       "latchOf" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
       "pairOf" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
-      // The four shapes the deleted legacy generic-return route still rendered, each as C# that
-      // does not compile (CS0234, a misspelled inner class, CS0718, `Box<void>`).
-      "shelfOf" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
+      // Three of the four shapes the deleted legacy generic-return route still rendered, each as C#
+      // that does not compile (a misspelled inner class, CS0718, `Box<void>`). The fourth, a
+      // generic interface return, binds since ADR-224 (asserted below).
       "infuserOf" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
       "boxOfDepot" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
       "boxOfUnit" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,

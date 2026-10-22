@@ -77,6 +77,19 @@ internal fun StringBuilder.renderBridgeHelper(helper: CirBridgeHelper) {
   appendLine("    }")
   appendLine()
 
+  // ADR-224: the erased mint a bridged generic interface implements as a default method, so a
+  // C# implementation at an erased position (`Wrap<T>` in a `Box<IKeepsake<X>>`) mints its
+  // bridge at the instantiation the static `T` names, under NativeAOT, with no reflection. Public
+  // because `IKeepsake<T>` lists it; its one member is internal, so no consumer can call it.
+  appendLine(
+    "    [global::System.ComponentModel.EditorBrowsable(" +
+      "global::System.ComponentModel.EditorBrowsableState.Never)]",
+  )
+  appendLine("    public interface INugetBridgeable<out TSelf>")
+  appendLine("    {")
+  appendLine("        internal IntPtr MintBridge();")
+  appendLine("    }")
+  appendLine()
   appendLine("    internal abstract class NugetBridgeState")
   appendLine("    {")
   appendLine("        internal IntPtr KotlinHandle;")

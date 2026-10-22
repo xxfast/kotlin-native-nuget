@@ -3328,6 +3328,87 @@ public class LiveHandleTests
         });
     }
 
+    // Row 8j-generic-output. ADR-224: the same generic interface at OUTPUT positions. A Kotlin
+    // `Locket` returned as `IKeepsake<T>` is a generic backing wrapper the caller disposes; a stored
+    // C# `Diary` read back through a return, a property, a collection component, a nested read and
+    // a lambda result resolves to itself, and each `TryResolveCSharp` hit disposes its transfer
+    // handle. A backing wrapper that kept its handle, or a hit that skipped the dispose, is +50.
+    [Fact]
+    public void GenericInterfaceOutput_ReturnedKeepsakes_ReturnToBaseline()
+    {
+        var diary = new ProbeDiary();
+        AssertNoLeak(() =>
+        {
+            using (Playroom.IKeepsake<double> locket = Playroom.KeepsakeTrove.LocketOf(4.5))
+            {
+                locket.Item += 1;
+                Assert.Equal(5.5, locket.Item);
+            }
+
+            using var trove = new Playroom.Trove();
+            using (Playroom.IKeepsake<string> kotlin = trove.Keep())
+            {
+                Assert.Equal("Oreo", kotlin.Item);
+            }
+
+            trove.Kept = diary;
+            Assert.Same(diary, trove.Keep());
+            Assert.Same(diary, trove.Kept);
+            Assert.Same(diary, Assert.Single(trove.All()));
+            Assert.Same(diary, trove.ByName()["kept"]);
+            Assert.Same(diary, Playroom.KeepsakeTrove.Visit(_ => diary));
+
+            using (Playroom.IKeepsake<Playroom.IKeepsake<string>> outer = Playroom.KeepsakeTrove.Nested())
+            using (Playroom.IKeepsake<string> inner = outer.Item)
+            {
+                Assert.Equal("Mylo", inner.Item);
+            }
+
+            using var mantel = new Playroom.Mantel<bool>(true);
+            using (Playroom.IKeepsake<bool> kept = mantel.Keep())
+            {
+                Assert.True(kept.Item);
+            }
+        });
+    }
+
+    // Row 8j-generic-erased. ADR-224: a C# implementation at ERASED inputs, minted by the
+    // `INugetBridgeable<TSelf>` default method inside `Wrap<T>`: a `Box<IKeepsake<string>>`
+    // constructor, an open `Box<IKeepsake<short>>` over an instantiation only the consumer picks,
+    // and an open collection. A mint marked owned that no one disposed is +50 per crossing.
+    private sealed class ProbeTally(short item) : Playroom.IKeepsake<short>
+    {
+        public short Item { get; set; } = item;
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void GenericInterfaceOutput_ErasedInputs_ReturnToBaseline()
+    {
+        var diary = new ProbeDiary();
+        var first = new ProbeTally(1);
+        var second = new ProbeTally(2);
+        AssertNoLeak(() =>
+        {
+            using (var box = new Box<Playroom.IKeepsake<string>>(diary))
+            using (Box<Playroom.IKeepsake<string>> back = Playroom.KeepsakeTrove.Boxed(box))
+            {
+                Assert.Same(diary, back.Value);
+            }
+
+            using (var box = new Box<Playroom.IKeepsake<short>>(first))
+            using (Box<Playroom.IKeepsake<short>> back = Playroom.KeepsakeTrove.BoxedOpen(box))
+            {
+                Assert.Same(first, back.Value);
+            }
+
+            IReadOnlyList<Playroom.IKeepsake<short>> stashed =
+                Playroom.KeepsakeTrove.Stash(new List<Playroom.IKeepsake<short>> { first, second });
+            Assert.Same(second, stashed[0]);
+            Assert.Same(first, stashed[1]);
+        });
+    }
+
     // Rows 8k and 8l. ADR-116's 2026-09-13 amendment: the same two callback families, one owner
     // kind to the left. A stored-callback pair (`StableRef.create(unregister)` on subscribe,
     // `ref.dispose()` on `Dispose`) and an interface-bridge pair (that, plus one retained handle

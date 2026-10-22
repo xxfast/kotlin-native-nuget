@@ -2166,4 +2166,45 @@ public class CollectabilityTests
             MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
             "the delegate passed to Pen.AddKeeper stayed reachable after its subscription was disposed");
     }
+
+    // ADR-224: the output side of the same release. Kotlin STORES the Diary (`Trove.kept`), C#
+    // reads it back as itself, then overwrites the slot with a Kotlin `Locket`. The read-back's
+    // transfer handle is disposed by `TryResolveCSharp`, so once Kotlin collects the overwritten
+    // bridge nothing roots the Diary. A token hit that kept its handle, or a resolved C# object
+    // the generated read cached, keeps it alive here.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference StoreReadBackAndOverwriteADiary(Playroom.Trove trove)
+    {
+        var diary = new GenericDiary();
+        trove.Kept = diary;
+        Assert.Same(diary, trove.Keep());
+        using (Playroom.IKeepsake<string> locket = Playroom.KeepsakeTrove.LocketOf("Mylo"))
+        {
+            trove.Kept = locket;
+        }
+        return new WeakReference(diary);
+    }
+
+    [Fact]
+    public void CSharpGenericKeepsake_StoredThenDropped_ReleasedAfterKotlinGc()
+    {
+        int before = NugetBridgeState.ReleasedCount;
+        using var trove = new Playroom.Trove();
+
+        WeakReference diary = StoreReadBackAndOverwriteADiary(trove);
+
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline && (diary.IsAlive || NugetBridgeState.ReleasedCount <= before))
+        {
+            NugetMarshal.GcCollect();
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            Thread.Sleep(25);
+        }
+
+        Assert.True(
+            NugetBridgeState.ReleasedCount > before,
+            $"expected the Kotlin cleaner to release the stored Keepsake bridge; ReleasedCount stayed at {before}");
+        Assert.False(diary.IsAlive, "the C# Diary stayed reachable after Kotlin overwrote and collected its bridge");
+    }
 }

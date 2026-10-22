@@ -25,6 +25,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.withOpenSlotFills
 import io.github.xxfast.kotlin.native.nuget.processor.forward.openSlotFills
+import io.github.xxfast.kotlin.native.nuget.processor.forward.OpenSlot
+import io.github.xxfast.kotlin.native.nuget.processor.forward.openSlots
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAsyncInterfaces
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpAsyncMemberName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpMemberName
 import io.github.xxfast.kotlin.native.nuget.processor.kotlinConstantToPascalCase
@@ -67,6 +70,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInheritedOutcome
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceHierarchy
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceBridgePlanner
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInterfacePlan
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncPlacement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceMemberPlacement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.declared
@@ -1667,10 +1673,30 @@ internal fun translateClass(
   val backingOverridesDisposeAsync: Boolean =
     scopeOwner != null && (scopeOwnerIsThisClass || scopeOwnerIsAbstract || scopeOwnerIsSealed)
 
+  // ADR-224: a generic implementer of a reachable generic interface (`Locket<T> : Keepsake<T>`)
+  // fills that interface's slot too, so a consumer-constructed `Locket<byte>` handed through an
+  // erased `Box<IKeepsake<byte>>` reads back through the backing wrapper.
+  val interfaceSlots: List<OpenSlot> = if (cls.typeParameters.isEmpty()) {
+    emptyList()
+  } else {
+    cls.superTypes
+      .map { reference -> reference.resolve() }
+      .filter { type ->
+        val declaration: KSClassDeclaration? = type.declaration as? KSClassDeclaration
+        declaration != null && declaration.classKind == ClassKind.INTERFACE &&
+            declaration.typeParameters.isNotEmpty() &&
+            ForwardAsyncInterfaces.isReachable(declaration.qualifiedName?.asString().orEmpty())
+      }
+      .mapNotNull { type -> classifier.classify(type) as? BridgeType.Interface }
+      .flatMap { iface -> iface.openSlots() }
+      .toList()
+  }
+
   return CirClass(
     name = name,
     // ADR-147: empty for an ordinary class; `Crate<T>` fills it and renders as the carrier.
     typeParameters = cls.cirTypeParameters(logger, context),
+    interfaceSlots = interfaceSlots,
     libraryName = libraryName,
     nativePrefix = prefix,
     constructor = cirConstructor,
@@ -4492,6 +4518,7 @@ internal fun translateInterface(
     superInterfaces = superInterfaces,
     isAsyncDisposable = context != null && iface.forwardInterfaceDeclaresScopeMember(classifier),
     discriminator = discriminator,
+    bridgeMint = genericBridgeMint(iface, classifier, context),
   )
 }
 
@@ -4591,6 +4618,9 @@ private fun typeParameterMethods(
     // ADR-174 ruling 3: a generic interface's `suspend fun get(): T` is a named skip, never a
     // synchronous `T Get()` this carve-out would otherwise declare for it.
     .filter { method -> !method.modifiers.contains(Modifier.SUSPEND) }
+    // ADR-224: a member's own `<R>` has no plan on any implementer, so declaring it here (as the
+    // `IntPtr Map(T)` this carve-out used to spell) left every implementer CS0535.
+    .filter { method -> method.typeParameters.isEmpty() }
     .mapNotNull { method ->
       val returnName: String? = method.returnType?.resolve()?.expandAliases()
         ?.declaration?.simpleName?.asString()
@@ -4831,6 +4861,16 @@ internal fun translateInterfaceBackingClass(
     KotlinSpellings.ofClass(iface), logger,
   )
 
+  // ADR-224: a generic interface's wrapper is generic over the interface's own parameters
+  // (`Keepsake<T> : IKeepsake<T>`), and a generic class hoists its externs into `KeepsakeNative`
+  // (CS7042).
+  val typeParameters: List<CirTypeParameter> =
+    iface.typeParameters.map { parameter -> CirTypeParameter(parameter.name.asString()) }
+  val arguments: String = if (typeParameters.isEmpty()) {
+    ""
+  } else {
+    typeParameters.joinToString(", ", "<", ">") { it.name }
+  }
   return CirClass(
     name = name,
     libraryName = libraryName,
@@ -4838,11 +4878,18 @@ internal fun translateInterfaceBackingClass(
     constructor = null,
     properties = properties + async?.properties.orEmpty(),
     methods = methods,
-    interfaces = listOf("I$name"),
+    typeParameters = typeParameters,
+    interfaces = listOf("I$name$arguments"),
     isSealed = true,
-    backsInterface = "I$name",
+    backsInterface = "I$name$arguments",
+    interfaceSlots = if (typeParameters.isEmpty()) {
+      emptyList()
+    } else {
+      listOf(OpenSlot("I$name$arguments", "new $name$arguments(handle, out _)"))
+    },
     companionMembers = async?.members.orEmpty(),
-    nativeCarrier = interfaceNativeCarrier(iface).takeIf { ownsScope },
+    nativeCarrier = interfaceNativeCarrier(iface)
+      .takeIf { ownsScope || typeParameters.isNotEmpty() },
     // ADR-159 (ROADMAP:49), ADR-174 ruling 5: derived from what this wrapper projects. It has no
     // base chain, so it is its own scope owner whenever it projects a scope-using member.
     hasSuspendMethods = ownsScope,
@@ -6124,4 +6171,23 @@ internal fun ForwardBridgeTypeClassifier.openSlotType(type: KSType): BridgeType 
   val element: KSType? = expanded.arguments.singleOrNull()?.type?.resolve()
   val flow: Boolean = name in FLOW_TYPES || name in STATE_FLOW_TYPES
   return if (flow && element != null) classify(element) else classify(type)
+}
+
+/**
+ * ADR-224: the bridge state a generic interface's `INugetBridgeable` default method mints
+ * (`KeepsakeBridgeState<T>`), or null when the interface is not generic or not bridged. A
+ * constrained bridge state's `where` clauses are restated on the interface (`withBridgeBounds`).
+ */
+private fun genericBridgeMint(
+  iface: KSClassDeclaration,
+  classifier: ForwardBridgeTypeClassifier,
+  context: NugetContext?,
+): String? {
+  if (context == null || iface.typeParameters.isEmpty() || iface.isSealedInterface()) return null
+  val qualifiedName: String = iface.qualifiedName?.asString() ?: return null
+  if (!ForwardAsyncInterfaces.isBridged(qualifiedName)) return null
+  val plan: ForwardBridgeInterfacePlan =
+    ForwardInterfaceBridgePlanner.plan(iface, classifier, context.symbols) ?: return null
+  val arguments: String = iface.typeParameters.joinToString(", ", "<", ">") { it.name.asString() }
+  return "${plan.stateClassName}$arguments"
 }

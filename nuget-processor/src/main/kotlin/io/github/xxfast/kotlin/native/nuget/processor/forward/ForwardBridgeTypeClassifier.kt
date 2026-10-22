@@ -200,8 +200,10 @@ internal class ForwardBridgeTypeClassifier(
     // open questions. A class-like member function's own is admitted below (ADR-197).
     if (declaration is KSTypeParameter) {
       val owner: KSDeclaration? = declaration.parentDeclaration
-      val onGenericClass: Boolean =
-        owner is KSClassDeclaration && owner.classKind == ClassKind.CLASS
+      // ADR-224: a generic interface's own `T` crosses on the same wire, since its members plan
+      // over the erased receiver a generic class's do.
+      val onGenericClass: Boolean = owner is KSClassDeclaration &&
+          (owner.classKind == ClassKind.CLASS || owner.isPlannableGenericInterface())
       // ADR-197: a member function's own `T` crosses on the same boxed wire. The planner decides
       // which member shapes route (`forwardMemberGenericRefusal`); this only spells the kind.
       if (owner is KSFunctionDeclaration && owner.isForwardGenericMemberOwner()) {
@@ -477,14 +479,11 @@ internal class ForwardBridgeTypeClassifier(
         },
       )
     }
-    // ADR-040: an interface with type parameters stays on the pre-existing "generic declaration"
-    // legacy route (unchanged from before this ADR) rather than becoming a plannable
-    // BridgeType.Interface — chosen ahead of the ADR-039 add*/remove* pair exclusion below, since
-    // the classifier is deliberately position-agnostic (ForwardCallablePlanner.classEntries
-    // already excludes add*/remove* pair methods from planOrSkip before classification's result
-    // would matter for them).
+    // ADR-224: a generic interface reference binds at every position through the one classifier
+    // entry ADR-222 gave its input positions. A sealed generic interface keeps its own route.
     if (classDeclaration.classKind == ClassKind.INTERFACE && classDeclaration.typeParameters.isNotEmpty()) {
-      return BridgeType.SpecializedProtocol("generic declaration $qualifiedName")
+      return genericInterfaceOrNull(type.makeNotNullable(), input = false)
+        ?: BridgeType.SpecializedProtocol("generic declaration $qualifiedName")
     }
     if (classDeclaration.classKind == ClassKind.INTERFACE) {
       return interfaceType(classDeclaration, qualifiedName)
@@ -1178,8 +1177,9 @@ internal class ForwardBridgeTypeClassifier(
         parameter.isNullableThrowablePayload()
     }
     if (!payloads) return null
+    // ADR-224: a bridged generic interface result rides the same owned box a `T` result does.
     val carriesResult: Boolean = result.isCallbackResult() || result.isBoxedTypeParameter() ||
-      result is BridgeType.BoundInterface
+      result.isBridgedInterfaceResult() || result is BridgeType.BoundInterface
     if (!carriesResult) return null
     recordBoxed(components)
     return BridgeType.Callback(parameters, result)
@@ -1324,22 +1324,86 @@ internal class ForwardBridgeTypeClassifier(
 
   /** [classify] at a parameter position: ADR-210's two asynchronous shapes first. */
   fun classifyParameter(type: KSType): BridgeType =
-    asyncCallbackOrNull(type)
+    erasedBridgeRefusal(type)
+      ?: asyncCallbackOrNull(type)
       ?: flowSourceOrNull(type)
       ?: genericInterfaceOrNull(type)
       ?: classify(type)
 
   /**
-   * ADR-222: a generic interface reference (`Keepsake<String>`, `Keepsake<T>`) at an INPUT position
-   * (a parameter or an extension receiver), spelled as ADR-208 spells a generic class reference and
-   * read through the interface's erased bridge. Every other position keeps [classify]'s
-   * `"generic declaration"` skip (ADR-208): an output needs a generic backing wrapper, and an
-   * erased position could build the generic bridge state only by reflection. Null when [type] is
-   * not an exported, non-sealed generic interface.
+   * ADR-224 (open question 2): an input type that hands Kotlin a C# implementation of a generic
+   * interface whose bridge is refused, at the top or erased inside it, as a named refusal. The
+   * top-level case is [genericInterfaceOrNull]'s own; this one names the erased ones (a collection
+   * component, a generic class argument, a nested interface argument, a lambda result), which would
+   * otherwise bind and throw `NotSupportedException` in `Wrap<T>` at the first C# implementation.
+   */
+  private fun erasedBridgeRefusal(type: KSType): BridgeType.Unsupported? {
+    if (genericInterfaceOrNull(type) != null) return null
+    val why: String = refusedBridgeInput(type) ?: return null
+    return BridgeType.Unsupported(
+      type.expandAliases().kotlinSpelling(keepProjections = true),
+      why,
+      isGenericRefusal = true,
+    )
+  }
+
+  /**
+   * ADR-224: why [type], read as an INPUT, cannot carry a C# implementation of a generic interface
+   * it mentions (that interface's bridge refusal), or null when every one it mentions is bridged.
+   * A lambda's payloads are outputs, so only its result is walked.
+   */
+  fun refusedBridgeInput(type: KSType): String? {
+    val expanded: KSType = type.expandAliases()
+    val declaration: KSClassDeclaration = expanded.declaration as? KSClassDeclaration ?: return null
+    val qualifiedName: String = declaration.qualifiedName?.asString() ?: return null
+    val isLambda: Boolean = qualifiedName in LAMBDA_TYPES ||
+        qualifiedName in SUSPEND_LAMBDA_TYPES ||
+        expanded.isFunctionType || expanded.isSuspendFunctionType
+    if (isLambda) {
+      return expanded.arguments.lastOrNull()?.type?.resolve()
+        ?.let { result -> refusedBridgeInput(result) }
+    }
+    val bridged: Boolean = declaration.isPlannableGenericInterface() &&
+        qualifiedName in context.exportedObjectHandles
+    val symbols: ForwardSymbolTable? = context.symbols
+    if (bridged && symbols != null) {
+      val outcome: ForwardBridgePlanOutcome? = genericBridgeOutcomes.getOrPut(qualifiedName) {
+        ForwardInterfaceBridgePlanner.planOrRefuse(declaration, this, symbols)
+      }
+      if (outcome is ForwardBridgePlanOutcome.Refused) {
+        return bridgeRefusalSentence(declaration, outcome)
+      }
+    }
+    return expanded.arguments.firstNotNullOfOrNull { argument ->
+      argument.type?.resolve()?.let { inner -> refusedBridgeInput(inner) }
+    }
+  }
+
+  /** ADR-222: the one sentence a refused generic interface bridge is named with. */
+  private fun bridgeRefusalSentence(
+    declaration: KSClassDeclaration,
+    outcome: ForwardBridgePlanOutcome.Refused,
+  ): String {
+    val members: String = outcome.refusals.joinToString("; ") { "`${it.member}` ${it.reason}" }
+    val name: String = declaration.nestedInterfaceCsName()
+    return "a C# implementation of `$name` cannot cross to Kotlin, because $members"
+  }
+
+  /**
+   * ADR-222 / ADR-224: a generic interface reference (`Keepsake<String>`, `Keepsake<T>`) at any
+   * position, spelled as ADR-208 spells a generic class reference. An input reads a C#
+   * implementation through the interface's erased bridge; an output reads a Kotlin implementation
+   * back as the generic backing wrapper (`Keepsake<string>`) and a C# one as itself. Null when
+   * [type] is not an exported, non-sealed generic interface.
    */
   private val genericBridgeOutcomes: MutableMap<String, ForwardBridgePlanOutcome?> = mutableMapOf()
 
-  fun genericInterfaceOrNull(type: KSType): BridgeType? {
+  fun genericInterfaceOrNull(
+    type: KSType,
+    // ADR-224: an output position binds even when the bridge is refused, since only a C#
+    // implementation needs the bridge and a refused one can never reach Kotlin to come back.
+    input: Boolean = true,
+  ): BridgeType? {
     val expanded: KSType = type.expandAliases()
     val declaration: KSClassDeclaration = expanded.declaration as? KSClassDeclaration ?: return null
     val isGenericInterface: Boolean = declaration.classKind == ClassKind.INTERFACE &&
@@ -1347,8 +1411,9 @@ internal class ForwardBridgeTypeClassifier(
     if (!isGenericInterface) return null
     val qualifiedName: String = declaration.qualifiedName?.asString() ?: return null
     if (qualifiedName !in context.exportedObjectHandles) return null
-    val path: String = (interfaceType(declaration, qualifiedName) as? BridgeType.Interface)
-      ?.csharpType ?: return null
+    val plain: BridgeType.Interface =
+      interfaceType(declaration, qualifiedName) as? BridgeType.Interface ?: return null
+    val path: String = plain.csharpType
     val reference: BridgeType = genericReference(
       expanded.makeNotNullable(),
       declaration,
@@ -1365,24 +1430,37 @@ internal class ForwardBridgeTypeClassifier(
     val outcome: ForwardBridgePlanOutcome? = genericBridgeOutcomes.getOrPut(qualifiedName) {
       ForwardInterfaceBridgePlanner.planOrRefuse(declaration, this, symbols)
     }
-    if (outcome is ForwardBridgePlanOutcome.Refused) {
-      val members: String = outcome.refusals.joinToString("; ") { "`${it.member}` ${it.reason}" }
+    if (outcome is ForwardBridgePlanOutcome.Refused && input) {
       return BridgeType.Unsupported(
         expanded.kotlinSpelling(keepProjections = true),
-        "a C# implementation of `${path.substringAfterLast('.')}` cannot cross to Kotlin, because $members",
+        bridgeRefusalSentence(declaration, outcome),
         isGenericRefusal = true,
       )
     }
+    // ADR-224: the Kotlin-backed side reads back as the generic backing wrapper at the same
+    // arguments (`global::Ns.Keepsake<string>`), and a closed instantiation registers it under the
+    // interface key so an erased position materialises it.
+    val backingType: String = plain.backingType + handle.csharpType.removePrefix(path)
+    if (!handle.open) {
+      closedInstantiations[handle.csharpType.removePrefix("global::")] =
+        "new $backingType(handle, out _)"
+    }
     val entry: String = genericBridgeEntryName(declaration, context.symbols)
+    // ADR-224: a nested generic interface argument (`Keepsake<Keepsake<T>>`) carries its own slot.
+    val nestedInterfaces: List<BridgeType.Interface> = expanded.arguments
+      .mapNotNull { argument -> argument.type?.resolve() }
+      .mapNotNull { argument -> classify(argument).unwrapNullable() as? BridgeType.Interface }
+      .filter { nested -> nested.open || nested.openArguments.isNotEmpty() }
     val bridged = BridgeType.Interface(
       qualifiedName,
       csharpType = handle.csharpType,
-      backingType = handle.csharpType,
-      bridgeEntry = "NugetBridge.$entry",
+      backingType = backingType,
+      bridgeEntry = "NugetBridge.$entry".takeIf { outcome !is ForwardBridgePlanOutcome.Refused },
       kotlinReadType = handle.kotlinReadType,
       open = handle.open,
       kotlinTypeVariableReadType = handle.kotlinTypeVariableReadType,
       typeVariables = handle.typeVariables,
+      openArguments = handle.openArguments + nestedInterfaces,
     )
     return if (expanded.isMarkedNullable) BridgeType.Nullable(bridged) else bridged
   }
@@ -1889,3 +1967,7 @@ private fun unmappedStdlibType(qualifiedName: String): BridgeType.Unsupported =
     rendered = qualifiedName,
     reason = "a Kotlin stdlib type with no first-class C# mapping yet",
   )
+
+/** ADR-224: a non-sealed generic interface, whose members plan over the erased receiver. */
+private fun KSClassDeclaration.isPlannableGenericInterface(): Boolean =
+  classKind == ClassKind.INTERFACE && typeParameters.isNotEmpty() && Modifier.SEALED !in modifiers

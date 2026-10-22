@@ -557,6 +557,8 @@ carries a `Cat` in the `T` slot; both return to baseline. `LeakTests/Collectabil
 `CSharpGenericKeepsake_ReleasedAfterKotlinGc` holds a `WeakReference` to the implementation and
 asserts Kotlin's garbage collection releases it.
 
+A generic interface at an output or erased position adds no new obligation: a Kotlin-backed `Keepsake<T>` you receive is yours to dispose, and a C# implementation Kotlin returns is your own object, with the transfer handle released. `LeakTests/LiveHandleTests.cs`'s `GenericInterfaceOutput_ReturnedKeepsakes_ReturnToBaseline` and `GenericInterfaceOutput_ErasedInputs_ReturnToBaseline` return to baseline, and `LeakTests/CollectabilityTests.cs`'s `CSharpGenericKeepsake_StoredThenDropped_ReleasedAfterKotlinGc` asserts a stored C# implementation is released after Kotlin's garbage collection once you overwrite and drop it.
+
 An exception thrown from Kotlin allocates one error handle per call, and the
 [exception mapping](exceptions.md#catching-a-specific-exception-type) reads a mapped type from it
 for the exception and each cause. `LeakTests/LiveHandleTests.cs`'s

@@ -97,29 +97,8 @@ class ForwardBridgeTypeClassifierTest {
     assertEquals("declaration is not in the exported object-handle set", unexported.reason)
   }
 
-  @Test
-  fun `classifies a generic interface as the pre-existing generic declaration legacy route`() {
-    val genericInterface = classDeclaration(
-      qualifiedName = "sample.Pet",
-      classKind = ClassKind.INTERFACE,
-    )
-    val withTypeParameter = Proxy.newProxyInstance(
-      KSClassDeclaration::class.java.classLoader,
-      arrayOf(KSClassDeclaration::class.java),
-    ) { _, method, _ ->
-      when (method.name) {
-        "getTypeParameters" -> listOf(proxy<KSTypeParameter>("getSimpleName" to name("T")))
-        else -> method.invoke(genericInterface)
-      }
-    } as KSClassDeclaration
-    assertEquals(
-      BridgeType.SpecializedProtocol("generic declaration sample.Pet"),
-      interfaceClassifier.classify(type(withTypeParameter)),
-    )
-  }
-
-  /** ADR-064 amendment (2026-09-11): `kotlin.sequences.Sequence` is shaped exactly like the generic
-   *  interface above (an `INTERFACE` with one type parameter), so it used to answer the generic
+  /** ADR-064 amendment (2026-09-11): `kotlin.sequences.Sequence` is shaped exactly like a generic
+   *  interface (an `INTERFACE` with one type parameter), so it used to answer the generic
    *  legacy route and vanish silently. The known-stdlib block claims it first, as a named
    *  [BridgeType.Unsupported]. */
   @Test

@@ -613,7 +613,8 @@ private fun inputLowering(type: BridgeType, name: String): String = when (type) 
     is BridgeType.Throwable -> managedExceptionLowering(name, nullable = true)
     is BridgeType.ObjectHandle ->
       "$name?.asStableRef<${inner.kotlinReadType ?: inner.qualifiedName}>()?.get()"
-    is BridgeType.Interface -> "$name?.asStableRef<${inner.qualifiedName}>()?.get()"
+    is BridgeType.Interface ->
+      "$name?.asStableRef<${inner.kotlinReadType ?: inner.qualifiedName}>()?.get()"
     // ADR-076: the wire value is a raw INT64 of ticks; convert it back to an Instant.
     BridgeType.Instant -> "instantFromDotNetTicks($name)"
     // ADR-103: the same, into a Duration.
@@ -668,7 +669,8 @@ private fun inputLowering(type: BridgeType, name: String): String = when (type) 
   BridgeType.Duration -> "durationFromDotNetTicks($name)"
   is BridgeType.ObjectHandle ->
     "$name.asStableRef<${type.kotlinReadType ?: type.qualifiedName}>().get()"
-  is BridgeType.Interface -> "$name.asStableRef<${type.qualifiedName}>().get()"
+  is BridgeType.Interface ->
+    "$name.asStableRef<${type.kotlinReadType ?: type.qualifiedName}>().get()"
   // ADR-088 / ADR-132 (2026-09-20): a bound C# interface receiver is read back through the reverse
   // pipeline's own `nuget{Iface}Value`, the SAME helper the callable route's bound-interface
   // parameter uses -- it decides between a token-probe hit (a Kotlin object all along, GCHandle

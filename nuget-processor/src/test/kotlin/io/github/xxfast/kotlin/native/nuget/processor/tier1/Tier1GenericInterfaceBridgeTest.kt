@@ -1,6 +1,5 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
-import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertFalse
@@ -10,8 +9,9 @@ import kotlin.test.assertTrue
  * ADR-222: a C# class implementing a Kotlin generic interface (`class Diary : IKeepsake<string>`)
  * crosses to Kotlin at an input position through one erased bridge factory per interface. The
  * Kotlin half is a local generic function instantiated at `Nothing`; the C# half is a generic
- * `KeepsakeBridgeState<T>` minted by the named `NugetBridge.KeepsakeHandleOf<T>` entry. Output and
- * erased positions keep ADR-208's named skip.
+ * `KeepsakeBridgeState<T>` minted by the named `NugetBridge.KeepsakeHandleOf<T>` entry. ADR-224:
+ * output and erased positions bind too, through the generic backing wrapper and the
+ * `INugetBridgeable` mint.
  */
 class Tier1GenericInterfaceBridgeTest {
 
@@ -182,28 +182,195 @@ class Tier1GenericInterfaceBridgeTest {
   }
 
   @Test
-  fun `output and erased positions keep ADR-208's named skip and name the remedy`() {
-    val result: Tier1Result = Tier1Harness.run(
+  fun `output and erased positions bind through the generic backing wrapper (ADR-224)`() {
+    val result: Tier1Result = run(
+      "giboutput",
       """
-      package tier1.giboutput
-
       interface Keepsake<T> { var item: T }
 
+      class Locket<T>(override var item: T) : Keepsake<T>
+
       class Shelf {
-        fun keep(): Keepsake<String> = TODO()
-        fun all(keepsakes: List<Keepsake<String>>): Int = keepsakes.size
+        fun keep(): Keepsake<String> = Locket("Oreo")
+        fun all(keepsakes: List<Keepsake<String>>): List<Keepsake<String>> = keepsakes
         var keeper: Keepsake<String>? = null
+      }
+
+      fun <T> locketOf(item: T): Keepsake<T> = Locket(item)
+      fun visit(block: (Keepsake<String>) -> Keepsake<String>): Keepsake<String> = block(Locket("Mylo"))
+      """,
+    )
+    listOf("Shelf.keep", "Shelf.all", "Shelf.keeper", "locketOf", "visit").forEach { member ->
+      val warned: Boolean = result.kspWarnings.any { "$member:" in it }
+      assertFalse(warned, "expected $member to bind; ${result.kspWarnings}")
+    }
+    val kotlin: String = result.generated
+    // The dispatch exports read the interface erased, as a generic class's do.
+    assertContains(kotlin, ".asStableRef<tier1.giboutput.Keepsake<Any?>>().get().item")
+    val cs: String = result.generatedCSharp
+    assertContains(cs, "public sealed class Keepsake<T> : IKeepsake<T>")
+    assertContains(
+      cs,
+      "NugetFactory<IKeepsake<T>>.Create ??= static handle => new Keepsake<T>(handle, out _);",
+    )
+    assertContains(
+      cs,
+      "public interface IKeepsake<T> : IDisposable, INugetBridgeable<IKeepsake<T>>",
+    )
+    assertContains(cs, "if (value is INugetBridgeable<T> bridgeable)")
+    assertContains(cs, "new global::Interop.Keepsake<string>(handle, out _)")
+    Tier1CSharpCompile.assertCompiles(
+      result,
+      """
+      using System.Collections.Generic;
+      using Interop;
+      class Diary : IKeepsake<short> { public short Item { get; set; } public void Dispose() { } }
+      class Consumer {
+        static void Run() {
+          using var shelf = new Shelf();
+          IKeepsake<string> kept = shelf.Keep();
+          IReadOnlyList<IKeepsake<string>> all = shelf.All(new List<IKeepsake<string>> { kept });
+          shelf.Keeper = kept;
+          IKeepsake<double> open = Fixture.LocketOf(4.5);
+          IKeepsake<string> back = Fixture.Visit(k => k);
+        }
+      }
+      """.trimIndent(),
+      allowUnsafe = true,
+    )
+  }
+
+  @Test
+  fun `a generic interface's suspend and flow members bind on the Kotlin-backed side (ADR-224)`() {
+    val result: Tier1Result = Tier1Harness.run(
+      """
+      package tier1.gibasync
+
+      import kotlinx.coroutines.flow.Flow
+      import kotlinx.coroutines.flow.flowOf
+
+      interface Heirloom<T> {
+        suspend fun polish(): T
+        fun glints(): Flow<T>
+      }
+
+      class Brooch<T>(private val label: T) : Heirloom<T> {
+        override suspend fun polish(): T = label
+        override fun glints(): Flow<T> = flowOf(label)
+      }
+
+      fun heirloom(): Heirloom<String> = Brooch("whisker")
+      """.trimIndent(),
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+    assertTrue(result.compiledClean, "compileErrors=${result.compileErrors}")
+    assertFalse(
+      result.kspWarnings.any { it.contains("SKIPPED_GENERIC_INTERFACE_ASYNC_MEMBER") },
+      "warnings=${result.kspWarnings}",
+    )
+    val cs: String = result.generatedCSharp
+    assertContains(cs, "public interface IHeirloom<T> : IDisposable, IAsyncDisposable")
+    assertContains(cs, "Task<T> PolishAsync(CancellationToken cancellationToken = default);")
+    assertContains(cs, "public sealed class Heirloom<T> : IHeirloom<T>")
+    Tier1CSharpCompile.assertCompiles(
+      result,
+      """
+      using System.Threading.Tasks;
+      using Interop;
+      class Consumer {
+        static async Task<string> Run() {
+          await using IHeirloom<string> heirloom = Fixture.Heirloom();
+          return await heirloom.PolishAsync();
+        }
+      }
+      """.trimIndent(),
+      allowUnsafe = true,
+    )
+  }
+
+  @Test
+  fun `a refused bridge names every input and erased input, and outputs still bind (ADR-224)`() {
+    val result: Tier1Result = Tier1Harness.run(
+      """
+      package tier1.gibrefusedin
+
+      interface Mapper<T> { fun <R> map(item: T): R }
+
+      class Box<T>(val value: T)
+
+      class Plain<T>(private val item: T) : Mapper<T> {
+        override fun <R> map(item: T): R = TODO()
+      }
+
+      fun mapperOf(): Mapper<String> = Plain("Oreo")
+      fun mappers(): List<Mapper<String>> = listOf(Plain("Oreo"))
+      fun all(mappers: List<Mapper<String>>): Int = mappers.size
+      fun boxed(box: Box<Mapper<String>>): Int = 1
+      fun visit(block: () -> Mapper<String>): Int = 1
+      fun peek(block: (Mapper<String>) -> Unit): Int = 1
+
+      class Shelf {
+        var mapper: Mapper<String> = Plain("Mylo")
       }
       """.trimIndent(),
     )
     assertTrue(result.compiledClean, "compileErrors=${result.compileErrors}")
-    val code: String = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_COMBINATION.name
-    listOf("Shelf.keep", "Shelf.all", "Shelf.keeper").forEach { member ->
-      val warning: String = result.kspWarnings.singleOrNull { "$member:" in it }
+    listOf("all", "boxed", "visit").forEach { member ->
+      val warning: String = result.kspWarnings.singleOrNull { "gibrefusedin.$member:" in it }
         ?: error("expected one named skip for $member; got ${result.kspWarnings}")
-      assertTrue("non-generic interface" in warning, warning)
-      assertTrue("direct parameter" in warning, warning)
+      assertTrue("`fun map`" in warning, warning)
     }
-    assertFalse("keepsake_bridge_create" in result.generated, "no input position, no bridge")
+    val setter: String = result.kspWarnings.singleOrNull { "Shelf.mapper" in it }
+      ?: error("expected the setter named; got ${result.kspWarnings}")
+    assertTrue("`fun map`" in setter, setter)
+    listOf("mapperOf", "mappers", "peek").forEach { member ->
+      val warned: Boolean = result.kspWarnings.any { "gibrefusedin.$member:" in it }
+      assertFalse(warned, "expected $member to bind")
+    }
+    val cs: String = result.generatedCSharp
+    assertContains(cs, "IMapper<string> MapperOf()")
+    assertContains(cs, "IMapper<string> Mapper\n")
+    assertFalse("Native_Set_mapper" in cs, "expected the setter dropped")
+    Tier1CSharpCompile.assertCompiles(result, "class Consumer { }", allowUnsafe = true)
+  }
+
+  @Test
+  fun `a constrained generic interface restates its bridge bound so the mint compiles (ADR-224)`() {
+    val result: Tier1Result = run(
+      "gibbound",
+      """
+      interface Furry { val name: String }
+
+      class Tabby(override val name: String) : Furry
+
+      interface Perch<T : Furry> { val sitter: T }
+
+      fun <T : Furry> names(perches: List<Perch<T>>): String = perches.joinToString { it.sitter.name }
+      fun perchOf(): Perch<Tabby> = object : Perch<Tabby> { override val sitter: Tabby = Tabby("Oreo") }
+      """,
+    )
+    val cs: String = result.generatedCSharp
+    assertContains(
+      cs,
+      "public interface IPerch<T> : IDisposable, INugetBridgeable<IPerch<T>> " +
+        "where T : global::Interop.IFurry",
+    )
+    assertContains(
+      cs,
+      "public sealed class Perch<T> : IPerch<T>, IDisposable, INugetHandle " +
+        "where T : global::Interop.IFurry",
+    )
+    Tier1CSharpCompile.assertCompiles(
+      result,
+      """
+      using System.Collections.Generic;
+      using Interop;
+      class Sill : IPerch<Tabby> { public Tabby Sitter { get; } = new Tabby("Mylo"); public void Dispose() { } }
+      class Consumer {
+        static string Run() => Fixture.Names(new List<IPerch<Tabby>> { new Sill() });
+      }
+      """.trimIndent(),
+      allowUnsafe = true,
+    )
   }
 }
