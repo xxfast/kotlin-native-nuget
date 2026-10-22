@@ -1294,6 +1294,8 @@ private fun BridgeType.readThrough(variables: Set<String>): BridgeType = when (t
   )
 
   is BridgeType.FlowSource -> copy(element = element.readThrough(variables))
+  // ADR-220: a member's own `T` inside a generic value class is unwrapped through the same cast.
+  is BridgeType.ValueClass -> copy(underlying = underlying.readThrough(variables))
   is BridgeType.Collection -> copy(
     element = element?.readThrough(variables),
     key = key?.readThrough(variables),
@@ -1324,7 +1326,6 @@ private fun BridgeType.readThrough(variables: Set<String>): BridgeType = when (t
   is BridgeType.Throwable,
   BridgeType.Uuid,
   is BridgeType.Enum,
-  is BridgeType.ValueClass,
   is BridgeType.BoundInterface,
   BridgeType.ByteArray,
   is BridgeType.Callback,

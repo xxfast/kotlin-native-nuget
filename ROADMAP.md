@@ -59,7 +59,6 @@ Complete.
 - [ ] A function's own `T` inside a generic value class under `?` (`Sticker<T>?`) or inside a `List`, `Set` or `Map` (`List<Sticker<T>>`) is skipped, named: `null` and `Sticker(null)` would share the null pointer, and the collection element needs ADR-212's element box plus the re-wrap ([ADR-220](docs/adr/220-generic-value-class-record-struct.md))
 - [ ] A generic value class at an erased position (`Box<Sticker<Int>>`, a lambda payload or result, a `Flow` element, an awaited `suspend` result) is skipped, named: it needs a per-instantiation box/unbox pair, which has no design ([ADR-220](docs/adr/220-generic-value-class-record-struct.md))
 - [ ] A generic value class's own members and secondary constructors are skipped, named: they need a substituted receiver per instantiation ([ADR-220](docs/adr/220-generic-value-class-record-struct.md))
-- [ ] A function's own `T` inside a generic value class whose bound needs the ADR-198 trampoline (`T : Comparable<T>`, an intersection) is skipped, named: the re-wrap sits outside the trampoline ([ADR-220](docs/adr/220-generic-value-class-record-struct.md))
 - [ ] A generic interface reference at an output position (return, property getter, or a class property, `fun keep(): Keepsake<String>`) keeps ADR-208's named skip: it needs a generic C# backing wrapper over an erased receiver. Consequence: a C#-implemented `IKeepsake<string>` Kotlin stores cannot be read back ([ADR-222](docs/adr/222-csharp-implemented-generic-interfaces.md))
 
 ## Phase 5: Exception handling

@@ -208,6 +208,7 @@ A [generic value class](value-classes.md#a-generic-value-class) owns no handle o
 `Sticker<Cat>` wraps the `Cat`'s handle, so you dispose the `Cat` you read out of `.Value`, and the
 count returns to baseline. `LeakTests/LiveHandleTests.cs`'s
 `GenericValueClass_Instantiations_ReturnToBaseline` pins the closed, own-`T` and nullable shapes.
+`GenericValueClass_BoundedOwnTypeParameter_ReturnsToBaseline` pins an own `T` with a `Comparable`, `Enum` or intersection bound.
 
 The [members of a generic arm](interfaces-abstract-sealed.md#generic-sealed-arm-members) add no new
 handle kind either. Each element a flow collects from `Dish.Hot<string>.Portions` mints one owned
