@@ -64,13 +64,31 @@ flow is `Task<KotlinStateFlow<T>>`.
   (CS0841 and CS0136); the locals are now distinct.
 - A class or interface member returning a lambda returns the C# delegate (`Func<int, string>`,
   `Action<int>`). Before, the class route skipped the member.
-- A cold `Flow` `var` on a non-generic, non-sealed owner has a real setter, taking a
-  `KotlinFlow<T>` that wraps a Kotlin flow. A flow made in C# wraps none and is refused at the call
-  with `ArgumentException`, the rule a hot-flow slot already follows. A hot-flow `var`, a generic
-  owner and a sealed owner keep the getter only.
-- A Kotlin-backed hot-flow property wrapper (`StateFlow`, `SharedFlow` and mutable forms) mints its
-  own Kotlin handle when asked, so it can be handed back through a C# implementation. ADR-232's
-  `ArgumentException` for such a wrapper no longer applies to a Kotlin-backed member's flow.
+- A flow `var` has a real setter on every owner the flow route serves: a class, an interface, a
+  sealed base, a sealed arm and a generic class, for `Flow`, `StateFlow`, `SharedFlow` and the
+  mutable forms. The setter hands Kotlin the flow its `KotlinFlow<T>` owns, or mints one for a
+  member's flow (released after the call). A cold flow made in C# (`KotlinFlow<T>.From`) crosses
+  through ADR-210's `flowForKotlin` seam on a sibling `_set_<p>_source` export, one
+  `GetAsyncEnumerator` per Kotlin `collect`. C# makes a hot flow only through `Create`, which owns
+  its Kotlin flow, so a hot setter needs no seam. An object, a companion, an enum and a top-level
+  flow property have no flow route at all, so the whole property stays a named
+  `SKIPPED_UNSUPPORTED_PROPERTY`.
+- Every Kotlin-backed member flow wrapper (a property of any flow type, and a re-invoked flow
+  function return: `Flow`, `StateFlow`, `SharedFlow`) mints its own Kotlin handle when asked
+  (`_get_<p>_flow`, `_<f>_flow`), so it can be handed back through a C# implementation or assigned
+  to a flow `var`. A function's mint re-runs it with the same arguments, as `ReplayCache` does. A
+  function taking an ADR-210 asynchronous parameter mints nothing, since its keys belong to one
+  call; a held `MutableStateFlow` or `MutableSharedFlow` return already owns its handle.
+- A `var` flow slot registers its `KotlinFlow<E>` factory entry while the bridge is planned, and
+  the C# translator reads the closed flow arguments after bridge planning, so an element no other
+  position wraps in a `Flow` (`Flow<Paw>` only on a `var` slot) materialises.
+- A `Flow<Throwable>` slot carries each C# exception as its managed-exception text, read in Kotlin
+  as the `NugetManagedException` a `Throwable` slot result already is.
+- A `suspend` slot returning a `Flow` of the interface's own `T` starts through
+  `NugetTasks.BeginFlow<TFlow, T>`, whose task the non-generic boxed End thunk registers without
+  naming `T`.
+- A backticked member reaches the bridge under the class route's name: a keyword (`in`) is `In` on
+  both, and a name with a space and no `@CSharpName` is skipped on both and named.
 - `KotlinMutableStateFlow<T>.Create` and `KotlinMutableSharedFlow<T>.Create` mint a scope; `Dispose`
   releases it. Before, only the finalizer did.
 
@@ -83,8 +101,8 @@ planner has no type table of its own now.
 
 - No source break: an interface that already declared these members on `I<Name>` keeps its
   declaration, and an existing implementer now also crosses to Kotlin.
-- A class or interface member returning a lambda changes from skipped to bound, and a cold `Flow`
-  `var` gains a setter, so a generated API grows.
+- A class or interface member returning a lambda changes from skipped to bound, and a flow `var`
+  gains a setter, so a generated API grows.
 - A C# class implementing a Kotlin interface now has one rule to follow: implement each member as
   `I<Name>` declares it.
 
@@ -96,21 +114,30 @@ a value class, nullable `Int`, `Boolean` and enum, `Char`, `Instant`, `Duration`
 `ByteArray`, a lambda each way, a suspend lambda, a generic interface result Kotlin-backed and
 C#-made, four parameters, a fault from a handle slot and a collection slot, every flow shape
 including a mid-stream fault, a `var` flow replaced by Kotlin, nullable flows, a `suspend` member
-returning a hot flow, an inherited `T`, a Kotlin-backed hot flow handed back, a `ByteArray`
-parameter named `bytes` with a `ByteArray` result, and a suspend flow over a generic owner's `T`).
-Leak rows 20a to 20e in `LeakTests/LiveHandleTests.cs`
+returning a hot flow, an inherited `T`, a Kotlin-backed hot flow handed back from a property and
+from a member function, a `ByteArray` parameter named `bytes` with a `ByteArray` result, a suspend
+flow over a generic owner's `T`, and a C# `suspend` slot returning a Flow of its own `T`).
+`IntegrationTests/CatterySlotTests.cs` (a generic super-interface inherited at a closed `Int`,
+Kotlin-backed member-function hot flows handed back, a Kotlin-backed interface and a class `var`
+flow set to another member's flow and to a C#-made flow, a `var` flow slot of an element no other
+position wraps, a `Flow<Throwable>` from C#, and a class member returning a lambda).
+`IntegrationTests/FlowVarSetterOwnerTests.cs` (`StateFlow`, `MutableStateFlow`, `SharedFlow` and
+`MutableSharedFlow` `var`s, a sealed base and arm, and a generic owner, each set from C#).
+Leak rows 20a to 20g in `LeakTests/LiveHandleTests.cs`
 (`CSharpInterfaceSlotVocabulary_Completion_ReturnsToBaseline`,
 `CSharpInterfaceSlotVocabulary_Fault_ReturnsToBaseline`,
 `CSharpInterfaceFlowSlots_Completion_ReturnsToBaseline`,
 `CSharpInterfaceFlowSlots_Fault_ReturnsToBaseline`,
-`CreatedHotFlows_DisposeReleasesTheirScope_WithoutAGc`) and `CSharpSitter_ReleasedAfterKotlinGc`
-in `LeakTests/CollectabilityTests.cs`. Tier 1: `Tier1InterfaceSlotVocabularyTest`, which also
-compiles the generated C# against an implementation.
+`CreatedHotFlows_DisposeReleasesTheirScope_WithoutAGc`,
+`ClassMemberReturnedLambda_DroppedDelegate_ReleasedByTheGc`,
+`CSharpInterfaceSlotVocabularyAmendment_Completion_ReturnsToBaseline`) and `CSharpSitter_ReleasedAfterKotlinGc`
+in `LeakTests/CollectabilityTests.cs`. Row 20f verifies that the GC releases the `KotlinFunc` a
+class member's returned delegate wraps, and row 20g the amendment's flow slots. Tier 1: `Tier1InterfaceSlotVocabularyTest`, which also
+compiles the generated C# against an implementation; `Tier1FlowVarPropertySetterTest` (every flow
+`var` setter, its `_flow` and `_source` exports, and the whole-property skip on the static and enum
+owners); `Tier1BridgeBacktickedNameTest` (a keyword member is `In` on both routes; a spaced member
+is skipped and named on both, which no runtime fixture can carry because Kotlin/Native links no
+symbol with a space).
 
 Verified by reading generated code: the `ISitter` and `ITracker` declarations and the
-`Func<int, string> Purrer()` slot in the generated `Interop.cs`; the cold `Flow` `var` setter by
-`Tier1FlowVarPropertySetterTest` (no runtime row exercises a class-level `Flow` `var` setter).
-
-Inferred, not verified: that the cleaner releasing a returned lambda's registration key also covers
-the `KotlinFunc` a class member's returned delegate wraps; the leak rows measure the C# lambda
-returned from an interface slot, not the class-member delegate.
+`Func<int, string> Purrer()` slot in the generated `Interop.cs`.

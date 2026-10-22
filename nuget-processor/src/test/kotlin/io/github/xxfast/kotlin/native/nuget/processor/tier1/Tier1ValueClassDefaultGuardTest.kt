@@ -149,11 +149,12 @@ class Tier1ValueClassDefaultGuardTest {
       "new KeyValuePair<string, string>(${nonNullStringOrThrow("x.Key", "byName")}, " +
         "${tag("x.Value", parameter = null)})",
     )
-    // The suspend and the Flow-returning member build the same list; all three sites are guarded.
+    // The suspend and the Flow-returning member build the same list, and so does the flow's
+    // `MintHandle` delegate, which re-runs the member (ADR-233 amendment): all four are guarded.
     assertEquals(
-      3,
+      4,
       csharp.lines().count { line -> "Select(tags, x => $element)" in line },
-      "expected RetagAll, RetagLaterAsync and Watch guarded:\n" +
+      "expected RetagAll, RetagLaterAsync, Watch and its mint guarded:\n" +
         csharp.lines().filter { "Select(tags" in it }.joinToString("\n"),
     )
   }

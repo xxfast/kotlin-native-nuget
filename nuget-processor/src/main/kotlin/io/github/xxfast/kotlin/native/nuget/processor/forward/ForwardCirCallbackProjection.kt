@@ -394,7 +394,9 @@ internal fun forwardAsyncCallbackCleanup(keyLocal: String): String =
 
 /** `NugetAsync{Element}Current`, one per element type: the thunk casts the enumeration it names. */
 internal fun BridgeType.FlowSource.forwardAsyncCurrentName(): String =
-  "NugetAsync${element.wireSuffix()}Current"
+  // ADR-233 amendment: an exception element shares the handle wire but not the read.
+  if (element is BridgeType.Throwable) "NugetAsyncExceptionCurrent"
+  else "NugetAsync${element.wireSuffix()}Current"
 
 /**
  * The Current thunk of this element type, in the End thunk's model: `a0` is the enumeration handle.
@@ -408,6 +410,14 @@ internal fun BridgeType.FlowSource.forwardAsyncCurrent(): CirAsyncEnd {
       name,
       "IntPtr",
       "NugetMarshal.WrapString(NugetAsyncEnumeration.Current<string>(a0))",
+    )
+
+    // ADR-233 amendment: an exception element as its managed-exception text, boxed on the read.
+    element is BridgeType.Throwable -> CirAsyncEnd(
+      name,
+      "IntPtr",
+      "NugetAsyncEnumeration.Current<global::System.Exception>(a0) is var nugetFault ? " +
+        "NugetMarshal.WrapString(${managedExceptionTextCs("nugetFault", nullable = false)}) : IntPtr.Zero",
     )
 
     // ADR-215 lane C: an owned box per element read (`WrapOwned<T>`), nothing for one never read.

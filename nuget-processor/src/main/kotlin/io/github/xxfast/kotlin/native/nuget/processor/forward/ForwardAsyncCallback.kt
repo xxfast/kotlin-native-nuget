@@ -552,6 +552,17 @@ internal fun flowSourceExpression(
         appendLine("    },")
       }
 
+      // ADR-233 amendment: a C# exception element crosses as its managed-exception text, lowered
+      // to the `NugetManagedException` a Throwable result of a slot already is.
+      is BridgeType.Throwable -> {
+        appendLine("    current = { nugetEnumeration ->")
+        appendLine("      val $box = $read!!")
+        appendLine("      val $value = $box.asStableRef<String>().get()")
+        appendLine("      NugetHandles.release($box)")
+        appendLine("      ${managedExceptionLowering(value, nullable = false)}")
+        appendLine("    },")
+      }
+
       // ADR-215 lane C: `CurrentBoxed()` hands back an owned box per element: read, cast, release.
       is BridgeType.TypeParameter, is BridgeType.Nullable -> {
         appendLine("    current = { nugetEnumeration ->")
@@ -563,7 +574,6 @@ internal fun flowSourceExpression(
       BridgeType.Char,
       BridgeType.Instant,
       BridgeType.Duration,
-      is BridgeType.Throwable,
       BridgeType.Uuid,
       is BridgeType.Enum,
       is BridgeType.ObjectHandle,

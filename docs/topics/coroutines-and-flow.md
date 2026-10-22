@@ -822,10 +822,10 @@ the Kotlin flow from the start. `WithCancellation` stops the enumeration early.
 
 ### A `var` flow property {id="flow-var-property"}
 
-A public `var` of type `Flow<T>` on a non-generic, non-sealed class or interface binds a `KotlinFlow<T>`
-property with a setter. Assigning replaces the Kotlin flow. A `KotlinFlow<T>` you got from Kotlin
-can be assigned; one made in C# with `KotlinFlow<T>.From(...)` wraps no Kotlin flow and throws
-`ArgumentException`. To hand Kotlin a flow made in C#, take it as a [`Flow` parameter](#flow-parameter).
+A public `var` of type `Flow<T>`, `StateFlow<T>`, `SharedFlow<T>`, `MutableStateFlow<T>` or
+`MutableSharedFlow<T>` binds a property with a setter. It works on a class, an interface, a sealed
+base or arm and a generic class. Assigning replaces the Kotlin flow. The setter takes any flow: one
+a Kotlin member returned, or one you made in C#.
 
 ```kotlin
 class CatFeeder(val name: String) {
@@ -834,31 +834,16 @@ class CatFeeder(val name: String) {
 ```
 
 ```C#
-feeder.Source = other.Source; // another feeder's Kotlin flow
+feeder.Source = other.Source;                       // another feeder's Kotlin flow
+feeder.Source = KotlinFlow<int>.From(Counting());   // a cold flow made in C#
 ```
 
-A hot `var` (`StateFlow<T>`, `SharedFlow<T>`, `MutableStateFlow<T>`, `MutableSharedFlow<T>`), and
-a `var` on a generic or sealed owner, binds a get-only C# property. The build reports
-`SKIPPED_UNSUPPORTED_INPUT` naming the property, and the C# property carries a `<remarks>` comment
-with the same reason. A `val`, a `private set` and an `internal set` bind the same way and report
-nothing, since there is no public setter to lose.
+A flow made with `KotlinFlow<T>.From` is cold, so each Kotlin `collect` enumerates your source again.
+A hot property takes a Kotlin flow, or one you made with `KotlinMutableStateFlow<T>.Create` or
+`KotlinMutableSharedFlow<T>.Create`. A `val`, a `private set` and an `internal set` bind get-only.
 
-A hot flow cannot be taken as a parameter either, so its diagnostic names the type
-(`StateFlow`, `SharedFlow`, `MutableStateFlow` or `MutableSharedFlow`) and points at
-`stateIn(scope)` or `shareIn` on a `Flow<T>` parameter in Kotlin:
-
-```
-its setter is not generated because a MutableStateFlow property binds read-only: its getter hands
-out the Kotlin flow, and C# has no source for a synchronous current value or a replay cache to set
-it from. the C# property Level is read-only; to let C# replace the flow, expose a function instead:
-declare the parameter as `Flow<T>` and call `stateIn(scope)` (or `shareIn`) on it in Kotlin
-```
-
-To replace the flow from C#, take it as a [`Flow` parameter](#flow-parameter). Only the property
-setter is dropped: `feeder.Level.Value = 5` on the `MutableStateFlow` above still works (see
-[Settable `.Value`](#settable-value)). The skip fires on a class, an interface and its implementer,
-a sealed base or arm (each for the property it declares), and on an inherited `open var` once, on
-the class that declares it.
+A hot flow cannot be taken as a parameter, so a `Flow<T>` parameter plus `stateIn(scope)` or
+`shareIn` in Kotlin is the way to turn a cold C# source into a hot one.
 
 ### Backpressure {id="flow-backpressure"}
 
@@ -1612,9 +1597,6 @@ members. A `Throwable`, `Exception` or `RuntimeException` parameter does bind, a
   [read-only](#flow-type-argument).
 - A top-level non-`suspend` `fun f(): Flow<T>?` and an `object` or companion `Flow<T>?` member are
   skipped with a diagnostic, like their non-null forms.
-- A `var` property of a hot flow type, or of a flow type on a generic or sealed owner, binds
-  get-only: the setter is dropped and reported as `SKIPPED_UNSUPPORTED_INPUT`. Take a `Flow<T>`
-  parameter to replace the flow from C#; see [a `var` flow property](#flow-var-property).
 - A `Pair` or a nullable collection (`List<T>?`) as a `Flow`/`StateFlow` element is not supported.
 - `Boolean?` / `Char?` value elements on a nullable `StateFlow` are not supported.
 - A `suspend inline fun <reified T> Receiver.f(...): Result<T>` extension has no bridge at all:

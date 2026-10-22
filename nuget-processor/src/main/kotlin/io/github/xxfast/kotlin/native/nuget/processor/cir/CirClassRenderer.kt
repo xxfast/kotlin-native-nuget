@@ -456,16 +456,24 @@ internal fun StringBuilder.renderFlowPropertyNativeImports(
   appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$collectEntryPoint\")]")
   appendLine("        private static extern IntPtr Native_Get${prop.nativeStem}Collect(NugetKotlinHandle handle, NugetKotlinHandle scopeHandle, IntPtr onNext, IntPtr onComplete, IntPtr onError, IntPtr userData);")
   appendLine()
-  // ADR-233: a hot flow's own Kotlin handle, minted when C# hands the wrapper back to Kotlin.
-  if (prop.isStateFlow || prop.sharedFlow != null) {
-    appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${nativePrefix}_get_${prop.nativeName}_flow\")]")
-    appendLine("        private static extern IntPtr Native_Get${prop.nativeStem}Flow(NugetKotlinHandle handle);")
-    appendLine()
-  }
-  // ADR-233: a cold `Flow` `var`'s setter, handed the Kotlin flow its `KotlinFlow<T>` wraps.
+  // ADR-233: a flow's own Kotlin handle, minted when C# hands the wrapper back to Kotlin.
+  appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${nativePrefix}_get_${prop.nativeName}_flow\")]")
+  appendLine("        private static extern IntPtr Native_Get${prop.nativeStem}Flow(NugetKotlinHandle handle);")
+  appendLine()
+  // ADR-233: a flow `var`'s setter, handed the Kotlin flow its `KotlinFlow<T>` wraps or mints.
   if (prop.setter != null) {
     appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${nativePrefix}_set_${prop.nativeName}\")]")
     appendLine("        private static extern void Native_Set_${prop.nativeName}(NugetKotlinHandle handle, IntPtr value);")
+    appendLine()
+  }
+  // ADR-233 amendment: and a cold one's C#-made flow, through ADR-210's eight enumeration slots.
+  if (prop.flowSetterSource) {
+    appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${nativePrefix}_set_${prop.nativeName}_source\")]")
+    appendLine(
+      "        private static extern void Native_Set_${prop.nativeName}Source(NugetKotlinHandle handle, " +
+        "IntPtr enumerate, IntPtr current, IntPtr key, IntPtr releaseTask, IntPtr moveNextBegin, " +
+        "IntPtr moveNextEnd, IntPtr disposeEnumeration, IntPtr releaseContext);",
+    )
     appendLine()
   }
   if (prop.isStateFlow) {

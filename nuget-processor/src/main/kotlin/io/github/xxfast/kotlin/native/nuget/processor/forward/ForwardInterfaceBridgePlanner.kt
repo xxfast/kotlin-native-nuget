@@ -422,6 +422,16 @@ internal object ForwardInterfaceBridgePlanner {
       // ADR-233: a `var` of a flow takes the Kotlin flow as its handle, which C# reads as the
       // `KotlinFlow` a class member returning that flow hands out.
       val setter: ForwardBridgeSlot? = if (property.isMutable) {
+        // ADR-233 amendment: C# materialises that handle through the closed flow argument's
+        // factory entry, which no other position may have sighted (`Flow<Paw>` only here).
+        val declaring: KSClassDeclaration? = property.parentDeclaration as? KSClassDeclaration
+        if (outcome is FlowSlotOutcome.Element && declaring != null) {
+          val reading: ForwardFlowArgumentReading =
+            classifier.flowArgument(type.makeNotNullable(), owner ?: declaring)
+          if (reading is ForwardFlowArgumentReading.Bound) {
+            classifier.closedFlowArguments.getOrPut(reading.argument.csharpType) { reading.argument }
+          }
+        }
         val value = ForwardBridgeType(
           ForwardBridgeWire.OBJECT, read.result.kotlin, read.result.csharp, read.result.nullable,
         )
@@ -505,14 +515,8 @@ internal object ForwardInterfaceBridgePlanner {
     } else {
       null
     }
-    // ADR-232: the End thunk is not generic, so it names the element; an own `T` has no spelling.
-    if (suspend && flow?.typeParameter == true) {
-      return refuse(
-        "is a suspend member returning a Flow of its interface's own type parameter, which the " +
-          "awaited result cannot name",
-        "return the Flow from a non-suspend member",
-      )
-    }
+    // ADR-233 amendment: a suspend member returning a Flow of the interface's own `T` starts
+    // through `BeginFlow`, whose task the non-generic boxed End thunk registers without naming `T`.
     val result: ForwardBridgeType = hotResult ?: flow?.let { flowSlotResult(it, flowNullable) }
       ?: bridgeType(returnType, classifier, owner)
       ?: return refuse(
@@ -601,7 +605,8 @@ internal object ForwardInterfaceBridgePlanner {
     } else {
       bridgeType(argument, classifier, owner)
         ?.takeIf { element -> element.typeParameter || !element.nullable }
-        ?.takeIf { element -> element.throwable == null && element.boxed == null }
+        // ADR-233 amendment: a non-null exception element rides the managed-exception text.
+        ?.takeIf { element -> element.boxed == null }
         ?.takeIf { element ->
           element.wire != ForwardBridgeWire.UNIT && element.wire != ForwardBridgeWire.ENUM
         }
@@ -1020,6 +1025,7 @@ internal fun ForwardBridgeSlot.asyncBeginName(): String =
 internal fun ForwardBridgeSlot.asyncEndName(): String {
   val type: ForwardBridgeType = result
   val shape: String = when {
+    element?.typeParameter == true -> "Boxed"
     element != null -> "Flow" + flowSource().forwardAsyncCurrentName().removePrefix("NugetAsync")
       .removeSuffix("Current")
     type.typeParameter -> "Boxed"
@@ -1048,6 +1054,8 @@ internal fun ForwardBridgeSlot.flowSource(): BridgeType.FlowSource {
       if (element.nullable) BridgeType.Nullable(parameter) else parameter,
     )
   }
+  // ADR-233 amendment: an exception element reads as its managed-exception text.
+  element.throwable?.let { throwable -> return BridgeType.FlowSource(throwable) }
   val type: BridgeType = if (element.typeParameter) {
     val parameter = BridgeType.TypeParameter(element.kotlin.removeSuffix("?"))
     if (element.nullable) BridgeType.Nullable(parameter) else parameter

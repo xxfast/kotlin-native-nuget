@@ -580,7 +580,7 @@ to the implementation and asserts Kotlin's garbage collection releases it once K
 A C# class implementing a Kotlin interface whose members take or return classes, collections,
 lambdas and flows also adds no handle you dispose: a class a slot returns is Kotlin's, a class Kotlin
 passes is borrowed, and a lambda or flow a slot returns is released by Kotlin. `LeakTests/LiveHandleTests.cs`
-rows 20a to 20e return to baseline:
+rows 20a to 20g return to baseline:
 
 - Row 20a, `CSharpInterfaceSlotVocabulary_Completion_ReturnsToBaseline`: a handle returned and passed,
   a nullable and a generic handle, collections, a Kotlin lambda in, a C# lambda out, a suspend lambda,
@@ -594,6 +594,11 @@ rows 20a to 20e return to baseline:
   element.
 - Row 20e, `CreatedHotFlows_DisposeReleasesTheirScope_WithoutAGc`: `Dispose` on a `Create`d hot flow
   releases its scope with no garbage collection.
+- Row 20f, `ClassMemberReturnedLambda_DroppedDelegate_ReleasedByTheGc`: a delegate a class member
+  returns is released by the GC once dropped.
+- Row 20g, `CSharpInterfaceSlotVocabularyAmendment_Completion_ReturnsToBaseline`: a Kotlin-backed
+  member function's hot flows handed back, a `var` flow set to a C#-made flow, a `var` flow slot and
+  a `Flow<Throwable>`.
 
 `LeakTests/CollectabilityTests.cs` `CSharpSitter_ReleasedAfterKotlinGc` asserts Kotlin's garbage
 collection releases such an implementation once Kotlin drops its bridge.

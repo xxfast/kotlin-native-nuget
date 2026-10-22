@@ -12,6 +12,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncCurren
 import io.github.xxfast.kotlin.native.nuget.processor.forward.bridgeImplVariable
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isGeneric
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeSlot
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeSlotKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeWire
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpWire
@@ -454,14 +455,18 @@ private fun CirBridgeInterface.whereClauses(): String = typeParameters
 private fun suspendSlotBody(slot: ForwardBridgeSlot, receiver: String): String {
   val arguments: String =
     (slot.parameters.indices.map { "value$it" } + "nugetToken").joinToString(", ")
-  val begin: String = if (slot.result.typeParameter) {
-    "NugetTasks.BeginBoxed<${slot.result.csharp.removeSuffix("?")}>"
-  } else {
-    "NugetTasks.Begin"
+  val element: ForwardBridgeType? = slot.element
+  val begin: String = when {
+    element?.typeParameter == true ->
+      "NugetTasks.BeginFlow<${slot.result.csharp.removeSuffix("?")}, ${element.csharp.removeSuffix("?")}>"
+    slot.result.typeParameter -> "NugetTasks.BeginBoxed<${slot.result.csharp.removeSuffix("?")}>"
+    else -> "NugetTasks.Begin"
   }
+  // ADR-233 amendment: the flow's enumeration factory is registered under the member's name.
+  val named: String = if (element?.typeParameter == true) "\"${slot.csName}\", " else ""
   return parameterReads(slot) +
     "return $begin(nugetToken => $receiver.${toCSharpName(slot.csName)}($arguments), " +
-    "nugetCallback, nugetAwaitCtx);"
+    "${named}nugetCallback, nugetAwaitCtx);"
 }
 
 /** The delegate type a slot's pinned delegate is declared as. */
@@ -499,6 +504,8 @@ internal fun bridgeAsyncEnds(plans: List<ForwardBridgeInterfacePlan>): List<CirA
       val name: String = slot.asyncEndName()
       val exception = "global::System.Exception"
       when {
+        // ADR-233 amendment: a Flow of the interface's own `T` was started through `BeginFlow`.
+        slot.element?.typeParameter == true -> CirAsyncEnd(name, "IntPtr", "NugetTasks.EndBoxed(a0)")
         // ADR-232: a suspend member returning a Flow: the awaited flow's enumeration factory key.
         slot.element != null -> {
           val flow: String = slot.result.csharp
@@ -567,7 +574,7 @@ internal fun bridgeAsyncBoxes(plans: List<ForwardBridgeInterfacePlan>): Boolean 
     when (slot.async) {
       ForwardBridgeAsync.SYNC -> false
       ForwardBridgeAsync.SUSPEND -> (slot.result.typeParameter && slot.element == null) ||
-        slot.element?.let { it.boxed != null || it.star } == true
+        slot.element?.let { it.typeParameter || it.boxed != null || it.star } == true
       ForwardBridgeAsync.FLOW ->
         slot.element?.let { it.typeParameter || it.boxed != null || it.star } == true
     }

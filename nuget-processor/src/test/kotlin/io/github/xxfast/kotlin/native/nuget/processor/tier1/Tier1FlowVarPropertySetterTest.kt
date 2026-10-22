@@ -7,24 +7,15 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * A public `var` of a flow type binds get-only, and its setter is NAMED: the partial skip ADR-075
- * requires of every other property type (`SKIPPED_UNSUPPORTED_INPUT`, "its setter is not
- * generated because ..."), which the flow property route never emitted because it never read
- * `isMutable`. This class began as the spike that pinned the silence.
+ * ADR-233 (amended): a public `var` of any flow type binds its setter wherever the flow route binds
+ * the getter: a class, an interface, a sealed base, a sealed arm and a generic class. The
+ * setter hands Kotlin the flow its `KotlinFlow<T>` wraps or mints (`_get_<p>_flow`), and a cold
+ * one also takes a C#-made flow through ADR-210's seam (`_set_<p>_source`). Before, only a cold
+ * `Flow` on a non-generic, non-sealed owner had one, and every other setter was a named
+ * `SKIPPED_UNSUPPORTED_INPUT` partial skip (ADR-075).
  *
- * The getter is untouched: a `var source: Flow<Int>` still renders the `KotlinFlow<int> Source`
- * the `val` does, over the same one collect export. What the skip adds is the diagnostic and the
- * `<remarks>` on the C# property.
- *
- * The remedy differs by temperature. A cold `Flow<T>` has a way in, as an ADR-210 parameter. A hot
- * one (`StateFlow`, `SharedFlow` and their mutable forms) has none, so it is pointed at the
- * hot-flow parameter's own remedy (`stateIn` / `shareIn` over a `Flow<T>` parameter).
- *
- * Owners: the skip fires wherever the flow route binds the getter, which is a class, an
- * interface, a sealed base and a sealed arm. An object, a companion and a top-level property have
- * no flow route, so the whole property was already a named `SKIPPED_UNSUPPORTED_PROPERTY`. A
- * generic class is the owner left pinned as a `DEFECT`: it renders no flow property of its own
- * and nothing names that, which is a silent whole-property drop rather than a setter one.
+ * An object, a companion, an enum and a top-level property have no flow route, so the whole
+ * property, getter included, stays a named `SKIPPED_UNSUPPORTED_PROPERTY`.
  *
  * `libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore)` is load-bearing: without `Flow` on
  * the KSP libraries path the property is an error type and every cell proves nothing.
@@ -114,6 +105,14 @@ class Tier1FlowVarPropertySetterTest {
     class Bin<T>(val item: T) : Feed {
       override var source: Flow<Int> = flowOf(1)
     }
+
+    enum class Light {
+      RED;
+
+      var glow: Flow<Int> = flowOf(1)
+    }
+
+    fun light(): Light = Light.RED
   """.trimIndent()
 
   private val result: Tier1Result by lazy {
@@ -127,25 +126,6 @@ class Tier1FlowVarPropertySetterTest {
   private val setterCode: String = "SKIPPED_UNSUPPORTED_INPUT"
   private val propertyCode: String = "SKIPPED_UNSUPPORTED_PROPERTY"
 
-  private val coldReason: String =
-    "its setter is not generated because a Flow property binds read-only: its getter hands out " +
-        "the Kotlin flow, and no setter route turns a C# stream back into one"
-
-  private fun coldHint(publicName: String): String =
-    "the C# property $publicName is read-only; to let C# replace the flow, expose a function " +
-        "taking a `Flow<T>` parameter instead, which binds as `IAsyncEnumerable<T>` for a " +
-        "primitive or String element"
-
-  private fun hotReason(flow: String): String =
-    "its setter is not generated because a $flow property binds read-only: its getter hands " +
-        "out the Kotlin flow, and C# has no source for a synchronous current value or a replay " +
-        "cache to set it from"
-
-  private fun hotHint(publicName: String): String =
-    "the C# property $publicName is read-only; to let C# replace the flow, expose a function " +
-        "instead: declare the parameter as `Flow<T>` and call `stateIn(scope)` (or `shareIn`) " +
-        "on it in Kotlin"
-
   /** Every diagnostic's own line: the `at <file>:<line>` location KSP appends is dropped. */
   private val diagnostics: List<String> by lazy {
     (result.kspErrors + result.kspWarnings)
@@ -156,14 +136,6 @@ class Tier1FlowVarPropertySetterTest {
   /** The diagnostics of [code] that skip [declaration], whole. */
   private fun skips(code: String, declaration: String): List<String> =
     diagnostics.filter { line -> line.startsWith("[nuget:$code] Skipping $declaration: ") }
-
-  private fun assertSetterNamed(declaration: String, reason: String, hint: String) {
-    assertEquals(
-      listOf("[nuget:$setterCode] Skipping $declaration: $reason. $hint"),
-      skips(setterCode, declaration),
-      "diagnostics=$diagnostics",
-    )
-  }
 
   /** The C# property [declaration] of [owner], its doc comment included, to its closing brace. */
   private fun property(owner: String, declaration: String): List<String> {
@@ -214,7 +186,13 @@ class Tier1FlowVarPropertySetterTest {
 
     assertTrue(source.hasAccessor("get"), "got=$source")
     assertFalse(source.hasAccessor("set"), "got=$source")
-    assertEquals(listOf("library_tier1_flowvar__tap_get_source_collect"), exports("tap_get_"))
+    assertEquals(
+      listOf(
+        "library_tier1_flowvar__tap_get_source_collect",
+        "library_tier1_flowvar__tap_get_source_flow",
+      ),
+      exports("tap_get_"),
+    )
     assertEquals(emptyList(), diagnostics.filter { line -> "Tap" in line })
   }
 
@@ -226,19 +204,34 @@ class Tier1FlowVarPropertySetterTest {
     assertTrue(source.hasAccessor("get"), "got=$source")
     assertTrue(source.hasAccessor("set"), "got=$source")
     assertEquals(
-      listOf("library_tier1_flowvar__feeder_get_source_collect"),
+      listOf(
+        "library_tier1_flowvar__feeder_get_source_collect",
+        "library_tier1_flowvar__feeder_get_source_flow",
+      ),
       exports("feeder_get_source"),
     )
-    assertEquals(listOf("library_tier1_flowvar__feeder_set_source"), exports("feeder_set_source"))
+    assertEquals(
+      listOf(
+        "library_tier1_flowvar__feeder_set_source",
+        "library_tier1_flowvar__feeder_set_source_source",
+      ),
+      exports("feeder_set_source"),
+    )
     assertEquals(emptyList(), skips(setterCode, "tier1.flowvar.Feeder.source"))
+    // A Kotlin-made flow hands its handle (or mints one); a C#-made one crosses the ADR-210 seam.
+    val setter: String = source.joinToString("\n")
+    assertContains(setter, "value.KotlinHandle")
+    assertContains(setter, "value.MintHandle")
+    assertContains(setter, "Native_Set_sourceSource(_handle, NugetThunks.NugetAsyncEnumeratePtr")
   }
 
+  /** ADR-233 amendment: a hot flow `var` binds its setter, handed the wrapped or minted flow. */
   @Test
-  fun `a var StateFlow property names its setter with the hot flow remedy`() {
+  fun `a var StateFlow property binds its setter`() {
     val source: List<String> = property("Gauge", "public KotlinStateFlow<int> Source")
 
     assertTrue(source.hasAccessor("get"), "got=$source")
-    assertFalse(source.hasAccessor("set"), "got=$source")
+    assertTrue(source.hasAccessor("set"), "got=$source")
     assertEquals(
       listOf(
         "library_tier1_flowvar__gauge_get_source_collect",
@@ -247,26 +240,22 @@ class Tier1FlowVarPropertySetterTest {
       ),
       exports("gauge_get_source"),
     )
-    assertEquals(emptyList(), exports("gauge_set_source"))
-    assertSetterNamed("tier1.flowvar.Gauge.source", hotReason("StateFlow"), hotHint("Source"))
+    // C# makes a hot flow only through `Create`, which owns its Kotlin flow: no C# seam.
+    assertEquals(listOf("library_tier1_flowvar__gauge_set_source"), exports("gauge_set_source"))
+    assertEquals(emptyList(), skips(setterCode, "tier1.flowvar.Gauge.source"))
   }
 
   @Test
-  fun `every other hot flow var names its setter by its own type`() {
-    assertSetterNamed("tier1.flowvar.Feeder.shared", hotReason("SharedFlow"), hotHint("Shared"))
-    assertSetterNamed(
-      "tier1.flowvar.Feeder.level",
-      hotReason("MutableStateFlow"),
-      hotHint("Level"),
-    )
-    assertSetterNamed(
-      "tier1.flowvar.Feeder.calls",
-      hotReason("MutableSharedFlow"),
-      hotHint("Calls"),
-    )
-    // ADR-071's write is the flow's `Value`, which is still there: only the property is get-only.
+  fun `every other hot flow var binds its setter too`() {
+    property("Feeder", "public KotlinSharedFlow<int> Shared")
+    assertEquals(listOf("library_tier1_flowvar__feeder_set_shared"), exports("feeder_set_shared"))
+    assertEquals(listOf("library_tier1_flowvar__feeder_set_calls"), exports("feeder_set_calls"))
+    // ADR-071's write is the flow's `Value`, beside the property's own setter.
     assertEquals(
-      listOf("library_tier1_flowvar__feeder_set_level_value"),
+      listOf(
+        "library_tier1_flowvar__feeder_set_level",
+        "library_tier1_flowvar__feeder_set_level_value",
+      ),
       exports("feeder_set_level"),
     )
   }
@@ -274,7 +263,13 @@ class Tier1FlowVarPropertySetterTest {
   @Test
   fun `a nullable var Flow member binds its setter too`() {
     property("Feeder", "public KotlinFlow<int>? Maybe")
-    assertEquals(listOf("library_tier1_flowvar__feeder_set_maybe"), exports("feeder_set_maybe"))
+    assertEquals(
+      listOf(
+        "library_tier1_flowvar__feeder_set_maybe",
+        "library_tier1_flowvar__feeder_set_maybe_source",
+      ),
+      exports("feeder_set_maybe"),
+    )
     assertEquals(emptyList(), skips(setterCode, "tier1.flowvar.Feeder.maybe"))
   }
 
@@ -310,15 +305,16 @@ class Tier1FlowVarPropertySetterTest {
   }
 
   @Test
-  fun `a sealed base and a sealed arm each name their own setter`() {
-    property("Meal", "public KotlinFlow<int> Portions")
-    property("Wet", "public KotlinFlow<int> Source")
+  fun `a sealed base and a sealed arm each bind their own setter`() {
+    assertTrue(property("Meal", "public KotlinFlow<int> Portions").hasAccessor("set"))
+    assertTrue(property("Wet", "public KotlinFlow<int> Source").hasAccessor("set"))
 
-    assertSetterNamed("tier1.flowvar.Meal.portions", coldReason, coldHint("Portions"))
-    assertSetterNamed("tier1.flowvar.Meal.Wet.source", coldReason, coldHint("Source"))
-    // The base's property is named on the base alone, not again on each arm that inherits it.
-    assertEquals(1, diagnostics.count { line -> "portions" in line }, "diagnostics=$diagnostics")
+    assertEquals(emptyList(), diagnostics.filter { line -> "portions" in line || "Wet.source" in line })
+    assertContains(result.generated, "library_tier1_flowvar__meal_set_portions_source")
+    assertContains(result.generated, "library_tier1_flowvar__meal_wet_set_source_source")
   }
+
+
 
   @Test
   fun `an inherited var binds on the class that declares it`() {
@@ -331,7 +327,7 @@ class Tier1FlowVarPropertySetterTest {
    * skip is added beside it: there is no C# property for "is read-only" to be true of.
    */
   @Test
-  fun `an object, a companion and a top-level flow var stay a named whole-property skip`() {
+  fun `an object, a companion, an enum and a top-level flow var stay a named whole-property skip`() {
     val wording: String = "its type flow kotlinx.coroutines.flow.Flow has no property getter or " +
         "setter shape. expose a bridgeable property (or a getter function) whose type is not " +
         "flow kotlinx.coroutines.flow.Flow, and export that instead"
@@ -339,6 +335,7 @@ class Tier1FlowVarPropertySetterTest {
     listOf(
       "tier1.flowvar.Kennel.source",
       "tier1.flowvar.Yard.Companion.source",
+      "tier1.flowvar.Light.glow",
       "tier1.flowvar.topSource",
     ).forEach { declaration ->
       assertEquals(
@@ -358,6 +355,7 @@ class Tier1FlowVarPropertySetterTest {
     assertEquals(
       listOf(
         "library_tier1_flowvar__crate_get_source_collect",
+        "library_tier1_flowvar__crate_get_source_flow",
         "library_tier1_flowvar__crate_get_fixed_collect",
         "library_tier1_flowvar__crate_get_fixed_flow",
         "library_tier1_flowvar__crate_get_fixed_value",
@@ -372,7 +370,8 @@ class Tier1FlowVarPropertySetterTest {
     assertTrue(crate.isNotEmpty(), "expected a C# class Crate<T>")
     assertTrue(crate.any { line -> "public KotlinFlow<int> Source" in line }, "crate=$crate")
     assertTrue(crate.any { line -> "public KotlinStateFlow<int> Fixed" in line }, "crate=$crate")
-    assertSetterNamed("tier1.flowvar.Crate.source", coldReason, coldHint("Source"))
+    assertTrue(crate.any { line -> "Native_Set_sourceSource(" in line }, "crate=$crate")
+    assertEquals(emptyList(), skips(setterCode, "tier1.flowvar.Crate.source"))
     // The refused element is still named, once, by the refused-legacy-route walk.
     assertEquals(
       listOf(
@@ -396,19 +395,11 @@ class Tier1FlowVarPropertySetterTest {
     assertEquals(emptyList(), diagnostics.filter { line -> "Bin." in line || "Bin<" in line })
   }
 
-  /** The census: every setter skip the fixture emits, so one that fires twice or astray fails. */
+  /** The census: no flow `var` the route binds drops its setter any more. */
   @Test
-  fun `the setter skip fires once per dropped public setter and nowhere else`() {
+  fun `no flow var setter is skipped`() {
     assertEquals(
-      listOf(
-        "tier1.flowvar.Crate.source",
-        "tier1.flowvar.Feeder.calls",
-        "tier1.flowvar.Feeder.level",
-        "tier1.flowvar.Feeder.shared",
-        "tier1.flowvar.Gauge.source",
-        "tier1.flowvar.Meal.Wet.source",
-        "tier1.flowvar.Meal.portions",
-      ),
+      emptyList(),
       diagnostics
         .filter { line -> line.startsWith("[nuget:$setterCode] ") }
         .map { line -> line.substringAfter("Skipping ").substringBefore(": ") }
