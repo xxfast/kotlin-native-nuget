@@ -57,6 +57,7 @@ using Cheersquad = TestLibrary.Cheersquad;
 using Purrclock = TestLibrary.Purrclock;
 using Feedingtime = TestLibrary.Feedingtime;
 using Catsitter = TestLibrary.Catsitter;
+using Cattery = TestLibrary.Cattery;
 
 namespace LeakTests;
 
@@ -7899,5 +7900,87 @@ public class LiveHandleTests
         }
 
         Assert.Equal(before, NugetMarshal.LiveHandles);
+    }
+
+    // Row 20f. ADR-233 amendment: a class member returning a lambda hands C# a delegate over a
+    // Kotlin function handle. The box is disposed and the delegate dropped undisposed, so the GC
+    // releasing that handle is the only thing that brings the count back.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void DropUndisposedPurrer()
+    {
+        using var box = new Cattery.Purrbox("Mylo");
+        Func<int, string> purrer = box.Purrer();
+        Assert.Equal("Mylo purrs x2", purrer(2));
+    }
+
+    [Fact]
+    public void ClassMemberReturnedLambda_DroppedDelegate_ReleasedByTheGc() =>
+        AssertReleasedByTheGc("class-member returned lambda delegates", DropUndisposedPurrer);
+
+    private static async IAsyncEnumerable<T> Drip<T>(params T[] items)
+    {
+        foreach (T item in items)
+        {
+            await Task.Yield();
+            yield return item;
+        }
+    }
+
+    private sealed class LeakRelay(Cattery.IIntercom wall) : Cattery.IIntercom
+    {
+        public KotlinStateFlow<int> Chime() => wall.Chime();
+        public KotlinMutableStateFlow<int> Alert() => wall.Alert();
+        public KotlinSharedFlow<string> Gossip() => wall.Gossip();
+        public void Dispose() { }
+        public ValueTask DisposeAsync() => default;
+    }
+
+    private sealed class LeakPorch : Cattery.IPawprints
+    {
+        public KotlinFlow<Cattery.Paw> Trail { get; set; } = KotlinFlow<Cattery.Paw>.From(Drip(new Cattery.Paw(3)));
+        public void Dispose() { }
+        public ValueTask DisposeAsync() => default;
+    }
+
+    private sealed class LeakFurball : Cattery.IHairballs
+    {
+        public KotlinFlow<Exception> Coughs() =>
+            KotlinFlow<Exception>.From(Drip<Exception>(new InvalidOperationException("Oreo at 3am")));
+        public void Dispose() { }
+        public ValueTask DisposeAsync() => default;
+    }
+
+    // Row 20g. ADR-233 amendment, completing: a Kotlin-backed member function's hot flows handed
+    // back, a Kotlin-backed and a class `var` flow set to a C#-made flow, a `var` flow slot of an
+    // unsighted element, and a Flow of a `Throwable`.
+    [Fact]
+    public async Task CSharpInterfaceSlotVocabularyAmendment_Completion_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await using (Cattery.IIntercom wall = Cattery.Catteries.WallIntercom())
+            {
+                using var relay = new LeakRelay(wall);
+                Assert.StartsWith("chime=", await Cattery.Catteries.BuzzAsync(relay));
+            }
+
+            using (Cattery.IChute chute = Cattery.Catteries.SteelChute())
+            {
+                chute.Feed = KotlinFlow<string>.From(Drip("salmon"));
+                Assert.Equal("salmon", await Cattery.Catteries.DrainAsync(chute));
+            }
+
+            using (Cattery.Hopper hopper = Cattery.Catteries.Hopper(["kibble"]))
+            using (Cattery.Hopper other = Cattery.Catteries.Hopper(["tuna"]))
+            {
+                hopper.Source = other.Source;
+                Assert.Equal("tuna", await hopper.DrainAsync());
+                hopper.Source = KotlinFlow<string>.From(Drip("duck"));
+                Assert.Equal("duck", await hopper.DrainAsync());
+            }
+
+            Assert.Equal("3 -> 7", await Cattery.Catteries.RetraceAsync(new LeakPorch(), 7));
+            Assert.Equal("Oreo at 3am", await Cattery.Catteries.InspectAsync(new LeakFurball()));
+        });
     }
 }

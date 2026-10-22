@@ -631,6 +631,19 @@ private fun CirMethod.heldCollectScope(): Pair<String, String> =
   else "NugetScopeHandle" to "GetOrCreateScope()"
 
 internal fun StringBuilder.renderFlowMethod(method: CirMethod, className: String) {
+  // ADR-233 amendment: a re-invoked return holds no Kotlin handle of its own; it mints one on
+  // demand when C# hands it back to Kotlin, re-running the method with the same arguments.
+  if (method.flowMintNativeName.isNotEmpty()) {
+    val plain = StringBuilder()
+    plain.renderFlowMethod(method.copy(flowMintNativeName = ""), className)
+    val rendered: String = plain.toString()
+    val close: Int = rendered.lastIndexOf(");")
+    val mint: String = reinvokedReplayArgument(
+      method, method.flowMintNativeName, "                ", method.flowOwnerGuard(className),
+    ).trimStart()
+    append(rendered.substring(0, close) + ") { MintHandle = $mint };" + rendered.substring(close + 2))
+    return
+  }
   if (method.isStateFlow) {
     renderStateFlowMethod(method, className)
     return

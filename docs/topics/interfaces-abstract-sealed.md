@@ -533,13 +533,16 @@ await Feeders.MenuAsync(bowl);          // "kibble, tuna"
   [every member shape](#implementing-every-member-shape). A `suspend` member returns the same types,
   `Throwable` included.
 - **A `suspend` member that returns a `Flow`** is `Task<KotlinFlow<T>>`. Kotlin awaits the task and
-  then collects the flow.
+  then collects the flow. On a generic interface the element can be the interface's own `T`
+  (`ILitter<T>`).
+- **`Flow<Throwable>`.** Each exception you emit arrives in Kotlin as a `NugetManagedException` whose
+  message is `Type: message`.
 - **Hot flows.** A `StateFlow`, `SharedFlow` or mutable member must hand Kotlin a real Kotlin flow.
   Make one with `KotlinMutableStateFlow<T>.Create(initial)` or
   `KotlinMutableSharedFlow<T>.Create(replay)`; a write on either side is seen on the other.
   Dispose a flow you made with `Create`, as `Dispose` releases its scope. A hot flow read from a
-  Kotlin-backed object, such as `Level` of a Kotlin `IThermostat`, can be returned from your member
-  as it is.
+  Kotlin-backed object, such as `Level` of a Kotlin `IThermostat`, or returned by one of its
+  member functions, can be returned from your member as it is.
 
 ```C#
 private sealed class Boiler : IThermostat
@@ -1928,7 +1931,7 @@ A lambda over the arm's `T` binds as a per-call parameter (`fun each(action: (T)
 and in a stored pair (`addTaste`/`removeTaste` over `(T) -> Unit` is `IDisposable AddTaste(Action<T> listener)`).
 The payload is typed by the closed `T`, so `Dish.Hot<string>` hands your callback a `string`.
 
-A `var` flow property on a generic arm keeps its getter and names its dropped setter once; see
+A `var` flow property on a generic arm has a setter; see
 [A `var` flow property](coroutines-and-flow.md#flow-var-property).
 
 ## Limitations {id="limitations"}

@@ -2,6 +2,9 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
 
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticFlowGetter
 import io.github.xxfast.kotlin.native.nuget.processor.exports.takesFlowSetter
+import io.github.xxfast.kotlin.native.nuget.processor.exports.flowSetterSource
+import io.github.xxfast.kotlin.native.nuget.processor.exports.mintsFlowHandle
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncCurrentName
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.getConstructors
 import com.google.devtools.ksp.getDeclaredFunctions
@@ -2128,15 +2131,18 @@ internal fun flowProperty(
       }
   }
 
-  // ADR-233: a member's hot flow re-reads its owner, so it holds no Kotlin handle of its own; it
-  // mints one on demand (`MintHandle`) when C# hands it back to Kotlin through an interface slot.
-  val minted: String = if (isStateFlowType || sharedFlow != null) {
-    val close: Int = getter.lastIndexOf(");")
-    getter.substring(0, close) +
-      ") { MintHandle = () => { $ownerGuard return ${nativeCarrier}Native_Get${csPropName}Flow(_handle); } };" +
-      getter.substring(close + 2)
-  } else {
-    getter
+  // ADR-233: a member's flow re-reads its owner, so it holds no Kotlin handle of its own; it mints
+  // one on demand (`MintHandle`) when C# hands it back to Kotlin, through an interface slot or a
+  // `var` flow setter.
+  val close: Int = getter.lastIndexOf(");")
+  val minted: String = getter.substring(0, close) +
+    ") { MintHandle = () => { $ownerGuard return ${nativeCarrier}Native_Get${csPropName}Flow(_handle); } };" +
+    getter.substring(close + 2)
+  // ADR-233 amendment: a cold flow made in C# crosses through ADR-210's seam.
+  val source: BridgeType.FlowSource? = prop.flowSetterSource(classifier)
+  if (source != null) {
+    tracker.flowSources += source
+    tracker.needsAsync = true
   }
   return CirProperty(
     name = prop.csharpMemberName(),
@@ -2147,17 +2153,15 @@ internal fun flowProperty(
     getter = minted.withOpenSlotFills(
       listOf(classifier.openSlotType(prop.type.resolve())).openSlotFills("                "),
     ),
-    // ADR-233: a cold `Flow` `var` hands Kotlin the flow its `KotlinFlow<T>` wraps.
     setter = if (prop.takesFlowSetter()) {
-      val handle = "value${if (isNullableMember) "?" else ""}.KotlinHandle"
-      val missing = "throw new ArgumentException(\"A KotlinFlow made in C# wraps no Kotlin flow, " +
-        "so it cannot be assigned to ${prop.csharpMemberName()}.\", nameof(value))"
-      val guard: String = if (isNullableMember) "value is null ? IntPtr.Zero : " else ""
-      "\n                ${nativeCarrier}Native_Set_${propName.asCSymbol()}(_handle, $guard($handle is IntPtr nugetFlow && " +
-        "nugetFlow != IntPtr.Zero ? nugetFlow : $missing));\n                GC.KeepAlive(value);"
+      flowSetterBody(
+        "${nativeCarrier}Native_Set_${propName.asCSymbol()}", prop.csharpMemberName(),
+        isNullableMember, source,
+      )
     } else {
       null
     },
+    flowSetterSource = source != null,
     nativeSetterType = "IntPtr",
     extraNatives = emptyList(),
     isFlow = true,
@@ -2173,6 +2177,68 @@ internal fun flowProperty(
   )
 }
 
+
+/**
+ * ADR-233: a flow `var`'s setter body. A flow that wraps a Kotlin flow hands its handle; a member's
+ * flow mints one (released after the call); a cold flow made in C# crosses through ADR-210's seam
+ * ([source]), and a hot one, which only `Create` makes and which then owns its flow, cannot reach
+ * the last branch.
+ */
+private fun flowSetterBody(
+  native: String,
+  member: String,
+  nullable: Boolean,
+  source: BridgeType.FlowSource?,
+): String = buildString {
+  val indent = "                "
+  appendLine()
+  if (nullable) {
+    appendLine("${indent}if (value is null)")
+    appendLine("$indent{")
+    appendLine("$indent    $native(_handle, IntPtr.Zero);")
+    appendLine("$indent    return;")
+    appendLine("$indent}")
+  }
+  appendLine("${indent}IntPtr nugetFlow = value.KotlinHandle;")
+  appendLine("${indent}if (nugetFlow != IntPtr.Zero)")
+  appendLine("$indent{")
+  appendLine("$indent    $native(_handle, nugetFlow);")
+  appendLine("$indent    GC.KeepAlive(value);")
+  appendLine("$indent    return;")
+  appendLine("$indent}")
+  appendLine("${indent}if (value.MintHandle != null)")
+  appendLine("$indent{")
+  appendLine("$indent    using var nugetMinted = new NugetKotlinHandle(value.MintHandle());")
+  appendLine("$indent    $native(_handle, nugetMinted.DangerousGetHandle());")
+  appendLine("$indent    return;")
+  appendLine("$indent}")
+  if (source == null) {
+    append(
+      "${indent}throw new ArgumentException(\"A KotlinFlow made in C# wraps no Kotlin flow, so it " +
+        "cannot be assigned to $member.\", nameof(value));",
+    )
+    return@buildString
+  }
+  val current = "NugetThunks.${source.forwardAsyncCurrentName()}Ptr"
+  appendLine(
+    "${indent}IntPtr valueAsyncKey = NugetTasks.Register(value, nameof(value), " +
+      "(Func<IntPtr>)(() => NugetAsyncEnumeration.Enumerate(value)));",
+  )
+  appendLine("${indent}try")
+  appendLine("$indent{")
+  appendLine(
+    "$indent    ${native}Source(_handle, NugetThunks.NugetAsyncEnumeratePtr, $current, valueAsyncKey, " +
+      "NugetThunks.NugetAsyncReleaseTaskPtr, NugetThunks.NugetAsyncMoveNextBeginPtr, " +
+      "NugetThunks.NugetAsyncMoveNextEndPtr, NugetThunks.NugetAsyncDisposeEnumerationPtr, " +
+      "NugetThunks.NugetAsyncReleaseContextPtr);",
+  )
+  appendLine("$indent    valueAsyncKey = IntPtr.Zero;")
+  appendLine("$indent}")
+  appendLine("${indent}finally")
+  appendLine("$indent{")
+  appendLine("$indent    NugetThunks.UnregisterCtx(valueAsyncKey);")
+  append("$indent}")
+}
 
 /**
  * ADR-124: the legacy Flow/StateFlow route's C# **method** half, lifted out of [translateClass] so
@@ -2468,6 +2534,23 @@ internal fun flowMembers(
       )
     } else null
 
+    // ADR-233 amendment: the re-invoked return's own Kotlin handle, minted on demand.
+    val mintImport: CirDllImport? = if (method.mintsFlowHandle(classifier)) {
+      CirDllImport(
+        libraryName = libraryName,
+        entryPoint = "${stem}_flow",
+        returnType = "IntPtr",
+        name = "${nativeStem}Flow",
+        // ADR-230: a static member mints through its receiver slot, or with none.
+        parameters = ownerSlots +
+            methodParams.nativeImportParameters(),
+        visibility = CirVisibility.PRIVATE,
+        hasSyncErrorOut = true,
+      )
+    } else {
+      null
+    }
+
     if (isStateFlowMethod) {
       // ADR-065: sibling synchronous `_value` export -- takes handle + the method's own
       // parameters (no scope, no callbacks, no errorOut; StateFlow.value cannot throw).
@@ -2506,12 +2589,14 @@ internal fun flowMembers(
         stateFlowHasValueNativeName =
           if (isNullableMember) "${nativeStem}HasValue" else "",
         flowCallbackNames = callbackNames,
+        flowMintNativeName = mintImport?.name.orEmpty(),
       )
 
       return@flatMap listOfNotNull(
         nativeImport,
         valueNativeImport,
         hasValueNativeImport,
+        mintImport,
         stateFlowMethod,
       )
     }
@@ -2555,9 +2640,10 @@ internal fun flowMembers(
       isStateFlowNullableMember = isNullableMember,
       stateFlowHasValueNativeName = if (isNullableMember) "${nativeStem}HasValue" else "",
       flowCallbackNames = callbackNames,
+      flowMintNativeName = mintImport?.name.orEmpty(),
     )
 
-    listOfNotNull(nativeImport, hasValueNativeImport, replayImport, flowMethod)
+    listOfNotNull(nativeImport, hasValueNativeImport, replayImport, mintImport, flowMethod)
   }
 }
 
@@ -5957,6 +6043,7 @@ internal fun interfaceAsyncForwards(
               method.stateFlowCompareAndSetNativeName.carried(),
             // ADR-209: the shared flow's seams are the interface's imports too.
             sharedFlow = method.sharedFlow?.carried(carrier),
+            flowMintNativeName = method.flowMintNativeName.carried(),
           )
         },
         properties = projected.properties.map { prop ->
