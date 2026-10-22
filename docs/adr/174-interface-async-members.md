@@ -285,3 +285,10 @@ measure, and Kotlin never hands out the newly reachable base wrapper (the ADR-17
 
 Open, not chased: a public interface whose public super sits outside the export set through a
 dependency module under ADR-154.
+
+## Amendment (2026-10-22): a generic interface declares its async members
+
+Decision 3 no longer holds. `SKIPPED_GENERIC_INTERFACE_ASYNC_MEMBER` is gone: `interface Heirloom<T>`
+declares `Task<T> PolishAsync(...)` and `KotlinFlow<T> Glints()` on `IHeirloom<T>`, which is
+`IAsyncDisposable`, and the generic backing wrapper dispatches them over the erased receiver
+([ADR-224](224-generic-interface-at-every-position.md)).

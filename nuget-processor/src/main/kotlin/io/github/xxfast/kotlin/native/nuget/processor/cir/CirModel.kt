@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInterfacePlan
+import io.github.xxfast.kotlin.native.nuget.processor.forward.OpenSlot
 import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
 
 /**
@@ -133,6 +134,9 @@ internal data class CirInterface(
   // ADR-204: a sealed interface reconstructed over its declared arms carries an internal `_handle`,
   // the `get_type` extern and a `FromHandle` switching to each arm's own class. Null otherwise.
   val discriminator: CirInterfaceDiscriminator? = null,
+  // ADR-224: a bridged generic interface's bridge state (`KeepsakeBridgeState<T>`), minted by
+  // the `INugetBridgeable<IKeepsake<T>>` default method so an erased `Wrap<T>` reaches it.
+  val bridgeMint: String? = null,
 ) : CirDeclaration
 
 /**
@@ -239,6 +243,10 @@ internal data class CirClass(
   // ADR-173: the C# interface (`IPet`) this class is the ADR-040 backing wrapper of, or null for
   // every ordinary class. Drives the interface-keyed `NugetMarshal.Factories` entry.
   val backsInterface: String? = null,
+  // ADR-224: the generic interface slots this class's static constructor fills with `??=`
+  // (`NugetFactory<IKeepsake<T>>`), so an erased read of a Kotlin-backed `IKeepsake<X>` finds
+  // the generic backing wrapper once the consumer touched either the wrapper or an implementer.
+  val interfaceSlots: List<OpenSlot> = emptyList(),
   val companionMembers: List<CirMember> = emptyList(),
   // ADR-159: `hasScope` -- this class, or a kept ancestor, owns the one coroutine scope. Drives the
   // scope block in `Dispose()`, which every level below the owner must repeat (a derived `Dispose`

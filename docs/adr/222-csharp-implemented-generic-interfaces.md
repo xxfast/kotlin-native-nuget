@@ -302,3 +302,11 @@ verified.
 - A multi-bound `T` bridge instantiates at `Nothing` like the self-bound one. If wrong, Kotlin
   compile error (loud).
 - The CLR rule that keeps the factory import off the generic state class (above).
+
+## Amendment (2026-10-22): output and erased positions bind
+
+The "Not shipped" paragraph no longer holds. A generic interface at a return, a getter, a property,
+a collection component, a `Box<..>` argument, a lambda payload or result, a `suspend` result and a
+`Flow` element binds, and a stored C# `IKeepsake<string>` comes back as the same object
+([ADR-224](224-generic-interface-at-every-position.md)). The member-level type parameter stays
+impossible.

@@ -104,7 +104,8 @@ internal fun forwardCallbackPrelude(
     }
     // ADR-215 lane A: always an OWNED box, since the thunk returns before Kotlin reads it: a
     // borrowed wrapper handle is retained through the generated `<lib>__retain_handle`.
-    is BridgeType.TypeParameter, is BridgeType.Nullable ->
+    // ADR-224: a bridged generic interface result is the same owned box.
+    is BridgeType.TypeParameter, is BridgeType.Nullable, is BridgeType.Interface ->
       "return NugetMarshal.WrapOwned<${result.forwardPublicCsharpType()}>($call);"
 
     BridgeType.Char,
@@ -113,7 +114,6 @@ internal fun forwardCallbackPrelude(
     BridgeType.Uuid,
     is BridgeType.Enum,
     is BridgeType.ObjectHandle,
-    is BridgeType.Interface,
     is BridgeType.BoundInterface,
     is BridgeType.ValueClass,
     BridgeType.ByteArray,

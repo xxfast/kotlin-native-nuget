@@ -2275,44 +2275,6 @@ internal class NugetProcessor(
     val interfaces: List<KSClassDeclaration> =
       declaredInterfaces + nestedDeclared.filter { it.classKind == ClassKind.INTERFACE }
 
-    // ADR-174 ruling 3: a generic interface's async members stay off `IFeed<T>`, named once each at
-    // the member. A sealed interface is excluded silently (ruling 2: its arms bind the members).
-    ForwardDiagnosticSink.emit(
-      interfaces
-        .filter { it.typeParameters.isNotEmpty() && !it.isSealedInterface() }
-        .flatMap { iface ->
-          val name: String = iface.qualifiedName?.asString() ?: iface.simpleName.asString()
-          val members: List<KSDeclaration> = iface.declarations
-            .filter { member ->
-              when (member) {
-                is KSFunctionDeclaration -> member.modifiers.contains(Modifier.SUSPEND) ||
-                    member.returnsForwardFlow()
-                is KSPropertyDeclaration ->
-                  member.type.resolve().expandAliases().isForwardFlowType()
-                else -> false
-              }
-            }
-            .filter { it.getVisibility() == Visibility.PUBLIC }
-            .toList()
-          return@flatMap members.map { member ->
-            val memberName: String = member.simpleName.asString()
-            ForwardDiagnostic(
-              kind = ForwardDiagnosticKind.SKIPPED_GENERIC_INTERFACE_ASYNC_MEMBER,
-              symbol = member.takeIf { iface.containingFile != null },
-              declaration = "$name.$memberName",
-              reason = "`$memberName` is a suspend/Flow member of the generic interface `$name`: " +
-                  "its interface-owned export would need " +
-                  "`asStableRef<${iface.simpleName.asString()}<...>>()`, which has no type " +
-                  "argument to spell (ADR-147, ADR-174)",
-              hint = "declare it on a non-generic interface, or on the implementing class, " +
-                  "which binds it through its own class route",
-              owner = null,
-            )
-          }
-        },
-      logger,
-    )
-
     // ADR-147: generic classes are ordinary classes now; one bucket, one route.
     val classes: List<KSClassDeclaration> = allClasses
 
@@ -2492,8 +2454,8 @@ internal class NugetProcessor(
     // interface's own members never mention that same interface as their receiver's result type.
     fun BridgeType.interfaceQualifiedNameOrNull(): String? {
       val unwrapped: BridgeType = if (this is BridgeType.Nullable) type else this
-      // ADR-222: a generic interface has no backing wrapper or dispatch exports, only its bridge.
-      return (unwrapped as? BridgeType.Interface)?.takeIf { it.bridgeEntry == null }?.qualifiedName
+      // ADR-224: a generic interface gets its generic backing wrapper and dispatch exports too.
+      return (unwrapped as? BridgeType.Interface)?.qualifiedName
     }
 
     // ADR-214 / ADR-217: a non-generic interface that is only the bound of a `T` IN position
@@ -2818,11 +2780,13 @@ internal class NugetProcessor(
           .mapNotNullTo(this) { parameter -> parameter.transfer.type.genericBridgeName() }
       }
     }
+    // ADR-224: a reachable generic interface is bridged through the reachable set already.
     val genericBridgeInterfaces: List<KSClassDeclaration> = interfaces
       .filter { iface -> iface.qualifiedName?.asString() in genericBridgeNames }
+      .filter { iface -> iface.qualifiedName?.asString() !in closedInterfaceNames }
     // ADR-174: the reachable set is the one that carries interface async members; every selector
     // (Kotlin exports, `I<Name>`, the backing wrapper, a generic implementer's forwards) reads it.
-    ForwardAsyncInterfaces.reset(reachableInterfaces)
+    ForwardAsyncInterfaces.reset(reachableInterfaces, genericBridgeInterfaces)
 
     // ADR-162: the interface planning loops are guarded per interface for the same reason the
     // callable planner's `planOrSkip` is: an interface whose planning throws used to abort the

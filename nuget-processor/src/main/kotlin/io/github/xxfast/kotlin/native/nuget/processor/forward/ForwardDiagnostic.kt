@@ -354,13 +354,6 @@ internal enum class ForwardDiagnosticKind(
    *  why there is none. */
   SKIPPED_INELIGIBLE_SEALED_INTERFACE(ForwardDiagnosticSeverity.WARNING),
 
-  /** ADR-174 ruling 3: a `suspend`/`Flow`/`StateFlow` member of a GENERIC interface
-   *  (`interface Feed<T>`). The interface-owned export would read its receiver as
-   *  `asStableRef<Feed<...>>()`, which has no type argument to spell, the ADR-147 reason the class
-   *  async routes refuse a generic owner. Named once per member, at the interface, which keeps
-   *  `IFeed<T>` free of it. */
-  SKIPPED_GENERIC_INTERFACE_ASYNC_MEMBER(ForwardDiagnosticSeverity.WARNING),
-
   /** ADR-110: a top-level function whose PascalCase C# name is already held by a top-level
    *  property of the same file class (`val name` + `fun name()`, CS0102). camelCase used to keep
    *  the two apart, since Kotlin gives properties and functions separate namespaces and C# does
@@ -924,9 +917,7 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
             "parameter binds on a top-level function, including a `suspend` one, and on a " +
             "class, object, companion or sealed-class member: as a bare `T` or `T?`, inside a " +
             "`List`, `Set` or `Map`, inside an exported generic class or a `Result` payload, " +
-            "and inside a lambda or `Flow`; a generic interface binds only as a parameter or an " +
-            "extension receiver (ADR-222), so at a result, property or erased position type it " +
-            "with a non-generic interface or pass the value as a direct parameter; an inner " +
+            "and inside a lambda or `Flow`, as does a generic interface (ADR-224); an inner " +
             "class of a generic owner does not bind, nor does a type parameter at this position"
 
       else -> "no bridge route carries it at this position"

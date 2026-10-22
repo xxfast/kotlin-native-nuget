@@ -1,6 +1,5 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
-import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -159,17 +158,16 @@ class Tier1InterfaceAsyncMembersTest {
     assertFalse(block.contains("IAsyncDisposable"), "expected no IAsyncDisposable; got:\n$block")
     assertTrue(
       result.kspWarnings.none {
-        it.contains(ForwardDiagnosticKind.SKIPPED_GENERIC_INTERFACE_ASYNC_MEMBER.name)
+        it.contains("SKIPPED_GENERIC_INTERFACE_ASYNC_MEMBER")
       },
       "expected a sealed interface to be excluded silently; kspWarnings=${result.kspWarnings}",
     )
   }
 
   @Test
-  fun `a generic interface's async members are a named skip and stay off the interface`() {
-    // Ruling 3: `asStableRef<Feed<...>>()` has no type argument to spell (the ADR-147 reason).
-    // `get(): T` is the case the type-parameter carve-out would otherwise have declared as
-    // `T Get()`.
+  fun `a reachable generic interface's async members bind over the erased receiver`() {
+    // ADR-224 lifts ruling 3: the receiver reads `asStableRef<Feed<Any?>>()`, the generic class
+    // route's spelling, so `IFeed<T>` declares the async members a returned feed dispatches.
     val result = Tier1Harness.run(
       """
       package tier1.asyncgeneric
@@ -190,6 +188,8 @@ class Tier1InterfaceAsyncMembersTest {
         override fun ticks(): Flow<Int> = flowOf(1)
         override fun name(): String = "bowl"
       }
+
+      fun feed(): Feed<Int> = Bowl()
       """.trimIndent(),
       libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
     )
@@ -197,22 +197,20 @@ class Tier1InterfaceAsyncMembersTest {
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
     val block: String = result.generatedCSharp.interfaceBlock("IFeed<T>")
     assertTrue(block.isNotEmpty(), "expected IFeed<T>; generatedCSharp=${result.generatedCSharp}")
-    listOf("Task<", "KotlinFlow<", " Get(", "IAsyncDisposable").forEach { absent ->
-      assertFalse(block.contains(absent), "expected no `$absent` on IFeed<T>; got:\n$block")
-    }
-    listOf("get", "count", "ticks").forEach { member ->
-      assertTrue(
-        result.kspWarnings.any {
-          it.contains(ForwardDiagnosticKind.SKIPPED_GENERIC_INTERFACE_ASYNC_MEMBER.name) &&
-              it.contains("tier1.asyncgeneric.Feed.$member")
-        },
-        "expected `$member` named; kspWarnings=${result.kspWarnings}",
-      )
-    }
-    assertFalse(
-      result.kspWarnings.any { it.contains("tier1.asyncgeneric.Feed.name") },
-      "expected the sync member not to be named; kspWarnings=${result.kspWarnings}",
+    listOf(
+      "Task<T> GetAsync(",
+      "Task<int> CountAsync(",
+      "KotlinFlow<int> Ticks(",
+      "IAsyncDisposable",
     )
+      .forEach { present ->
+        assertTrue(block.contains(present), "expected `$present` on IFeed<T>; got:\n$block")
+      }
+    assertTrue(
+      result.kspWarnings.none { it.contains("tier1.asyncgeneric.Feed.") },
+      "expected no Feed member named; kspWarnings=${result.kspWarnings}",
+    )
+    assertTrue("asStableRef<tier1.asyncgeneric.Feed<Any?>>()" in result.generated, result.generated)
   }
 
   /** The body of a top-level (4-space) C# type, from its header to its own closing brace. */

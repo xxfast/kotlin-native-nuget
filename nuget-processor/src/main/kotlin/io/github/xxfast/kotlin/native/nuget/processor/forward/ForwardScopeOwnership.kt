@@ -285,21 +285,45 @@ internal fun KSFunctionDeclaration.reProjectsKeptBaseMember(
  */
 internal object ForwardAsyncInterfaces {
   private val reachable: MutableSet<String> = mutableSetOf()
+  private val bridgedOnly: MutableSet<String> = mutableSetOf()
 
-  fun reset(interfaces: Iterable<KSClassDeclaration>) {
+  fun reset(
+    interfaces: Iterable<KSClassDeclaration>,
+    // ADR-224: the generic interfaces only an input position reaches, bridged but not reachable.
+    bridged: Iterable<KSClassDeclaration> = emptyList(),
+  ) {
     reachable.clear()
     interfaces.mapNotNullTo(reachable) { it.qualifiedName?.asString() }
+    bridgedOnly.clear()
+    bridged.mapNotNullTo(bridgedOnly) { it.qualifiedName?.asString() }
+    bridgesGeneric = (interfaces + bridged).any { iface ->
+      iface.typeParameters.isNotEmpty() && !iface.isSealedInterface()
+    }
   }
 
   /**
-   * Whether [iface] carries the async surface: reachable, not generic (ADR-174 ruling 3: the
-   * receiver would need type arguments, the ADR-147 reason) and not sealed (ruling 2: never an
+   * ADR-224: whether any generic interface gets a C# bridge state. Its `T` slot result reaches
+   * Kotlin through `WrapOwned<T>`, so the module needs the retain export even when no plan names
+   * the interface directly (an erased `List<Perch<T>>` parameter only).
+   */
+  var bridgesGeneric: Boolean = false
+    private set
+
+  /** ADR-224: whether [qualifiedName] gets a C# bridge state, i.e. its `I<Name>` can mint one. */
+  fun isBridged(qualifiedName: String): Boolean =
+    qualifiedName in reachable || qualifiedName in bridgedOnly
+
+  /**
+   * Whether [iface] carries the async surface: reachable (ADR-224: a generic one reads its
+   * receiver over the erased owner, as a generic class does) and not sealed (ruling 2: never an
    * interface type, so never reachable anyway; tested here too so the answer does not rest on it).
    */
+  /** ADR-224: whether [qualifiedName] names a reachable interface with a backing wrapper. */
+  fun isReachable(qualifiedName: String): Boolean = qualifiedName in reachable
+
   fun carries(iface: KSClassDeclaration): Boolean =
     iface.classKind == ClassKind.INTERFACE &&
         iface.qualifiedName?.asString() in reachable &&
-        iface.typeParameters.isEmpty() &&
         !iface.isSealedInterface()
 }
 

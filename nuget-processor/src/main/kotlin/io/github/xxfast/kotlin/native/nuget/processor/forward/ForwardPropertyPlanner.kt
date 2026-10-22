@@ -606,7 +606,11 @@ internal class ForwardPropertyPlanner(
           val plan: ForwardPropertyPlan? = propertyPlan(
             symbol = "$owner.${prop.simpleName.asString()}",
             position = ForwardPropertyPosition.CLASS,
-            receiver = ForwardPropertyReceiver.Handle(owner),
+            // ADR-224: a generic interface reads its receiver erased (`Keepsake<Any?>`).
+            receiver = ForwardPropertyReceiver.Handle(
+              iface.forwardOwnerTypeName() ?: owner,
+              iface.forwardGenericOwner(),
+            ),
             prop = prop,
             getExport = "${prefix}_get_${prop.simpleName.asString()}",
             setExport = "${prefix}_set_${prop.simpleName.asString()}",
@@ -1236,6 +1240,22 @@ internal class ForwardPropertyPlanner(
           reason = "C# hands Kotlin a NugetManagedException (a RuntimeException), which a " +
               "property declared narrower than RuntimeException cannot hold; declare it " +
               "Throwable, Exception or RuntimeException to make it writable",
+        ),
+      )
+      return null
+    }
+    // ADR-224: a setter hands Kotlin a C# implementation, so a generic interface whose bridge is
+    // refused, at the top or erased inside the value, binds get-only, named.
+    val refusedBridge: String? = classifier.refusedBridgeInput(prop.type.resolve())
+    if (refusedBridge != null) {
+      droppedSetters.add(
+        ForwardDroppedPropertySetter(
+          symbol = symbol,
+          node = prop,
+          publicName = publicName,
+          owner = ownerScope,
+          componentDescription = type.diagnosticTypeName(),
+          reason = refusedBridge,
         ),
       )
       return null

@@ -611,7 +611,12 @@ private fun elementKotlinTypeName(type: BridgeType): String = when (type) {
   is BridgeType.Enum -> type.qualifiedName
   // ADR-176: the box holds the Kotlin object itself (a Kotlin-backed instance, or the ADR-084
   // bridge object `nuget_list_add` dereferenced from a C# transfer handle).
-  is BridgeType.Interface -> type.qualifiedName
+  // ADR-224: a generic interface element is cast at its applied (or type-variable) spelling.
+  is BridgeType.Interface -> if (type.readsAsTypeVariable) {
+    requireNotNull(type.kotlinTypeVariableReadType)
+  } else {
+    type.kotlinReadType ?: type.qualifiedName
+  }
   // ROADMAP Phase 4 (ADR-151 amendment): the incoming box holds the real `ByteArray` --
   // `nuget_list_add` dereferenced the `nuget_bytes_create` handle before storing it -- so the
   // lowering is the plain cast every other handle-shaped component uses. Without this arm the
@@ -2219,10 +2224,15 @@ private fun loweredCallbackExpression(
     is BridgeType.Enum -> "Int"
     BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface,
     is BridgeType.Throwable -> "COpaquePointer?"
-    // ADR-215 lane A: a `T` or `T?` rides the boxed `Object` wire, null for a null `T`.
+    // ADR-215: a `T` or `T?` rides the boxed `Object` wire, null for a null `T`.
     is BridgeType.TypeParameter -> "COpaquePointer?"
-    is BridgeType.Nullable -> if (component.type is BridgeType.TypeParameter) "COpaquePointer?"
-    else error("Forward Kotlin plan emitter has no callback wire type for $component")
+    // ADR-224: and so does a nullable bridged generic interface result.
+    is BridgeType.Nullable ->
+      if (component.type is BridgeType.TypeParameter || component.type is BridgeType.Interface) {
+        "COpaquePointer?"
+      } else {
+        error("Forward Kotlin plan emitter has no callback wire type for $component")
+      }
     BridgeType.Unit,
     BridgeType.Char,
     BridgeType.Instant,
@@ -2358,13 +2368,18 @@ private fun loweredCallbackExpression(
 
       // ADR-215 lane A: C# always hands back an owned box (`WrapOwned<T>`), so this side reads it,
       // releases it and casts the value to the bound chain.
-      is BridgeType.TypeParameter, is BridgeType.Nullable -> {
+      is BridgeType.TypeParameter, is BridgeType.Nullable, is BridgeType.Interface -> {
         val nullable: Boolean = result is BridgeType.Nullable
-        val parameter: BridgeType.TypeParameter = result.unwrapNullable() as BridgeType.TypeParameter
         val box: String = if (nullable) invocation else "$invocation!!"
-        val read: String = forwardBoundedRead(
-          "${name}Box", parameter.bounds(), nullable, parameter.typeVariable(),
-        )
+        // ADR-224: a bridged generic interface box holds the Kotlin object (or the bridge).
+        val iface: BridgeType.Interface? = result.unwrapNullable() as? BridgeType.Interface
+        val read: String = if (iface != null) {
+          iface.handleRead("${name}Box", nullable)
+        } else {
+          val parameter: BridgeType.TypeParameter =
+            result.unwrapNullable() as BridgeType.TypeParameter
+          forwardBoundedRead("${name}Box", parameter.bounds(), nullable, parameter.typeVariable())
+        }
         appendLine("  val ${name}Box = $box")
         appendLine("  val ${name}Value = $read")
         if (nullable) {
@@ -2381,7 +2396,6 @@ private fun loweredCallbackExpression(
       BridgeType.Uuid,
       is BridgeType.Enum,
       is BridgeType.ObjectHandle,
-      is BridgeType.Interface,
       is BridgeType.BoundInterface,
       is BridgeType.ValueClass,
       BridgeType.ByteArray,

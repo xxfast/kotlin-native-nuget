@@ -334,8 +334,8 @@ generated this way, a generic one (`Satchel<T>`) or one in a package you did not
 members declared on the derived interface instead, so `IHaversack : Satchel<Int>` still declares
 `FetchAsync`.
 
-`interface Feed<T>` (a generic interface) keeps its async members off `IFeed<T>` entirely, named
-`SKIPPED_GENERIC_INTERFACE_ASYNC_MEMBER`. An [eligible sealed interface](#sealed-interfaces) is
+`interface Feed<T>` (a generic interface) declares its async members on `IFeed<T>` like any other
+interface; see [A generic interface](#implementing-a-generic-interface-in-c). An [eligible sealed interface](#sealed-interfaces) is
 excluded from this, since it never gets an `I<Name>` declaration; its async members are declared on
 the abstract class instead, see
 [Async members on a sealed base](#sealed-method-suspend-generated-c).
@@ -413,7 +413,9 @@ The same holds for a `var` on a [listener](lambdas-and-callbacks.md#a-listener-v
 
 #### A generic interface {id="implementing-a-generic-interface-in-c"}
 
-A C# class implementing a generic Kotlin interface crosses the same way, with the interface's `T`
+A generic Kotlin interface binds at every position (a parameter, return, property, nullable,
+collection component, `suspend` result, `Flow` element, lambda payload or result, and inside a
+generic function or class). A C# class can implement it and cross to Kotlin with the interface's `T`
 as a property, `var`, method parameter or result:
 
 ```kotlin
@@ -421,6 +423,12 @@ interface Keepsake<T> { var item: T }
 
 fun inspect(keepsake: Keepsake<String>): String = "curator sees ${keepsake.item}"
 fun <T> trade(keepsake: Keepsake<T>, value: T): T // returns the old item
+fun <T> locketOf(item: T): Keepsake<T> = Locket(item)
+
+class Trove {
+  var kept: Keepsake<String> = Locket("Oreo")
+  fun all(): List<Keepsake<String>> = listOfNotNull(kept)
+}
 ```
 
 ```C#
@@ -433,14 +441,32 @@ private sealed class Diary : IKeepsake<string>
 using var diary = new Diary();
 Keepsakes.Inspect(diary);       // "curator sees Oreo"
 Keepsakes.Trade(diary, "Mylo"); // "Oreo"; diary.Item is now "Mylo"
+
+using var trove = new Trove();
+trove.Kept = diary;
+Assert.Same(diary, trove.Kept);       // your own object comes back
+Assert.Same(diary, trove.All()[0]);
+
+using var locket = Keepsakes.LocketOf(41L);   // Kotlin-backed: a Keepsake<long>, yours to dispose
+locket.Item += 1;
 ```
 
-This works for a closed argument (`Keepsake<String>`, `Keepsake<Int>`), an open `fun <T>`, a bounded
-or self-bounded `T`, a class member, a constructor and an extension receiver. A Kotlin-backed
-`Locket<string>` binds at the same parameter. An interface member with its own type parameter
-(`fun <R> map(...)`) has no bridge. A generic interface at a return, a property getter or a class
-property, or inside a `List`, a generic class argument or a lambda, is skipped with a named
-warning: type that position with a non-generic interface, or pass the value as a direct parameter.
+A value Kotlin implements arrives as the generic wrapper `Keepsake<T>`, which implements
+`IKeepsake<T>`. A value you implemented comes back as the same object. Closed (`Keepsake<String>`,
+`Keepsake<Int>`), open (`fun <T>`), bounded and self-bounded `T` all work, and so does a `Box<..>`
+argument, a nested `Keepsake<Keepsake<String>>` and a class member typed by the class's own `T`.
+You can choose any instantiation yourself, value types included (`class Tally : IKeepsake<short>`),
+and pass it inside a collection or a `Box<IKeepsake<short>>`.
+
+A constrained interface restates its bound: `interface Perch<T : Furry>` is
+`IPerch<T> where T : IFurry`. A stdlib bound such as `Comparable<T>` drops to `where T : notnull`
+with `INFO_DROPPED_BOUND`. An interface member with its own type parameter (`fun <R> map(...)`) is
+left off `IKeepsake<T>`, and the interface cannot be implemented in C#: its outputs still bind, and
+each input position that would hand it a C# implementation is skipped with a named warning.
+
+A generic interface's `suspend` and `Flow` members bind too: `interface Heirloom<T>` declares
+`Task<T> PolishAsync(...)` and `KotlinFlow<T> Glints()` on `IHeirloom<T>`, which is
+`IAsyncDisposable`.
 
 Kotlin-backed implementations of the interface still cross as usual, and `IPet` still declares every
 member. A marker interface with no members bridges too:
@@ -1757,9 +1783,7 @@ on an ordinary class; see [A `var` flow property is read-only](coroutines-and-fl
 - A C#-implemented object's bridge is released on Kotlin's next garbage-collection round, not
   deterministically; there is no `IDisposable`-style prompt release for it.
 - An interface member whose own return type is another interface or a class handle (chained
-  resolution) is not supported, and neither is a generic interface at a return or getter position
-  (see [A generic interface](#implementing-a-generic-interface-in-c)). A generic interface's own `suspend`/`Flow`/`StateFlow` members are a named skip too;
-  see [Async members on an interface](#async-members-on-an-interface).
+  resolution) is not supported.
 - An interface's `companion object` members (functions, `val`, `const val`) are not bound: the C#
   interface has no statics. Each is skipped with a named warning; move it to a top-level
   declaration or an `object`.

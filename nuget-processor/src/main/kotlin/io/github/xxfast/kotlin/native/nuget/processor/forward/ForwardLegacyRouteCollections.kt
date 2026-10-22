@@ -1218,6 +1218,8 @@ internal fun ForwardBridgeTypeClassifier.legacyFlowElementShape(
   // ADR-208: a closed instantiation of an exported generic class reads through its `Factories`
   // entry as the generic sealed element above does, spelled by [legacyGenericElement].
   if (classified is BridgeType.ObjectHandle) return ForwardLegacyFlowElementShape.Plain
+  // ADR-224: and so does a generic interface, through its token probe first.
+  if (classified is BridgeType.Interface) return ForwardLegacyFlowElementShape.Plain
 
   // ADR-119 amendment: the suspend return's ADR-105 rewrite, so `Flow<List<Shape>>` of an eligible
   // sealed base admits its `ObjectHandle(viaDiscriminator)` elements. A nullable collection element
@@ -2234,9 +2236,12 @@ internal fun ForwardBridgeTypeClassifier.legacyGenericElement(
 ): String? {
   val expanded: KSType = type?.expandAliases() ?: return null
   if (!expanded.isGenericSealedReference() && expanded.arguments.isEmpty()) return null
-  val handle: BridgeType.ObjectHandle = classify(expanded.makeNotNullable()).sealedAsHandle()
-    as? BridgeType.ObjectHandle ?: return null
-  return handle.csharpType + if (nullable) "?" else ""
+  val classified: BridgeType = classify(expanded.makeNotNullable()).sealedAsHandle()
+  // ADR-224: a generic interface element reads through its token probe and `Factories` key.
+  val csharpType: String = (classified as? BridgeType.ObjectHandle)?.csharpType
+    ?: (classified as? BridgeType.Interface)?.csharpType
+    ?: return null
+  return csharpType + if (nullable) "?" else ""
 }
 
 /**
