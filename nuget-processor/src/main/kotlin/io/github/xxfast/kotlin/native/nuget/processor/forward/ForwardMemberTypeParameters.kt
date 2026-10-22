@@ -158,13 +158,6 @@ internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
   fun KSType.mentionsOwn(): Boolean = ownParameter() ||
       arguments.any { argument -> argument.type?.resolve()?.expandAliases()?.mentionsOwn() == true }
 
-  // ADR-220: the struct's re-wrap and unwrap sit outside ADR-198's trampoline, so a `T` that
-  // needs one (`T : Enum<T>`, an intersection) keeps the named refusal inside `Sticker<T>`.
-  fun KSType.hasSpellableBound(): Boolean {
-    val bounds: List<KSType> = (declaration as KSTypeParameter).bounds.map { it.resolve() }.toList()
-    return bounds.size <= 1 && bounds.none { bound -> bound.mentionsAnyTypeParameter() }
-  }
-
   // ADR-220: a generic value class whose underlying is its own type parameter, instantiated at
   // the member's own `T` (or `T?`) at the top of a parameter or the result, non-null outer. Not a
   // component of [carriesOwn]: `List<Sticker<T>>` and `Sticker<T>?` keep the named refusal.
@@ -182,7 +175,7 @@ internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
     return arguments.withIndex().all { (position, argument) ->
       val type: KSType = argument.type?.resolve()?.expandAliases() ?: return false
       if (position == index) {
-        type.ownParameter() && type.hasSpellableBound()
+        type.ownParameter()
       } else {
         !type.mentionsOwn()
       }

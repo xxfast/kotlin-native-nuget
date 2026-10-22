@@ -62,6 +62,11 @@ class Tier1GenericValueClassTest {
 
       fun <T> maybeStick(value: T): Sticker<T>? = Sticker(value)
       fun <T : Comparable<T>> ranked(sticker: Sticker<T>): T = sticker.value
+      fun <T : Comparable<T>> higher(a: Sticker<T>, b: Sticker<T>): Sticker<T> =
+        if (a.value >= b.value) a else b
+      fun <T : Enum<T>> napOf(sticker: Sticker<T>): Sticker<T> = sticker
+      fun <T> loudest(sticker: Sticker<T>): Sticker<T>
+          where T : CharSequence, T : Comparable<T> = sticker
       fun initial(): Sticker<Char> = Sticker('o')
       fun starred(sticker: Sticker<*>): String = "star"
       fun <T : Any> firmly(value: T): Sticker<T> = Sticker(value)
@@ -74,6 +79,8 @@ class Tier1GenericValueClassTest {
         val decal: Decal<Cat> = Decal(9L)
         fun <T> stick(value: T): Sticker<T> = Sticker(value)
         fun <T> peel(sticker: Sticker<T>): T = sticker.value
+        fun <T : Enum<T>> napOf(sticker: Sticker<T>): Sticker<T> = sticker
+        fun <T : Comparable<T>> ranked(sticker: Sticker<T>): T = sticker.value
       }
       """.trimIndent(),
       processorOptions = mapOf("nuget.rootPackage" to "tier1"),
@@ -160,12 +167,65 @@ class Tier1GenericValueClassTest {
     assertContains(firm, "default(Sticker) carries no Value")
   }
 
+  /**
+   * A member's own `T` inside the struct binds whatever its bound. `Comparable<T>` erases to
+   * `Comparable<Any?>`; `Enum<T>` and an intersection run the unwrap, the call and the re-wrap
+   * inside the trampoline, each read checked against every bound and cast to the trampoline's `T`.
+   */
+  @Test
+  fun `a member's own bounded T inside the struct binds through the trampoline`() {
+    val spelled: String = code.replace("global::Interop.Stickers.Sticker", "Sticker")
+    assertContains(spelled, "public static T Ranked<T>(Sticker<T> sticker) where T : notnull")
+    assertContains(
+      spelled,
+      "public static Sticker<T> Higher<T>(Sticker<T> a, Sticker<T> b) where T : notnull",
+    )
+    assertContains(
+      spelled,
+      "public static Sticker<T> NapOf<T>(Sticker<T> sticker) where T : struct, global::System.Enum",
+    )
+    assertContains(
+      spelled,
+      "public static Sticker<T> Loudest<T>(Sticker<T> sticker) where T : notnull",
+    )
+    assertContains(
+      spelled,
+      "public Sticker<T> NapOf<T>(Sticker<T> sticker) where T : struct, global::System.Enum",
+    )
+    assertContains(spelled, "public T Ranked<T>(Sticker<T> sticker) where T : notnull")
+    assertContains(
+      result.generated,
+      "tier1.stickers.ranked<kotlin.Comparable<Any?>>(tier1.stickers.Sticker((sticker.asStableRef<Any>().get() as kotlin.Comparable<Any?>)))",
+    )
+    assertContains(
+      result.generated,
+      "tier1.stickers.napOf<T>(tier1.stickers.Sticker(sticker.asStableRef<Any>().get().let { bounded -> bounded as kotlin.Enum<*>; bounded as T })).value",
+    )
+    assertContains(
+      result.generated,
+      "tier1.stickers.loudest<T>(tier1.stickers.Sticker(sticker.asStableRef<Any>().get().let { bounded -> bounded as kotlin.Comparable<Any?>; bounded as kotlin.CharSequence; bounded as T })).value",
+    )
+    // `default(Sticker<Mood>)` is a real value (the first entry), so no null guard: `?? throw` on
+    // a `struct` T does not compile.
+    val nap: String = spelled
+      .substringAfter("public static Sticker<T> NapOf<T>")
+      .substringBefore("public static")
+    assertFalse(nap.contains("carries no Value"), "expected no default guard on a struct T")
+    val ranked: String = spelled
+      .substringAfter("public static T Ranked<T>")
+      .substringBefore("public static")
+    assertContains(ranked, "carries no Value")
+  }
+
   @Test
   fun `a generic value class outside the ordinary wire stays a named skip`() {
-    listOf("maybeStick", "stickAll", "boxed", "later", "shine", "ranked", "initial", "starred").forEach { member ->
+    listOf(
+      "maybeStick", "stickAll", "boxed", "later", "shine", "initial", "starred",
+    ).forEach { member ->
       assertTrue(result.skipped(member), "expected $member named; kspWarnings=${result.kspWarnings}")
     }
-    assertFalse(Regex("""\b(MaybeStick|StickAll|Boxed|Later|Shine|Ranked|Initial|Starred)\(""").containsMatchIn(code))
+    val named = Regex("""\b(MaybeStick|StickAll|Boxed|Later|Shine|Initial|Starred)\(""")
+    assertFalse(named.containsMatchIn(code))
   }
 
   @Test
@@ -191,6 +251,13 @@ class Tier1GenericValueClassTest {
               long serial = Fixture.Serial(decal);
               System.Collections.Generic.IReadOnlyList<Sticker<int>> tally =
                   Fixture.Tally(new[] { three, four });
+              int ranked = Fixture.Ranked(new Sticker<int>(3));
+              Sticker<string> higher = Fixture.Higher(new Sticker<string>("Mylo"), new Sticker<string>("Oreo"));
+              Sticker<Mood> napped = Fixture.NapOf(new Sticker<Mood>(Mood.Sleepy));
+              Sticker<string> loudest = Fixture.Loudest(new Sticker<string>("Oreo"));
+              using var book = new StickerBook(new Sticker<string>("Mylo's"), three);
+              Sticker<Mood> booked = book.NapOf(napped);
+              string bookRanked = book.Ranked(new Sticker<string>("Oreo"));
           }
       }
       """.trimIndent(),

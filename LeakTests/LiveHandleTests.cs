@@ -8145,4 +8145,28 @@ public class LiveHandleTests
         await Task.Yield();
         yield return new Hoards.Mouse("Mylo");
     }
+
+    // ADR-220
+    // A bounded own `T` inside `Sticker<T>`: `Comparable<T>` erases with no trampoline, `Enum<T>` and
+    // the intersection run in the trampoline. Each string and enum box is +1 in and -1 once
+    // read, and the book is +1/-1 through its dispose. Net zero.
+    [Fact]
+    public void GenericValueClass_BoundedOwnTypeParameter_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            Assert.Equal("Oreo", TestLibrary.Stickers.Stickers.Higher(
+                new TestLibrary.Stickers.Sticker<string>("Mylo"),
+                new TestLibrary.Stickers.Sticker<string>("Oreo")).Value);
+            Assert.Equal(Mood.Sleepy, TestLibrary.Stickers.Stickers.NapOf(
+                new TestLibrary.Stickers.Sticker<Mood>(Mood.Sleepy)).Value);
+            Assert.Equal("Oreo", TestLibrary.Stickers.Stickers.Loudest(
+                new TestLibrary.Stickers.Sticker<string>("Oreo")).Value);
+            using var book = new TestLibrary.Stickers.StickerBook(
+                new TestLibrary.Stickers.Sticker<string>("Mylo's"),
+                new TestLibrary.Stickers.Sticker<int>(1));
+            Assert.Equal(Mood.Happy, book.NapOf(
+                new TestLibrary.Stickers.Sticker<Mood>(Mood.Happy)).Value);
+        });
+    }
 }

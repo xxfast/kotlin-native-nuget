@@ -71,6 +71,25 @@ fun <T : Any> firm(sticker: Sticker<T>): T = sticker.value
 /** An explicit `Sticker<T?>`: classifies like an unconstrained `Sticker<T>`, null in-band. */
 fun <T> blank(value: T?): Sticker<T?> = Sticker(value)
 
+/**
+ * A `Comparable<T>` own `T` inside the struct, in: `Comparable` is contravariant, so the erased
+ * spelling `Comparable<Any?>` satisfies the bound and no trampoline is needed.
+ */
+fun <T : Comparable<T>> ranked(sticker: Sticker<T>): T = sticker.value
+
+/** A `Comparable<T>` own `T` inside the struct, in twice and out: Oreo outranks Mylo. */
+fun <T : Comparable<T>> higher(a: Sticker<T>, b: Sticker<T>): Sticker<T> =
+  if (a.value >= b.value) a else b
+
+/**
+ * An `Enum<T>` own `T` inside the struct: the bound has no erased spelling, so the whole call,
+ * the unwrap and the re-wrap run inside the ADR-198 trampoline, and the enum crosses as an ordinal.
+ */
+fun <T : Enum<T>> napOf(sticker: Sticker<T>): Sticker<T> = sticker
+
+/** An intersection-bound own `T` inside the struct: the ADR-217 trampoline checks both bounds. */
+fun <T> loudest(sticker: Sticker<T>): Sticker<T> where T : CharSequence, T : Comparable<T> = sticker
+
 /** A phantom instantiation at a return. */
 fun oreoDecal(): Decal<Cat> = Decal(7L)
 
@@ -93,4 +112,10 @@ class StickerBook(val cover: Sticker<String>, var pages: Sticker<Int>) {
 
   /** A member's own `T` inside the struct, in. */
   fun <T> peel(sticker: Sticker<T>): T = sticker.value
+
+  /** A member's `Enum<T>` own `T` inside the struct: the member runs through the trampoline. */
+  fun <T : Enum<T>> napOf(sticker: Sticker<T>): Sticker<T> = sticker
+
+  /** A member's `Comparable<T>` own `T` inside the struct, erased, no trampoline. */
+  fun <T : Comparable<T>> ranked(sticker: Sticker<T>): T = sticker.value
 }

@@ -65,6 +65,20 @@ Decal<Cat> decal = Stickers.OreoDecal();                // Serial stays a long
 
 - The struct is `Sticker<T>(T Value)`, with no `where` clause. A function's own `T` inside it
   (`Stick<T>`, `Peel<T>`) binds like a bare `T`, and its bound becomes the method's `where`.
+  Any bound works: `T : Comparable<T>`, `T : Enum<T>` and a multi-bound `T` all bind, on top-level
+  functions and class members alike.
+
+  ```kotlin
+  fun <T : Comparable<T>> higher(a: Sticker<T>, b: Sticker<T>): Sticker<T> = if (a.value >= b.value) a else b
+  fun <T : Enum<T>> napOf(sticker: Sticker<T>): Sticker<T> = sticker
+  ```
+
+  ```C#
+  Sticker<string> higher = Stickers.Higher(new Sticker<string>("Mylo"), new Sticker<string>("Oreo"));
+  Sticker<Mood> napped = Stickers.NapOf(new Sticker<Mood>(Mood.Sleepy));   // where T : struct, Enum
+  ```
+
+  A `Comparable<T>` bound is not spelled as a C# constraint, so Kotlin checks it.
 - `init` does not run at `new Sticker<int>(-1)` in C#. It runs when the value first crosses into
   Kotlin, so the call that receives it throws. A non-generic value class validates at construction.
 - `default(Sticker<string>)` passed to a non-null `Sticker<String>` parameter throws
@@ -73,8 +87,7 @@ Decal<Cat> decal = Stickers.OreoDecal();                // Serial stays a long
 - The struct has no members of its own and no secondary constructors. Each one is a named skip
   (`SKIPPED_UNSUPPORTED_TYPE`); read `Value` or expose a top-level function instead.
 - A closed instantiation works as a `List`, `Set` or `Map` component and under `?`. These skip,
-  named: `Sticker<T>?` or `List<Sticker<T>>` over a function's own `T`, a bound that needs a
-  trampoline (`T : Comparable<T>`), and an erased position (`Box<Sticker<Int>>`, a lambda payload
+  named: `Sticker<T>?` or `List<Sticker<T>>` over a function's own `T`, and an erased position (`Box<Sticker<Int>>`, a lambda payload
   or result, a `Flow` element, an awaited `suspend` result).
 - A generic value class over `List<T>` or any other shape that is not `T` or a phantom stays
   refused by name.

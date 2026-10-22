@@ -167,9 +167,7 @@ of sending a null pointer into a non-null Kotlin slot (**verified**,
 `DefaultSticker_IntoABoundOwnTypeParameterSlot_ThrowsInCSharp`). An unconstrained `T` admits null:
 `Peel(default(Sticker<string?>))` returns null, exactly like a bare `Identity<string?>(null)`.
 
-A `T` whose bound needs ADR-198's trampoline (`T : Comparable<T>`, an intersection) is refused by
-name inside `Sticker<T>`: the re-wrap and unwrap sit outside the trampoline's type variable. Pinned
-as a skip in `Tier1GenericValueClassTest` (`ranked`).
+A `T` whose bound needs ADR-198's trampoline is bound inside `Sticker<T>` too; see the amendment below.
 
 ### Named skips
 
@@ -179,7 +177,6 @@ as a skip in `Tier1GenericValueClassTest` (`ranked`).
 | `List<Sticker<T>>` (own `T`) | "nested in" | ADR-212's element box plus this ADR's re-wrap; budget only |
 | `Box<Sticker<Int>>`, lambda payload/result, flow element, awaited `suspend` result or value-class parameter on a `suspend` member | named skip | no per-instantiation ADR-171 box pair |
 | own members and secondary constructors of a generic value class | named skip, per member | needs a receiver substituted per instantiation |
-| own `T` with a trampolined bound inside `Sticker<T>` | "nested in" | outside the trampoline |
 | underlying `List<T>` or any non-bare, non-phantom shape | unchanged `REFUSED` | pre-existing |
 
 ## Consequences
@@ -214,3 +211,24 @@ as a skip in `Tier1GenericValueClassTest` (`ranked`).
 1. That the positional generic record struct compiles on net8.0: the Tier 1 C# compile and the
    integration projects target net10.0 here; a positional generic record struct is C# 10.
 2. That Kotlin erases the underlying to the bound (documentation only); nothing here depends on it.
+
+## Amendment 2026-10-22: a bounded own `T` binds inside the struct
+
+A function's own `T` inside `Sticker<T>` binds whatever its bound, on top-level functions and on
+class members. The original refusal assumed the re-wrap sat outside ADR-198's trampoline. It does
+not: the trampoline wraps the export's whole body, so the unwrap, the call and the result's `.value`
+all run inside it, and the re-wrap reads the trampolined `T` like any other.
+
+- `T : Comparable<T>` needs no trampoline. `Comparable` is `in`, so the erased `Comparable<Any?>`
+  is within the bound. C# gets `where T : notnull`, and Kotlin checks the bound.
+- `T : Enum<T>` and an intersection go through the ADR-198 and ADR-217 trampoline. C# gets
+  `where T : struct, global::System.Enum` for the enum bound.
+- Fixed: an intersection-bound unwrap failed the Kotlin compile because `readThrough` skipped
+  `ValueClass`.
+- Fixed: the `default(Sticker<T>)` guard emitted CS0019 for a `struct`-constrained `T`. A default
+  `Sticker<Mood>` holds the enum's first entry, so that case has no guard.
+
+The named-skip row for a trampolined bound is gone. Leak row
+`GenericValueClass_BoundedOwnTypeParameter_ReturnsToBaseline`. This amendment is **verified** by
+the Tier 1 cells in `Tier1GenericValueClassTest` and the integration rows in
+`GenericValueClassTests.cs`.
