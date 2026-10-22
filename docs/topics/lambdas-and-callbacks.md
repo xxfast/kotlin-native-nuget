@@ -245,6 +245,27 @@ this route today. Change the lambda's own type to carry the "no listener" case i
 or wrap the payload in a non-nullable type before it crosses. The same skip applies on a sealed arm
 and to both halves of a stored-callback `add`/`remove` pair, which go together.
 
+### A type parameter in the lambda {id="a-type-parameter-in-the-lambda"}
+
+A generic member can name its own `T` (or its class's) as a lambda's payload or result. It binds
+as a generic method taking an ordinary delegate, and a top-level `fun <T>` can return a lambda over
+`T` as a `KotlinFunc<T, T>`:
+
+```kotlin
+fun <T> each(items: List<T>, action: (T) -> Unit)
+fun <T> map(value: T, transform: (T) -> T): T
+fun <T> echoer(): (T) -> T   // top level
+```
+
+```C#
+dealer.Each(new[] { "Oreo", "Mylo" }, name => seen.Add(name));
+using Tabby same = dealer.Map(oreo, cat => cat);
+using KotlinFunc<int, int> echo = Decks.Echoer<int>();
+```
+
+A wrapper `T` follows [the ownership rules below](#ownership-of-a-callback-payload) as a payload.
+The rest, including bounds and `T?`, is covered in [Generics](generics.md#a-type-parameter-in-a-lambda).
+
 ## Ownership of a callback payload {id="ownership-of-a-callback-payload"}
 
 A value handed to your callback from any of the C# → Kotlin routes on this page is owned by C#, not

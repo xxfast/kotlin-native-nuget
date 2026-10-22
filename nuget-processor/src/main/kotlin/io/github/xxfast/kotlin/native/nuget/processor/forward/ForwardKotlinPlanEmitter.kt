@@ -2066,6 +2066,10 @@ private fun loweredCallbackExpression(
     is BridgeType.Enum -> "Int"
     BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface,
     is BridgeType.Throwable -> "COpaquePointer?"
+    // ADR-215 lane A: a `T` or `T?` rides the boxed `Object` wire, null for a null `T`.
+    is BridgeType.TypeParameter -> "COpaquePointer?"
+    is BridgeType.Nullable -> if (component.type is BridgeType.TypeParameter) "COpaquePointer?"
+    else error("Forward Kotlin plan emitter has no callback wire type for $component")
     BridgeType.Unit,
     BridgeType.Char,
     BridgeType.Instant,
@@ -2075,7 +2079,6 @@ private fun loweredCallbackExpression(
     is BridgeType.ValueClass,
     BridgeType.ByteArray,
     is BridgeType.Collection,
-    is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
     is BridgeType.FlowSource,
@@ -2084,7 +2087,6 @@ private fun loweredCallbackExpression(
     is BridgeType.RawKSType,
     is BridgeType.Unsupported,
     is BridgeType.RawCollection,
-    is BridgeType.TypeParameter,
       -> error("Forward Kotlin plan emitter has no callback wire type for $component")
   }
 
@@ -2138,6 +2140,9 @@ private fun loweredCallbackExpression(
           BridgeType.String -> "NugetHandles.retain($argument as Any)"
           // ADR-201 amendment: the ADR-107 envelope; C# reads it with `BuildException`.
           is BridgeType.Throwable -> "NugetHandles.retain(buildError($argument, ::nugetMappedType))"
+          // ADR-215 lane A: a null `T` mints nothing; C#'s `FromHandle<T>` reads `IntPtr.Zero` as
+          // null.
+          is BridgeType.Nullable -> "$argument?.let { NugetHandles.retain(it) }"
           BridgeType.Unit,
           BridgeType.Char,
           BridgeType.Instant,
@@ -2149,7 +2154,6 @@ private fun loweredCallbackExpression(
           is BridgeType.ValueClass,
           BridgeType.ByteArray,
           is BridgeType.Collection,
-          is BridgeType.Nullable,
           is BridgeType.Callback,
           is BridgeType.AsyncCallback,
           is BridgeType.FlowSource,
@@ -2199,6 +2203,25 @@ private fun loweredCallbackExpression(
         appendLine("  $invocation")
       }
 
+      // ADR-215 lane A: C# always hands back an owned box (`WrapOwned<T>`), so this side reads it,
+      // releases it and casts the value to the bound chain.
+      is BridgeType.TypeParameter, is BridgeType.Nullable -> {
+        val nullable: Boolean = result is BridgeType.Nullable
+        val parameter: BridgeType.TypeParameter = result.unwrapNullable() as BridgeType.TypeParameter
+        val box: String = if (nullable) invocation else "$invocation!!"
+        val read: String = forwardBoundedRead(
+          "${name}Box", parameter.bounds(), nullable, parameter.typeVariable(),
+        )
+        appendLine("  val ${name}Box = $box")
+        appendLine("  val ${name}Value = $read")
+        if (nullable) {
+          appendLine("  if (${name}Box != null) NugetHandles.release(${name}Box)")
+        } else {
+          appendLine("  NugetHandles.release(${name}Box)")
+        }
+        appendLine("  ${name}Value")
+      }
+
       BridgeType.Char,
       BridgeType.Instant,
       BridgeType.Duration,
@@ -2210,7 +2233,6 @@ private fun loweredCallbackExpression(
       is BridgeType.ValueClass,
       BridgeType.ByteArray,
       is BridgeType.Collection,
-      is BridgeType.Nullable,
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
       is BridgeType.FlowSource,
@@ -2219,7 +2241,6 @@ private fun loweredCallbackExpression(
       is BridgeType.RawKSType,
       is BridgeType.Unsupported,
       is BridgeType.RawCollection,
-      is BridgeType.TypeParameter,
         -> error("Forward Kotlin plan emitter has no callback result lowering for $result")
     }
     append("}")

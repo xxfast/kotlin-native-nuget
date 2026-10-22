@@ -696,6 +696,11 @@ internal data class CirMarshalHelper(
    * `Factories` lines that call them.
    */
   val flowArgumentImports: List<CirDllImport> = emptyList(),
+  /**
+   * ADR-215 lane A: the `<lib>__retain_handle` entry point `WrapOwned<T>` calls, or null when no
+   * plan hands a `T` from a C# lambda back to Kotlin (then neither is rendered).
+   */
+  val retainHandleExport: String? = null,
 ) : CirDeclaration
 
 /**

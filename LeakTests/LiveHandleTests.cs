@@ -5817,4 +5817,82 @@ public class LiveHandleTests
                 () => Suspendgeneric.SuspendGenericSample.HoldLaterAsync("late", cts.Token));
         }, iterations: 200);
     }
+
+    // ADR-215
+    // Lane A, payload: a member's own `T` handed Kotlin to C# inside a lambda. Kotlin retains one
+    // box per invocation, and C#'s `FromHandle<T>` consumes it: a builtin is read and disposed, a
+    // wrapper is adopted and released by the lambda's `using`. A null `T` mints nothing.
+    // Ledger per iteration: dealer, oreo, mylo +1/-1 each; Each over ints and strings: one box per
+    // element +1/-1; Each over wrappers: one wrapper per element +1/-1 (the lambda's `using`);
+    // Each over `string?` with a null: one box per non-null element +1/-1; Serving<Tabby>.Each:
+    // the serving +1/-1 and one wrapper per invocation +1/-1. Net zero.
+    [Fact]
+    public void MemberGeneric_LambdaPayload_ReturnToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var dealer = new Membergeneric.Dealer();
+            using var oreo = new Membergeneric.Tabby("Oreo", 3);
+            using var mylo = new Membergeneric.Tabby("Mylo", 5);
+            int seen = 0;
+            dealer.Each(new[] { 4, 6 }, age => seen += age);
+            dealer.Each(new[] { "Oreo", "Mylo" }, name => seen += name.Length);
+            dealer.Each(new[] { oreo, mylo }, cat =>
+            {
+                using (cat) seen += cat.Tricks;
+            });
+            dealer.Each(new string?[] { "Oreo", null }, seat => seen += seat?.Length ?? 0);
+            dealer.Peek<string>(null, seat => seen += seat?.Length ?? 0);
+            using var forOreo = new Membergeneric.Serving<Membergeneric.Tabby>(oreo);
+            forOreo.Each(cat =>
+            {
+                using (cat) seen += cat.Tricks;
+            });
+            Assert.Equal(4 + 6 + 4 + 4 + 3 + 5 + 4 + 3 + 3, seen);
+        });
+    }
+
+    // Lane A, result: a `T` the C# lambda hands back to Kotlin. `WrapOwned<T>` always gives Kotlin
+    // an owned box: a builtin mints one, a borrowed wrapper (Mylo, still owned by this row) is
+    // retained through the generated `<lib>__retain_handle`, and a fresh wrapper created inside the
+    // lambda and dropped on return is retained the same way before its finalizer can run. Kotlin
+    // disposes exactly one box per result.
+    // Ledger per iteration: dealer, oreo, mylo +1/-1 each; Map(4): argument box +1/-1, payload box
+    // +1/-1, result box +1/-1, returned box +1/-1; Map(oreo, borrowed mylo): payload wrapper +1/-1
+    // (disposed in the lambda), retained box +1/-1 (Kotlin), returned wrapper +1/-1 (`using`);
+    // Rename(oreo, fresh): payload +1/-1, the fresh Tabby's own handle +1/-1 (its finalizer, or
+    // Kotlin's GC once the cast object is unreachable), retained box +1/-1; Map<string?>(null):
+    // nothing minted for either null; Fill<Tabby>(null, fresh): the fresh Tabby +1/-1, its box
+    // +1/-1, the returned wrapper +1/-1. Net zero.
+    [Fact]
+    public void MemberGeneric_LambdaResult_ReturnToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var dealer = new Membergeneric.Dealer();
+            using var oreo = new Membergeneric.Tabby("Oreo", 3);
+            using var mylo = new Membergeneric.Tabby("Mylo", 5);
+            Assert.Equal(8, dealer.Map(4, age => age * 2));
+            Assert.Equal("Oreo!", dealer.Map("Oreo", name => name + "!"));
+            using (Membergeneric.Tabby swapped = dealer.Map(oreo, cat =>
+            {
+                cat.Dispose();
+                return mylo;
+            }))
+            {
+                Assert.Equal("Mylo", swapped.Name);
+            }
+            Assert.Equal("Mylo", dealer.Rename(oreo, cat =>
+            {
+                cat.Dispose();
+                return new Membergeneric.Tabby("Mylo", 5);
+            }));
+            Assert.Null(dealer.Map<string?>(null, seat => seat));
+            using (Membergeneric.Tabby fetched = dealer.Fill<Membergeneric.Tabby>(null, () => new Membergeneric.Tabby("Mylo", 5)))
+            {
+                Assert.Equal("Mylo", fetched.Name);
+            }
+            Assert.Equal(5, mylo.Tricks);
+        });
+    }
 }

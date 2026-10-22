@@ -147,7 +147,7 @@ class Tier1GenericSealedArmNamedSkipTest {
 
   @Test
   fun `a callback carrying the type parameter is named and reaches neither half`() {
-    listOf("Dish.Hot.withItem", "Dish.Hot.addTaste", "Dish.Hot.removeTaste")
+    listOf("Dish.Hot.addTaste", "Dish.Hot.removeTaste")
       .forEach { member ->
         val warnings: List<String> = named(member)
         assertEquals(1, warnings.size, "expected `$member` named once; got: ${result.kspWarnings}")
@@ -165,10 +165,10 @@ class Tier1GenericSealedArmNamedSkipTest {
     assertEquals(1, pick.size, "expected `pick` named once; got: ${result.kspWarnings}")
     assertContains(pick.single(), "SKIPPED_UNSUPPORTED_RETURN")
     assertContains(pick.single(), "returns `T`")
-    listOf("hot_withItem", "hot_pick", "hot_addTaste", "hot_removeTaste").forEach { export ->
+    listOf("hot_pick", "hot_addTaste", "hot_removeTaste").forEach { export ->
       assertFalse(export in result.generated, "expected no Kotlin export for $export")
     }
-    listOf("WithItem(", "Pick(", "AddTaste(").forEach { member ->
+    listOf("Pick(", "AddTaste(").forEach { member ->
       assertFalse(member in result.generatedCSharp, "expected no `$member` in C#")
     }
   }
@@ -179,6 +179,8 @@ class Tier1GenericSealedArmNamedSkipTest {
       "Dish.Hot.each", "Dish.Hot.wafts", "Dish.Cold.thaw", "Dish.Cold.over", "Plate.Bare.wipe",
       // The two remedies the type-parameter lambda's hint names.
       "Dish.Hot.withCount", "Dish.Cold.withChill",
+      // ADR-215 lane A: a per-call lambda over the arm's `T` binds on the plan callback.
+      "Dish.Hot.withItem",
     ).forEach { member ->
       assertTrue(named(member).isEmpty(), "`$member` binds; got: ${named(member)}")
     }
@@ -187,6 +189,7 @@ class Tier1GenericSealedArmNamedSkipTest {
       "public void Each(Action<char> cb)", "public KotlinFlow<int> Wafts()",
       "public Task<int> ThawAsync(", "public Task<int> OverAsync(", "public Task<int> WipeAsync(",
       "public void WithCount(Action<int> cb)", "public void WithChill(Action<int> cb)",
+      "public void WithItem(Action<T> cb)",
     ).forEach { member -> assertContains(cs, member) }
     // `over` binds on the one arm that can carry it, and nowhere else.
     assertEquals(1, cs.lines().count { "public Task<int> OverAsync(" in it })

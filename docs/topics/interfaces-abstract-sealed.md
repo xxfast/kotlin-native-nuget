@@ -1681,11 +1681,11 @@ Two kinds of member on an arm with a Kotlin type parameter are skipped, named
   generic base or of a generic sealed interface is reported as "it is a `suspend` member of a generic
   class". Declare it on an arm that fixes the argument (`class Cold : Dish<Int>()` binds
   `ThawAsync`), or on a non-generic class that wraps the hierarchy.
-- **A lambda whose parameter is the arm's `T`.** `fun withItem(cb: (T) -> Unit)` and an
-  `addTaste`/`removeTaste` pair over `(T) -> Unit` are reported with the sentence "one of its lambdas
+- **A stored lambda over the arm's `T`.** A per-call `fun each(action: (T) -> Unit)` binds (as `Each(Action<T>)`); an
+  `addTaste`/`removeTaste` pair over `(T) -> Unit` is reported with the sentence "one of its lambdas
   takes or returns a type parameter of its generic sealed arm, and the bridge calls the arm with that
   parameter erased: the lambda's payload crosses as `Any?`, which the callback route cannot marshal".
-  Give the lambda a payload that does not name `T` (`withCount(cb: (Int) -> Unit)` and `spell` take
+  Give the pair a payload that does not name `T` (`withCount(cb: (Int) -> Unit)` and `spell` take
   an `Int` and a `Char`), or declare the member on an arm that fixes the argument
   (`class Cold : Dish<Int>()`), where the lambda is concrete. A member that itself returns `T`
   keeps its own `SKIPPED_UNSUPPORTED_RETURN`.

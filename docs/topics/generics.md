@@ -299,10 +299,10 @@ inherent to erasure. The same identity rule applies to a lambda argument
 `T` is admitted at a parameter, a return, a constructor parameter, or a property getter, optionally
 nullable, and as the element of a `List`, `Set` or `Map` at those positions (`List<T>` binds as
 `IReadOnlyList<T>`; see [A type parameter as an element](#a-type-parameter-as-an-element)). It is refused, named,
-everywhere else: nested in a lambda or `Flow` (`(T) -> Unit`, `Flow<T>`), a `var` property's setter
+everywhere else: nested in a `Flow` (`Flow<T>`) or a `suspend` lambda, a `var` property's setter
 (`var item: T` and `var items: List<T>` render get-only), a `suspend fun`, a `Flow`/`StateFlow` member, a
-stored-callback member, and a method's own type parameter when its signature carries a lambda
-(`fun <R> map(f: (T) -> R): R`; a plain `fun <U> swap(next: U): U` [binds](#generic-methods)). A
+stored-callback member, and a method's own type parameter when its signature carries a `suspend` lambda or a `Flow`
+(a plain `fun <U> swap(next: U): U` [binds](#generic-methods), and so does a [`T` in a lambda](#a-type-parameter-in-a-lambda)). A
 type parameter declared on an `interface` rather than a `class` is unaffected by this and keeps
 its own, unrelated named refusal.
 
@@ -524,7 +524,7 @@ Assert.Equal("4 x2", Descriptions.Tally(4, 2));
 // public static string Tally<T>(T x, int n) where T : notnull
 ```
 
-A top-level `fun <T>` with a lambda or `Flow` in the signature, an extension receiver,
+A top-level `fun <T>` with a `suspend` lambda or `Flow` in the signature, an extension receiver,
 or a `reified` `T` whose bound C# cannot spell is not generated, and the warning names
 which one. A `suspend fun <T>` binds as a `Task<T>`; see
 [A `suspend fun` with its own type parameter](coroutines-and-flow.md#suspend-fun-generic).
@@ -597,7 +597,7 @@ What differs from a generic class:
 These stay a named skip, with the specific reason in the warning: a generic method on an interface,
 an `enum class`, a value class, or an extension function; a `reified` type parameter on a member (a top-level `fun <T>` binds one); a bound that
 is itself a type parameter; a `T` nested in a generic value class or in a type that is not an exported generic class
-(`List`, `Set`, `Map` and `Result` aside); a lambda or `Flow` anywhere in the signature; a multi-bound `T` that no parameter mentions; and a
+(`List`, `Set`, `Map` and `Result` aside); a `suspend` lambda or `Flow` anywhere in the signature; a multi-bound `T` that no parameter mentions; and a
 `T` that shadows a type parameter in scope (the owner's, or one an `inner` class captures). A
 generic method on an `inner` class or a type nested in a generic owner binds like any other.
 Expose a non-generic wrapper for any of the refused shapes. The warning
@@ -643,9 +643,56 @@ foreach (Tabby cat in deck.Shuffle(new[] { oreo })) cat.Dispose();           // 
 A passed wrapper element is borrowed, and each wrapper element Kotlin returns is yours to dispose.
 `List<List<T>>` works, and a bounded `T` keeps its `where` clause. A `Map` key must be non-null:
 `fun <K : Any, V> tally(map: Map<K, V>)` binds, while an unconstrained `K` is skipped as
-`NULLABLE_MAP_KEY`. Declare `K : Any`. A `T` inside a lambda or a
+`NULLABLE_MAP_KEY`. Declare `K : Any`. A `T` inside a
 `Flow` is still skipped, as is a `T` with an unspellable bound
-([An enum bound](#an-enum-bound)) in a collection.
+([An enum bound](#an-enum-bound)) in a collection. A `T` in a lambda binds; see [below](#a-type-parameter-in-a-lambda).
+
+### A type parameter in a lambda {id="a-type-parameter-in-a-lambda"}
+
+A method's own `T`, or a generic class's `T`, can be a payload or the result of a non-suspend lambda
+parameter. `T` is inferred from the arguments, and the lambda is an ordinary `Action<T>` or
+`Func<T, ...>`.
+
+```kotlin
+class Dealer {
+  fun <T> each(items: List<T>, action: (T) -> Unit) = items.forEach(action)
+  fun <T> map(value: T, transform: (T) -> T): T = transform(value)
+  fun <T : Furry> rename(pet: T, pick: (T) -> T): String = pick(pet).name
+}
+
+class Serving<T>(val portion: T) {
+  fun each(action: (T) -> Unit) { action(portion) }
+}
+
+fun <T> echoer(): (T) -> T = { item -> item }   // top level
+```
+
+```C#
+void Each<T>(IReadOnlyList<T> items, Action<T> action)
+T Map<T>(T value, Func<T, T> transform)
+string Rename<T>(T pet, Func<T, T> pick) where T : IFurry
+KotlinFunc<T, T> Echoer<T>()
+```
+
+```C#
+using var dealer = new Dealer();
+dealer.Each(new[] { "Oreo", "Mylo" }, name => seen.Add(name));
+int eight = dealer.Map(4, age => age * 2);
+
+using var oreo = new Tabby("Oreo", 3);
+dealer.Each(new[] { oreo }, cat => { using (cat) names.Add(cat.Name); });   // the payload is yours
+using Tabby same = dealer.Map(oreo, cat => cat);                            // the result is yours too
+```
+
+A wrapper payload follows the usual [callback ownership](lambdas-and-callbacks.md#ownership-of-a-callback-payload):
+the lambda owns it and disposes it. A wrapper the lambda returns, whether the payload, one you already
+hold or a fresh one, needs no extra step: Kotlin takes its own reference, so you still dispose any
+wrapper you hold. A `T?` payload, or a `T` that is `null`, arrives as `null`. A [bound with no closed
+spelling](#an-enum-bound) (`T : Enum<T>`) works in both directions.
+
+Still named skips: a `suspend` lambda or a `Flow` anywhere in the signature, and a stored callback or
+listener pair over `T` (`addTaste(listener: (T) -> Unit)`). A generic sealed arm's per-call lambda
+member binds like the class's.
 
 ### A type parameter inside a generic class or a Result {id="a-type-parameter-inside-a-generic-class"}
 
@@ -738,7 +785,7 @@ C#, so the type argument you choose decides whether `null` can be held.
 
 A generic class binds its ordinary members, including a member that takes a lambda
 (`box.Measure(n => n * 10)`). It does not bind `suspend` members, `Flow`-returning members, stored
-callback or listener pairs, or lambda members with a `Char` or `T` payload. Each is skipped with a
+callback or listener pairs, or lambda members with a `Char` payload. Each is skipped with a
 named `SKIPPED_UNSUPPORTED_COMBINATION` diagnostic; move it onto a non-generic class that wraps the
 generic one.
 
