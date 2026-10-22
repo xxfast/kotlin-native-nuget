@@ -24,6 +24,9 @@ import kotlin.test.assertTrue
  */
 class Tier1MutableSharedFlowValueClassElementTest {
 
+  // An underlying no value-class wire carries, so `Initial` has no C# record struct.
+  private val structless: Tier1StructlessUnderlying = Tier1StructlessValueClassWitness.underlying
+
   private val source: String = """
     package tier1.sharedvc
 
@@ -382,7 +385,7 @@ class Tier1MutableSharedFlowValueClassElementTest {
    * spelled the undeclared type.
    */
   @Test
-  fun `a Char, stdlib class, nested value class or generic underlying is refused by name`() {
+  fun `a struct-less, stdlib class, nested value class or generic underlying is refused by name`() {
     val refusing: Tier1Result = Tier1Harness.run(
       """
       package tier1.sharedvcrefused
@@ -391,7 +394,7 @@ class Tier1MutableSharedFlowValueClassElementTest {
       import kotlinx.coroutines.flow.MutableSharedFlow
 
       @JvmInline
-      value class Initial(val letter: Char)
+      value class Initial(val letter: ${structless.kotlin})
 
       @JvmInline
       value class Stamp(val at: Instant)
@@ -432,7 +435,7 @@ class Tier1MutableSharedFlowValueClassElementTest {
     )
     val pkg = "tier1.sharedvcrefused"
     mapOf(
-      "Bulletin.initials:" to listOf("`$pkg.Initial`", "`kotlin.Char`"),
+      "Bulletin.initials:" to listOf("`$pkg.Initial`", "`${structless.qualifiedName}`"),
 
       "Bulletin.oopses:" to listOf("`$pkg.Oops`", "`kotlin.Throwable`"),
     ).forEach { (member, named) ->

@@ -8389,6 +8389,60 @@ public class LiveHandleTests
         });
     }
 
+    // ADR-234
+    // A value class over a sealed type carries the device handle: a returned `Clue`/`Dossier` mints
+    // one wrapper the `using` releases, a C#-built one borrows it. Every `Box<V>` is one handle
+    // +1/-1, the boxed value class inside it one box handle +1/-1 on each crossing, and the
+    // `out`-projected `Sticker<Cat>` one cat wrapper +1/-1. `Monogram` and `TreatCount` carry no
+    // handle of their own, only the box. nearby outlives each iteration's crossings. Net zero.
+    [Fact]
+    public void ValueClassUnderlyingWidenings_ReturnToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var nearby = new TestLibrary.Issue463.NearbyDevice("desk", "aa:bb");
+            using (TestLibrary.Issue463.IConnectableDevice device = TestLibrary.Stickers.StickerWidenings.ClueAt("cc:dd").Device)
+                Assert.Equal("cc:dd", device.Address);
+            Assert.Equal("aa:bb", TestLibrary.Stickers.StickerWidenings.ClueAddress(new TestLibrary.Stickers.Clue(nearby)));
+            using (Box<TestLibrary.Stickers.Clue> boxed = TestLibrary.Stickers.StickerWidenings.BoxedClue("ee:ff"))
+            using (TestLibrary.Issue463.IConnectableDevice device = boxed.Value.Device)
+                Assert.Equal("ee:ff", device.Address);
+            using (var built = new Box<TestLibrary.Stickers.Clue>(new TestLibrary.Stickers.Clue(nearby)))
+                Assert.Equal("aa:bb", TestLibrary.Stickers.StickerWidenings.ClueInBox(built));
+            using (var built = new Box<TestLibrary.Stickers.Dossier>(new TestLibrary.Stickers.Dossier(nearby)))
+                Assert.Equal("NearbyDevice", TestLibrary.Stickers.StickerWidenings.DossierInBox(built));
+            using (Box<TestLibrary.Stickers.Monogram> boxed = TestLibrary.Stickers.StickerWidenings.BoxedMonogram())
+                Assert.Equal('O', boxed.Value.Letter);
+            using (var built = new Box<TestLibrary.Stickers.TreatCount?>(new TestLibrary.Stickers.TreatCount(null)))
+                Assert.Equal("uncounted", TestLibrary.Stickers.StickerWidenings.TreatsOrNoneInBox(built));
+            using (Cat mylo = TestLibrary.Stickers.StickerWidenings.AnimalSticker<Cat>("Mylo").Value)
+                Assert.Equal("Mylo", mylo.Name);
+        });
+    }
+
+    // ADR-234
+    // The erased async halves: each collected `Flow` releases its flow handle and every element box;
+    // each awaited result releases its job handle and its result box; the `Clue` elements and result
+    // mint one device wrapper each, disposed in the loop. Net zero.
+    [Fact]
+    public async Task ValueClassUnderlyingWidenings_AsyncHalves_ReturnToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var courier = new TestLibrary.Stickers.WideningCourier("Oreo's desk");
+            await foreach (TestLibrary.Stickers.Clue clue in courier.CluesFlow())
+                using (TestLibrary.Issue463.IConnectableDevice device = clue.Device) Assert.NotNull(device.Address);
+            await foreach (TestLibrary.Stickers.TreatCount? _ in courier.TreatLog()) { }
+            await foreach (TestLibrary.Stickers.MaybeMonogram? _ in courier.MaybeMonograms()) { }
+            using (TestLibrary.Issue463.IConnectableDevice device = (await courier.ClueLaterAsync("aa:bb")).Device)
+                Assert.Equal("aa:bb", device.Address);
+            Assert.Null(await courier.TreatsLaterAsync(false));
+            Assert.Equal(new TestLibrary.Stickers.Sticker<char>('O'), await courier.CharLaterAsync());
+            courier.TreatBoard.Value = new TestLibrary.Stickers.TreatCount(3);
+            Assert.Equal(new TestLibrary.Stickers.TreatCount(3), courier.TreatBoard.Value);
+        });
+    }
+
     private static async IAsyncEnumerable<TestLibrary.Stickers.Sticker<int>> StickerDrip(params int[] values)
     {
         foreach (int value in values)

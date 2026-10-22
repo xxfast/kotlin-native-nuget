@@ -99,3 +99,9 @@ verified `Interop.cs`.
 nullable value class whose underlying can be null (`Nick?`, `Sticker<T>?` over an unconstrained
 `T`) at a parameter, result, constructor, property and extension receiver, and as a collection
 element. A null pointer is `null` and a live handle is the boxed value class.
+
+## Amendment 2026-10-23: sealed and `Char` underlyings
+
+[ADR-234](234-value-class-underlying-widenings.md) admits a value class over a sealed type (the
+sealed-helper protocol or an eligible sealed base) and over `Char` or `Char?` at the erased-position
+gates, so `Box<Clue>` and `Flow<Monogram>` bind.

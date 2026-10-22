@@ -224,7 +224,7 @@ internal fun KSFunctionDeclaration.refusedLegacyLambdaShape(
             "has no C# record struct, because it wraps `${undeclared.valueClassUnderlying}`, " +
             "which no value-class wire carries",
         hint = "change the underlying of value class `${undeclared.rendered}` to a String, a " +
-            "primitive other than Char, an enum, or an exported class or sealed type, or pass " +
+            "primitive, a Char, an enum, or an exported class or sealed type, or pass " +
             "the underlying value to the callback instead",
       )
     }

@@ -250,11 +250,14 @@ internal fun BridgeType.valueClassWithoutStruct(): BridgeType.Unsupported? =
  * [ForwardLegacyReturnShape.ValueClass] arm reads through `NugetUnbox`, so both read this one rule.
  */
 internal fun BridgeType.ValueClass.hasErasedCrossing(): Boolean = underlying.isErasedUnderlying() ||
+    // ADR-234: a sealed underlying (an ineligible sealed interface or an eligible sealed base),
+    // on the handle of the sealed type it is read back through.
+    (underlying as? BridgeType.SpecializedProtocol)?.sealedHandle != null ||
     (underlying as? BridgeType.Nullable)?.type?.let { inner ->
       // ADR-228: a nullable String, primitive or own `T` underlying (`Nick(val name: String?)`).
       inner == BridgeType.String || inner is BridgeType.TypeParameter ||
-          // ADR-226: and a nullable primitive (`TreatCount(val count: Int?)`).
-          inner is BridgeType.Primitive
+          // ADR-226: and a nullable primitive (`TreatCount(val count: Int?)`). ADR-234: or `Char?`.
+          inner is BridgeType.Primitive || inner == BridgeType.Char
     } == true ||
     // ADR-240: an ADR-235 WIRE underlying (`Instant`, `Duration`, `Uuid`, `ByteArray`, a
     // collection, a plain interface, another value class): its box takes the struct on the
@@ -266,6 +269,8 @@ internal fun BridgeType.ValueClass.hasErasedCrossing(): Boolean = underlying.isE
 private fun BridgeType.isErasedUnderlying(): Boolean =
   this == BridgeType.String || this is BridgeType.Primitive || this is BridgeType.Enum ||
       this is BridgeType.ObjectHandle ||
+      // ADR-234: `Char`, on the `char` box.
+      this == BridgeType.Char ||
       // ADR-228: a generic value class's own `T`, crossing on the bare-`T` box.
       this is BridgeType.TypeParameter
 
@@ -1474,8 +1479,8 @@ internal fun ForwardBridgeTypeClassifier.legacyFlowElementShape(
  */
 internal const val VALUE_CLASS_WITHOUT_BOX_REFUSAL: String =
   " (a value class is a Flow or StateFlow element, or an awaited result, only over a String, a " +
-    "primitive other than Char, an enum or an exported class: those are the underlyings it has a " +
-    "boxed form for)"
+    "primitive, a Char, an enum, an exported class or sealed type, or a nullable String, " +
+    "primitive or Char: those are the underlyings it has a boxed form for)"
 
 /**
  * ADR-123: the element of a `Flow`/`StateFlow` type, or null when [type] is neither. The one place

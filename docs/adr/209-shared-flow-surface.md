@@ -284,3 +284,8 @@ The refusal sentence for a collection, `ByteArray` or interface element is now t
 `MutableStateFlow`'s setter uses ("a List element of a MutableSharedFlow has no write arm (...)"),
 built by one shared function. Verified natively by four facts in `IntegrationTests/SharedFlowTests.cs`
 over `CatBulletin.hunches`, `purrs` and `initials`, AOT included, and by `Tier1SharedFlowSurfaceTest`.
+
+## Amendment 2026-10-23: `Char` underlying
+
+[ADR-234](234-value-class-underlying-widenings.md) gives a value class over `Char` a record struct,
+so a `SharedFlow` over one is no longer a named skip.

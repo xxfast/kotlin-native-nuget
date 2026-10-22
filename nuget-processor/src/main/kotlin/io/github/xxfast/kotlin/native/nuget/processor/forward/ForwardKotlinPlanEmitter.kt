@@ -271,7 +271,7 @@ private fun addValueClassOrdinaryResult(
     }
 
     // ADR-077 sub-item 4: the underlying's own result emission with the unboxing composed in.
-    is BridgeType.Primitive -> {
+    is BridgeType.Primitive, BridgeType.Char -> {
       builder.returns(kotlinResultType(nativeResult))
       builder.addCode(
         errorHandlingValueBody(unboxed, errorName, defaultResult(underlying)),
@@ -319,6 +319,20 @@ private fun addValueClassOrdinaryResult(
         cVarType((underlying.type as BridgeType.Primitive).kind),
         *errorTypes(errorName),
       )
+    } else if (underlying.type == BridgeType.Char) {
+      // ADR-234: a `Char?` underlying writes its `.code` as a `UShort`, the bare `Char?`
+      // result shape.
+      builder.returns(kotlinType("Boolean"))
+      builder.addCode(
+        nullablePrimitiveResultBody(
+          unboxed,
+          requireNotNull(valueOut) { "Value class $type result has no valueOut" },
+          errorName,
+          "result.code.toUShort()",
+        ),
+        cVarType(PrimitiveKind.USHORT),
+        *errorTypes(errorName),
+      )
     } else {
       require(underlying.type is BridgeType.TypeParameter) {
         "Forward Kotlin plan emitter has no ordinary value-class result for underlying $underlying"
@@ -330,7 +344,6 @@ private fun addValueClassOrdinaryResult(
     }
 
     BridgeType.Unit,
-    BridgeType.Char,
     BridgeType.Instant,
     BridgeType.Duration,
     is BridgeType.Throwable,
@@ -1102,7 +1115,10 @@ private fun addNullableResult(
     // through the underlying's own CVar.
     is BridgeType.ValueClass -> {
       val underlying: BridgeType = type.underlying
-      if (underlying is BridgeType.Primitive || underlying is BridgeType.Enum) {
+      val fansOut: Boolean = underlying is BridgeType.Primitive || underlying is BridgeType.Enum ||
+          // ADR-234: a `Char` underlying writes its code unit, as a bare `Char?` result does.
+          underlying == BridgeType.Char
+      if (fansOut) {
         require(call.result == ForwardAbiWireType.BOOLEAN) {
           "Forward Kotlin nullable value-class result over a primitive/enum underlying " +
               "must use BOOLEAN"
@@ -1111,9 +1127,13 @@ private fun addNullableResult(
           call.parameters.firstOrNull { parameter -> parameter.role == ForwardAbiRole.VALUE_OUT },
         ) { "Forward Kotlin nullable value-class result is missing valueOut" }
         val written: String = "result.${type.underlyingPropertyName}" +
-            if (underlying is BridgeType.Enum) ".ordinal" else ""
+            if (underlying is BridgeType.Enum) ".ordinal"
+            else if (underlying == BridgeType.Char) ".code.toUShort()"
+            else ""
         val kind: PrimitiveKind =
-          if (underlying is BridgeType.Primitive) underlying.kind else PrimitiveKind.INT
+          if (underlying is BridgeType.Primitive) underlying.kind
+          else if (underlying == BridgeType.Char) PrimitiveKind.USHORT
+          else PrimitiveKind.INT
         builder.returns(kotlinType("Boolean"))
         builder.addCode(
           nullablePrimitiveResultBody(invocation, valueOut.name, errorName, written),
@@ -2351,7 +2371,7 @@ private fun underlyingArgument(parameter: ForwardPublicParameter): String =
       // ADR-079: a Primitive/Enum underlying arrives as the adjacent HasValue pair instead, so the
       // guard is the `${name}HasValue` flag (the value slot's dead default is never re-wrapped).
       is BridgeType.ValueClass ->
-        if (inner.underlying is BridgeType.Primitive || inner.underlying is BridgeType.Enum) {
+        if (inner.underlying.isHasValueUnderlying()) {
           val lowered: String = valueClassUnderlyingLowering(parameter.ref, inner.underlying)
           "if (${parameter.hasValueSlot}) ${inner.qualifiedName}($lowered) else null"
         } else {

@@ -596,8 +596,9 @@ internal object ForwardCirPropertyProjection {
       is BridgeType.Enum -> "(${underlying.csharpType})$wireValue"
       is BridgeType.ObjectHandle -> underlying.handleReconstruction(wireValue)
       is BridgeType.Primitive -> wireValue
+      // ADR-234: a `Char` underlying is the `char` a bare `Char` getter returns.
+      BridgeType.Char -> wireValue
       BridgeType.Unit,
-      BridgeType.Char,
       BridgeType.Instant,
       BridgeType.Duration,
       is BridgeType.Throwable,

@@ -22,11 +22,14 @@ import kotlin.test.assertTrue
  */
 class Tier1ValueClassWithoutStructPositionsTest {
 
+  // An underlying no value-class wire carries, so `Initial` has no C# record struct.
+  private val structless: Tier1StructlessUnderlying = Tier1StructlessValueClassWitness.underlying
+
   private val source: String = """
     package tier1.vcpositions
 
     @JvmInline
-    value class Initial(val letter: Char)
+    value class Initial(val letter: ${structless.kotlin})
 
     @JvmInline
     value class Tag(val id: String)
@@ -44,7 +47,7 @@ class Tier1ValueClassWithoutStructPositionsTest {
     sealed class Pet {
       class Cat : Pet() {
         val all: List<Initial> = emptyList()
-        fun first(): Initial = Initial('c')
+        fun first(): Initial = Initial(${structless.sample})
       }
     }
 
@@ -76,13 +79,13 @@ class Tier1ValueClassWithoutStructPositionsTest {
       fun tags(): List<Tag> = emptyList()
     }
 
-    fun topFirst(): Initial = Initial('t')
+    fun topFirst(): Initial = Initial(${structless.sample})
 
     fun topAll(): List<Initial> = emptyList()
 
-    fun Initial.shout(): String = letter.uppercase()
+    fun Initial.shout(): String = letter.toString().uppercase()
 
-    val Initial.code: Int get() = letter.code
+    val Initial.code: Int get() = letter.hashCode()
     """.trimIndent()
 
   private val result: Tier1Result by lazy {
@@ -163,7 +166,7 @@ class Tier1ValueClassWithoutStructPositionsTest {
     assertContains(
       later,
       "its value class type `tier1.vcpositions.Initial` has no C# record struct, because it " +
-        "wraps `kotlin.Char`, which no value-class wire carries",
+        "wraps `${structless.qualifiedName}`, which no value-class wire carries",
     )
     assertFalse("generic type" in later, "a value class is not a generic type: $later")
   }
@@ -215,6 +218,6 @@ class Tier1ValueClassWithoutStructPositionsTest {
         it.contains("Skipping tier1.vcpositions.Initial:")
     }
     assertEquals(1, declared.size, "got: $declared")
-    assertContains(declared.single(), "wraps `kotlin.Char`")
+    assertContains(declared.single(), "wraps `${structless.qualifiedName}`")
   }
 }

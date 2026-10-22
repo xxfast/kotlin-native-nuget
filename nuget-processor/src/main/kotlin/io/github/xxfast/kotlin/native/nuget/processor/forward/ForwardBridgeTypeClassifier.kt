@@ -1261,8 +1261,13 @@ internal class ForwardBridgeTypeClassifier(
    * question ([BridgeType.ReturnedLambda.unnameableTypeArgument]), so an unspellable one is a
    * named skip rather than a fall-through to a protocol with no route. An ADR-009 sealed class
    * argument is carried as its [BridgeType.ObjectHandle], the same unwrap a sealed result takes.
+   *
+   * ADR-234: a star- or `out`-projected generic value class takes the same caller-supplied method
+   * type parameter a star-projected parameter does.
    */
-  fun classifyResult(type: KSType): BridgeType = lambdaPropertyOrNull(type) ?: classify(type)
+  fun classifyResult(type: KSType): BridgeType = lambdaPropertyOrNull(type)
+    ?: starProjectedValueClassOrNull(type, admitsCovariant = true)
+    ?: classify(type)
 
   /**
    * ADR-236: the lambda handle a PROPERTY of function type crosses as, on every owner: the
@@ -1417,12 +1422,17 @@ internal class ForwardBridgeTypeClassifier(
    * `Sticker<Any?>`, which is a `Sticker<*>`. The planner declares the synthesized parameter on
    * the C# method. Null for anything else.
    */
-  private fun starProjectedValueClassOrNull(type: KSType): BridgeType? {
+  private fun starProjectedValueClassOrNull(
+    type: KSType,
+    admitsCovariant: Boolean = false,
+  ): BridgeType? {
     val expanded: KSType = type.expandAliases()
     val declaration: KSClassDeclaration = expanded.declaration as? KSClassDeclaration ?: return null
     if (!declaration.isValueClass() || declaration.typeParameters.size != 1) return null
     val argument: KSTypeArgument = expanded.arguments.singleOrNull() ?: return null
-    if (argument.variance != Variance.STAR) return null
+    val projected: Boolean = argument.variance == Variance.STAR ||
+        (admitsCovariant && argument.variance == Variance.COVARIANT)
+    if (!projected) return null
     val qualifiedName: String = declaration.qualifiedName?.asString() ?: return null
     if (qualifiedName !in context.exportedValueClasses) return null
     val underlying = declaration.primaryConstructor?.parameters?.singleOrNull() ?: return null

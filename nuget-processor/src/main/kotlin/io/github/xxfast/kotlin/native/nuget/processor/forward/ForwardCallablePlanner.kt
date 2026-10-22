@@ -1450,7 +1450,8 @@ internal class ForwardCallablePlanner(
           parameters = method.parameters.map { parameter ->
             parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
           },
-          result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
+          result = method.returnType?.resolve()?.let(classifier::classifyResult)
+              ?: BridgeType.Unit,
           origin = ForwardCallableOrigin.VALUE_CLASS_MEMBER,
           target = owner,
           ownerType = genericOwner,
@@ -1780,7 +1781,8 @@ internal class ForwardCallablePlanner(
             parameters = method.parameters.map { parameter ->
               parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
             },
-            result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
+            result = method.returnType?.resolve()?.let(classifier::classifyResult)
+                ?: BridgeType.Unit,
             origin = ForwardCallableOrigin.VALUE_CLASS_MEMBER,
             target = owner,
             member = name,
@@ -3169,14 +3171,15 @@ internal class ForwardCallablePlanner(
     method: KSFunctionDeclaration,
   ): ForwardCallableCatalogEntry {
     if (this !is ForwardCallableCatalogEntry.Planned) return this
-    // ADR-226: and one per star-projected value class parameter, which the Kotlin call never names.
-    val starred: List<ForwardMethodTypeParameter> = plan.starTypeParameters()
-    if (method.typeParameters.isEmpty() && starred.isEmpty()) return this
+    if (method.typeParameters.isEmpty()) return this
     val signature: ForwardPublicSignature = plan.publicSignature
     // ADR-237: an interface member's own type parameters are erased.
     val typeParameters: List<ForwardMethodTypeParameter> =
       if (method.isErasedInterfaceMember()) method.forwardErasedTypeParameters()
       else method.forwardMethodTypeParameters()
+    // ADR-226: and one per star projection, which the Kotlin call never names, stamped already.
+    val starred: List<ForwardMethodTypeParameter> = signature.typeParameters
+      .filter { typeParameter -> typeParameter.kotlinName == STAR_KOTLIN_NAME }
     return copy(
       plan = plan.copy(publicSignature = signature.copy(typeParameters = typeParameters + starred)),
     )
@@ -3625,7 +3628,7 @@ internal class ForwardCallablePlanner(
       symbol, publicName, exportName, receiver, parameters, result, origin, target, ownerType,
       invocationReceiver, includeError, valueClassProperty, member, isOverride, isVirtual, node,
       defaults, doc, extensionImportAlias, isAbstract,
-    ).withStarTypeParameters()
+    ).withStarTypeParameters(starTypeParameters(parameters.map { (_, type) -> type } + result))
   } catch (failure: Exception) {
     ForwardCallableCatalogEntry.Skipped(
       symbol,
@@ -3639,9 +3642,10 @@ internal class ForwardCallablePlanner(
    * ADR-226: a star-projected value class parameter's synthesized C# method type parameters, on
    * every route; one that also declares its own is restated by [withMethodTypeParameters].
    */
-  private fun ForwardCallableCatalogEntry.withStarTypeParameters(): ForwardCallableCatalogEntry {
+  private fun ForwardCallableCatalogEntry.withStarTypeParameters(
+    starred: List<ForwardMethodTypeParameter>,
+  ): ForwardCallableCatalogEntry {
     if (this !is ForwardCallableCatalogEntry.Planned) return this
-    val starred: List<ForwardMethodTypeParameter> = plan.starTypeParameters()
     if (starred.isEmpty()) return this
     val signature: ForwardPublicSignature = plan.publicSignature
     return copy(
@@ -3651,9 +3655,11 @@ internal class ForwardCallablePlanner(
     )
   }
 
-  private fun ForwardCallablePlan.starTypeParameters(): List<ForwardMethodTypeParameter> =
-    publicSignature.parameters
-      .mapNotNull { parameter -> parameter.type.unwrapNullable() as? BridgeType.ValueClass }
+  // Read before ADR-226 rewrites a nullable one into its box handle, which no longer names them.
+  // ADR-234: a star- or `out`-projected result included, which the caller supplies the same way.
+  private fun starTypeParameters(types: List<BridgeType>): List<ForwardMethodTypeParameter> =
+    types
+      .mapNotNull { type -> type.unwrapNullable() as? BridgeType.ValueClass }
       .flatMap { valueClass -> valueClass.typeArguments }
       .mapNotNull { argument -> argument.unwrapNullable() as? BridgeType.TypeParameter }
       .filter { argument -> argument.kotlinName == STAR_KOTLIN_NAME }
@@ -4789,7 +4795,7 @@ internal class ForwardCallablePlanner(
       // transfer carries the Nullable value class + UNBOX_VALUE_CLASS; `valueOut` carries the
       // *bare* underlying primitive (INT for an enum ordinal) so it renders as `double`/`int` on
       // the C# side and inherits ADR-069's [MarshalAs(UnmanagedType.I1)] for a Boolean underlying.
-      is BridgeType.Primitive, is BridgeType.Enum -> ForwardResultShape(
+      is BridgeType.Primitive, is BridgeType.Enum, BridgeType.Char -> ForwardResultShape(
         wireType = ForwardAbiWireType.BOOLEAN,
         transfer = ForwardTransfer(
           subject = "result",
@@ -4823,7 +4829,6 @@ internal class ForwardCallablePlanner(
 
       BridgeType.Unit,
       is BridgeType.Primitive,
-      BridgeType.Char,
       BridgeType.Instant,
       BridgeType.Duration,
       is BridgeType.Throwable,
@@ -5121,7 +5126,10 @@ internal class ForwardCallablePlanner(
         (this is BridgeType.Nullable && type == BridgeType.String) ||
         // ADR-226: a nullable primitive underlying (`TreatCount(val count: Int?)`) rides ADR-061's
         // has-value pair as its own wire, so its only null is the underlying's.
-        (this is BridgeType.Nullable && type is BridgeType.Primitive)
+        (this is BridgeType.Nullable && type is BridgeType.Primitive) ||
+        // ADR-234: `Char` on its `char` wire, and `Char?` on the has-value pair
+        // ADR-098 part C gave it.
+        this == BridgeType.Char || (this is BridgeType.Nullable && type == BridgeType.Char)
 
   /**
    * ADR-220: a member's own `T` substituted into a generic value class (`Sticker<T>`), either
@@ -5139,7 +5147,7 @@ internal class ForwardCallablePlanner(
    * ObjectHandle underlyings ride their own null pointer instead (ADR-077 sub-items 3/4).
    */
   private fun BridgeType.isHasValueFanOutUnderlying(): Boolean =
-    this is BridgeType.Primitive || this is BridgeType.Enum
+    this is BridgeType.Primitive || this is BridgeType.Enum || this == BridgeType.Char
 
   /**
    * ADR-132: whether [nativeInputParameters] fans this input out into the adjacent
@@ -5164,7 +5172,10 @@ internal class ForwardCallablePlanner(
    * valueOut.
    */
   private fun BridgeType.valueOutTransferType(): BridgeType =
-    if (this is BridgeType.Enum) BridgeType.Primitive(PrimitiveKind.INT) else this
+    if (this is BridgeType.Enum) BridgeType.Primitive(PrimitiveKind.INT)
+    // ADR-234: a `Char` underlying writes its UTF-16 code unit, as a bare `Char?` result does.
+    else if (this == BridgeType.Char) BridgeType.Primitive(PrimitiveKind.USHORT)
+    else this
 
   private data class ForwardResultShape(
     val wireType: ForwardAbiWireType,

@@ -16,11 +16,15 @@ import kotlin.test.assertTrue
  *    return and parameter, inside a `List`, as a `MutableStateFlow` element) and a `Flow` or
  *    `StateFlow` as a generic type argument (`Box<Flow<Initial>>`, `Box<StateFlow<Nick>>`).
  *
- * `Initial` wraps a `Char`, so it has no C# record struct at all and may not be spelled at any of
+ * `Initial` wraps [Tier1StructlessValueClassWitness]'s underlying, so it has no C# record struct
+ * at all and may not be spelled at any of
  * these positions; each member is a named skip. `Tag` and (ADR-228) `Nick`, which wraps a
  * `String?` and now has its box/unbox pair, keep binding. The proof is a real `dotnet build`.
  */
 class Tier1ValueClassWithoutStructSharedFlowAndGenericTest {
+
+  // An underlying no value-class wire carries, so `Initial` has no C# record struct.
+  private val structless: Tier1StructlessUnderlying = Tier1StructlessValueClassWitness.underlying
 
   private val source: String = """
     package tier1.vcstack
@@ -33,7 +37,7 @@ class Tier1ValueClassWithoutStructSharedFlowAndGenericTest {
     import kotlinx.coroutines.flow.emptyFlow
 
     @JvmInline
-    value class Initial(val letter: Char)
+    value class Initial(val letter: ${structless.kotlin})
 
     @JvmInline
     value class Nick(val name: String?)
@@ -57,8 +61,8 @@ class Tier1ValueClassWithoutStructSharedFlowAndGenericTest {
       suspend fun awaitMutableShared(): MutableSharedFlow<Initial> = mutableShared
       suspend fun awaitSharedNick(): SharedFlow<Nick> = sharedNick
 
-      val box: Box<Initial> = Box(Initial('a'))
-      var boxVar: Box<Initial> = Box(Initial('a'))
+      val box: Box<Initial> = Box(Initial(${structless.sample}))
+      var boxVar: Box<Initial> = Box(Initial(${structless.sample}))
       val boxes: List<Box<Initial>> = emptyList()
       val boxState: MutableStateFlow<Box<Initial>> = MutableStateFlow(box)
       val boxNick: Box<Nick> = Box(Nick(null))

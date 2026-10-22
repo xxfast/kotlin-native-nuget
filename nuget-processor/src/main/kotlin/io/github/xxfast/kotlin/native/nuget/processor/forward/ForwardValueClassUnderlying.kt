@@ -70,7 +70,8 @@ internal fun ForwardBridgeTypeClassifier.valueClassUnderlying(
 }
 
 internal fun BridgeType.valueClassUnderlyingRole(): ForwardValueClassUnderlying = when (this) {
-  BridgeType.String, is BridgeType.Primitive, is BridgeType.Enum ->
+  // ADR-234: `Char` crosses on its own `char` wire, like a primitive.
+  BridgeType.String, is BridgeType.Primitive, BridgeType.Char, is BridgeType.Enum ->
     ForwardValueClassUnderlying.VALUE
   is BridgeType.ObjectHandle -> ForwardValueClassUnderlying.REFERENCE
   // ADR-105: a sealed underlying crosses as the base's handle on the shipped ABI.
@@ -79,8 +80,11 @@ internal fun BridgeType.valueClassUnderlyingRole(): ForwardValueClassUnderlying 
     else ForwardValueClassUnderlying.REFUSED
   // A nullable scalar underlying (`value class MaybeId(val value: String?)`) is a value.
   is BridgeType.Nullable ->
-    if (type == BridgeType.String || type is BridgeType.Primitive) ForwardValueClassUnderlying.VALUE
-    else ForwardValueClassUnderlying.REFUSED
+    if (type == BridgeType.String || type is BridgeType.Primitive || type == BridgeType.Char) {
+      ForwardValueClassUnderlying.VALUE
+    } else {
+      ForwardValueClassUnderlying.REFUSED
+    }
   // ADR-235: each already crosses on its own wire; the value class rides it as a view.
   BridgeType.Instant,
   BridgeType.Duration,
@@ -91,7 +95,6 @@ internal fun BridgeType.valueClassUnderlyingRole(): ForwardValueClassUnderlying 
   is BridgeType.Collection,
     -> ForwardValueClassUnderlying.WIRE
   BridgeType.Unit,
-  BridgeType.Char,
   is BridgeType.Throwable,
   is BridgeType.BoundInterface,
   is BridgeType.Callback,
@@ -226,3 +229,10 @@ internal fun BridgeType.valueClassViewOrNull(): ForwardValueClassView? {
 /** ADR-235: this value class when its underlying is a WIRE one, so it rides that wire as a view. */
 internal fun BridgeType.ValueClass.wireOrNull(): BridgeType.ValueClass? =
   takeIf { underlying.valueClassUnderlyingRole() == ForwardValueClassUnderlying.WIRE }
+
+/**
+ * ADR-079: a value-class underlying with no in-band null, so a nullable value class over it rides
+ * the has-value pair. ADR-234: `Char` is one, on the `char` slot (`ushort` valueOut).
+ */
+internal fun BridgeType.isHasValueUnderlying(): Boolean =
+  this is BridgeType.Primitive || this is BridgeType.Enum || this == BridgeType.Char

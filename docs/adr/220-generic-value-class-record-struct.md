@@ -259,3 +259,9 @@ reads.
 `Sticker(null)` stay distinct, over a `T : Any` it rides the null pointer, and a collection element
 projects to its underlying and re-wraps in Kotlin. A star-projected `Sticker<*>` parameter binds as
 a synthesized method type parameter.
+
+## Amendment 2026-10-23: `Sticker<Char>` and star results
+
+[ADR-234](234-value-class-underlying-widenings.md) binds `Sticker<Char>` (a `Char` underlying is a
+value underlying) and a star- or `out`-projected result as a caller-supplied method type parameter,
+as ADR-226 did for a parameter.

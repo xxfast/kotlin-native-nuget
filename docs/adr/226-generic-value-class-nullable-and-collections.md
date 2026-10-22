@@ -95,3 +95,8 @@ throws when a box is minted and when a set element is re-wrapped after the set h
   `Sticker<T>` over a function's own `T` as skipped. They bind now (decisions 1 and 3).
 - [ADR-228](228-generic-value-class-erased-positions.md) minted the box for erased positions. It now
   also serves a nullable value class at an ordinary position (decision 1).
+
+## Amendment 2026-10-23: star-projected results
+
+[ADR-234](234-value-class-underlying-widenings.md) applies decision 4 to a result too:
+`fun any(): Sticker<*>` binds as `Sticker<TSticker> Any<TSticker>()`.

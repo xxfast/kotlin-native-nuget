@@ -126,7 +126,8 @@ internal object ForwardCirPlanProjection {
       boxParameter = boxParameter.csharpName,
       boxArguments = box.callArgument(boxParameter),
       unboxResult = if (hasValue) {
-        "new ${type.csharpType}(nativeResult ? ${unboxValueOut?.name} : null)"
+        "new ${type.csharpType}(nativeResult ? " +
+            "${type.underlying.hasValueSlotRead(requireNotNull(unboxValueOut).name)} : null)"
       } else {
         valueClassReconstructionCs(type, "nativeResult")
       },
@@ -504,7 +505,7 @@ internal object ForwardCirPlanProjection {
           BridgeType.Instant -> hasValue(::instantLiftCs)
           BridgeType.Duration -> hasValue(::durationLiftCs)
           is BridgeType.ValueClass ->
-            if (inner.underlying is BridgeType.Primitive || inner.underlying is BridgeType.Enum) {
+            if (inner.underlying.isHasValueUnderlying()) {
               hasValue { slot -> valueClassReconstructionCs(inner, slot) }
             } else {
               held(present + valueClassReconstructionCs(inner, "nativeResult"))
@@ -1325,7 +1326,7 @@ internal object ForwardCirPlanProjection {
         // reads that dead value because HasValue is false.
         is BridgeType.ValueClass -> {
           val prop: String = inner.underlyingPropertyName.replaceFirstChar { it.uppercase() }
-          if (inner.underlying is BridgeType.Primitive || inner.underlying is BridgeType.Enum) {
+          if (inner.underlying.isHasValueUnderlying()) {
             val unwrapped = "${parameter.csharpName}.GetValueOrDefault().$prop"
             listOf(
               "${parameter.csharpName}.HasValue",
@@ -1838,7 +1839,9 @@ internal object ForwardCirPlanProjection {
         nativeReturnType = "bool",
         body = checkedNullableValueBody(
           nativeName, callArguments, prelude, cleanup,
-          "new ${result.csharpType}(hasValue ? valueOut : null)", exit,
+          "new ${result.csharpType}(" +
+              "hasValue ? ${result.underlying.hasValueSlotRead("valueOut")} : null)",
+          exit,
         ),
       )
 
@@ -1988,7 +1991,7 @@ internal object ForwardCirPlanProjection {
         // instead; valueOut is declared at the *bare* underlying wire (`double`, `int` ordinal,
         // and `bool` with ADR-069's [MarshalAs(UnmanagedType.I1)]), reconstructed here.
         is BridgeType.ValueClass ->
-          if (type.underlying is BridgeType.Primitive || type.underlying is BridgeType.Enum) {
+          if (type.underlying.isHasValueUnderlying()) {
             CirResultProjection(
               returnType = "${type.csharpType}?",
               nativeReturnType = "bool",
@@ -2211,8 +2214,9 @@ internal object ForwardCirPlanProjection {
       else error("Forward CIR plan projection has no value-class underlying wire for $underlying")
     is BridgeType.Enum -> "int"
     is BridgeType.Primitive -> underlying.kind.csharpType()
+    // ADR-234: a `Char` underlying crosses as the `char` a bare `Char` does.
+    BridgeType.Char -> "char"
     BridgeType.Unit,
-    BridgeType.Char,
     BridgeType.Instant,
     BridgeType.Duration,
     is BridgeType.Throwable,
@@ -2246,6 +2250,8 @@ internal object ForwardCirPlanProjection {
       is BridgeType.Enum -> "(${underlying.csharpType})$wireValue"
       is BridgeType.ObjectHandle -> underlying.handleReconstruction(wireValue)
       is BridgeType.Primitive -> wireValue
+      // ADR-234: a `Char` result is `char`; a `Char` valueOut is the `ushort` code unit.
+      BridgeType.Char -> "(char)$wireValue"
       // ADR-220: a member's own `T` inside a generic value class, read like a bare `T` result.
       is BridgeType.TypeParameter -> "NugetMarshal.FromHandle<${underlying.name}>($wireValue)"
       // ADR-228: a nullable String underlying, the null pointer read back as null.
@@ -2257,7 +2263,6 @@ internal object ForwardCirPlanProjection {
         "NugetMarshal.FromHandle<${inner.nullableRead()}>($wireValue)"
       }
       BridgeType.Unit,
-      BridgeType.Char,
       BridgeType.Instant,
       BridgeType.Duration,
       is BridgeType.Throwable,
@@ -2781,3 +2786,10 @@ internal val ForwardAbiParameter.csharpName: String get() = name.csharpParameter
  * `default(T)`, the enum's first entry, where Kotlin returned null.
  */
 internal fun BridgeType.TypeParameter.nullableRead(): String = if (valueType) "$name?" else name
+
+/**
+ * ADR-226: the C# read of a nullable primitive underlying's has-value [slot]. ADR-234: a `Char?`
+ * slot is the `ushort` code unit, cast back to `char`.
+ */
+internal fun BridgeType.hasValueSlotRead(slot: String): String =
+  if ((this as? BridgeType.Nullable)?.type == BridgeType.Char) "(char)$slot" else slot

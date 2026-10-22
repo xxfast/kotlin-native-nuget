@@ -1009,7 +1009,9 @@ internal class ForwardPropertyPlanner(
     // in a parameter slot.
     is BridgeType.ValueClass ->
       underlying is BridgeType.String || underlying is BridgeType.Primitive ||
-          underlying is BridgeType.Enum || underlying is BridgeType.ObjectHandle
+          underlying is BridgeType.Enum || underlying is BridgeType.ObjectHandle ||
+          // ADR-234: and a `Char`, on the by-value CHAR16 slot.
+          underlying == BridgeType.Char
 
     // ADR-132 amendment (2026-10-04): a `Char` receiver rides the by-value CHAR16 slot a `Char`
     // setter value already uses, as the function route's `Char` receiver does.
@@ -1078,7 +1080,8 @@ internal class ForwardPropertyPlanner(
     val declaredType: BridgeType = classifier.lambdaPropertyOrNull(declaredKsType)
       ?: classifier.classify(declaredKsType).sealedAsHandle()
         // ADR-226: a nullable value class over a nullable-admitting underlying is its box handle.
-        .asValueClassBoxHandle()
+        // ADR-234: and a non-null one over a nullable underlying.
+        .asPropertyValueClassBoxHandle()
     // ADR-235: a WIRE value class is planned as its underlying, as a callable parameter is.
     val view: ForwardValueClassView? = declaredType.valueClassViewOrNull()
     val type: BridgeType = view?.planned ?: declaredType
@@ -1582,10 +1585,11 @@ internal class ForwardPropertyPlanner(
     // (String/primitive/enum/ObjectHandle).
     is BridgeType.ValueClass -> when (type.underlying) {
       BridgeType.String, is BridgeType.Primitive, is BridgeType.Enum,
-      is BridgeType.ObjectHandle -> true
+      is BridgeType.ObjectHandle,
+      // ADR-234: a `Char` underlying, on the by-value CHAR16 slot.
+      BridgeType.Char -> true
 
       BridgeType.Unit,
-      BridgeType.Char,
       BridgeType.Instant,
       BridgeType.Duration,
       is BridgeType.Throwable,

@@ -160,15 +160,24 @@ private fun StringBuilder.renderValueClassCreateChecked(
   val suffix: String = ctor.nativeSuffix
   // A nullable value-type underlying returns its has-value flag and writes the value out.
   val valueOut: CirParameter? = ctor.valueOut
-  val helperType: String = if (valueOut == null) nativeReturnType else "${valueOut.type}?"
+  // ADR-234: a `Char?` underlying's value slot is the `ushort` code unit, cast back to `char`.
+  val isChar: Boolean = cls.underlyingType == "char?"
+  val helperType: String = when {
+    valueOut == null -> nativeReturnType
+    isChar -> "char?"
+    else -> "${valueOut.type}?"
+  }
   val call: String = if (valueOut == null) {
     "$nativeReturnType underlying = Native_Create$suffix($nativeArgs, out IntPtr error);"
   } else {
     "bool hasValue = Native_Create$suffix($nativeArgs, ${valueOut.nativeType} ${valueOut.name}, " +
         "out IntPtr error);"
   }
-  val returned: String =
-    if (valueOut == null) "underlying" else "hasValue ? ${valueOut.name} : null"
+  val returned: String = when {
+    valueOut == null -> "underlying"
+    isChar -> "hasValue ? (char)${valueOut.name} : null"
+    else -> "hasValue ? ${valueOut.name} : null"
+  }
 
   renderDllImport(cls.constructorNativeImport(ctor))
   appendLine("        private static $helperType CreateChecked$suffix($paramStr)")

@@ -1110,3 +1110,8 @@ the held `Mutable*` kinds taking a null collection scope. The `.Value` write, `C
 of a bare `Instant`, `Duration` or `Uuid` (nullable too) is settable, writing ticks or text, and of a
 value class over any wire underlying writes through the value class box pair, refusing `default(V)`
 with `ArgumentException`. Verified by `SettableHolders_OfNarrowTypesAndWireValueClasses_ReadAndWrite`.
+
+## Amendment 2026-10-23: `Char` underlying
+
+[ADR-234](234-value-class-underlying-widenings.md) gives a value class over `Char` a record struct,
+so a `Flow`, `StateFlow` or `MutableStateFlow` over one binds, and the latter is settable.
