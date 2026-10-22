@@ -69,7 +69,8 @@ class Tier1BuiltinGenericBoundTest {
     // A checked cast: the box is read as `Any` and cast to the bound's class, so a `T` outside it
     // fails here as a ClassCastException. `asStableRef<Bound>()` is a generic, unchecked cast.
     assertContains(result.generated, "(value_.asStableRef<Any>().get() as kotlin.Comparable<Any?>)")
-    assertContains(result.generated, "(value.asStableRef<Any>().get() as kotlin.Comparable<Any?>)")
+    // ADR-213: the function is on the plan, so its `value` reads off the shifted ABI slot too.
+    assertContains(result.generated, ".pick<kotlin.Comparable<Any?>>((value_.asStableRef<Any>().get() as kotlin.Comparable<Any?>))")
     assertFalse(result.generated.contains("asStableRef<kotlin.Comparable<Any?>>()"))
     // The cast to the generic bound checks `Comparable` and leaves its argument unchecked; the
     // export suppresses that warning itself, so a warnings-as-errors consumer still builds.
@@ -107,7 +108,7 @@ class Tier1BuiltinGenericBoundTest {
     // dispatching `toDouble()` on an object that is not a Number.
     assertContains(result.generated, "(value_.asStableRef<Any>().get() as kotlin.Number)")
     assertContains(result.generated, "(other.asStableRef<Any>().get() as kotlin.Number)")
-    assertContains(result.generated, "(value.asStableRef<Any>().get() as kotlin.Number)")
+    assertContains(result.generated, ".twice<kotlin.Number>((value_.asStableRef<Any>().get() as kotlin.Number))")
     assertFalse(result.generated.contains("asStableRef<kotlin.Number>()"))
     assertContains(
       result.generatedCSharp,
@@ -115,10 +116,10 @@ class Tier1BuiltinGenericBoundTest {
     )
     assertContains(result.generatedCSharp, "public static T Twice<T>(T value) where T : notnull")
     assertEquals(2, droppedBounds(result).size, "${droppedBounds(result)}")
-    // A bounded function exports only the object variant, so a builtin `T` (`Twice<int>`) comes
-    // back as a box. It is read through the class route's reader, which unwraps builtin boxes;
-    // `Materialize<T>` knew only generated factories and threw NotSupportedException.
-    assertContains(result.generatedCSharp, "NugetMarshal.FromHandle<T>(result)")
+    // A builtin `T` (`Twice<int>`) comes back as a box, read through the class route's reader,
+    // which unwraps builtin boxes; `Materialize<T>` knew only generated factories and threw
+    // NotSupportedException.
+    assertContains(result.generatedCSharp, "NugetMarshal.FromHandle<T>(nativeResult)")
     assertFalse(
       result.generatedCSharp.contains("NugetMarshal.Materialize<T>("),
       "the function route still reads its result through Materialize<T>",
@@ -126,9 +127,9 @@ class Tier1BuiltinGenericBoundTest {
   }
 
   /**
-   * An unconstrained function has C# width variants for six builtins only (`string`, `int`,
-   * `long`, `float`, `double`, `bool`); every other builtin (`Identity<short>`) takes the object
-   * variant and its boxed result, the same read as a bounded function's.
+   * An unconstrained function had C# width variants for six builtins only until ADR-213; now every
+   * builtin (`Identity<short>`) crosses as a box and comes back through the builtin reader, the
+   * same read as a bounded function's.
    */
   @Test
   fun `an unconstrained function reads a narrow builtin result through the builtin reader`() {
@@ -143,7 +144,7 @@ class Tier1BuiltinGenericBoundTest {
 
     assertTrue(result.compiledClean, "generated Kotlin: ${result.compileErrors}")
     assertFalse(result.generatedCSharp.contains("_short_native"), "a short width was imported")
-    assertContains(result.generatedCSharp, "NugetMarshal.FromHandle<T>(result)")
+    assertContains(result.generatedCSharp, "NugetMarshal.FromHandle<T>(nativeResult)")
     assertFalse(result.generatedCSharp.contains("NugetMarshal.Materialize<T>("))
   }
 

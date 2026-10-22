@@ -779,8 +779,7 @@ internal fun legacyBoundClassCsName(type: KSType, context: NugetContext): String
 
 /**
  * The C# `where` constraint for one Kotlin type-parameter bound, shared by the generic class
- * (`cirTypeParameters`) and generic function (`translateGenericFunction`) routes; null means no
- * constraint.
+ * (`cirTypeParameters`) and the plan's method type parameters; null means no constraint.
  *
  * A Kotlin builtin bound other than `Any` (`Comparable<T>`, `Number`, `CharSequence`) has no C#
  * spelling: `Number` is CS0246, `Kotlin.IComparable` under the root CS0234 (ADR-123), and

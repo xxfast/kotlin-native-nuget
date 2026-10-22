@@ -86,7 +86,7 @@ class Tier1GenericNullableTypeArgumentTest {
   }
 
   @Test
-  fun `the generic function route dispatches a nullable value type and carries null`() {
+  fun `a generic top-level function boxes a nullable value type and carries null`() {
     val result = Tier1Harness.run(
       """
       package tier1.identity
@@ -98,31 +98,24 @@ class Tier1GenericNullableTypeArgumentTest {
     assertTrue(result.compiledClean, "expected clean compile; got: ${result.compileErrors}")
 
     val kotlin: String = result.generated
-    assertContains(kotlin, "`value`: COpaquePointer?")
-    assertContains(
-      kotlin,
-      "tier1.identity.identity(value?.asStableRef<Any>()?.get())?.let { result -> " +
-          "NugetHandles.retain(result) }",
-    )
+    // ADR-213: one plan export, its `T` read as a nullable box at the erased `Any?`.
+    assertContains(kotlin, "export_library_tier1_identity__identity(value_: COpaquePointer?,")
+    assertContains(kotlin, "tier1.identity.identity<Any?>(value_?.asStableRef<Any>()?.get())")
 
     val cs: String = result.generatedCSharp
-    // `int?` is `Nullable<int>`, which never equals `typeof(int)`.
-    assertContains(cs, "Type width = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);")
-    assertContains(cs, "if (present && width == typeof(int))")
-    // A null string used to cross the string width into a non-null Kotlin `String` parameter.
-    assertContains(cs, "if (present && width == typeof(string))")
-    // ADR-173: the object arm writes through the shared `Wrap<T>`, which answers a null with the
-    // null pointer (ADR-083) and disposes a minted handle on `owned`.
-    assertContains(cs, "IntPtr handle = NugetMarshal.Wrap<T>(value!, out bool owned);")
-    assertContains(cs, "if (owned) NugetMarshal.Dispose(handle);")
+    // No width dispatch: `int?`, a null `string` and every other `T` cross through the shared
+    // `Wrap<T>` (ADR-173), which answers a null with the null pointer (ADR-083).
+    assertFalse(cs.contains("typeof(T) ?? typeof(T)"), "a width dispatch survived; generated=$cs")
+    assertContains(cs, "value_Box = NugetMarshal.Wrap<T>(value!, out value_Owned);")
+    assertContains(cs, "Native_Identity(value_Box, out IntPtr error)")
     // ADR-015 amendment: the result reads through `FromHandle<T>`, whose first line answers the
     // null pointer with `default!`, the null result this cell has always pinned.
-    assertContains(cs, "return NugetMarshal.FromHandle<T>(result);")
+    assertContains(cs, "return NugetMarshal.FromHandle<T>(nativeResult);")
     assertContains(cs, "if (handle == IntPtr.Zero) return default!;")
   }
 
   @Test
-  fun `an Any-bound generic function renders notnull and keeps its width dispatch`() {
+  fun `an Any-bound generic function renders notnull on one boxed export`() {
     val result = Tier1Harness.run(
       """
       package tier1.handback
@@ -136,21 +129,18 @@ class Tier1GenericNullableTypeArgumentTest {
     assertTrue(result.compiledClean, "expected clean compile; got: ${result.compileErrors}")
 
     val kotlin: String = result.generated
-    // `T : Any` is non-null on the Kotlin half: the object variant dereferences as before.
-    assertContains(kotlin, "tier1.handback.handBack(treat.asStableRef<Any>().get())")
-    assertContains(kotlin, "@CName(\"library_tier1_handback__handBack_int\")")
+    // `T : Any` is non-null on the Kotlin half: the box dereferences without a null check.
+    assertContains(kotlin, "tier1.handback.handBack<Any>(treat.asStableRef<Any>().get())")
+    assertContains(kotlin, "@CName(\"library_tier1_handback__handBack\")")
+    assertFalse(kotlin.contains("handBack_int"), "a width variant survived")
 
     val cs: String = result.generatedCSharp
     assertContains(cs, "public static T HandBack<T>(T treat) where T : notnull")
-    assertContains(cs, "if (present && width == typeof(int))")
-    assertContains(
-      cs,
-      "private static extern int HandBack_int_native(int treat, out IntPtr error);",
-    )
+    assertContains(cs, "private static extern IntPtr Native_HandBack(IntPtr treat, out IntPtr error);")
     // A type parameter not named `T` is spelled by its own name throughout the body.
     assertContains(cs, "public static V Echo<V>(V value)")
-    assertContains(cs, "Type width = Nullable.GetUnderlyingType(typeof(V)) ?? typeof(V);")
-    assertContains(cs, "NugetMarshal.FromHandle<V>(result)")
+    assertContains(cs, "value_Box = NugetMarshal.Wrap<V>(value!, out value_Owned);")
+    assertContains(cs, "NugetMarshal.FromHandle<V>(nativeResult)")
     assertFalse(cs.contains("Echo<V>(T value)"), "the body must not hard-code T; generated=$cs")
   }
 

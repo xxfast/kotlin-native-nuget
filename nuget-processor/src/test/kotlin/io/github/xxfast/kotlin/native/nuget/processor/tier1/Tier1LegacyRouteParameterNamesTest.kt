@@ -101,20 +101,12 @@ class Tier1LegacyRouteParameterNamesTest {
   }
 
   @Test
-  fun `the generic function route escapes a keyword parameter in every instantiation`() {
+  fun `a generic top-level function escapes a keyword parameter on the plan`() {
+    // ADR-213: one boxed plan export where the width-variant route had one per instantiation.
     assertContains(generated, "public static T Put<T>(T @ref)")
-    assertContains(
-      generated,
-      "private static extern int Put_int_native(int @ref, out IntPtr error);",
-    )
-    assertContains(
-      generated,
-      "private static extern IntPtr Put_object_native(IntPtr @ref, out IntPtr error);",
-    )
-    assertContains(generated, "Put_string_native((string)(object)@ref!, out error)")
-    assertContains(generated, "Put_int_native((int)(object)@ref!, out error)")
-    // ADR-173: the object arm writes through the shared `Wrap<T>`.
-    assertContains(generated, "IntPtr handle = NugetMarshal.Wrap<T>(@ref!, out bool owned);")
+    assertContains(generated, "private static extern IntPtr Native_Put(IntPtr @ref, out IntPtr error);")
+    assertContains(generated, "@refBox = NugetMarshal.Wrap<T>(@ref!, out @refOwned);")
+    assertContains(generated, "Native_Put(@refBox, out IntPtr error)")
   }
 
   @Test

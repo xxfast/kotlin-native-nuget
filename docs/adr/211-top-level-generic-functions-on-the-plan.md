@@ -1,7 +1,7 @@
 # ADR-211: Forward, a top-level `fun <T>` the width-variant route refuses binds on the callable plan
 
 ## Status
-Accepted
+Accepted. The legacy-gate routing is superseded by [ADR-213](213-top-level-generic-functions-on-the-plan-only.md): every top-level `fun <T>` now binds on the plan and the width-variant route is deleted.
 
 Extends [ADR-197](197-member-generic-methods-on-the-plan.md) (owner: top-level). Narrows the
 legacy width-variant route of [ADR-064](064-forward-diagnostics.md)'s 2026-09-13 amendment to the

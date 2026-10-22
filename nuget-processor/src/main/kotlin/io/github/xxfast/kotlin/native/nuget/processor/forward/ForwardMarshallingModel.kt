@@ -717,6 +717,12 @@ internal data class ForwardPublicParameter(
    * unless one of those spellings is a sibling user parameter, then shifted by `_` until none is.
    */
   val localStem: String = name,
+  /**
+   * ADR-213: the public C# spelling when it is not [name] with ADR-211's `value` shift undone. A
+   * top-level `fun <T>` takes `handle` back (`handle_` -> `handle`): the width route it replaced
+   * shipped that label, and a static wrapper body declares no `handle`. Null means the default.
+   */
+  val csharpLabel: String? = null,
 ) {
   val isOptional: Boolean get() = default?.encoding == ForwardDefaultEncoding.OPTIONAL
 

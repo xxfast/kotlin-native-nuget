@@ -6,16 +6,14 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * The legacy generic top-level function route (`fun <T>`) hand-builds a C# wrapper body that
- * declares its own locals: `Type width` and `bool present` on the width dispatch, `IntPtr handle`,
- * `out bool owned` and `IntPtr result` on the object arm. A Kotlin parameter with one of those
- * names rebinds inside that body (CS0136). The generator must move **its own** local through
- * `freshName` (collision-only, as the suspend / Flow / callback routes already do) and leave the
- * user's parameter, which is a public named-argument label, untouched.
+ * Parameters of a top-level `fun <T>` named like a generator local (`owned`, `handle`, `result`,
+ * `width`, `present`). Until ADR-213 these bound on the legacy width-variant route, whose
+ * hand-built C# body declared those locals and had to move its own through `freshName` (CS0136).
+ * That route is deleted; these cells pin that what it was taught is the plan's own behaviour: the
+ * user's parameter, a public named-argument label, is untouched (the plan-owned `handle` too, at
+ * top level only), and the C# builds.
  *
- * Asserts the C# text and [Tier1Result.kspSucceeded], never [Tier1Result.compiledClean]: that only
- * compiles the generated Kotlin, so it is `true` for every colliding case here. The C# is compiled
- * for real by `IntegrationTests.KeywordRoutesTests`, against the mirror fixtures in
+ * The C# is also compiled by `IntegrationTests.KeywordRoutesTests`, against the mirror fixtures in
  * `test-library/.../test/routes/KeywordRoutesSample.kt`.
  */
 class Tier1GenericFunctionLocalNamesTest {
@@ -38,7 +36,13 @@ class Tier1GenericFunctionLocalNamesTest {
     }
   """.trimIndent()
 
-  private val result: Tier1Result by lazy { Tier1Harness.run(fixture) }
+  private val result: Tier1Result by lazy {
+    Tier1Harness.run(
+      fixture,
+      fileName = "Locals.kt",
+      processorOptions = mapOf("nuget.rootPackage" to "tier1"),
+    )
+  }
 
   private val generated: String by lazy { result.generatedCSharp }
 
@@ -48,45 +52,49 @@ class Tier1GenericFunctionLocalNamesTest {
   }
 
   @Test
-  fun `a parameter named owned keeps its label and the object arm moves its owned local`() {
+  fun `every local-named parameter keeps its label`() {
     assertContains(generated, "public static T Keep<T>(T owned)")
-    assertContains(generated, "IntPtr handle = NugetMarshal.Wrap<T>(owned!, out bool owned_);")
-    assertContains(generated, "if (owned_) NugetMarshal.Dispose(handle);")
-    assertFalse(generated.contains("Wrap<T>(owned!, out bool owned)"), "owned local still collides")
-  }
-
-  @Test
-  fun `a parameter named handle keeps its label and the object arm moves its handle local`() {
+    // ADR-213: `handle` is plan-owned (`PLAN_OWNED_NAMES`) and shifts in the Kotlin export and the
+    // extern, but a top-level `fun <T>` keeps the public label the width route shipped.
+    assertContains(generated, "private static extern IntPtr Native_Hold(IntPtr handle_, out IntPtr error);")
     assertContains(generated, "public static T Hold<T>(T handle)")
-    assertContains(generated, "IntPtr handle_ = NugetMarshal.Wrap<T>(handle!, out bool owned);")
-    assertContains(generated, "Hold_object_native(handle_, out error)")
-    assertContains(generated, "if (owned) NugetMarshal.Dispose(handle_);")
-  }
-
-  @Test
-  fun `a parameter named result keeps its label and the object arm moves its result local`() {
     assertContains(generated, "public static T Pick<T>(T result)")
-    assertContains(generated, "IntPtr result_;")
-    assertContains(
-      generated,
-      "result_ = NugetErrorNative.Check(Pick_object_native(handle, out error), error);",
-    )
-  }
-
-  @Test
-  fun `a parameter named width keeps its label and the dispatch moves its width local`() {
     assertContains(generated, "public static T Span<T>(T width)")
-    assertContains(generated, "Type width_ = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);")
-    assertContains(generated, "bool present = width is not null;")
-    assertContains(generated, "if (present && width_ == typeof(string))")
-    assertContains(generated, "Span_string_native((string)(object)width!, out error)")
+    assertContains(generated, "public static T Seen<T>(T present)")
   }
 
   @Test
-  fun `a parameter named present keeps its label and the dispatch moves its present local`() {
-    assertContains(generated, "public static T Seen<T>(T present)")
-    assertContains(generated, "bool present_ = present is not null;")
-    assertContains(generated, "if (present_ && width == typeof(int))")
+  fun `every local-named function binds as one plan export with no width variants`() {
+    listOf("keep", "hold", "pick", "span", "seen").forEach { name ->
+      assertContains(generated, "EntryPoint = \"library_genericlocals__$name\"")
+      assertFalse(generated.contains("__${name}_"), "$name still has width variants")
+    }
+  }
+
+  @Test
+  fun `the local-named functions compile in C# called by their labels`() {
+    Tier1CSharpCompile.assertCompiles(
+      result,
+      """
+      using Interop.Genericlocals;
+
+      namespace Consumer
+      {
+          public static class Probe
+          {
+              public static int Run()
+              {
+                  int owned = Locals.Keep(owned: 1);
+                  string handle = Locals.Hold(handle: "oreo");
+                  int? result = Locals.Pick<int?>(result: null);
+                  long width = Locals.Span(width: 3L);
+                  bool present = Locals.Seen(present: true);
+                  return owned + handle.Length + (result ?? 0) + (int)width + (present ? 1 : 0);
+              }
+          }
+      }
+      """.trimIndent(),
+    )
   }
 
   /**

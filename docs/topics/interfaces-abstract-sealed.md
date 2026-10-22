@@ -406,7 +406,7 @@ garbage-collection round, not the moment the C# reference goes out of scope. The
 
 Reading a stored C#-implemented object back from Kotlin, whether through a property, a `suspend
 fun` completion, a `Flow<T>` element, or any of the three erased generic routes (a
-`KotlinFunc<IPet, ...>` result, a legacy `fun <T>` return, or an [ADR-147 generic class's `T`
+`KotlinFunc<IPet, ...>` result, a `fun <T>` return, or an [ADR-147 generic class's `T`
 member](generics.md#an-interface-at-an-erased-position)), resolves to the **original C# instance**,
 not a fresh wrapper:
 

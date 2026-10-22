@@ -11,17 +11,16 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.SUSPEND_LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
-import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyGenericFunctionRoute
 
 /**
  * ADR-197: whether this function's own type parameters classify as [BridgeType.TypeParameter]: a
  * member (not an extension) of a class, a sealed class, an object or a companion. An interface,
- * an enum and a value class keep the named refusal. ADR-211: so does a top-level function, unless
- * the legacy width-variant gate refuses it; that one routes on the plan too.
+ * an enum and a value class keep the named refusal. ADR-211 / ADR-213: a top-level function is an
+ * owner too; the width-variant route it used to share is gone.
  */
 internal fun KSFunctionDeclaration.isForwardGenericMemberOwner(): Boolean {
   if (extensionReceiver != null) return false
-  if (parentDeclaration == null) return !hasLegacyGenericFunctionRoute()
+  if (parentDeclaration == null) return true
   val owner: KSClassDeclaration = parentDeclaration as? KSClassDeclaration ?: return false
   return when (owner.classKind) {
     ClassKind.CLASS -> !owner.isValueClass()
@@ -132,7 +131,11 @@ internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
   typeParameters.forEach { parameter ->
     val name: String = parameter.simpleName.asString()
     if (name in ownerNames) return "its type parameter `$name` shadows its owner's"
-    if (parameter.isReified) return "its type parameter `$name` is reified"
+    // ADR-213: a top-level `reified T` reifies at its bound (`Any?` when unbounded), the explicit
+    // type argument the plan passes; a member one has never bound and keeps the refusal.
+    if (parameter.isReified && parentDeclaration != null) {
+      return "its type parameter `$name` is reified"
+    }
     parameter.bounds.forEach { bound ->
       val resolved: KSType = bound.resolve()
       if (resolved.declaration is KSTypeParameter) {
@@ -235,3 +238,11 @@ private val OWN_PARAMETER_COLLECTIONS: Set<String> = setOf(
   "kotlin.collections.Set", "kotlin.collections.MutableSet",
   "kotlin.collections.Map", "kotlin.collections.MutableMap",
 )
+
+/**
+ * ADR-198: a `reified` type parameter whose bound has no closed spelling (`inline fun <reified T :
+ * Enum<T>>`). The trampoline's `T` is not reified and neither is `Nothing`, so nothing the export
+ * can name is a legal reified argument; the language has no way to call it here.
+ */
+internal fun KSFunctionDeclaration.isReifiedWithUnspellableBound(): Boolean =
+  typeParameters.any { parameter -> parameter.isReified && parameter.isTrampolined() }

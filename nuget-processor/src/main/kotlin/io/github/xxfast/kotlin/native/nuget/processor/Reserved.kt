@@ -225,29 +225,11 @@ internal fun String.bridgeParameterName(): String {
 }
 
 /**
- * The ABI slot names the ADR-055 contract check reads a direction off: a user parameter spelled
- * like one would read back as an `out` slot. A subset of [PLAN_OWNED_NAMES].
- */
-private val ABI_SLOT_NAMES: Set<String> = setOf("errorOut", "valueOut", RESULT_FAILED_SLOT)
-
-/**
  * The out slot a `Result<T>`-unwrapping export writes its `isFailure` into, read by the C# `TryX`
  * twin. Spelled once because the plan, both projections and the ADR-055 contract check (which
  * reads an out slot's direction off its name) all name it.
  */
 internal const val RESULT_FAILED_SLOT: String = "resultFailedOut"
-
-/**
- * The legacy generic-function route's narrower [bridgeParameterName]: only the ABI slot names
- * ([ABI_SLOT_NAMES]) shift, same injective chain rule, so a shipped label like `value` stays put.
- * Applied on both halves of that route (Kotlin export and C# translator) so the contract check
- * agrees.
- */
-internal fun String.abiSlotParameterName(): String {
-  // As [bridgeParameterName]: a backticked `step count` has no slot spelling of its own.
-  val name: String = asCSymbol()
-  return if (name.shadows(ABI_SLOT_NAMES)) "${name}_" else name
-}
 
 /**
  * A generator identifier that is *derived* from a user parameter's name (`${name}HasValue`,

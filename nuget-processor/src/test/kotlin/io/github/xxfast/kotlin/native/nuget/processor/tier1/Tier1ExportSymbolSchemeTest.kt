@@ -393,10 +393,9 @@ class Tier1ExportSymbolSchemeTest {
   }
 
   /**
-   * The two generic families, both on legacy routes: a generic CLASS (`box_create`, `box_get_value`)
-   * and a generic top-level FUNCTION, whose per-variant exports (`wrap_string`, `wrap_object`) are
-   * minted by `GenericFunctionExports`. The function cell is the one that also needs the Kotlin call
-   * site qualified: that route imports by simple name too, so `compiledClean` is load-bearing here.
+   * The two generic families: a generic CLASS (`box_create`, `box_get_value`) and a generic
+   * top-level FUNCTION, one plan export each since ADR-213 (`wrap`). The function cell is the one
+   * that also needs the Kotlin call site qualified, so `compiledClean` is load-bearing here.
    */
   @Test
   fun `generic class and generic top-level function in two packages both bind`() {
@@ -418,8 +417,8 @@ class Tier1ExportSymbolSchemeTest {
     Tier1CSharpCompile.assertCompiles(result, "")
     assertContains(result.generated, "@CName(\"library_a__box_create\")")
     assertContains(result.generated, "@CName(\"library_b__box_create\")")
-    assertContains(result.generated, "@CName(\"library_a__wrap_string\")")
-    assertContains(result.generated, "@CName(\"library_b__wrap_string\")")
+    assertContains(result.generated, "@CName(\"library_a__wrap\")")
+    assertContains(result.generated, "@CName(\"library_b__wrap\")")
   }
 
   /**

@@ -1813,9 +1813,8 @@ public class LiveHandleTests
         });
     }
 
-    // ADR-015 amendment: a builtin T through the generic-function route's object variant
-    // (a builtin-bounded function, and a narrow builtin with no width variant on an unconstrained
-    // one). Two boxes per call: the argument's `Wrap<T>` box, disposed on `owned`, and the result
+    // ADR-015 amendment: a builtin T through a generic top-level function.s boxed export (one per
+    // function since ADR-213, bounded or not). Two boxes per call: the argument's `Wrap<T>` box, disposed on `owned`, and the result
     // box, which `FromHandle<T>` unwraps and must dispose: no wrapper holds it.
     [Fact]
     public void BuiltinGenericFunction_BoxedPrimitiveAndString_ReturnsToBaseline()
@@ -5767,6 +5766,24 @@ public class LiveHandleTests
                 }
                 Assert.False(groomer.TrySpill(new[] { oreo }, out _, out Exception? failure));
                 Assert.Contains("Mylo spilled 1", failure!.Message);
+            }
+        });
+    }
+
+    // ADR-213
+    // A top-level `fun <T>` on the plan: a `WrapInBox<int>` mints a box handle the `using` releases,
+    // and `UnwrapBox` borrows it and hands the primitive back through a disposed result box.
+    // Ledger per iteration: box +1/-1, argument and result boxes +1/-1 each. Net zero.
+    [Fact]
+    public void TopLevelGenericMethod_BoxedBox_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            for (int i = 0; i < 5; i++)
+            {
+                using TestLibrary.Cat.Box<int> box = TestLibrary.Cat.Helpers.WrapInBox(i);
+                Assert.Equal(i, TestLibrary.Cat.Helpers.UnwrapBox(box));
+                Assert.Equal("Oreo", TestLibrary.Cat.Helpers.Identity("Oreo"));
             }
         });
     }

@@ -7,11 +7,10 @@ import kotlin.time.Duration.Companion.milliseconds
 
 // ROADMAP Phase 4 line 23: dependency types reached ONLY through a top-level `suspend fun`.
 //
-// `dev.other.bysuspend` is admitted (`admit("dev.other.bysuspend")`), but ADR-066's closure walk
-// is handed `functions + genericFunctions` and never the non-generic top-level `suspendFunctions`,
-// so nothing here reaches it: `Mousetoy`/`Chipcode` get neither an admission nor a refusal, are
-// never declared in C#, and the suspend route spells them regardless. Asserted by
-// `IntegrationTests/SuspendReachabilityTests.cs`.
+// `dev.other.bysuspend` is admitted (`admit("dev.other.bysuspend")`), and ADR-066's closure walk
+// is handed `functions + genericFunctions + suspendFunctions`, so `Mousetoy`/`Chipcode` are
+// reached through the suspend signatures alone: admitted, declared in C#, and spelled by the
+// suspend route. Asserted by `IntegrationTests/SuspendReachabilityTests.cs`.
 //
 // Nothing else in the export scope may mention `Mousetoy` or `Chipcode` at a non-suspend
 // position, or the closure would reach them through that member and this fixture would prove
