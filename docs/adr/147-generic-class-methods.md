@@ -858,3 +858,10 @@ Evidence, verified: `Tier1GenericSealedFlowPropertyTest`, `Tier1GenericSealedArm
 `Tier1GenericSealedArmNamedSkipTest` (which pins both remedies as binding cells, `Hot.withCount` and
 `Cold.withChill`); `IntegrationTests/GenericSealedArmRouteTests.cs` against
 `Dish<out T>` in `outcome/DishSample.kt`; four `GenericSealedArm_*` rows in `LeakTests/LiveHandleTests.cs`.
+
+## Amendment (2026-10-22): ADR-217
+
+[ADR-217](217-trampoline-for-collection-and-generic-class-positions.md): a multi-bound owner `T`
+mentioned only inside a collection (`Arena<T>.team(pets: List<T>)`) has no bare witness for the
+`nugetTypedOwner` helper, and its generated Kotlin did not compile. It now runs under ADR-198's
+trampoline, which declares both bounds. A member with a bare witness keeps the helper.

@@ -18,8 +18,8 @@ import kotlin.test.assertTrue
  * (CS0460), and one with a `T?` position says `where T : default` (CS0115 without it).
  *
  * Every shape the route does not carry keeps a named skip: a `T` nested in `kotlin.Array`, a
- * multi-bound `T` witnessed only inside a generic class (until ADR-217), a shadowed owner `T`, a `reified` one, an `Enum<T>` bound, a multi-bound `T` no
- * parameter mentions, and the interface, extension, enum and value-class owners.
+ * shadowed owner `T`, a `reified` one, a multi-bound `T` no parameter mentions, and the
+ * interface, extension, enum and value-class owners.
  *
  * Rex the cat keeps whatever he is handed; Oreo knows more tricks than Mylo.
  */
@@ -284,8 +284,13 @@ class Tier1MemberGenericMethodTest {
       ".best<kotlin.Comparable<Any?>>((first.asStableRef<Any>().get() as " +
           "kotlin.Comparable<Any?>), (second.asStableRef<Any>().get() as kotlin.Comparable<Any?>))",
     ).forEach { read -> assertContains(result.generated, read) }
+    // ADR-217: `Pet` is now reachable as a bound, so its own interface exports read
+    // `asStableRef<Pet>()`; only the member calls are checked here.
     assertFalse(
-      result.generated.contains("asStableRef<$pet>()"),
+      result.generated.lines().any { line ->
+        val callsMember: Boolean = listOf(".adopt<", ".spare<", ".map<").any { call -> call in line }
+        callsMember && line.contains("asStableRef<$pet>()")
+      },
       "a bounded read must not be the unchecked generic `asStableRef<Bound>()`",
     )
   }
@@ -347,6 +352,9 @@ class Tier1MemberGenericMethodTest {
           }
       }
       """.trimIndent(),
+      // ADR-217: an interface reachable only as a `T` bound now gets its C# bridge, so a
+      // C# implementation crosses `Wrap<T>`; the bridge uses function pointers.
+      allowUnsafe = true,
     )
   }
 
@@ -410,10 +418,6 @@ class Tier1MemberGenericMethodTest {
           "(here, its multi-bound type parameter `T` is mentioned by no parameter)",
       "tier1.membergeneric.Depot.narrow" to
           "(here, its type parameter `U` is bounded by another type parameter)",
-      // ADR-216: an invariant `Crate<Pet>` cannot infer `T : Pet, T : Trainable`.
-      "tier1.membergeneric.Depot.rank" to
-          "(here, its multi-bound type parameter `T` is witnessed only inside " +
-          "`Crate<T>`, which ADR-217 lifts)",
       // ADR-216: `kotlin.Array` is no exported generic class, so it keeps the GENERIC text.
       "tier1.membergeneric.Depot.sort" to "(here, its type parameter is nested in `Array<T>`)",
       "tier1.membergeneric.Crate.shadow" to "(here, its type parameter `T` shadows its owner's)",
@@ -435,8 +439,15 @@ class Tier1MemberGenericMethodTest {
     val declarations: List<String> = result.generatedCSharp.lines()
       .map(String::trim)
       .filterNot { line -> line.startsWith("//") }
+    // ADR-217: an invariant `Crate<Pet>` cannot infer `T : Pet, T : Trainable`, so `rank` runs
+    // under the trampoline instead of the refusal ADR-216 gave it.
+    assertTrue(
+      declarations.any { line -> line.startsWith("public T Rank<T>(") },
+      "expected the ADR-217 Rank binding",
+    )
+    assertContains(result.generated, ".rank<T>(")
     listOf(
-      "Lambda", "Kind", "Conjure", "Narrow", "Rank", "Sort", "Shadow", "Structural",
+      "Lambda", "Kind", "Conjure", "Narrow", "Sort", "Shadow", "Structural",
       "Extended",
     )
       .forEach { member ->
@@ -538,7 +549,7 @@ class Tier1MemberGenericMethodTest {
     assertFalse(result.generated.contains(" as T)"), "an element is never cast to the bare `T`")
   }
 
-  /** An unconstrained key and a trampolined `T` keep their named refusals. */
+  /** An unconstrained key keeps its named refusal (ADR-217 binds the trampolined `moods`). */
   @Test
   fun `a collection of T the wire does not carry is refused by name`() {
     val result: Tier1Result = runCollections()
@@ -546,7 +557,6 @@ class Tier1MemberGenericMethodTest {
 
     mapOf(
       "tier1.membergeneric.Deck.loose" to "key type K",
-      "tier1.membergeneric.Deck.moods" to "",
     ).forEach { (member, refusal) ->
       val named: List<String> = result.kspWarnings.filter { warning ->
         Regex("\\b${Regex.escape(member)}\\b").containsMatchIn(warning)
@@ -557,7 +567,11 @@ class Tier1MemberGenericMethodTest {
     val declarations: List<String> = result.generatedCSharp.lines()
       .map(String::trim)
       .filterNot { line -> line.startsWith("//") }
-    listOf("Loose", "Moods").forEach { member ->
+    assertTrue(
+      declarations.any { line -> line.startsWith("public int Moods<T>(IReadOnlyList<T> items)") },
+      "expected the ADR-217 Moods binding",
+    )
+    listOf("Loose").forEach { member ->
       assertFalse(
         declarations.any { line -> Regex("\\b$member\\s*[<(]").containsMatchIn(line) },
         "expected no C# member $member",
@@ -595,6 +609,9 @@ class Tier1MemberGenericMethodTest {
           }
       }
       """.trimIndent(),
+      // ADR-217: an interface reachable only as a `T` bound now gets its C# bridge, so a
+      // C# implementation crosses `Wrap<T>`; the bridge uses function pointers.
+      allowUnsafe = true,
     )
   }
 }

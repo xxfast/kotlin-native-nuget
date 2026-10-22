@@ -188,3 +188,10 @@ Found and not fixed: a function returning a generic abstract class at a closed t
 wrapper cannot nest in the generic class (CS7042), so it needs the non-generic holder. Pinned by a
 known-limit cell in `Tier1EnumSelfBoundInteractionTest`. Fixed 2026-10-05; see the
 [ADR-009](009-sealed-class-mapping.md) amendment of that date.
+
+## Amendment (2026-10-22): ADR-217
+
+[ADR-217](217-trampoline-for-collection-and-generic-class-positions.md) widens the trampoline from a
+bare position to a collection element and an open generic class (`as Basket<T>`), and from an
+unspellable bound to any `T` only a type variable can spell: an intersection that no bare
+parameter witnesses. The cast string is shared between a bare box and an element.

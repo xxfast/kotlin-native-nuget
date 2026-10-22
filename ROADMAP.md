@@ -57,7 +57,6 @@ Complete.
 
 - [ ] A method or class `T` inside a `Flow` parameter or a `suspend` lambda is still skipped, named ([ADR-215](docs/adr/215-type-parameter-in-lambda-and-flow.md))
 - [ ] An open exported generic instantiation nested two or more levels deep, read through a property getter or any position outside a member's result before the consumer holds one, has no factory ([ADR-216](docs/adr/216-own-type-parameter-in-result-and-generic-class.md))
-- [ ] A trampolined `T` (a bound with no closed spelling, such as `Enum<T>`) in a collection is still skipped, named ([ADR-212](docs/adr/212-type-parameter-as-collection-element.md))
 
 ## Phase 5: Exception handling
 

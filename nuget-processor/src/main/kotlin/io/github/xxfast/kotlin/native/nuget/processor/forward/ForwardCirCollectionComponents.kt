@@ -107,8 +107,13 @@ internal fun collectionComponentRead(
   }
   // ADR-212: `FromHandle<T>` already returns `default!` on `IntPtr.Zero`, which is `null` for every
   // instantiation a null element can reach; `(T)null` would not compile for an unconstrained `T`.
-  if (component.type is BridgeType.TypeParameter) {
-    val read: String = componentReadExpression(handle, component.type, csharpType, depth)
+  // ADR-217: except under `struct, Enum`, where `T?` is `Nullable<T>` and `FromHandle<T>` would
+  // read a null element back as the first entry; ADR-198's bare `T?` rule, per element.
+  val typeParameter: BridgeType? = component.type
+  if (typeParameter is BridgeType.TypeParameter) {
+    val read: String =
+      if (typeParameter.valueType) "NugetMarshal.FromHandle<${typeParameter.name}?>($handle)"
+      else componentReadExpression(handle, typeParameter, csharpType, depth)
     return CirComponentRead(null, read)
   }
   // ADR-083: the null pointer *is* the null component. The cast on the null arm is what gives the

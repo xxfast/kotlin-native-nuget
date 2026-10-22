@@ -5054,9 +5054,9 @@ internal fun BridgeType.sealedAsHandle(): BridgeType = when (this) {
  */
 internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
   // ADR-212: a method's or a class's `T` is a collection component on the same boxed handle it
-  // crosses on at a top-level position (ADR-147). A trampolined `T` (ADR-198) has no closed bound
-  // to cast an element to, so it stays refused.
-  is BridgeType.TypeParameter -> !trampolined
+  // crosses on at a top-level position (ADR-147). ADR-217: a trampolined `T` (ADR-198) too, its
+  // element cast to the trampoline's own type variable.
+  is BridgeType.TypeParameter -> true
 
   BridgeType.Unit, BridgeType.Char, BridgeType.String, is BridgeType.Primitive,
   is BridgeType.Enum, is BridgeType.ObjectHandle,
@@ -5304,7 +5304,7 @@ internal fun BridgeType.Collection.declinesNullableMapKey(): Boolean = when (kin
  */
 internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
   // ADR-212: `Wrap<T>` boxes each element by its runtime type, as it does for a bare `T`.
-  is BridgeType.TypeParameter -> !trampolined
+  is BridgeType.TypeParameter -> true
 
   BridgeType.String -> true
   // ADR-098: every PrimitiveKind is wrappable now that the six narrow kinds have a

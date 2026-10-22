@@ -436,7 +436,8 @@ private fun FileSpec.Builder.addSetter(
   val expression: String = plan.accessExpression(trampoline)
   val assignment: String = when {
     assignsNull == true -> "$expression = null"
-    trampoline != null -> "$expression = ${plan.trampolinedValueExpression(trampoline)}"
+    trampoline != null && plan.type.unwrapNullable() is BridgeType.TypeParameter ->
+      "$expression = ${plan.trampolinedValueExpression(trampoline)}"
     else -> "$expression = ${plan.valueExpression()}"
   }
   builder.addCode(unitBody(assignment, "errorOut"), cOpaquePointerVar, nugetHandles)
@@ -552,11 +553,20 @@ private fun ForwardPropertyPlan.valueExpression(): String = inputLowering(type, 
 private fun ForwardPropertyPlan.setterTrampoline(): ForwardGenericOwnerParameter? {
   val generic: ForwardGenericOwner = (receiver as? ForwardPropertyReceiver.Handle)?.generic
     ?: return null
-  val value: BridgeType.TypeParameter = type.unwrapNullable() as? BridgeType.TypeParameter
-    ?: return null
+  // ADR-217: a trampolined `T` inside a collection (`var a: List<A>`) needs the type variable too.
+  val names: Set<String> = type.typeParameterNames()
   return generic.typeParameters.firstOrNull { parameter ->
-    parameter.kotlinName == value.kotlinName && parameter.erased == null
+    parameter.kotlinName in names && parameter.erased == null
   }
+}
+
+/** ADR-217: every type parameter a setter value carries, bare or as a collection component. */
+private fun BridgeType.typeParameterNames(): Set<String> {
+  val unwrapped: BridgeType = unwrapNullable()
+  if (unwrapped is BridgeType.TypeParameter) return setOf(unwrapped.kotlinName)
+  if (unwrapped !is BridgeType.Collection) return emptySet()
+  return listOfNotNull(unwrapped.element, unwrapped.key, unwrapped.value)
+    .flatMapTo(mutableSetOf()) { component -> component.typeParameterNames() }
 }
 
 /** ADR-218: the setter value read inside the trampoline, cast last to its type variable. */

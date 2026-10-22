@@ -133,6 +133,16 @@ internal sealed interface BridgeType {
     val openArguments: List<ObjectHandle> = emptyList(),
     /** ADR-216 amendment: an instantiation whose arguments mention a type parameter. */
     val open: kotlin.Boolean = false,
+    /**
+     * ADR-217: an [open] instantiation spelled with its type parameters as declared
+     * (`pkg.Basket<T>`), and the names it mentions. Inside a trampoline declaring every one of
+     * [typeVariables], the handle is read as `Any` and cast to this spelling, which no erased
+     * [kotlinReadType] (`pkg.Basket<pkg.Furry>`) can stand in for under an intersection bound.
+     */
+    val kotlinTypeVariableReadType: kotlin.String? = null,
+    val typeVariables: List<kotlin.String> = emptyList(),
+    /** ADR-217: set by the Kotlin emitter inside a trampoline, never by the classifier. */
+    val readsAsTypeVariable: kotlin.Boolean = false,
   ) : BridgeType
 
   /**

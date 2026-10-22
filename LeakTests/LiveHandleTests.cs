@@ -6023,4 +6023,47 @@ public class LiveHandleTests
             }
         });
     }
+
+    // ADR-217
+    // A trampolined `T : Enum<T>` per collection element. `CreateList`/`CreateSet`/`CreateMap`
+    // mint one `Wrap<Medal>` box per passed element and dispose it in their loop; each returned
+    // element is read through `FromHandle<T>` (or `FromHandle<T?>`), which must release its box,
+    // since an enum is a value type and the caller has nothing to dispose. A null element crosses
+    // as the null pointer and mints nothing. The trampoline adds no handle of its own.
+    // Ledger per iteration: rosette +1, sash +1, every collection handle and element box +1/-1,
+    // rosette and sash dispose -1 each. Net zero; a positive delta is an element box nobody freed.
+    [Fact]
+    public void EnumSelfBound_CollectionElements_ReturnToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            for (int i = 0; i < 5; i++)
+            {
+                Assert.Equal(
+                    new[] { Rankings.Medal.Gold, Rankings.Medal.Bronze },
+                    Rankings.Judge.Sorted(new[] { Rankings.Medal.Bronze, Rankings.Medal.Gold }));
+                Assert.Equal(
+                    new Rankings.Medal?[] { Rankings.Medal.Silver, null, null },
+                    Rankings.Judge.Pad(new Rankings.Medal?[] { Rankings.Medal.Silver, null }));
+                Assert.Single(Rankings.Judge.Unique(
+                    new HashSet<Rankings.Medal> { Rankings.Medal.Bronze, Rankings.Medal.Gold }));
+                Assert.Equal(
+                    4,
+                    Rankings.Judge.Scores(
+                        new Dictionary<Rankings.Medal, int> { [Rankings.Medal.Gold] = 2 })
+                        [Rankings.Medal.Gold]);
+                Assert.Single(Rankings.Judge.Heats(
+                    new IReadOnlyList<Rankings.Medal>[] { new[] { Rankings.Medal.Silver } }));
+                Assert.Equal(
+                    new[] { Rankings.Medal.Gold, Rankings.Medal.Silver },
+                    Rankings.Medals.Ordered(new[] { Rankings.Medal.Silver, Rankings.Medal.Gold }));
+                using var oreo = new Rankings.Rosette<Rankings.Medal>(Rankings.Medal.Gold);
+                Assert.Equal(2, oreo.Rank(new[] { Rankings.Medal.Silver }).Count);
+                using var mylo = new Rankings.Sash<Rankings.Medal>(
+                    new[] { Rankings.Medal.Bronze, Rankings.Medal.Silver });
+                Assert.Equal(Rankings.Medal.Silver, mylo.Best);
+                Assert.Equal(2, mylo.Ribbons.Count);
+            }
+        });
+    }
 }

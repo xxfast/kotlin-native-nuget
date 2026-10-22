@@ -470,7 +470,9 @@ write and released by the call, a `T` result is released as it is read (an enum)
 constraint admits but the call refuses, strand nothing. `LeakTests/LiveHandleTests.cs`'s
 `EnumSelfBound_ClassAndFunctionRoute_ReturnsToBaseline`,
 `EnumSelfBound_ThrowPaths_ReturnToBaseline` and `InvariantRecursiveBound_ReturnsToBaseline` cover
-the success, throw and wrapper paths.
+the success, throw and wrapper paths. `EnumSelfBound_CollectionElements_ReturnToBaseline` covers the
+same `T` as a list, set or map element and in a generic class: a returned element's box is released
+by the read, and a null element mints nothing.
 
 A [sealed base's own async members](interfaces-abstract-sealed.md#sealed-method-suspend-generated-c)
 add no new handle kind either: the scope handle moves from the arm to the base, and the count returns

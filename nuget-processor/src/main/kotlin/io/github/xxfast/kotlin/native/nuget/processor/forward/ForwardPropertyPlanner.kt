@@ -1697,7 +1697,7 @@ internal class ForwardPropertyPlanner(
     // projection can spell it (`byte[]`), matching `isBridgeableComponent`.
     BridgeType.ByteArray -> true
     // ADR-212: a `T` element reads back through `FromHandle<T>`, as `isBridgeableComponent` admits.
-    is BridgeType.TypeParameter -> !trampolined
+    is BridgeType.TypeParameter -> true
     BridgeType.Unit, is BridgeType.BoundInterface, is BridgeType.SpecializedProtocol,
     is BridgeType.RawCollection, is BridgeType.RawKSType, is BridgeType.Unsupported -> false
   }

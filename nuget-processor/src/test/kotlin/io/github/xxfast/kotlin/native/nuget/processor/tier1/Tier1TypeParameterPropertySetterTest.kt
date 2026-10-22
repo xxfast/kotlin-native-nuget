@@ -178,6 +178,30 @@ class Tier1TypeParameterPropertySetterTest {
           }
       }
       """.trimIndent(),
+      // ADR-217: an interface reachable only as a `T` bound now gets its C# bridge, so a
+      // C# implementation crosses `Wrap<T>`; the bridge uses function pointers.
+      allowUnsafe = true,
+    )
+  }
+
+  // ADR-217 x ADR-218: a trampolined `T` inside a collection setter assigns inside the trampoline
+  // too; outside it the element cast named a type variable that does not exist.
+  @Test
+  fun `a trampolined T in a collection setter assigns inside the trampoline`() {
+    val result: Tier1Result = Tier1Harness.run(
+      """
+      package tier1.tpsetlist
+
+      class Ribbons<A : Enum<A>>(var medals: List<A>)
+      """.trimIndent(),
+    )
+
+    assertTrue(result.compiledClean, "generated Kotlin: ${result.compileErrors}")
+    assertContains(result.generated, "fun <A> nugetTrampoline()")
+    assertContains(result.generatedCSharp, "Native_Set_medals(")
+    assertFalse(
+      result.kspWarnings.any { warning -> "Ribbons.medals" in warning },
+      "expected the setter to bind: ${result.kspWarnings}",
     )
   }
 }
