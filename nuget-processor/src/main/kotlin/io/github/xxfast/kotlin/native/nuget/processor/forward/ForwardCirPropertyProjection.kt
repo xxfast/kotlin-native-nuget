@@ -792,6 +792,9 @@ internal object ForwardCirPropertyProjection {
         )
       }
 
+      // ADR-218: a `T` value is boxed exactly as a callable's `T` argument is.
+      is BridgeType.TypeParameter -> forwardCirTypeParameterBox(this, name, name)
+
       BridgeType.Unit,
       is BridgeType.Primitive,
       BridgeType.Char,
@@ -812,13 +815,14 @@ internal object ForwardCirPropertyProjection {
       is BridgeType.RawKSType,
       is BridgeType.Unsupported,
       is BridgeType.RawCollection,
-      is BridgeType.TypeParameter,
         -> null
     }
   }
 
   private fun BridgeType.handleCleanup(name: String): String? =
     when (val value = unwrapNullable()) {
+      // ADR-218: only a box the setter minted is disposed; a borrowed wrapper is kept alive.
+      is BridgeType.TypeParameter -> forwardCirTypeParameterCleanup(this, name, name)
       // Only a minted bridge handle is disposed: a Kotlin-backed wrapper's `_handle` belongs to
       // that wrapper, and `owned` is how HandleOf reports which of the two it returned.
       // ADR-135: the same zero guard the collection arm below carries. A throw from the mint in
@@ -865,7 +869,6 @@ internal object ForwardCirPropertyProjection {
       is BridgeType.RawKSType,
       is BridgeType.Unsupported,
       is BridgeType.RawCollection,
-      is BridgeType.TypeParameter,
         -> null
     }
 
@@ -914,6 +917,9 @@ internal object ForwardCirPropertyProjection {
 
       // ADR-088: the transfer GCHandle [handleStep] allocated just above.
       is BridgeType.BoundInterface -> "${name}Handle"
+
+      // ADR-218: the box [handleStep] minted (or the borrowed wrapper's own handle).
+      is BridgeType.TypeParameter -> "${name}Box"
 
       // ADR-077 sub-items 2/3/4: unwrap the record struct to its capitalized underlying property
       // and lower it to the wire per underlying, with null propagation for the nullable spelling
@@ -987,7 +993,6 @@ internal object ForwardCirPropertyProjection {
       is BridgeType.RawKSType,
       is BridgeType.Unsupported,
       is BridgeType.RawCollection,
-      is BridgeType.TypeParameter,
         -> name
     }
 

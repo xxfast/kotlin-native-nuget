@@ -150,15 +150,16 @@ class Tier1GenericNullableTypeArgumentTest {
       """
       package tier1.duovar
 
-      class Duo<A, B>(var a: A, val b: B)
+      class Duo<A : Enum<A>, B>(var a: List<A>, val b: B)
       """.trimIndent(),
     )
 
     assertTrue(result.compiledClean, "expected clean compile; got: ${result.compileErrors}")
     assertContains(result.generatedCSharp, "public class Duo<TA, TB>")
 
-    // `var a: A` binds read-only (ADR-147 v1); the dropped-setter note names the type the author
-    // wrote, `A`, never the C# rename `TA`.
+    // `var a: List<A>` binds read-only (a trampolined `A` in a collection, ADR-212); the dropped-
+    // setter note names the type the author wrote, `A`, never the C# rename `TA`. (A bare
+    // `var a: A` has a setter since ADR-218.)
     val note: String = result.kspWarnings.single { warning ->
       "Duo" in warning && "setter" in warning
     }

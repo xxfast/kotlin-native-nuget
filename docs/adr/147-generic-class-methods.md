@@ -372,7 +372,8 @@ the bare receiver spelling, `asStableRef<LabelledCrate>()`.
   type-argument position). A `var` property's setter is not admitted in v1: `T` only binds at the
   getter, so a `var item: T` on a generic class renders get-only with a named
   `ForwardDroppedPropertySetter` skip, the same partial-skip shape an ineligible collection setter
-  already uses.
+  already uses. *Amended by [ADR-218](218-type-parameter-property-setter.md): the setter binds,
+  boxing the value with `Wrap<T>` as a `T` argument does.*
 - **Interface and function type parameters, unchanged in v1.** The classifier returns
   `TypeParameter` only when the parameter's owning declaration is a `ClassKind.CLASS`
   (`ForwardBridgeTypeClassifier.kt`); a type parameter owned by an `interface` or by a top-level/

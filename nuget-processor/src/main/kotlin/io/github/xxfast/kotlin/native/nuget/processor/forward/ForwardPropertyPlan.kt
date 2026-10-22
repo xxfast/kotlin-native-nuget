@@ -150,7 +150,15 @@ internal fun BridgeType.isNullableValueTypeReceiver(): Boolean {
 internal fun ForwardPropertyReceiver.Value.fanOutInner(): BridgeType? = type.hasValueFanOutInner()
 
 internal sealed interface ForwardPropertyReceiver {
-  data class Handle(val owner: String) : ForwardPropertyReceiver
+  /**
+   * [generic]: ADR-218, the generic owner [owner] spells, when it has one. A setter whose value is
+   * a parameter with no single erased argument (ADR-198 trampolined, or multi-bound) assigns
+   * through the trampoline, which re-applies the owner to its own type variable.
+   */
+  data class Handle(
+    val owner: String,
+    val generic: ForwardGenericOwner? = null,
+  ) : ForwardPropertyReceiver
   data class Value(val type: BridgeType) : ForwardPropertyReceiver
   data class Static(val owner: String?) : ForwardPropertyReceiver
 

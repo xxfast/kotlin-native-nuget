@@ -198,7 +198,7 @@ Assert.ThrowsAny<ArgumentException>(() => Medals.RequirePrize(Medal.Bronze));   
 - `Rosette<int>`, `Rosette<string>`, a wrapper and `Rosette<Medal?>` do not compile.
 - C# cannot say "an enum generated from Kotlin", so a .NET enum such as `DayOfWeek` compiles and
   throws a catchable `NotSupportedException` at the call, before anything reaches Kotlin.
-- A `T` property is get-only, as on any generic class.
+- A `T` property is settable, as on any generic class.
 - `inline fun <reified T : Enum<T>>` is skipped with a named `SKIPPED_UNSUPPORTED_COMBINATION`,
   because the generated export cannot supply a reified argument. Drop `reified`, or export a
   non-generic overload per enum. A `suspend` or `Flow` member of an enum-bound class is skipped as
@@ -235,6 +235,38 @@ Assert.True(typeof(IReadable<IPet>).IsAssignableFrom(typeof(IReadable<Cat>)));
 Variance declared on a **class's** own type parameter, as opposed to an interface's, is dropped: C#
 does not support variance on classes. The class still generates and works, just without `out`/`in`
 on its type parameter.
+
+## Writable properties {id="writable-properties"}
+
+A `var` typed by the class's own type parameter gets a C# setter: `T`, `T?`, and a `List`, `Set` or
+`Map` of `T`. Value types and strings are boxed for the call and the box is released afterwards; an
+exported class you pass in is borrowed, so it stays yours to dispose.
+
+```kotlin
+class Playpen<T>(first: T) {
+  var current: T = first
+  var maybe: T? = null
+  var items: List<T> = listOf(first)
+}
+```
+
+```C#
+using var pen = new Playpen<int>(9);
+pen.Current = 7;
+pen.Items = new[] { 1, 2, 3 };
+
+using var oreo = new Cat("Oreo", 9);
+using var cats = new Playpen<Cat>(oreo);
+cats.Current = oreo;                 // borrowed, still yours to dispose
+
+using var names = new Playpen<string?>("Oreo");
+names.Maybe = null;
+```
+
+The same holds for a bounded `T` (`T : Furry`), a trampolined `T : Enum<T>`, and an interface
+`var item: T`, which declares `T Item { get; set; }` on `IKeepsake<T>`. `Playpen<int>.Maybe = null`
+does not compile, because an unconstrained `T?` is spelled `T` in C# (see [Nullable properties](#nullable-properties)).
+A generic interface implemented in C# and passed to Kotlin is not bridged.
 
 ## Methods on a generic class
 
@@ -296,11 +328,10 @@ Kotlin-backed value that isn't a `Dog` throws `NotSupportedException` naming the
 inherent to erasure. The same identity rule applies to a lambda argument
 (see [Lambdas and callbacks](lambdas-and-callbacks.md)) and to [generic functions](#generic-functions) below.
 
-`T` is admitted at a parameter, a return, a constructor parameter, or a property getter, optionally
+`T` is admitted at a parameter, a return, a constructor parameter, or a property (getter and setter), optionally
 nullable, and as the element of a `List`, `Set` or `Map` at those positions (`List<T>` binds as
 `IReadOnlyList<T>`; see [A type parameter as an element](#a-type-parameter-as-an-element)). It is refused, named,
-everywhere else: nested in a `Flow` (`Flow<T>`) or a `suspend` lambda, a `var` property's setter
-(`var item: T` and `var items: List<T>` render get-only), a `suspend fun`, a `Flow`/`StateFlow` member, a
+everywhere else: nested in a `Flow` (`Flow<T>`) or a `suspend` lambda, a `suspend fun`, a `Flow`/`StateFlow` member, a
 stored-callback member, and a method's own type parameter when its signature carries a `suspend` lambda or a `Flow`
 (a plain `fun <U> swap(next: U): U` [binds](#generic-methods), and so does a [`T` in a lambda](#a-type-parameter-in-a-lambda)). A
 type parameter declared on an `interface` rather than a `class` is unaffected by this and keeps

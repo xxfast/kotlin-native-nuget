@@ -222,7 +222,7 @@ and `Box<Box<int>>.Value` mints a second wrapper you dispose separately. A `Box<
 parameter, a `var` setter, a constructor argument, an extension receiver) is borrowed and mints
 nothing. `LeakTests/LiveHandleTests.cs`'s `GenericInstance_ReturnedBoxes_ReturnToBaseline`,
 `GenericInstance_PassedBoxes_ReturnToBaseline` and `GenericInstance_SuspendAndFlow_ReturnToBaseline`
-pin the three groups.
+pin the three groups. A `T` you assign to a generic class's `var` is boxed for the call and the box released after it: `GenericInstance_SetterBoxes_ReturnToBaseline`.
 
 A [sealed interface whose arms extend a class](interfaces-abstract-sealed.md#sealed-interface-over-arms)
 follows the same rule: an `I<Name>` Kotlin hands back is the arm wrapper, owns one handle, and its

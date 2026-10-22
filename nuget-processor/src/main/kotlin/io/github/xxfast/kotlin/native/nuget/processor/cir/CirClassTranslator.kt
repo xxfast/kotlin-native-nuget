@@ -4590,7 +4590,9 @@ private fun typeParameterProperties(
       if (typeName !in typeParamNames) return@mapNotNull null
       val csName: String = prop.csharpMemberName()
       if (csName in plannedNames) return@mapNotNull null
-      CirInterfaceProperty(csName, typeName)
+      // ADR-218: a `var` keeps its setter. An abstract interface `var` cannot narrow its setter,
+      // and every implementing class plans one through the generic class route.
+      CirInterfaceProperty(csName, typeName, hasSetter = prop.isMutable)
     }
     .toList()
 }

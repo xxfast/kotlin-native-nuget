@@ -14,6 +14,7 @@ import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
+import io.github.xxfast.kotlin.native.nuget.processor.cir.forwardSuperInterfaceSpelling
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedCsName
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMember
@@ -383,7 +384,10 @@ internal class ForwardPropertyPlanner(
         propertyPlan(
           symbol = "$owner.${prop.simpleName.asString()}",
           position = ForwardPropertyPosition.CLASS,
-          receiver = ForwardPropertyReceiver.Handle(sealed.forwardOwnerTypeName() ?: owner),
+          receiver = ForwardPropertyReceiver.Handle(
+            sealed.forwardOwnerTypeName() ?: owner,
+            sealed.forwardGenericOwner(),
+          ),
           prop = prop,
           getExport = "${prefix}_get_${prop.simpleName.asString()}",
           setExport = "${prefix}_set_${prop.simpleName.asString()}",
@@ -425,7 +429,10 @@ internal class ForwardPropertyPlanner(
         propertyPlan(
           symbol = "$owner.${prop.simpleName.asString()}",
           position = ForwardPropertyPosition.CLASS,
-          receiver = ForwardPropertyReceiver.Handle(subclass.forwardOwnerTypeName() ?: owner),
+          receiver = ForwardPropertyReceiver.Handle(
+            subclass.forwardOwnerTypeName() ?: owner,
+            subclass.forwardGenericOwner(),
+          ),
           prop = prop,
           getExport = "${prefix}_get_${prop.simpleName.asString()}",
           setExport = "${prefix}_set_${prop.simpleName.asString()}",
@@ -503,7 +510,10 @@ internal class ForwardPropertyPlanner(
           position = ForwardPropertyPosition.CLASS,
           // ADR-147: a generic owner is read back fully applied (`Crate<Any?>`); the bare
           // qualified name is not a legal type argument to `asStableRef`.
-          receiver = ForwardPropertyReceiver.Handle(cls.forwardOwnerTypeName() ?: owner),
+          receiver = ForwardPropertyReceiver.Handle(
+            cls.forwardOwnerTypeName() ?: owner,
+            cls.forwardGenericOwner(),
+          ),
           prop = prop,
           getExport = "${cls.nativePrefix(symbols)}_get_${prop.simpleName.asString()}",
           setExport = "${cls.nativePrefix(symbols)}_set_${prop.simpleName.asString()}",
@@ -524,8 +534,8 @@ internal class ForwardPropertyPlanner(
    *
    * Only a DECLARED (or diamond-redeclared) placement counts: an inherited member lives on the
    * super-interface that declares it, and the explicit member has to name that one. A member typed
-   * by the interface's own type parameter is excluded: the ADR-113 carve-out renders it get-only,
-   * so an explicit `set` against it would be CS0550.
+   * by the interface's own type parameter counts too since ADR-218: the ADR-113 carve-out renders
+   * a `var` one `{ get; set; }`, so the explicit `set` has a member to implement.
    */
   private fun KSClassDeclaration.explicitSetterInterfaces(
     prop: KSPropertyDeclaration,
@@ -557,11 +567,8 @@ internal class ForwardPropertyPlanner(
           .firstOrNull { it.simpleName.asString() == name } ?: return@filter false
         val placement: ForwardInterfaceMemberPlacement =
           ForwardInterfaceHierarchy(iface, exported).placement(member)
-        val isNotTypeParameter: Boolean =
-          member.type.resolve().declaration !is com.google.devtools.ksp.symbol.KSTypeParameter
         member.isMutable &&
             member.getVisibility() == Visibility.PUBLIC &&
-            isNotTypeParameter &&
             (placement == ForwardInterfaceMemberPlacement.DECLARED ||
                 placement == ForwardInterfaceMemberPlacement.DIAMOND_OVERRIDE)
       }
@@ -1119,6 +1126,7 @@ internal class ForwardPropertyPlanner(
       }
     val setter: ForwardPropertySetter? = collectionSetterOrNull(
       symbol, publicName, prop, type, setExport, receiver, superClass, explicitInterfaces,
+      implementer,
     )
     return ForwardPropertyPlan(
       symbol = symbol,
@@ -1154,6 +1162,8 @@ internal class ForwardPropertyPlanner(
     receiver: ForwardPropertyReceiver,
     superClass: KSClassDeclaration?,
     explicitInterfaces: List<String> = emptyList(),
+    // The class whose base list spells [explicitInterfaces], for the remark's C# spelling.
+    implementer: KSClassDeclaration? = null,
   ): ForwardPropertySetter? {
     if (!prop.isMutable || !prop.hasPublicSetter()) return null
     val readOnlyBase: KSClassDeclaration? = prop.readOnlyOverrideeOwner(superClass)
@@ -1170,8 +1180,18 @@ internal class ForwardPropertyPlanner(
           symbol, publicName, prop, type, setExport, receiver, superClass = null,
         )
         if (built != null) {
+          // ADR-218: spelled as the explicit member is, type arguments included
+          // (`IHolder<string>`).
+          val supertypes: List<KSType> = implementer?.getAllSuperTypes()?.toList().orEmpty()
           val through: String = explicitInterfaces.joinToString(" and ") { qualified ->
-            "I${qualified.substringAfterLast('.')}.$publicName"
+            val spelled: String? = supertypes
+              .firstOrNull { it.declaration.qualifiedName?.asString() == qualified }
+              ?.let { supertype ->
+                forwardSuperInterfaceSpelling(
+                  supertype, classifier, from = requireNotNull(implementer),
+                )
+              }
+            "${spelled ?: "I${qualified.substringAfterLast('.')}"}.$publicName"
           }
           droppedSetters.add(
             ForwardDroppedPropertySetter(
@@ -1213,23 +1233,6 @@ internal class ForwardPropertyPlanner(
           reason = "C# hands Kotlin a NugetManagedException (a RuntimeException), which a " +
               "property declared narrower than RuntimeException cannot hold; declare it " +
               "Throwable, Exception or RuntimeException to make it writable",
-        ),
-      )
-      return null
-    }
-    // ADR-147 v1: `var item: T` binds get-only. The write side would have to mint a box per
-    // assignment and dispose it after the native call, which no property setter shape carries
-    // today; refused here, named, rather than emitting a setter that cannot marshal.
-    if (type.unwrapNullable() is BridgeType.TypeParameter) {
-      droppedSetters.add(
-        ForwardDroppedPropertySetter(
-          symbol = symbol,
-          node = prop,
-          publicName = publicName,
-          owner = ownerScope,
-          componentDescription = type.diagnosticTypeName(),
-          reason = "a type-parameter property binds read-only in v1; the write side has no " +
-              "boxing step (ADR-147)",
         ),
       )
       return null

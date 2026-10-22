@@ -431,14 +431,23 @@ private fun FileSpec.Builder.addSetter(
     builder.addParameter("value", kotlinInputType(valueType))
   }
   builder.addParameter("errorOut", cOpaquePointer.copy(nullable = true))
-  val expression: String = plan.accessExpression()
-  val assignment: String = if (assignsNull == true) {
-    "$expression = null"
-  } else {
-    "$expression = ${plan.valueExpression()}"
+  // ADR-218: a `T` value with no single erased argument assigns inside the ADR-198 trampoline.
+  val trampoline: ForwardGenericOwnerParameter? = plan.setterTrampoline()
+  val expression: String = plan.accessExpression(trampoline)
+  val assignment: String = when {
+    assignsNull == true -> "$expression = null"
+    trampoline != null -> "$expression = ${plan.trampolinedValueExpression(trampoline)}"
+    else -> "$expression = ${plan.valueExpression()}"
   }
   builder.addCode(unitBody(assignment, "errorOut"), cOpaquePointerVar, nugetHandles)
-  addFunction(builder.build())
+  val value: BridgeType.TypeParameter? = plan.type.unwrapNullable() as? BridgeType.TypeParameter
+  // ADR-147: a checked read through a generic bound's erased spelling warns on its arguments.
+  if (value != null && !value.trampolined && value.bounds().castsToGenericBound()) {
+    builder.addAnnotation(forwardUncheckedCastSuppression)
+  }
+  val typeVariables: List<Pair<String, List<String>>> =
+    listOfNotNull(trampoline).map { parameter -> parameter.kotlinName to parameter.bounds }
+  addFunction(builder.build().trampolined(typeVariables))
 }
 
 /**
@@ -480,12 +489,28 @@ private fun exportBuilder(
   return builder
 }
 
-private fun ForwardPropertyPlan.accessExpression(): String {
+private fun ForwardPropertyPlan.accessExpression(
+  // ADR-218: inside the trampoline the owner is applied to the trampoline's own type variable,
+  // through a cast (`asStableRef` is reified, and a type variable is not).
+  trampoline: ForwardGenericOwnerParameter? = null,
+): String {
   // Backticked where the declared name needs it: a hard keyword, or a space or symbol.
   val name: String = kotlinName.kotlinIdentifier()
   return when (val receiver: ForwardPropertyReceiver = receiver) {
-    is ForwardPropertyReceiver.Handle ->
-      "handle.asStableRef<${receiver.owner}>().get().$name"
+    is ForwardPropertyReceiver.Handle -> {
+      val generic: ForwardGenericOwner? = receiver.generic
+      if (trampoline != null && generic != null) {
+        val applied: String = generic.applied(
+          generic.typeParameters.joinToString(", ") { parameter ->
+            if (parameter.kotlinName == trampoline.kotlinName) parameter.kotlinName
+            else parameter.erased ?: "*"
+          },
+        )
+        "(handle.asStableRef<Any>().get() as $applied).$name"
+      } else {
+        "handle.asStableRef<${receiver.owner}>().get().$name"
+      }
+    }
 
     // ADR-157: no member access after the cast. The box's `Value` IS the receiver -- an enum entry
     // has no property that answers with itself -- and the `Enum` result branch appends `.ordinal`.
@@ -520,6 +545,44 @@ private fun ForwardPropertyPlan.accessExpression(): String {
 private fun ForwardPropertyPlan.valueExpression(): String = inputLowering(type, "value")
 
 /**
+ * ADR-218: the owner parameter a `T` setter value names when that parameter has no single erased
+ * argument (ADR-198 trampolined, or multi-bound), so the erased receiver cannot take the value.
+ * Null for every other setter, which keeps its plain assignment.
+ */
+private fun ForwardPropertyPlan.setterTrampoline(): ForwardGenericOwnerParameter? {
+  val generic: ForwardGenericOwner = (receiver as? ForwardPropertyReceiver.Handle)?.generic
+    ?: return null
+  val value: BridgeType.TypeParameter = type.unwrapNullable() as? BridgeType.TypeParameter
+    ?: return null
+  return generic.typeParameters.firstOrNull { parameter ->
+    parameter.kotlinName == value.kotlinName && parameter.erased == null
+  }
+}
+
+/** ADR-218: the setter value read inside the trampoline, cast last to its type variable. */
+private fun ForwardPropertyPlan.trampolinedValueExpression(
+  trampoline: ForwardGenericOwnerParameter,
+): String {
+  val value: BridgeType.TypeParameter = type.unwrapNullable() as BridgeType.TypeParameter
+  return forwardBoundedRead(
+    "value", value.bounds(), nullable = type is BridgeType.Nullable, trampoline.kotlinName,
+  )
+}
+
+/** ADR-218: a `T` setter value, the callable route's bounded read of its box. */
+private fun typeParameterLowering(
+  name: String,
+  type: BridgeType.TypeParameter,
+  nullable: Boolean,
+): String = forwardBoundedRead(
+  name, type.bounds(), nullable, type.kotlinName.takeIf { type.trampolined },
+)
+
+/** ADR-147: every bound a `T` box is cast to, first one first; empty when unconstrained. */
+private fun BridgeType.TypeParameter.bounds(): List<String> =
+  listOfNotNull(boundQualifiedName) + additionalBounds
+
+/**
  * The wire value named [name], lowered to the Kotlin type [type] spells. Shared by the setter's
  * value and (ADR-132) by an extension property's receiver: both are inputs on the same wire, so
  * one `when` covers both and a shape neither has an arm for is a build failure rather than a
@@ -548,6 +611,8 @@ private fun inputLowering(type: BridgeType, name: String): String = when (type) 
     is BridgeType.Collection -> loweredCollectionExpression(name, inner, nullable = true)
     // ADR-151: `?.` short-circuits on the null wire pointer, exactly as the collection arm does.
     BridgeType.ByteArray -> "$name?.asStableRef<kotlin.ByteArray>()?.get()"
+    // ADR-218: a null `T?` (or a nullable-bounded `T`) arrives as the null pointer.
+    is BridgeType.TypeParameter -> typeParameterLowering(name, inner, nullable = true)
     // ADR-077 sub-items 3/4: `?.let` re-wraps only a non-null wire value, matching the callable
     // parameter lowering in ForwardKotlinPlanEmitter.
     // ADR-079: a Primitive/Enum underlying takes the NullableDispatch route instead, whose `set`
@@ -572,7 +637,6 @@ private fun inputLowering(type: BridgeType, name: String): String = when (type) 
     is BridgeType.RawKSType,
     is BridgeType.Unsupported,
     is BridgeType.RawCollection,
-    is BridgeType.TypeParameter,
       -> error("Forward property emitter has no nullable input route for $type")
   }
 
@@ -596,6 +660,8 @@ private fun inputLowering(type: BridgeType, name: String): String = when (type) 
   is BridgeType.Collection -> loweredCollectionExpression(name, type)
   // ADR-151: the setter value is the handle C# minted with `NugetMarshal.CreateBytes`.
   BridgeType.ByteArray -> "$name.asStableRef<kotlin.ByteArray>().get()"
+  // ADR-218: the box C# minted with `Wrap<T>` (or a borrowed wrapper's handle).
+  is BridgeType.TypeParameter -> typeParameterLowering(name, type, nullable = false)
   // ADR-077 sub-items 2/4: re-wrap the raw underlying wire value, re-running the value class's
   // own `init` validation, exactly like the callable parameter lowering in
   // ForwardKotlinPlanEmitter.
@@ -611,7 +677,6 @@ private fun inputLowering(type: BridgeType, name: String): String = when (type) 
   is BridgeType.RawKSType,
   is BridgeType.Unsupported,
   is BridgeType.RawCollection,
-  is BridgeType.TypeParameter,
     -> error("Forward property emitter has no input route for $type")
 }
 
@@ -630,7 +695,7 @@ private fun kotlinInputType(type: BridgeType): TypeName = when (type) {
   is BridgeType.ValueClass -> kotlinInputType(type.underlying)
   // ADR-088: the bound-interface transfer GCHandle is the same opaque pointer slot.
   is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
-  is BridgeType.BoundInterface, BridgeType.ByteArray ->
+  is BridgeType.BoundInterface, BridgeType.ByteArray, is BridgeType.TypeParameter ->
     cOpaquePointer.copy(nullable = type is BridgeType.Nullable)
 
   BridgeType.Unit,
@@ -642,7 +707,6 @@ private fun kotlinInputType(type: BridgeType): TypeName = when (type) {
   is BridgeType.RawKSType,
   is BridgeType.Unsupported,
   is BridgeType.RawCollection,
-  is BridgeType.TypeParameter,
     -> error("Forward property emitter has no input type for $type")
 }
 
