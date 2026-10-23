@@ -220,6 +220,15 @@ Kotlin drops it. `LeakTests/LiveHandleTests.cs`'s `ValueClassOverByteArray_Param
 when the call throws), and `NarrowStdlibComponents_ListSetAndMap_ReturnToBaseline` a `List`, `Set` or
 `Map` of `Instant`, `Duration` and `Uuid`.
 
+The `suspend` and `Flow` routes carry `Instant`, `Duration`, `Uuid`, `ByteArray`, a collection, a plain
+interface and a value class over each as parameters, results and receivers
+([details](coroutines-and-flow.md#async-wire-types)). A minted handle is released when the extern
+returns, so completion, a fault and cancellation all return to baseline.
+`LeakTests/LiveHandleTests.cs`'s `AsyncWireUnderlyings_HandleBacked_Completion_ReturnsToBaseline`,
+`AsyncWireUnderlyings_HandleBacked_Fault_ReturnsToBaseline` and
+`AsyncWireUnderlyings_HandleBacked_Cancellation_ReturnsToBaseline` pin the three. The class owner
+mints its coroutine scope on its first `suspend` call, so the rows warm it before taking the baseline.
+
 The [members of a generic arm](interfaces-abstract-sealed.md#generic-sealed-arm-members) add no new
 handle kind either. Each element a flow collects from `Dish.Hot<string>.Portions` mints one owned
 crossing, and the count returns to baseline once you `DisposeAsync` the arm. A stored-callback or

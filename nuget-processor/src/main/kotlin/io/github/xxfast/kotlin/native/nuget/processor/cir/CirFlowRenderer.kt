@@ -376,10 +376,13 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
       appendLine("            Func<IntPtr> readValue,")
       appendLine("            Action<T> writeValue,")
       appendLine("            Func<T, T, bool> compareAndSet,")
+      // ADR-240: the per-member element read a bytes, collection or interface element needs.
       appendLine("            NugetKotlinHandle? ownedHandle = null,")
+      appendLine("            Func<IntPtr, T>? read = null,")
+      appendLine("            Action<T>? release = null,")
       // ADR-233: a `Create`d flow owns its scope, released by `Dispose` rather than the finalizer.
       appendLine("            NugetKotlinHandle? ownedScope = null)")
-      appendLine("            : base(startCollect, readValue, ownedHandle, ownedScope: ownedScope)")
+      appendLine("            : base(startCollect, readValue, ownedHandle, read, release, ownedScope)")
       appendLine("        {")
       appendLine("            _writeValue = writeValue;")
       appendLine("            _compareAndSet = compareAndSet;")
@@ -902,7 +905,9 @@ private fun StringBuilder.renderHeldStateFlowMethod(method: CirMethod, className
       taken = method.parameters.localScopeNames() + owned, indent = "                ",
     ) + ",",
   )
-  appendLine("                $owned);")
+  // ADR-240: a bytes, collection or interface element reads through its per-member `read:`.
+  val read: String = method.flowElementRead?.let { ",\n                $it" }.orEmpty()
+  appendLine("                $owned$read);")
   closeFlowBody(method)
   appendLine()
 }

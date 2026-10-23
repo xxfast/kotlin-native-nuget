@@ -115,6 +115,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.validateCSharpName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.valueClassUnderlying
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeContext
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardWriteClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiRole
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallableCatalogEntry
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardNativeCall
@@ -1266,6 +1267,8 @@ internal fun warnRefusedLegacyRouteMembers(
             classified.qualifiedName, "${classified.underlyingSimpleName} as a nullable element",
           )
 
+        is MutableStateFlowElement.Minted,
+        is MutableStateFlowElement.Narrow,
         MutableStateFlowElement.Scalar,
         is MutableStateFlowElement.Enum,
         is MutableStateFlowElement.Handle,
@@ -2453,6 +2456,8 @@ internal class NugetProcessor(
       valueClasses.forEach { cls -> cls.qualifiedName?.asString()?.let(::add) }
     }
     val forwardClassifier = classifierFor(exportedValueClasses)
+    // ADR-240: the `MutableStateFlow` write seam classifies a minted element through this one.
+    ForwardWriteClassifier.current = forwardClassifier
     val forwardPlanner = ForwardCallablePlanner(forwardClassifier, context.symbols, expects)
     val forwardPropertyPlanner = ForwardPropertyPlanner(forwardClassifier, context.symbols, expects)
     // ROADMAP line 29 (ADR-118 amendment): the planner sees every non-generic top-level function,

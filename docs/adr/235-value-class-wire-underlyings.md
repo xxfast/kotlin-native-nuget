@@ -91,15 +91,35 @@ dispose, and a C#-implemented one you pass in comes back as the same instance. L
 
 ## Consequences
 
-- `ByteArray`- and collection-underlying structs compare their payload by reference, because
-  `byte[]` and `IReadOnlyList<T>` do (the `ByteArray_ParamAndReturn_RoundTripsTheBytes` row asserts
-  on the bytes for that reason). Verified for the collection case by
-  `Collection_StructComparesItsListByReference`: two structs over equal but distinct lists differ,
-  and an echoed struct holds a new list.
+- Amended 2026-10-22 by [ADR-240](240-async-routes-carry-wire-underlyings.md): a `ByteArray`- or
+  collection-underlying struct compares its payload by CONTENT, through a generated `Equals(V)`
+  and `GetHashCode()`: `byte[]` by sequence, a list element-wise in order, a set
+  order-insensitively, a map by the same keys with equal values, a nested struct through its own
+  members. An interface-underlying struct keeps reference equality. `default(V)` equals another
+  `default(V)` and hashes to 0. Verified by `Collection_StructComparesItsListByContent`,
+  `ByteArray_StructComparesItsBytesByContent`, `Set_StructComparesItsSetIgnoringOrder`,
+  `Map_StructComparesSameKeysWithEqualValues`, `Interface_StructKeepsReferenceEquality` and
+  `Default_ReferencePayloadStructs_EqualEachOtherAndHashToZero`. Before the amendment the payload
+  compared by reference, so two structs over equal but distinct lists differed.
 - A struct over a `ByteArray` or a collection is admitted as a `Set` element and a `Map` key, which
-  the bare `ByteArray` declines (ADR-151 amendment). It crosses and reads back intact, but because
-  it compares by reference a lookup with a freshly built struct never matches. Verified by
-  `ByteArray_StructInASetAndAMap_CrossesButMatchesByReference`.
+  the bare `ByteArray` declines (ADR-151 amendment). Since the 2026-10-22 amendment a lookup with a
+  freshly built struct over equal bytes matches, and a C# set collapses equal prints before it
+  crosses. Verified by `ByteArray_StructInASetAndAMap_MatchesByContent` and
+  `Collection_StructInAHashSet_MatchesByContent`.
 - `init` does not run at primary construction in C#, only when the struct crosses.
 - Amends ADR-171's REFUSED list to `Char`, a nullable non-scalar and a non-exported type, and drops
   the `Instant`/`Duration`/`Uuid` collection-component declines from ADR-076, ADR-103 and ADR-106.
+
+## Amendment (2026-10-22): erased positions, async routes and content equality
+
+[ADR-240](240-async-routes-carry-wire-underlyings.md) gives these value classes the ADR-228 box pair
+(the box takes the struct on its innermost underlying's ordinary parameter wire, the unbox returns
+it on the ordinary result wire), so `Box<PawPrint>`, a `Flow` element, an awaited `suspend` result
+and a `MutableStateFlow` write bind. `default(V)` over a `ByteArray`, collection or interface
+underlying is refused before the box crosses, as at an ordinary position. A value class over a
+nullable `String` keeps `null` apart from `V(null)`. The `suspend` and `Flow` routes also take these
+structs as parameters, and a value class's own `suspend` and `Flow` members bind on the struct.
+Verified by `Erased_GenericClass_InstantUuidCollectionAndInterfaceUnderlyings_RoundTrip`,
+`Erased_GenericClass_DefaultReferencePayload_IsRefusedBeforeItCrosses`,
+`SettableHolders_OfNarrowTypesAndWireValueClasses_ReadAndWrite` and
+`ValueClassOverANullableUnderlying_KeepsNullAndAbsentApart`.

@@ -402,23 +402,18 @@ class Tier1FlowCollectionElementTest {
   }
 
   @Test
-  fun `a mutable state flow of a collection on the suspend route still skips named`() {
-    assertFalse(
-      awaited.generatedCSharp.lines().any {
-        it.contains("MutableRosterAsync(") && !it.trimStart().startsWith("//")
-      },
-      "expected no MutableRosterAsync: the collection element has no write seam; got: " +
-          "${csharpLinesFor(awaited, "MutableRoster")}",
+  fun `a mutable state flow of a collection on the suspend route awaits settable`() {
+    // ADR-240: it reads through its own per-member pair and writes the minted list handle.
+    assertTrue(
+      awaited.generatedCSharp.contains("Task<KotlinMutableStateFlow<IReadOnlyList<string>>> MutableRosterAsync("),
+      "expected a settable MutableRosterAsync; got: ${csharpLinesFor(awaited, "MutableRoster")}",
     )
     assertTrue(
-      awaited.kspWarnings.any {
-        it.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN.name}]") &&
-            it.contains("mutableRoster")
-      },
-      "expected a SKIPPED_UNSUPPORTED_RETURN naming Desk.mutableRoster; " +
-          "kspWarnings=${awaited.kspWarnings}",
+      awaited.kspWarnings.none { it.contains("mutableRoster") },
+      "expected no diagnostic for Desk.mutableRoster; kspWarnings=${awaited.kspWarnings}",
     )
   }
+
 
   /**
    * LeakTests row 16l: an element the enumerator read but could not hand out (queued at

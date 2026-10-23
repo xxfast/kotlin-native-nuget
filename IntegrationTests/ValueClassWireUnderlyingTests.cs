@@ -197,34 +197,89 @@ public class ValueClassWireUnderlyingTests
     }
 
     [Fact]
-    public void Collection_StructComparesItsListByReference()
+    public void Collection_StructComparesItsListByContent()
     {
         var toys = new List<string> { "yarn" };
         Assert.Equal(new ToyBasket(toys), new ToyBasket(toys));
-        Assert.NotEqual(new ToyBasket(new List<string> { "yarn" }), new ToyBasket(new List<string> { "yarn" }));
-        // Every crossing copies, so the echoed struct holds a new list with the same toys.
+        // Two distinct lists with the same toys in the same order are the same basket.
+        var oreo = new ToyBasket(new List<string> { "yarn", "mouse" });
+        var mylo = new ToyBasket(new List<string> { "yarn", "mouse" });
+        Assert.Equal(oreo, mylo);
+        Assert.True(oreo == mylo);
+        Assert.Equal(oreo.GetHashCode(), mylo.GetHashCode());
+        // Order is part of a list's content.
+        Assert.NotEqual(oreo, new ToyBasket(new List<string> { "mouse", "yarn" }));
+        Assert.NotEqual(oreo, new ToyBasket(new List<string> { "yarn" }));
+        // Every crossing copies, so the echoed struct holds a new list, and still equals the original.
         var basket = new ToyBasket(toys);
         ToyBasket echoed = FurcoatSample.EchoBasket(basket);
-        Assert.NotEqual(basket, echoed);
-        Assert.Equal(basket.Toys, echoed.Toys);
+        Assert.NotSame(basket.Toys, echoed.Toys);
+        Assert.Equal(basket, echoed);
+        Assert.Equal(basket.GetHashCode(), echoed.GetHashCode());
     }
 
     [Fact]
-    public void ByteArray_StructInASetAndAMap_CrossesButMatchesByReference()
+    public void ByteArray_StructComparesItsBytesByContent()
+    {
+        var oreo = new PawPrint(new byte[] { 4, 1, 1 });
+        var mylo = new PawPrint(new byte[] { 4, 1, 1 });
+        Assert.Equal(oreo, mylo);
+        Assert.True(oreo == mylo);
+        Assert.False(oreo != mylo);
+        Assert.Equal(oreo.GetHashCode(), mylo.GetHashCode());
+        Assert.NotEqual(oreo, new PawPrint(new byte[] { 4, 1 }));
+        Assert.NotEqual(oreo, new PawPrint(new byte[] { 1, 1, 4 }));
+        // A crossing copies the bytes, and the echo still equals what went in.
+        PawPrint echoed = FurcoatSample.EchoPaw(oreo);
+        Assert.NotSame(oreo.Pads, echoed.Pads);
+        Assert.Equal(oreo, echoed);
+        // A nested struct over a bytes struct compares through it.
+        Assert.Equal(new PawCast(oreo), new PawCast(mylo));
+        Assert.Equal(new PawCast(oreo), FurcoatSample.EchoCast(new PawCast(mylo)));
+    }
+
+    [Fact]
+    public void ByteArray_StructInASetAndAMap_MatchesByContent()
     {
         IReadOnlySet<PawPrint> prints = FurcoatSample.PawSet();
         Assert.Equal(2, prints.Count);
         Assert.Equal(3, FurcoatSample.CountSetPads(prints));
+        // A lookup with a freshly built struct over equal bytes matches the Kotlin-minted element.
+        Assert.Contains(new PawPrint(new byte[] { 1 }), prints);
+        Assert.Contains(new PawPrint(new byte[] { 2, 2 }), prints);
+        Assert.DoesNotContain(new PawPrint(new byte[] { 2 }), prints);
         IReadOnlyDictionary<string, PawPrint> owned = FurcoatSample.PawsByOwner();
         Assert.Equal(new byte[] { 4, 4, 4 }, owned["Oreo"].Pads);
+        Assert.Equal(new PawPrint(new byte[] { 4, 4, 4 }), owned["Oreo"]);
         Assert.Equal(3, FurcoatSample.CountMapPads(owned));
-        Assert.Equal("Mylo,Oreo", FurcoatSample.OwnersByPaw(new Dictionary<PawPrint, string>
+        // Equal bytes are one key, so the second assignment replaces Oreo with Mylo.
+        var byPaw = new Dictionary<PawPrint, string>
         {
             [new PawPrint(new byte[] { 1 })] = "Oreo",
             [new PawPrint(new byte[] { 1 })] = "Mylo",
-        }));
-        // The bytes are equal but the arrays are not, so a lookup by a fresh struct never matches.
-        Assert.DoesNotContain(new PawPrint(new byte[] { 1 }), prints);
+            [new PawPrint(new byte[] { 2 })] = "Oreo",
+        };
+        Assert.Equal(2, byPaw.Count);
+        Assert.Equal("Mylo,Oreo", FurcoatSample.OwnersByPaw(byPaw));
+        Assert.Equal("Mylo", byPaw[new PawPrint(new byte[] { 1 })]);
+        // A set built in C# collapses equal prints before it crosses.
+        var set = new HashSet<PawPrint> { new(new byte[] { 3 }), new(new byte[] { 3 }) };
+        Assert.Single(set);
+        Assert.Equal(1, FurcoatSample.CountSetPads(set));
+    }
+
+    [Fact]
+    public void Collection_StructInAHashSet_MatchesByContent()
+    {
+        var baskets = new HashSet<ToyBasket>
+        {
+            new(new List<string> { "yarn" }),
+            new(new List<string> { "yarn" }),
+            new(new List<string> { "mouse" }),
+        };
+        Assert.Equal(2, baskets.Count);
+        Assert.Contains(new ToyBasket(new List<string> { "mouse" }), baskets);
+        Assert.Contains(FurcoatSample.Baskets()[0], baskets);
     }
 
     // --- Nested value class ----------------------------------------------------------------
@@ -507,4 +562,100 @@ public class ValueClassWireUnderlyingTests
         Assert.Equal(TimeSpan.FromMinutes(45), rack.Lengthen(new SnoozeSpan(TimeSpan.FromMinutes(15))).Span);
     }
 
+    // --- Erased generic position (ADR-171 box pair over the underlying's wire) -----------------
+
+    [Fact]
+    public void Erased_GenericClass_DurationUnderlying_RoundTrips()
+    {
+        var snooze = new SnoozeSpan(TimeSpan.FromMinutes(40));
+        using var box = new Box<SnoozeSpan>(snooze);
+        Assert.Equal(snooze, box.Value);
+    }
+
+    [Fact]
+    public void Erased_GenericClass_NestedUnderlying_RoundTrips()
+    {
+        var tag = new ShelterTag(new ChipSerial(OreoChipId));
+        using var box = new Box<ShelterTag>(tag);
+        Assert.Equal(tag, box.Value);
+    }
+
+    [Fact]
+    public void Erased_GenericClass_ByteArrayUnderlying_RoundTrips()
+    {
+        using var box = new Box<PawPrint>(new PawPrint(new byte[] { 7, 7 }));
+        Assert.Equal(new byte[] { 7, 7 }, box.Value.Pads);
+    }
+
+    [Fact]
+    public void Erased_GenericClass_InitRunsInKotlin()
+    {
+        Assert.ThrowsAny<ArgumentException>(() => new Box<SnoozeSpan>(new SnoozeSpan(TimeSpan.FromMinutes(-3))));
+    }
+
+    [Fact]
+    public void Erased_GenericClass_InstantUuidCollectionAndInterfaceUnderlyings_RoundTrip()
+    {
+        var start = new SunbeamStart(DateTimeOffset.FromUnixTimeSeconds(1_700_000_000));
+        using (var box = new Box<SunbeamStart>(start)) Assert.Equal(start, box.Value);
+        var chip = new ChipSerial(OreoChipId);
+        using (var box = new Box<ChipSerial>(chip)) Assert.Equal(chip, box.Value);
+        var basket = new ToyBasket(new List<string> { "yarn", "mouse" });
+        using (var box = new Box<ToyBasket>(basket)) Assert.Equal(basket, box.Value);
+        var mylo = new MyloRumbler();
+        using (var box = new Box<PurrVoice>(new PurrVoice(mylo))) Assert.Same(mylo, box.Value.Rumbler);
+        var cast = new PawCast(new PawPrint(new byte[] { 2 }));
+        using (var box = new Box<PawCast>(cast)) Assert.Equal(cast, box.Value);
+    }
+
+    [Fact]
+    public void Erased_GenericClass_DefaultReferencePayload_IsRefusedBeforeItCrosses()
+    {
+        Assert.ThrowsAny<ArgumentException>(() => new Box<PawPrint>(default));
+    }
+
+    // --- ADR-240: content equality over a set, a map, an interface and a default payload ----------
+
+    [Fact]
+    public void Set_StructComparesItsSetIgnoringOrder()
+    {
+        var oreo = new TestLibrary.Pawpost.PostStack(new HashSet<string> { "bill", "card" });
+        var mylo = new TestLibrary.Pawpost.PostStack(new HashSet<string> { "card", "bill" });
+        Assert.Equal(oreo, mylo);
+        Assert.Equal(oreo.GetHashCode(), mylo.GetHashCode());
+        Assert.NotEqual(oreo, new TestLibrary.Pawpost.PostStack(new HashSet<string> { "bill" }));
+        Assert.Equal(oreo, TestLibrary.Pawpost.PostOffice.EchoStack(mylo));
+    }
+
+    [Fact]
+    public void Map_StructComparesSameKeysWithEqualValues()
+    {
+        var oreo = new TestLibrary.Pawpost.PostLedger(new Dictionary<string, int> { ["bill"] = 1, ["card"] = 2 });
+        var mylo = new TestLibrary.Pawpost.PostLedger(new Dictionary<string, int> { ["card"] = 2, ["bill"] = 1 });
+        Assert.Equal(oreo, mylo);
+        Assert.Equal(oreo.GetHashCode(), mylo.GetHashCode());
+        Assert.NotEqual(oreo, new TestLibrary.Pawpost.PostLedger(new Dictionary<string, int> { ["bill"] = 1, ["card"] = 3 }));
+        Assert.NotEqual(oreo, new TestLibrary.Pawpost.PostLedger(new Dictionary<string, int> { ["bill"] = 1, ["parcel"] = 2 }));
+        Assert.Equal(oreo, TestLibrary.Pawpost.PostOffice.EchoLedger(mylo));
+    }
+
+    [Fact]
+    public void Interface_StructKeepsReferenceEquality()
+    {
+        var oreo = new MyloRumbler();
+        Assert.Equal(new PurrVoice(oreo), new PurrVoice(oreo));
+        Assert.NotEqual(new PurrVoice(oreo), new PurrVoice(new MyloRumbler()));
+    }
+
+    [Fact]
+    public void Default_ReferencePayloadStructs_EqualEachOtherAndHashToZero()
+    {
+        Assert.Equal(default(PawPrint), default(PawPrint));
+        Assert.Equal(0, default(PawPrint).GetHashCode());
+        Assert.Equal(default(ToyBasket), default(ToyBasket));
+        Assert.Equal(0, default(ToyBasket).GetHashCode());
+        Assert.NotEqual(default(PawPrint), new PawPrint(Array.Empty<byte>()));
+        Assert.Equal(0, default(TestLibrary.Pawpost.PostStack).GetHashCode());
+        Assert.Equal(0, default(TestLibrary.Pawpost.PostLedger).GetHashCode());
+    }
 }

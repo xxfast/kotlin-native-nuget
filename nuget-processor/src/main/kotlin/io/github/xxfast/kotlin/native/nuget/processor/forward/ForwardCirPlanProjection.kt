@@ -135,6 +135,73 @@ internal object ForwardCirPlanProjection {
   }
 
   /**
+   * ADR-240: the box/unbox pair of an ADR-235 WIRE value class. The box takes the struct on its
+   * innermost underlying's ordinary parameter wire (a bytes, collection or interface handle minted
+   * before the extern and released after it, ticks, text), so its body is the ordinary route's
+   * handle scope; the unbox passes the incoming box as the leading native argument and reads the
+   * result on the ordinary result wire, re-wrapped through the struct's view.
+   */
+  fun wireValueClassBoxing(
+    box: ForwardCallablePlan,
+    unbox: ForwardCallablePlan,
+    libraryName: String,
+  ): CirValueClassBoxing {
+    val boxCall: ForwardNativeCall = box.singleNativeImport()
+    val unboxCall: ForwardNativeCall = unbox.singleNativeImport()
+    val boxParameter: ForwardPublicParameter = box.publicSignature.parameters.single()
+    val boxBody: String = box.wireBoxBody("Native_NugetBox")
+    val unboxed: CirResultProjection = unbox.resultProjection(
+      nativeName = "Native_NugetUnbox",
+      parameters = emptyList(),
+      receiverArgument = "boxed",
+      forceCustomBody = true,
+    )
+    return CirValueClassBoxing(
+      boxImport = CirDllImport(
+        libraryName = libraryName,
+        entryPoint = boxCall.exportName,
+        returnType = "IntPtr",
+        name = "Native_NugetBox",
+        parameters = box.nativeInCirParameters(boxCall.parameters),
+        visibility = CirVisibility.PRIVATE,
+        hasSyncErrorOut = box.errorSlot != null,
+      ),
+      unboxImport = CirDllImport(
+        libraryName = libraryName,
+        entryPoint = unboxCall.exportName,
+        returnType = unboxed.nativeReturnType,
+        name = "Native_NugetUnbox",
+        parameters = unbox.nativeInCirParameters(unboxCall.parameters),
+        visibility = CirVisibility.PRIVATE,
+        hasSyncErrorOut = unbox.errorSlot != null,
+      ),
+      boxParameter = boxParameter.csharpName,
+      boxArguments = emptyList(),
+      unboxResult = "",
+      boxBody = boxBody,
+      unboxBody = unboxed.body,
+    )
+  }
+
+  /** ADR-240: the box export's call inside the ordinary route's handle scope, returning the box. */
+  private fun ForwardCallablePlan.wireBoxBody(nativeName: String): String {
+    val parameters: List<ForwardPublicParameter> = publicSignature.parameters
+    val prelude: List<ForwardCirHandleStep> =
+      parameters.mapNotNull { parameter -> parameter.optionalPrelude() } +
+        parameters.unwrapped().zip(parameters).mapNotNull { (parameter, declared) ->
+          bytesPrelude(parameter)
+            ?: collectionPrelude(parameter, named = declared.csharpName)
+            ?: interfacePrelude(parameter)
+        }
+    val cleanup: List<String> = parameters.unwrapped().mapNotNull { parameter ->
+      bytesCleanup(parameter) ?: collectionCleanup(parameter) ?: interfaceCleanup(parameter)
+    }
+    val arguments: String = (parameters.flatMap { parameter -> inputArguments(parameter) } +
+      "out IntPtr error").joinToString(", ")
+    return checkedPointerBody(nativeName, arguments, "return nativeResult;", prelude, cleanup)
+  }
+
+  /**
    * ADR-094 (write side): an enum's box extern, off its plan so the `DllImport` carries exactly
    * the wire the Kotlin export declares (the ordinal as `int`, the error slot). Named after its
    * entry point, which is unique by construction, because every enum's row shares `NugetMarshal`.

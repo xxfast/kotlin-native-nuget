@@ -91,3 +91,15 @@ The receiver crosses as a boxed `T` (a plain scalar for a phantom) and Kotlin re
 coroutine, so a failing `init` faults the returned `Task` instead of throwing from the call. The C#
 member is an instance method on the generic record struct, and the box is released when the task
 settles.
+
+## Amendment (2026-10-22): wire receivers
+
+[ADR-240](240-async-routes-carry-wire-underlyings.md) widens the receiver row. A `suspend`
+extension binds on an `Instant`, `Duration`, `Uuid`, `ByteArray` or plain interface receiver, each
+nullable too, on that type's ordinary wire (`suspend fun ByteArray?.padsOrNone()`). A value class
+over `Instant`, `Duration`, `Uuid`, `ByteArray`, a collection, an interface or another value class
+binds its `suspend` members as instance methods on the struct, and a `default(V)` receiver over a
+reference underlying throws `ArgumentException`. Verified by
+`NullableAndValueClassExtensionReceivers_Cross`, `Extension_BareTypeReceivers_CrossOnTheirWire`,
+`Extension_ValueClassReceivers_CrossOnTheirUnderlyingWire` and
+`ValueClassMembers_ReferenceAndStdlibUnderlyings_AreInstanceAsyncMethods`.

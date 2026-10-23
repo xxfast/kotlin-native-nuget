@@ -209,11 +209,11 @@ public KotlinFlow<byte[]> Pulses { get; }
 ```
 
 A bare `ByteArray` (no surrounding collection) binds the same way a component does, straight to
-`Task<byte[]>` and `KotlinFlow<byte[]>`; see [Coroutines and Flow](coroutines-and-flow.md). A bare
-`ByteArray` **parameter** on a `Flow`-, `StateFlow`-, or `suspend`-returning member is not
-supported.
+`Task<byte[]>` and `KotlinFlow<byte[]>`, and a `ByteArray` parameter on those members binds as
+`byte[]` too; see [Coroutines and Flow](coroutines-and-flow.md#async-wire-types).
 
-A `Set<ByteArray>` element and a `Map<ByteArray, V>` **key** are deliberately not supported: arrays
+A `Set<ByteArray>` element and a `Map<ByteArray, V>` **key** are deliberately not supported (a value
+class over a `ByteArray` is, and compares by content): arrays
 compare by identity in Kotlin and in C# alike, and every crossing copies, so the `byte[]` you hold is
 never the array the Kotlin container hashed and no membership test or lookup could ever succeed. Use
 a `List<ByteArray>` when you want order, or key the map by a `String` (or a value class over one)

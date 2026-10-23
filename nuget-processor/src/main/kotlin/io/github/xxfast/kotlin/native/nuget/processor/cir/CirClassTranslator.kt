@@ -95,6 +95,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.inlineList
 import io.github.xxfast.kotlin.native.nuget.processor.forward.interfaceMethodSymbols
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyReturnShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyWireRead
+import io.github.xxfast.kotlin.native.nuget.processor.forward.planned
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOptInRefused
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallableCatalogEntry
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
@@ -169,6 +171,11 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.overridesKeptBaseO
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyMarshalledRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyDiscriminatedRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollection
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementWire
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyWireShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParameterShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyWireReadArgument
+import io.github.xxfast.kotlin.native.nuget.processor.forward.declaredCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyFlowElementShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyGenericElement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBytesCsharpType
@@ -180,10 +187,10 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyEnvelopeElem
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementEnvelope
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementReadArgument
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedFlowElement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedReturn
-import io.github.xxfast.kotlin.native.nuget.processor.forward.declaredCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyInterfaceElementReadArgument
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyInterfaceRead
@@ -1995,8 +2002,8 @@ internal fun flowProperty(
   // settable MutableStateFlow property: its write path spells `v._handle`, which the projection
   // does not carry, and no fixture exercises that combination.
   val flowElementInterface: BridgeType.Interface? =
-    if (isMutableStateFlowProperty) null
-    else classifier.legacyFlowElementInterface(flowElementTypeResolved)
+    // ADR-240: a settable one too, which now writes through the interface bridge.
+    classifier.legacyFlowElementInterface(flowElementTypeResolved)
   // ROADMAP Phase 4 (ADR-151 amendment): a bare `ByteArray` element is `byte[]`, read through the
   // same per-member `read:` seam a collection element uses. It has to be decided here because
   // `qualifiedElementCsType` below crashes the processor on a Kotlin builtin (ADR-123's guard).
@@ -2006,7 +2013,12 @@ internal fun flowProperty(
   // ADR-201 amendment: a bare Throwable element is `Exception`, read as its ADR-107 envelope.
   val flowElementEnvelope: Boolean = classifier.legacyFlowElementEnvelope(propTypeResolved)
   if (flowElementBytes) tracker.needsBytes = true
+  // ADR-240: a narrow or wire value-class element, read through the per-member `read:` seam.
+  val flowElementWire: ForwardLegacyFlowElementShape.Wire? =
+    classifier.legacyFlowElementWire(propTypeResolved)
+  flowElementWire?.trackWire(tracker)
   val flowElementType: String? = when {
+    flowElementWire != null -> flowElementWire.declaredCsharpType()
     flowElementCollection != null -> flowElementCollection.forwardPublicCsharpType()
     flowElementBytes -> legacyBytesCsharpType(isNullableElement)
     flowElementEnvelope -> legacyEnvelopeCsharpType(isNullableElement)
@@ -2019,7 +2031,8 @@ internal fun flowProperty(
         ?: qualifiedElementCsType(flowElementTypeResolved, context, isNullableElement)
     else -> null
   }
-  val flowElementRead: String? = flowElementCollection
+  val flowElementRead: String? = flowElementWire?.legacyWireReadArgument()
+    ?: flowElementCollection
     ?.let { collection -> legacyFlowElementReadArgument(collection) }
     ?: flowElementInterface
       ?.let { iface -> legacyInterfaceElementReadArgument(iface, isNullableElement) }
@@ -2107,7 +2120,7 @@ internal fun flowProperty(
             stateFlowCompareAndSetLambda(
               compareAndSetNativeName, "_handle", stateFlowWrite, taken = emptySet(),
               indent = "                    ", ownerGuard = ownerGuard,
-            ) + ");",
+            ) + (flowElementRead?.let { read -> ",\n                    $read" }.orEmpty()) + ");",
           )
         } else if (flowElementRead != null) {
           // ADR-123: `read:` is named, so it skips the ADR-068-only `ownedHandle` slot.
@@ -2351,11 +2364,10 @@ internal fun flowMembers(
       classifier.legacyFlowElementCollection(returnType)
     if (flowElementCollection != null) tracker.trackCollection(flowElementCollection)
     // ADR-040: the sibling property branch's rule -- an interface element is declared with the
-    // projection and read through the backing wrapper, and the held MutableStateFlow route (which
-    // writes `v._handle`) keeps the shipped spelling.
+    // projection and read through the backing wrapper; ADR-240: on a settable holder too, which
+    // writes it through the interface bridge.
     val flowElementInterface: BridgeType.Interface? =
-      if (isHeldMutableStateFlow) null
-      else classifier.legacyFlowElementInterface(flowElementTypeResolved)
+      classifier.legacyFlowElementInterface(flowElementTypeResolved)
     // ROADMAP Phase 4: the sibling property branch's bytes arm, for a
     // `fun ticks(): Flow<ByteArray>`.
     val flowElementBytes: Boolean =
@@ -2365,7 +2377,12 @@ internal fun flowMembers(
     val flowElementEnvelope: Boolean = classifier.legacyFlowElementEnvelope(returnType)
     if (flowElementBytes) tracker.needsBytes = true
     // ADR-066: qualified, not by simple name, see the sibling property branch above for why.
-    val flowCsElementType: String = flowElementCollection?.forwardPublicCsharpType()
+    // ADR-240: the property branch's wire arm.
+    val flowElementWire: ForwardLegacyFlowElementShape.Wire? =
+      classifier.legacyFlowElementWire(returnType)
+    flowElementWire?.trackWire(tracker)
+    val flowCsElementType: String = flowElementWire?.declaredCsharpType()
+      ?: flowElementCollection?.forwardPublicCsharpType()
       ?: legacyBytesCsharpType(isNullableElement).takeIf { flowElementBytes }
       ?: legacyEnvelopeCsharpType(isNullableElement).takeIf { flowElementEnvelope }
       ?: flowElementInterface?.let { it.csharpType + if (isNullableElement) "?" else "" }
@@ -2380,7 +2397,8 @@ internal fun flowMembers(
       elementClass.typeParameters.isNotEmpty() &&
       flowElementTypeResolved.mentionsAnyTypeParameter()
     ) listOf(flowCsElementType.removeSuffix("?")) else emptyList()
-    val flowElementRead: String? = flowElementCollection
+    val flowElementRead: String? = flowElementWire?.legacyWireReadArgument()
+      ?: flowElementCollection
       ?.let { collection -> legacyFlowElementReadArgument(collection) }
       ?: flowElementInterface
         ?.let { iface -> legacyInterfaceElementReadArgument(iface, isNullableElement) }
@@ -2752,6 +2770,10 @@ internal fun suspendMembers(
     // ROADMAP Phase 4: `suspend fun snapshot(): ByteArray` is `Task<byte[]>`, read with
     // `NugetMarshal.ReadBytes` off the awaited handle (the Kotlin half already retains the array).
     if (returnShape is ForwardLegacyReturnShape.Bytes) tracker.needsBytes = true
+    // ADR-240: the helpers a wire result's read binds to.
+    val planned: BridgeType? = (returnShape as? ForwardLegacyReturnShape.Wire)?.planned
+    if (planned == BridgeType.ByteArray) tracker.needsBytes = true
+    if (planned is BridgeType.Collection) tracker.trackCollection(planned)
 
     // ADR-114: a collection parameter takes the public collection type with an IntPtr native
     // slot; every other parameter keeps mapParamType's shipped spelling.
@@ -2782,6 +2804,8 @@ internal fun suspendMembers(
       returnShape is ForwardLegacyReturnShape.ValueClass -> returnShape.declaredCsharpType()
       returnShape is ForwardLegacyReturnShape.Enum -> returnShape.declaredCsharpType()
       returnShape is ForwardLegacyReturnShape.Boxed -> returnShape.declaredCsharpType()
+      // ADR-240: a bare narrow type or a value class without a box pair.
+      returnShape is ForwardLegacyReturnShape.Wire -> returnShape.declaredCsharpType()
       else -> {
         // ADR-118: a nested sealed arm is declared inside its base (ADR-009), so the bare simple
         // name is unresolvable at namespace scope (CS0246). `nestedCsName()` walks class parents
@@ -2882,6 +2906,9 @@ internal fun suspendMembers(
 
         // ADR-214: the plan route's read of a boxed `T`.
         is ForwardLegacyReturnShape.Boxed -> returnShape.legacyBoxedRead("resultPtr")
+
+        // ADR-240: the ordinary route's read of the innermost underlying, re-wrapped.
+        is ForwardLegacyReturnShape.Wire -> returnShape.legacyWireRead("resultPtr")
 
         ForwardLegacyReturnShape.Plain, is ForwardLegacyReturnShape.Refused -> null
       },
@@ -2997,9 +3024,9 @@ internal fun suspendMembers(
         if (element.acquiredFlow) "${nativeStem}Collect" else null,
       isAwaitedStateFlow = !element.acquiredFlow,
       awaitedStateFlowCollectNativeName =
-        if (element.collection != null) "${nativeStem}Collect" else null,
+        if (element.perMember) "${nativeStem}Collect" else null,
       awaitedStateFlowValueNativeName =
-        if (element.collection != null) "${nativeStem}Value" else null,
+        if (element.perMember) "${nativeStem}Value" else null,
       stateFlowSetValueNativeName = if (write != null) "${nativeStem}SetValue" else "",
       stateFlowCompareAndSetNativeName =
         if (write != null) "${nativeStem}CompareAndSet" else "",
@@ -3019,7 +3046,7 @@ internal fun suspendMembers(
       emptyList()
     }
     // ADR-068, collection element: the per-member pair the awaited holder reads through.
-    val awaitedPair: List<CirMember> = if (element.collection != null) {
+    val awaitedPair: List<CirMember> = if (element.perMember) {
       awaitedStateFlowCollectionImports(
         libraryName, "${prefix}_${cname}", "${nativeStem}Collect", "${nativeStem}Value",
       )
@@ -3090,6 +3117,8 @@ internal data class SuspendStateFlowElement(
    * ([awaitedStateFlowCollectionImports]) rather than the runtime's shared one. Null otherwise.
    */
   val collection: BridgeType.Collection? = null,
+  /** ADR-240: whether the awaited flow reads through its own `_value`/`_collect` pair. */
+  val perMember: Boolean = collection != null,
 )
 
 internal fun suspendStateFlowElement(
@@ -3109,13 +3138,18 @@ internal fun suspendStateFlowElement(
     // ADR-201 amendment: an acquired `Flow<Throwable>` reads each item as its envelope.
     val envelope = classifier.legacyFlowElementShape(element) is
       ForwardLegacyFlowElementShape.Envelope
-    val cs = collection?.forwardPublicCsharpType()
+    // ADR-240: an acquired `Flow` of a wire element.
+    val wire = classifier.legacyFlowElementWire(returnType)
+    if (tracker != null) wire?.trackWire(tracker)
+    val cs = wire?.declaredCsharpType()
+      ?: collection?.forwardPublicCsharpType()
       ?: legacyBytesCsharpType(nullable).takeIf { bytes }
       ?: legacyEnvelopeCsharpType(nullable).takeIf { envelope }
       ?: iface?.let { it.csharpType + if (nullable) "?" else "" }
       ?: classifier.legacyGenericElement(element, nullable)
       ?: qualifiedElementCsType(element, context, nullable)
-    val read = collection?.let { legacyFlowElementReadArgument(it) }
+    val read = wire?.legacyWireReadArgument()
+      ?: collection?.let { legacyFlowElementReadArgument(it) }
       ?: iface?.let { legacyInterfaceElementReadArgument(it, nullable) }
       ?: legacyBytesElementReadArgument(nullable).takeIf { bytes }
       ?: legacyEnvelopeElementReadArgument(nullable).takeIf { envelope }
@@ -5333,6 +5367,17 @@ internal fun translateValueClass(
     ?.takeIf { it.valueClassUnderlying(cls) == ForwardValueClassUnderlying.WIRE }
     ?.classify(underlyingResolved)
   if (wireUnderlying != null) {
+    // ADR-240: a `suspend` or `Flow` member's receiver is the struct's own innermost underlying,
+    // on its ordinary-route wire, unwrapped from `this` (refusing a reference-typed default).
+    val self: ForwardLegacyParameterShape.Wire? =
+      legacyWireShape(requireNotNull(classifier).classify(cls.asStarProjectedType()))
+    val asyncMembers: List<CirMember> = if (self == null) emptyList() else staticSuspend(
+      legacyWireParameter(
+        "receiver", self, tracker,
+        hasValue = null, handle = "receiverHandle", owned = "receiverOwned",
+        source = "this", named = null, root = underlyingName,
+      ),
+    )
     // ADR-235: every member and secondary constructor is on the ADR-225 route, [routeMembers].
     return CirValueClass(
       name = name,
@@ -5347,6 +5392,14 @@ internal fun translateValueClass(
       doc = cls.forwardKdoc(expects)?.toCirDoc(),
       underlyingDoc = underlyingProp.forwardKdoc(expects)?.toCirDoc(),
       routeMembers = routeMembers,
+      asyncMembers = asyncMembers,
+      contentEquality = contentEqualityMembers(name, underlyingName, wireUnderlying),
+      // ADR-240: the box pair an erased position (`Box<V>`, a flow element, an awaited result)
+      // crosses through.
+      boxing = callableCatalog.valueClassBoxing(cls.qualifiedName?.asString().orEmpty())
+        ?.let { (box, unbox) ->
+          ForwardCirPlanProjection.wireValueClassBoxing(box, unbox, libraryName)
+        },
     )
   }
   // ADR-077 sub-item 4 prerequisite: an enum underlying is a *value* underlying (ordinal over the
@@ -6378,9 +6431,32 @@ private fun awaitedStateFlowCollectionElement(
   classifier: ForwardBridgeTypeClassifier,
   tracker: CollectionHelperTracker?,
 ): SuspendStateFlowElement? {
-  if (returnType?.expandAliases()?.declaration?.qualifiedName?.asString() !in
-    READ_ONLY_STATE_FLOW_TYPES
-  ) return null
+  val holder: String? = returnType?.expandAliases()?.declaration?.qualifiedName?.asString()
+  if (holder !in STATE_FLOW_TYPES) return null
+  // ADR-240: an awaited `MutableStateFlow` of a `ByteArray` reads its bytes through the same pair.
+  val element: KSType? = legacyFlowElement(returnType)
+  val bytes: Boolean = classifier.legacyFlowElementShape(element) is ForwardLegacyFlowElementShape.Bytes
+  if (bytes && holder in MUTABLE_STATE_FLOW_TYPES) {
+    tracker?.needsBytes = true
+    return SuspendStateFlowElement(
+      asyncReturnType = "KotlinStateFlow<byte[]>" + if (memberNullable) "?" else "",
+      elementType = "byte[]",
+      read = legacyBytesElementReadArgument(nullable = false),
+      perMember = true,
+    )
+  }
+  // ADR-240: a wire element reads through the same pair, on its result wire.
+  val wire: ForwardLegacyFlowElementShape.Wire? = classifier.legacyFlowElementWire(returnType)
+  if (wire != null) {
+    if (tracker != null) wire.trackWire(tracker)
+    return SuspendStateFlowElement(
+      asyncReturnType = "KotlinStateFlow<${wire.declaredCsharpType()}>" +
+        if (memberNullable) "?" else "",
+      elementType = wire.declaredCsharpType(),
+      read = wire.legacyWireReadArgument(),
+      perMember = true,
+    )
+  }
   val collection: BridgeType.Collection =
     classifier.legacyFlowElementCollection(returnType) ?: return null
   tracker?.trackCollection(collection)
@@ -6540,4 +6616,11 @@ private fun CirMethod.substituting(arguments: Map<String, String>): CirMethod {
     },
     body = body.substituted(),
   )
+}
+
+/** ADR-240: the helpers a wire element's read binds to. */
+private fun ForwardLegacyFlowElementShape.Wire.trackWire(tracker: CollectionHelperTracker) {
+  val inner: BridgeType = planned
+  if (inner == BridgeType.ByteArray) tracker.needsBytes = true
+  if (inner is BridgeType.Collection) tracker.trackCollection(inner)
 }

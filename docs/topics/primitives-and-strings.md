@@ -164,7 +164,8 @@ using var record = new ChipRecord(minted);
 `record.Id` equals `minted`. All 128 bits are preserved, and `Uuid.NIL` maps to `Guid.Empty`.
 
 `Instant`, `Duration`, and `Uuid` work as properties, constructor and method parameters, and
-function results. They also work as `List`, `Set` and `Map` elements, keys and values, nullable
+function results, and as a `suspend` or `Flow` parameter, result or element
+(see [Coroutines and Flow](coroutines-and-flow.md#async-wire-types)). They also work as `List`, `Set` and `Map` elements, keys and values, nullable
 included: each element crosses as ticks (`Instant`, `Duration`) or text (`Uuid`).
 
 ```kotlin
@@ -210,7 +211,9 @@ an empty payload. `ByteArray` works as a property, constructor and method parame
 result, and as a `List` element or a `Map` value (`List<ByteArray>` is `IReadOnlyList<byte[]>`, see
 [Collections](collections.md)). It is not supported as a `Set` element or a `Map` key, since arrays
 compare by identity and every crossing copies, so a lookup could never succeed, nor as another array
-type (`IntArray`, `Array<T>`), nor as an extension receiver.
+type (`IntArray`, `Array<T>`), nor as a non-`suspend` extension receiver. It binds as a `suspend`
+parameter and result, a `Flow` element and a `suspend` extension receiver
+(see [Coroutines and Flow](coroutines-and-flow.md#async-wire-types)).
 
 ## Any {id="any"}
 

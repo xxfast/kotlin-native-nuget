@@ -161,6 +161,49 @@ internal sealed interface ForwardLegacyParameterShape {
     ForwardLegacyParameterShape
 
   /**
+   * ADR-240: a type the ordinary route already carries on a wire of its own: a bare `Instant`,
+   * `Duration`, `Uuid`, `ByteArray` or plain interface, or a value class over any underlying,
+   * nullable or not. [declared] is the classified parameter type. A value class is seen through
+   * its [view] to its innermost underlying, [planned], which crosses exactly as the ordinary route
+   * crosses it: ticks, hex-dash text, a bytes or collection handle, the interface bridge, or the
+   * scalar itself. Kotlin reads the slot into a local before the coroutine launches, so C# may
+   * release a minted handle the moment the extern returns; the value class is re-wrapped inside
+   * the launch, so a failing `init` faults the `Task` instead of escaping the export.
+   */
+  data class Wire(val declared: BridgeType) : ForwardLegacyParameterShape {
+    val view: ForwardValueClassView?
+      get() = if (declared.unwrapNullable() is BridgeType.ValueClass) {
+        ForwardValueClassView(declared)
+      } else {
+        null
+      }
+
+    val planned: BridgeType
+      get() = view?.planned ?: declared
+
+    /** Whether C# mints a handle for the planned wire before the call and releases it after. */
+    val mintsHandle: Boolean
+      get() {
+        val inner: BridgeType = planned.unwrapNullable()
+        return inner == BridgeType.ByteArray ||
+          inner is BridgeType.Collection ||
+          inner is BridgeType.Interface
+      }
+
+    /** Whether the planned wire is the interface bridge, which reports a minted transfer handle. */
+    val bridgesInterface: Boolean
+      get() = planned.unwrapNullable() is BridgeType.Interface
+
+    /** Whether the planned wire is a nullable value type, which takes the has-value slot pair. */
+    val fansOut: Boolean
+      get() {
+        val inner: BridgeType = (planned as? BridgeType.Nullable)?.type ?: return false
+        return inner is BridgeType.Primitive || inner == BridgeType.Char ||
+          inner is BridgeType.Enum || inner == BridgeType.Instant || inner == BridgeType.Duration
+      }
+  }
+
+  /**
    * Any other parameter, named so the skip diagnostic can quote it.
    *
    * [refusal] is the classifier's own [BridgeType.Unsupported] when the parameter is an
@@ -212,7 +255,13 @@ internal fun BridgeType.ValueClass.hasErasedCrossing(): Boolean = underlying.isE
       inner == BridgeType.String || inner is BridgeType.TypeParameter ||
           // ADR-226: and a nullable primitive (`TreatCount(val count: Int?)`).
           inner is BridgeType.Primitive
-    } == true
+    } == true ||
+    // ADR-240: an ADR-235 WIRE underlying (`Instant`, `Duration`, `Uuid`, `ByteArray`, a
+    // collection, a plain interface, another value class): its box takes the struct on the
+    // underlying's wire, as every ordinary parameter does, and its unbox returns it the same way.
+    (qualifiedName != "kotlin.Result" &&
+      underlying.valueClassUnderlyingRole() == ForwardValueClassUnderlying.WIRE &&
+      legacyWireShape(this) != null)
 
 private fun BridgeType.isErasedUnderlying(): Boolean =
   this == BridgeType.String || this is BridgeType.Primitive || this is BridgeType.Enum ||
@@ -297,6 +346,9 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
   classified.valueClassBoxParameter(expanded)?.let { boxed ->
     return ForwardLegacyParameterShape.Boxed(boxed, nullable = classified is BridgeType.Nullable)
   }
+  // ADR-240: a type with a wire of its own on the ordinary route rides that wire here too.
+  val wire: ForwardLegacyParameterShape.Wire? = legacyWireShape(classified)
+  if (wire != null) return wire
 
   if (expanded.arguments.isEmpty()) return when {
     classified.isLegacyScalar() -> ForwardLegacyParameterShape.Plain
@@ -332,6 +384,66 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
       unwritten.valueClassWithoutStruct(),
     )
   }
+}
+
+/**
+ * ADR-240: the [ForwardLegacyParameterShape.Wire] [classified] rides, or null. A bare `Instant`,
+ * `Duration`, `Uuid`, `ByteArray` or plain interface, and a value class (not `kotlin.Result`, not
+ * one carrying a member's own `T`) whose innermost underlying the legacy routes can lower.
+ */
+internal fun legacyWireShape(classified: BridgeType): ForwardLegacyParameterShape.Wire? {
+  val inner: BridgeType = classified.unwrapNullable()
+  val admitted: Boolean = when (inner) {
+    BridgeType.Instant, BridgeType.Duration, BridgeType.Uuid, BridgeType.ByteArray -> true
+    is BridgeType.Interface -> true
+    is BridgeType.ValueClass -> inner.qualifiedName != "kotlin.Result" &&
+      ForwardValueClassView(classified).planned.isLegacyWireUnderlying()
+    BridgeType.Unit,
+    is BridgeType.Primitive,
+    BridgeType.Char,
+    BridgeType.String,
+    is BridgeType.Throwable,
+    is BridgeType.Enum,
+    is BridgeType.ObjectHandle,
+    is BridgeType.BoundInterface,
+    is BridgeType.Collection,
+    is BridgeType.Nullable,
+    is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+    is BridgeType.TypeParameter,
+      -> false
+  }
+  return if (admitted) ForwardLegacyParameterShape.Wire(classified) else null
+}
+
+/** ADR-240: whether a value class's innermost underlying has a lowering on the legacy routes. */
+private fun BridgeType.isLegacyWireUnderlying(): Boolean = when (this) {
+  is BridgeType.Primitive, BridgeType.String, is BridgeType.Enum, BridgeType.Instant,
+  BridgeType.Duration, BridgeType.Uuid, BridgeType.ByteArray, is BridgeType.Interface,
+  is BridgeType.ObjectHandle -> true
+  is BridgeType.Collection -> isLegacyMarshallableInput()
+  is BridgeType.Nullable -> type.isLegacyWireUnderlying() && type !is BridgeType.Nullable
+  BridgeType.Unit,
+  BridgeType.Char,
+  is BridgeType.Throwable,
+  is BridgeType.BoundInterface,
+  is BridgeType.ValueClass,
+  is BridgeType.Callback,
+  is BridgeType.AsyncCallback,
+  is BridgeType.FlowSource,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+  is BridgeType.TypeParameter,
+    -> false
 }
 
 /**
@@ -639,6 +751,7 @@ private fun legacyWidenedIndices(
     // Only a nullable one: the `IsSet` slot rides the nullable pointer slot.
     is ForwardLegacyParameterShape.Marshalled -> shape.nullable
     // ADR-214: a defaulted `T` stays required; its box has no unset encoding.
+    is ForwardLegacyParameterShape.Wire,
     is ForwardLegacyParameterShape.Boxed,
     // ADR-232: a defaulted interface stays required, as a defaulted `T` does.
     is ForwardLegacyParameterShape.Interface,
@@ -703,6 +816,7 @@ internal val ForwardLegacyParameterShape.isLegacyDefaulted: Boolean
     is ForwardLegacyParameterShape.Enum,
     is ForwardLegacyParameterShape.ManagedException,
     is ForwardLegacyParameterShape.Async,
+    is ForwardLegacyParameterShape.Wire,
     is ForwardLegacyParameterShape.Boxed,
     is ForwardLegacyParameterShape.Interface,
     is ForwardLegacyParameterShape.Refused -> false
@@ -855,6 +969,15 @@ internal sealed interface ForwardLegacyReturnShape {
     val type: BridgeType.Enum,
     val nullable: Boolean,
   ) : ForwardLegacyReturnShape
+
+  /**
+   * ADR-240: a bare `Instant`, `Duration` or `Uuid`, or a value class with no ADR-171 box pair
+   * (one over `Instant`, `Duration`, `Uuid`, `ByteArray`, a collection, a plain interface or
+   * another value class). The export pins the innermost underlying on the ordinary route's result
+   * wire (ticks, hex-dash text, the bytes or collection container, the object), and C# reads it
+   * back with that route's read and re-wraps the struct; a null result is the null pointer.
+   */
+  data class Wire(val declared: BridgeType) : ForwardLegacyReturnShape
 
   /**
    * Any other generic return, named so the skip diagnostic can quote it. [refusal] carries the
@@ -1023,6 +1146,14 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
     return ForwardLegacyReturnShape.Envelope(expanded.isMarkedNullable)
   }
 
+  // ADR-240: a bare `Instant`, `Duration` or `Uuid` reached the `Plain` fall-through and was
+  // spelled by the user-type speller, which refuses a Kotlin builtin.
+  if (classified == BridgeType.Instant || classified == BridgeType.Duration ||
+    classified == BridgeType.Uuid
+  ) {
+    return ForwardLegacyReturnShape.Wire(classify(expanded))
+  }
+
   // ROADMAP Phase 4 line 23: `Plain` means "spell it", so a type the classifier refused (an
   // out-of-scope dependency type above all) was spelled as a C# type nothing declares. Refused
   // by name instead, carrying the dependency refusal for the `admit(...)` hint.
@@ -1041,6 +1172,9 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
   ) {
     return if (classified.hasErasedCrossing()) {
       ForwardLegacyReturnShape.ValueClass(classified, expanded.isMarkedNullable)
+    } else if (classified.isLegacyWireResult()) {
+      // ADR-240: no box pair, so the innermost underlying crosses on its own result wire.
+      ForwardLegacyReturnShape.Wire(classify(expanded))
     } else {
       ForwardLegacyReturnShape.Refused(
         "${expanded.legacyDescription()}$VALUE_CLASS_WITHOUT_BOX_REFUSAL",
@@ -1097,8 +1231,15 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
     val readOnly: Boolean =
       expanded.declaration.qualifiedName?.asString() in READ_ONLY_STATE_FLOW_TYPES
     val elementShape: ForwardLegacyFlowElementShape = legacyFlowElementShape(element)
-    val bindsPerMember: Boolean =
-      readOnly && elementShape is ForwardLegacyFlowElementShape.Marshalled
+    // ADR-240: a wire element reads through the same per-member pair, boxed on its result wire.
+    // ADR-240: an awaited `MutableStateFlow` of a collection or `ByteArray` reads through the
+    // same pair, and writes its minted handle through the held route's flow-keyed setter.
+    val mintedMutable: Boolean = !readOnly && element?.isMarkedNullable != true &&
+      (elementShape is ForwardLegacyFlowElementShape.Marshalled ||
+        elementShape is ForwardLegacyFlowElementShape.Bytes)
+    val bindsPerMember: Boolean = mintedMutable || readOnly &&
+      (elementShape is ForwardLegacyFlowElementShape.Marshalled ||
+        elementShape is ForwardLegacyFlowElementShape.Wire)
     return if (elementShape is ForwardLegacyFlowElementShape.Plain || bindsPerMember) {
       ForwardLegacyReturnShape.Plain
     } else {
@@ -1195,6 +1336,13 @@ internal sealed interface ForwardLegacyFlowElementShape {
    */
   data class Envelope(val nullable: Boolean) : ForwardLegacyFlowElementShape
 
+  /**
+   * ADR-240: a bare `Instant`, `Duration` or `Uuid` element, or a value class with no ADR-171 box
+   * pair, each emission boxed on the suspend result's wire ([ForwardLegacyReturnShape.Wire]) and
+   * read through the per-member `read:` seam. [declared] keeps the element's nullability.
+   */
+  data class Wire(val declared: BridgeType) : ForwardLegacyFlowElementShape
+
   /** Any other generic element, named so the skip diagnostic can quote it. */
   data class Refused(
     val description: String,
@@ -1233,6 +1381,13 @@ internal fun ForwardBridgeTypeClassifier.legacyFlowElementShape(
   // [legacyRefusedFlowElementShape] and the awaited `StateFlow` arm of [legacyReturnShape]).
   if (classified is BridgeType.Throwable) {
     return ForwardLegacyFlowElementShape.Envelope(expanded.isMarkedNullable)
+  }
+
+  // ADR-240: a bare narrow element reached the `Plain` fall-through, which crashed the speller.
+  if (classified == BridgeType.Instant || classified == BridgeType.Duration ||
+    classified == BridgeType.Uuid
+  ) {
+    return ForwardLegacyFlowElementShape.Wire(classify(expanded))
   }
 
   // ROADMAP Phase 4 line 23: an element the classifier refused (an out-of-scope dependency type
@@ -1274,6 +1429,12 @@ internal fun ForwardBridgeTypeClassifier.legacyFlowElementShape(
   // rewrite is the planner's own (`valueClassBoxingEntries`).
   val valueClass: BridgeType.ValueClass? =
     classified.sealedAsHandle() as? BridgeType.ValueClass
+  // ADR-240: a value class with no box pair crosses on its innermost underlying's wire.
+  if (valueClass != null && expanded.arguments.isEmpty() && !valueClass.hasErasedCrossing() &&
+    valueClass.isLegacyWireResult()
+  ) {
+    return ForwardLegacyFlowElementShape.Wire(classify(expanded))
+  }
   if (valueClass != null && expanded.arguments.isEmpty() && !valueClass.hasErasedCrossing()) {
     return ForwardLegacyFlowElementShape.Refused(
       "${expanded.legacyDescription()}$VALUE_CLASS_WITHOUT_BOX_REFUSAL",
@@ -1353,6 +1514,30 @@ internal fun ForwardBridgeTypeClassifier.legacyRefusedFlowElementShape(
   return if (shape is ForwardLegacyFlowElementShape.Refused) shape.description to shape.refusal
   else null
 }
+
+/** ADR-240: the wire element of a `Flow` member, or null for every other element. */
+internal fun ForwardBridgeTypeClassifier.legacyFlowElementWire(
+  type: KSType?,
+): ForwardLegacyFlowElementShape.Wire? {
+  val element: KSType = legacyFlowElement(type) ?: return null
+  return legacyFlowElementShape(element) as? ForwardLegacyFlowElementShape.Wire
+}
+
+/** ADR-240: the Kotlin box of one emitted [value] of a wire element. */
+internal fun ForwardLegacyFlowElementShape.Wire.legacyWireBox(value: String): String =
+  ForwardLegacyReturnShape.Wire(declared).legacyWireBox(value)
+
+/** ADR-240: the C# type of a wire element. */
+internal fun ForwardLegacyFlowElementShape.Wire.declaredCsharpType(): String =
+  declared.forwardPublicCsharpType()
+
+/** ADR-240: the planned innermost type of a wire element. */
+internal val ForwardLegacyFlowElementShape.Wire.planned: BridgeType
+  get() = ForwardLegacyReturnShape.Wire(declared).planned
+
+/** ADR-240: the `read:` argument a flow holder reads a wire element through. */
+internal fun ForwardLegacyFlowElementShape.Wire.legacyWireReadArgument(): String =
+  "read: static h => ${ForwardLegacyReturnShape.Wire(declared).legacyWireRead("h")}"
 
 /**
  * ADR-201 amendment: the clause appended to a refused `StateFlow<Throwable>`'s description: the
@@ -1572,7 +1757,8 @@ internal class ForwardLegacyNames(
    */
   val hasValueSlots: List<String?> = parameters.mapIndexed { index, name ->
     val shape: ForwardLegacyParameterShape = shapes[index]
-    val fansOut: Boolean = shape is ForwardLegacyParameterShape.NullableScalar && shape.fansOut
+    val fansOut: Boolean = (shape is ForwardLegacyParameterShape.NullableScalar && shape.fansOut) ||
+      (shape is ForwardLegacyParameterShape.Wire && shape.fansOut)
     if (fansOut) mint("${name}HasValue") else null
   }
 
@@ -1625,8 +1811,10 @@ internal class ForwardLegacyNames(
     // ADR-232: an interface is wrapped the same way, into a handle that may be minted.
     val boxed: Boolean = shapes[index] is ForwardLegacyParameterShape.Boxed ||
       shapes[index] is ForwardLegacyParameterShape.Interface
+    // ADR-240: a bytes, collection or interface wire is minted into a local as well.
+    val minted: Boolean = (shapes[index] as? ForwardLegacyParameterShape.Wire)?.mintsHandle == true
     val marshalled: Boolean = csharp &&
-      (shapes[index] is ForwardLegacyParameterShape.Marshalled || boxed)
+      (shapes[index] is ForwardLegacyParameterShape.Marshalled || boxed || minted)
     if (marshalled) mint(if (boxed) "${name}Box" else "${name}Handle") else null
   }
 
@@ -1635,8 +1823,10 @@ internal class ForwardLegacyNames(
    * box in (`${name}Owned` unless taken), or null.
    */
   val ownedLocals: List<String?> = parameters.mapIndexed { index, name ->
+    val wire = shapes[index] as? ForwardLegacyParameterShape.Wire
+    val bridged: Boolean = wire?.bridgesInterface == true
     val wrapped: Boolean = shapes[index] is ForwardLegacyParameterShape.Boxed ||
-      shapes[index] is ForwardLegacyParameterShape.Interface
+      shapes[index] is ForwardLegacyParameterShape.Interface || bridged
     if (csharp && wrapped) mint("${name}Owned") else null
   }
 
@@ -1731,6 +1921,7 @@ internal val ForwardLegacyParameterShape.isLegacyNullableSlot: Boolean
 internal fun ForwardLegacyParameterShape.isLegacyLowered(): Boolean = when (this) {
   is ForwardLegacyParameterShape.Marshalled, is ForwardLegacyParameterShape.Handle,
   is ForwardLegacyParameterShape.Async,
+  is ForwardLegacyParameterShape.Wire,
   is ForwardLegacyParameterShape.Boxed,
   is ForwardLegacyParameterShape.Interface -> true
   ForwardLegacyParameterShape.Plain,
@@ -1763,6 +1954,9 @@ internal fun ForwardLegacyNames.legacyArgument(index: Int, parameter: String): S
         .takeIf { name -> shape.type.trampolined || name in trampolineVariables }
       return legacyBoxedCast(local, shape, variable)
     }
+    // ADR-240: the value class is re-wrapped at the call, inside the launch, so `init` faults the
+    // `Task`.
+    if (shape is ForwardLegacyParameterShape.Wire) return shape.view?.kotlinWrap(local) ?: local
     // ADR-164: a widened handle's local is `T?` off its nullable slot, but it is only passed in
     // the arms that set it, where the member declares `T`.
     val widened: Boolean = shape is ForwardLegacyParameterShape.Handle && shape.widened
@@ -1869,7 +2063,9 @@ internal fun ForwardLegacyNames.legacyPrelude(parameters: List<String>): String 
   ordered.forEach { index ->
     val parameter: String = parameters[index]
     shapes[index]
-      .legacyPrelude(parameter.kotlinIdentifier(), loweredLocals[index], asyncSlots[index])
+      .legacyPrelude(
+        parameter.kotlinIdentifier(), loweredLocals[index], asyncSlots[index], hasValueSlots[index],
+      )
       ?.let { line -> appendLine(line) }
   }
   val mask: String = mask ?: return@buildString
@@ -1946,6 +2142,8 @@ internal fun ForwardLegacyParameterShape.legacyPrelude(
   parameter: String,
   local: String?,
   async: ForwardAsyncSlots? = null,
+  // ADR-240: a fanned-out [ForwardLegacyParameterShape.Wire]'s has-value slot.
+  hasValue: String? = null,
 ): String? = when (this) {
   // ADR-210: built on the calling thread, so Kotlin owns the C# key before the coroutine launches.
   // ADR-231: a plain callback is lowered at the call instead ([legacyArgument]).
@@ -1958,6 +2156,8 @@ internal fun ForwardLegacyParameterShape.legacyPrelude(
     legacyLoweringStatement(parameter, requireNotNull(local), type, nullable)
   is ForwardLegacyParameterShape.Handle ->
     legacyHandleStatement(parameter, requireNotNull(local), type, nullable)
+  is ForwardLegacyParameterShape.Wire ->
+    "val ${requireNotNull(local)} = ${legacyWireLowering(parameter.trim('`'), planned, hasValue)}"
   // ADR-214: the erased read only; the bound cast is [legacyArgument]'s, inside the launch.
   is ForwardLegacyParameterShape.Boxed ->
     "val ${requireNotNull(local)} = ${forwardBoundedRead(parameter, emptyList(), nullable = true)}"
@@ -1984,13 +2184,16 @@ internal fun legacyCollectionCreate(
   source: String,
   type: BridgeType.Collection,
   nullable: Boolean = false,
+  // ADR-240: the parameter a refused null element names, when [source] is an unwrap expression.
+  root: String = source.substringBefore('.'),
 ): String {
   val factory: String = when (type.kind) {
     CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> "CreateList"
     CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> "CreateMap"
     CollectionKind.SET, CollectionKind.MUTABLE_SET -> "CreateSet"
   }
-  val argument: String = collectionCreateArgument(source, type) { it.forwardPublicCsharpType() }
+  val argument: String =
+    collectionCreateArgument(source, type, root = root) { it.forwardPublicCsharpType() }
   val create = "NugetMarshal.$factory($argument)"
   return if (nullable) "$source != null ? $create : IntPtr.Zero" else create
 }
@@ -2395,3 +2598,113 @@ internal fun BridgeType.valueClassBoxParameter(type: KSType): BridgeType.TypePar
     valueClass = true,
   )
 }
+
+/** ADR-240: the value-class view of a wire result's non-null form, or null for a bare type. */
+private fun ForwardLegacyReturnShape.Wire.view(): ForwardValueClassView? {
+  val bare: BridgeType = declared.unwrapNullable()
+  return if (bare is BridgeType.ValueClass) ForwardValueClassView(bare) else null
+}
+
+/** ADR-240: the innermost non-null type a wire result crosses on. */
+internal val ForwardLegacyReturnShape.Wire.planned: BridgeType
+  get() = (view()?.planned ?: declared).unwrapNullable()
+
+/** ADR-240: the `Task<...>` argument a wire result is declared with. */
+internal fun ForwardLegacyReturnShape.Wire.declaredCsharpType(): String =
+  declared.forwardPublicCsharpType()
+
+/** ADR-240: the Kotlin value the export pins for a non-null [result]. */
+internal fun ForwardLegacyReturnShape.Wire.legacyWireBox(result: String): String {
+  val value: String = view()?.kotlinUnwrap(result) ?: result
+  return legacyWireValueBox(value, planned)
+}
+
+/**
+ * ADR-240: the ordinary route's result-wire value of [value], a non-null [planned]. An `Instant`,
+ * `Duration` or `Uuid` is boxed as itself, the ADR-239 erased box `NugetMarshal.FromHandle` reads
+ * through `nuget_unwrap_instant`/`_duration`/`_uuid`, so a holder with no `read:` seam and a
+ * lambda's type argument read one encoding.
+ */
+internal fun legacyWireValueBox(value: String, planned: BridgeType): String = when (planned) {
+  BridgeType.Instant, BridgeType.Duration, BridgeType.Uuid -> value
+  is BridgeType.Enum -> "$value.ordinal"
+  is BridgeType.Collection -> collectionResultProjection(value, planned)
+  is BridgeType.Primitive, BridgeType.String, BridgeType.ByteArray, is BridgeType.Interface,
+  is BridgeType.ObjectHandle -> value
+  BridgeType.Unit,
+  BridgeType.Char,
+  is BridgeType.Throwable,
+  is BridgeType.BoundInterface,
+  is BridgeType.ValueClass,
+  is BridgeType.Nullable,
+  is BridgeType.Callback,
+  is BridgeType.AsyncCallback,
+  is BridgeType.FlowSource,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+  is BridgeType.TypeParameter,
+    -> error("ADR-240: no legacy result wire for $planned")
+}
+
+/** ADR-240: the C# read of a wire result's [handle], re-wrapped, null-guarded when nullable. */
+internal fun ForwardLegacyReturnShape.Wire.legacyWireRead(handle: String): String {
+  val read: String = legacyWireValueRead(handle, planned)
+  val wrapped: String = view()?.csharpWrap(read) ?: read
+  if (declared !is BridgeType.Nullable) return wrapped
+  return "$handle == IntPtr.Zero ? (${declared.forwardPublicCsharpType()})null : $wrapped"
+}
+
+/** ADR-240: the ordinary route's read of a non-null [planned] result-wire [handle]. */
+internal fun legacyWireValueRead(handle: String, planned: BridgeType): String = when (planned) {
+  // The ADR-239 erased box [legacyWireValueBox] pins.
+  BridgeType.Instant -> "NugetMarshal.FromHandle<global::System.DateTimeOffset>($handle)"
+  BridgeType.Duration -> "NugetMarshal.FromHandle<global::System.TimeSpan>($handle)"
+  BridgeType.Uuid -> "NugetMarshal.FromHandle<global::System.Guid>($handle)"
+  BridgeType.ByteArray -> "NugetMarshal.ReadBytes($handle)"
+  is BridgeType.Collection -> legacyCollectionRead(handle, planned)
+  is BridgeType.Interface ->
+    ForwardLegacyReturnShape.Interface(planned, nullable = false).legacyInterfaceRead(handle)
+  is BridgeType.ObjectHandle -> "new ${planned.constructedType()}($handle, out _)"
+  is BridgeType.Enum -> "(${planned.csharpType})NugetMarshal.FromHandle<int>($handle)"
+  is BridgeType.Primitive, BridgeType.String ->
+    "NugetMarshal.FromHandle<${planned.forwardPublicCsharpType()}>($handle)"
+  BridgeType.Unit,
+  BridgeType.Char,
+  is BridgeType.Throwable,
+  is BridgeType.BoundInterface,
+  is BridgeType.ValueClass,
+  is BridgeType.Nullable,
+  is BridgeType.Callback,
+  is BridgeType.AsyncCallback,
+  is BridgeType.FlowSource,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+  is BridgeType.TypeParameter,
+    -> error("ADR-240: no legacy result read for $planned")
+}
+
+/**
+ * ADR-240: [legacyWireShape], plus a bare collection the legacy routes marshal: the receiver of a
+ * value class's own member over a collection underlying.
+ */
+internal fun legacyWireUnderlyingShape(classified: BridgeType): ForwardLegacyParameterShape.Wire? {
+  val wire: ForwardLegacyParameterShape.Wire? = legacyWireShape(classified)
+  if (wire != null) return wire
+  val collection: BridgeType.Collection = classified as? BridgeType.Collection ?: return null
+  return if (collection.isLegacyMarshallableInput()) ForwardLegacyParameterShape.Wire(collection)
+  else null
+}
+
+/**
+ * ADR-240: whether a value class with no box pair rides the result wire: its view must be
+ * admitted, and its innermost underlying non-null, since the pinned underlying of a present value
+ * cannot be the null pointer that means an absent one.
+ */
+private fun BridgeType.ValueClass.isLegacyWireResult(): Boolean =
+  legacyWireShape(this) != null && ForwardValueClassView(this).planned !is BridgeType.Nullable

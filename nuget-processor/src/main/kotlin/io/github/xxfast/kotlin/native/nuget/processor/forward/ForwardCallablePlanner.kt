@@ -1505,7 +1505,7 @@ internal class ForwardCallablePlanner(
       return ForwardStaticSuspendReceiver.Box(own, underlying is BridgeType.Nullable, bounds)
     }
     return cls.primaryConstructor?.parameters?.firstOrNull()?.type?.resolve()
-      ?.let(classifier::staticSuspendReceiver)
+      ?.let { type -> classifier.staticSuspendReceiver(type, valueClassUnderlying = true) }
   }
 
   /**
@@ -1816,7 +1816,8 @@ internal class ForwardCallablePlanner(
         val stem: String = function
           ?.let { "${prefix}_${it.simpleName.asString()}${entry.overloadTail(it)}" }.orEmpty()
         val underlying: ForwardStaticSuspendReceiver? = cls.primaryConstructor?.parameters
-          ?.firstOrNull()?.type?.resolve()?.let(classifier::staticSuspendReceiver)
+          ?.firstOrNull()?.type?.resolve()
+          ?.let { type -> classifier.staticSuspendReceiver(type, valueClassUnderlying = true) }
           ?.takeIf { cls.typeParameters.isEmpty() }
         // ADR-230: a `Flow` family return binds on the static flow route, the same receiver slot.
         entry

@@ -222,12 +222,15 @@ class Tier1FlowElementValueClassWithoutStructTest {
       }
     assertContains(code, Regex("""KotlinStateFlow<[\w.:]*Nick> Nick\b"""))
     // ADR-235: an `Instant`, a nested value class and a collection underlying have a record struct
-    // over the underlying's own C# spelling; ADR-228's box pair carries each as a bare element.
-    listOf("Tracker.stamp:", "Tracker.outer:", "Tracker.tags:").forEach { member ->
-      assertTrue(
-        result.kspWarnings.none { it.contains(member) },
-        "expected $member to bind silently; got: ${result.kspWarnings.filter { it.contains(member) }}",
-      )
+    // over the underlying's own C# spelling; a read-only flow of one binds, its element read
+    // through the per-member `read:` seam (ADR-240) and re-wrapped.
+    mapOf(
+      "Tracker.stamp:" to "Stamp", "Tracker.outer:" to "Outer", "Tracker.tags:" to "Tags",
+    ).forEach { (member, valueClass) ->
+      assertContains(result.generatedCSharp, "public readonly record struct $valueClass(")
+      val named: List<String> = result.kspWarnings.filter { it.contains(member) }
+      assertEquals(0, named.size, "expected $member to bind; got: $named")
+      assertContains(result.generatedCSharp, Regex("""KotlinStateFlow<[\w.:]*$valueClass> """))
     }
     assertContains(
       result.generatedCSharp,

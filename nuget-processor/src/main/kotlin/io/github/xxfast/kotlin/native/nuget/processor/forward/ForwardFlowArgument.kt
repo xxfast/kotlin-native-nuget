@@ -66,6 +66,8 @@ internal class ForwardFlowArgument(
   val bytes: Boolean,
   /** A `Throwable` element, which crosses as its ADR-107 envelope. */
   val envelope: Boolean,
+  /** ADR-240: a narrow or wire value-class element, boxed on its result wire. */
+  val wire: ForwardLegacyFlowElementShape.Wire? = null,
   /** The generic class first seen holding this argument: the export's ADR-117 owner. */
   val owner: KSClassDeclaration,
 ) {
@@ -143,6 +145,7 @@ internal fun ForwardBridgeTypeClassifier.flowArgument(
     is ForwardLegacyFlowElementShape.Marshalled -> shape.type.forwardPublicCsharpType()
     is ForwardLegacyFlowElementShape.Bytes -> legacyBytesCsharpType(nullable)
     is ForwardLegacyFlowElementShape.Envelope -> legacyEnvelopeCsharpType(nullable)
+    is ForwardLegacyFlowElementShape.Wire -> shape.declaredCsharpType()
     ForwardLegacyFlowElementShape.Plain -> {
       val classified: BridgeType = classify(element).sealedAsHandle()
       val readable: BridgeType = classified.unwrapNullable()
@@ -150,7 +153,9 @@ internal fun ForwardBridgeTypeClassifier.flowArgument(
       classified.forwardPublicCsharpType()
     }
   }
+  val wire: ForwardLegacyFlowElementShape.Wire? = shape as? ForwardLegacyFlowElementShape.Wire
   val read: String? = when {
+    wire != null -> wire.legacyWireReadArgument()
     collection != null -> legacyFlowElementReadArgument(collection)
     bytes -> legacyBytesElementReadArgument(nullable)
     envelope -> legacyEnvelopeElementReadArgument(nullable)
@@ -169,6 +174,7 @@ internal fun ForwardBridgeTypeClassifier.flowArgument(
       collection = collection,
       bytes = bytes,
       envelope = envelope,
+      wire = wire,
       owner = owner,
     ),
   )
