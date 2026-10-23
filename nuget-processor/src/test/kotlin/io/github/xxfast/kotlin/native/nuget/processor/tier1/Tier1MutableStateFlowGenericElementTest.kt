@@ -101,29 +101,19 @@ class Tier1MutableStateFlowGenericElementTest {
     )
   }
 
-  /** A generic value class is no handle: the member stays refused whole, named. */
+  /**
+   * ADR-228: a generic value class element is no handle, but it crosses as its own box now, so the
+   * member binds writable with no diagnostic: C# writes `Wrap<VCrate<int>>`, Kotlin reads the box
+   * back at the applied spelling.
+   */
   @Test
-  fun `a generic value class element stays refused`() {
+  fun `a generic value class element binds through its box`() {
     val cs: String = result.generatedCSharp.withoutDocComments()
+    assertContains(cs, Regex("""KotlinMutableStateFlow<[\w.:]*VCrate<int>> Crate\b"""))
+    assertContains(result.generated, "as tier1.cells.VCrate<kotlin.Int>)")
     assertTrue(
-      cs.lines().none { line -> line.trimStart().startsWith("public") && " Crate" in line },
-      "expected no Crate member; got: ${cs.lines().filter { " Crate" in it }}",
-    )
-    assertFalse(result.generated.contains("_crate_"), "expected no export for crate")
-    // ADR-220: the record struct is declared, but a flow element is an erased position and a
-    // generic value class has no box pair, so the member is refused as a generic type, named.
-    assertTrue(
-      result.kspWarnings.any {
-        it.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name}]") &&
-          it.contains("Shelf.crate") &&
-          it.contains("not the generic type VCrate<Int>")
-      },
-      "expected crate to be a named skip; kspWarnings=${result.kspWarnings}",
-    )
-    // The property is absent, so no "its setter is not generated" line may claim it survives.
-    assertTrue(
-      result.kspWarnings.none { it.contains("Shelf.crate") && it.contains("setter") },
-      "expected no setter diagnostic for an absent property; kspWarnings=${result.kspWarnings}",
+      result.kspWarnings.none { it.contains("Shelf.crate") },
+      "expected crate to bind silently; kspWarnings=${result.kspWarnings}",
     )
   }
 

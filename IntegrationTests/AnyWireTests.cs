@@ -371,6 +371,16 @@ public class AnyWireTests
         Assert.Equal(6_000_000_000L, Assert.IsType<long>(back.Ribbon));
     }
 
+    // ADR-228: a phantom shares the same box pair, so it reads back over `object?` too.
+    [Fact]
+    public void Stash_PhantomGenericValueClass_ReadsBackOverObject()
+    {
+        var back = Assert.IsType<TestLibrary.Stickers.Decal<object?>>(
+            Hoarding.Stash(new TestLibrary.Stickers.Decal<string>(7L)));
+
+        Assert.Equal(7L, back.Serial);
+    }
+
     [Fact]
     public void GenericValueClass_NullUnderlyingAndNullValue_StayDistinct()
     {

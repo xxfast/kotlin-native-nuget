@@ -1,11 +1,11 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isValueClass
+import io.github.xxfast.kotlin.native.nuget.processor.forward.mentionsAnyTypeParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticFlowGetter
 import io.github.xxfast.kotlin.native.nuget.processor.exports.takesFlowSetter
 import io.github.xxfast.kotlin.native.nuget.processor.exports.flowSetterSource
 import io.github.xxfast.kotlin.native.nuget.processor.exports.mintsFlowHandle
-import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardGenericValueBox
-import io.github.xxfast.kotlin.native.nuget.processor.forward.genericValueBox
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncCurrentName
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.getConstructors
@@ -2010,7 +2010,6 @@ internal fun flowProperty(
     isFlowType || isStateFlowType ->
       classifier.legacyGenericElement(flowElementTypeResolved, isNullableElement)
         ?: qualifiedElementCsType(flowElementTypeResolved, context, isNullableElement)
-
     else -> null
   }
   val flowElementRead: String? = flowElementCollection
@@ -2285,7 +2284,7 @@ internal fun flowMembers(
 ): List<CirMember> {
   // ADR-230: the owner slots every extern of these members starts with.
   val ownerSlots: List<CirParameter> =
-    if (staticFlow) listOfNotNull(staticReceiver).nativeImportParameters()
+    if (staticFlow) listOfNotNull(staticReceiver?.copy(name = "receiver")).nativeImportParameters()
     else listOf(CirParameter("handle", KOTLIN_HANDLE))
   // A struct receiver is read into this local first: a struct's lambdas cannot capture `this`.
   val receiverLocal: String? = staticReceiver?.let { "receiverValue" }
@@ -2365,6 +2364,15 @@ internal fun flowMembers(
       ?: flowElementInterface?.let { it.csharpType + if (isNullableElement) "?" else "" }
       ?: classifier.legacyGenericElement(flowElementTypeResolved, isNullableElement)
       ?: qualifiedElementCsType(flowElementTypeResolved, context, isNullableElement)
+    // ADR-228: a generic value class element over a type parameter is registered before the
+    // flow hands one out, since nothing else may have constructed that instantiation.
+    val elementClass: KSClassDeclaration? =
+      flowElementTypeResolved?.expandAliases()?.declaration as? KSClassDeclaration
+    val flowRegistrations: List<String> = if (
+      elementClass != null && elementClass.isValueClass() &&
+      elementClass.typeParameters.isNotEmpty() &&
+      flowElementTypeResolved.mentionsAnyTypeParameter()
+    ) listOf(flowCsElementType.removeSuffix("?")) else emptyList()
     val flowElementRead: String? = flowElementCollection
       ?.let { collection -> legacyFlowElementReadArgument(collection) }
       ?: flowElementInterface
@@ -2412,7 +2420,9 @@ internal fun flowMembers(
         isStaticFlow = staticFlow,
         isStatic = staticFlow && staticReceiver == null,
         isFlowProperty = method is ForwardStaticFlowGetter,
-        flowReceiverArgument = staticReceiver?.nativeArgument,
+        flowReceiverArgument = staticReceiver?.let { it.boxedRead ?: it.nativeArgument },
+        flowReceiverBox = staticReceiver?.boxedRead != null,
+        flowRegistrations = flowRegistrations,
         flowReceiverLocal = receiverLocal,
         openSlotFills = classifier.openSlotFills(method),
         typeParameters = ownTypeParameters,
@@ -2476,7 +2486,9 @@ internal fun flowMembers(
         isStaticFlow = staticFlow,
         isStatic = staticFlow && staticReceiver == null,
         isFlowProperty = method is ForwardStaticFlowGetter,
-        flowReceiverArgument = staticReceiver?.nativeArgument,
+        flowReceiverArgument = staticReceiver?.let { it.boxedRead ?: it.nativeArgument },
+        flowReceiverBox = staticReceiver?.boxedRead != null,
+        flowRegistrations = flowRegistrations,
         flowReceiverLocal = receiverLocal,
         openSlotFills = classifier.openSlotFills(method),
         typeParameters = ownTypeParameters,
@@ -2589,7 +2601,9 @@ internal fun flowMembers(
         isStaticFlow = staticFlow,
         isStatic = staticFlow && staticReceiver == null,
         isFlowProperty = method is ForwardStaticFlowGetter,
-        flowReceiverArgument = staticReceiver?.nativeArgument,
+        flowReceiverArgument = staticReceiver?.let { it.boxedRead ?: it.nativeArgument },
+        flowReceiverBox = staticReceiver?.boxedRead != null,
+        flowRegistrations = flowRegistrations,
         flowReceiverLocal = receiverLocal,
         openSlotFills = classifier.openSlotFills(method),
         typeParameters = ownTypeParameters,
@@ -2642,7 +2656,9 @@ internal fun flowMembers(
       isStaticFlow = staticFlow,
       isStatic = staticFlow && staticReceiver == null,
       isFlowProperty = method is ForwardStaticFlowGetter,
-      flowReceiverArgument = staticReceiver?.nativeArgument,
+      flowReceiverArgument = staticReceiver?.let { it.boxedRead ?: it.nativeArgument },
+        flowReceiverBox = staticReceiver?.boxedRead != null,
+        flowRegistrations = flowRegistrations,
       flowReceiverLocal = receiverLocal,
       openSlotFills = classifier.openSlotFills(method),
       typeParameters = ownTypeParameters,
@@ -5246,6 +5262,7 @@ internal fun translateValueClass(
           "NugetMarshal.Wrap<$genericUnderlyingType>($read!, out bool receiverOwned)",
         collectionHandle = "receiverBox",
         boxOwnedLocal = "receiverOwned",
+        boxedRead = read,
       )
     } else {
       val enumUnderlying: Boolean =
@@ -5293,9 +5310,12 @@ internal fun translateValueClass(
       doc = cls.forwardKdoc(expects)?.toCirDoc(),
       underlyingDoc = underlyingProp.forwardKdoc(expects)?.toCirDoc(),
       typeParameters = cls.typeParameters.map { it.name.asString() },
-      boxing = cls.genericValueBox()?.let { box -> genericValueBoxing(box, prefix, libraryName) },
       routeMembers = routeMembers,
       asyncMembers = asyncMembers,
+      // ADR-228: the one box/unbox pair every instantiation shares.
+      boxing = callableCatalog.valueClassBoxing(cls.qualifiedName?.asString().orEmpty())
+        ?.let { (box, unbox) -> ForwardCirPlanProjection.valueClassBoxing(box, unbox, libraryName) }
+        ?.copy(ownUnderlying = genericUnderlyingType.takeIf { isOwnTypeParameter }),
     )
   }
   // ADR-077 sub-item 4 prerequisite: an enum underlying is a *value* underlying (ordinal over the
@@ -6481,37 +6501,3 @@ private fun CirMethod.substituting(arguments: Map<String, String>): CirMethod {
     body = body.substituted(),
   )
 }
-
-/**
- * ADR-237: the C# half of a generic value class's box/unbox pair ([genericValueBox]), the
- * `<prefix>_box` / `<prefix>_unbox` imports over `object` boxes. Hoisted to `{Name}Native` by the
- * renderer, since a generic struct cannot declare an extern.
- */
-private fun genericValueBoxing(
-  box: ForwardGenericValueBox,
-  prefix: String,
-  libraryName: String,
-): CirValueClassBoxing = CirValueClassBoxing(
-  boxImport = CirDllImport(
-    libraryName = libraryName,
-    entryPoint = "${prefix}_box",
-    returnType = "IntPtr",
-    name = "Native_NugetBox",
-    parameters = listOf(CirParameter("unboxed", "IntPtr")),
-    visibility = CirVisibility.PRIVATE,
-    hasSyncErrorOut = true,
-  ),
-  unboxImport = CirDllImport(
-    libraryName = libraryName,
-    entryPoint = "${prefix}_unbox",
-    returnType = "IntPtr",
-    name = "Native_NugetUnbox",
-    parameters = listOf(CirParameter("boxed", "IntPtr")),
-    visibility = CirVisibility.PRIVATE,
-    hasSyncErrorOut = true,
-  ),
-  boxParameter = "value",
-  boxArguments = emptyList(),
-  unboxResult = "",
-  ownUnderlying = box.csharpUnderlying,
-)

@@ -389,7 +389,7 @@ string claim = await NapSpot.Box.ClaimAsync("Mylo");
 | extension (class, nullable class, `String`, primitive or enum receiver) | `this` extension method in `{Receiver}Extensions` |
 | enum body member | `this` extension method in `{Enum}Extensions` |
 | enum companion member | static method in `{Enum}Extensions` |
-| non-generic value class | instance method on the struct |
+| value class | instance method on the struct |
 
 A companion member and an instance member can share a C# name when their parameters differ
 (`Swing.SwayAsync(3)` and `swing.SwayAsync()`). With identical parameters the build fails with
@@ -412,7 +412,7 @@ An out-of-bound value faults the `Task` instead of throwing at the call.
 A `Flow`, `StateFlow`, `SharedFlow`, `MutableStateFlow` or `MutableSharedFlow` return or property
 binds as the matching `KotlinFlow<T>` wrapper on every owner that has no instance to dispose: the top
 level, an `object`, a companion (default or named), an enum body and enum companion, and a
-non-generic value class. A member's own `T` binds as on a class member.
+value class, generic or not. A member's own `T` binds as on a class member.
 
 ```kotlin
 fun purrs(count: Int): Flow<Int>
@@ -1303,15 +1303,15 @@ tracker.SpareChipId.Value = null;
 - `default(CatId)` has no `Id`, so writing it, or passing it to `CompareAndSet`, throws
   `ArgumentException` in C# before anything crosses. This applies to a value class over a `String`
   or an object.
-- The underlying must be a non-null `String`, a primitive other than `Char`, an enum, or an
+- The underlying must be a `String`, a primitive other than `Char`, an enum, or an
   exported class or object. A value class over anything else is not a flow element at all, on a
   `Flow`, `StateFlow` or `SharedFlow` alike, and the member is skipped by name rather than bound
   read-only. A `Char`, another value class, a `kotlin.*` class such as `Instant` or `Uuid`, a
   `Throwable`, a `List` has no C# record struct
-  (`SKIPPED_UNSUPPORTED_TYPE`). A generic value class (`Crate<Int>`) is skipped here too. A nullable underlying (`value class Nick(val name: String?)`) has a
-  record struct but cannot be read back as a bare flow element, an awaited result or a lambda
-  payload, so it is skipped too; it still works inside a `List`. Expose the underlying value, or
-  change the underlying, to bind it.
+  (`SKIPPED_UNSUPPORTED_TYPE`). A generic value class (`Sticker<Int>`) and one over a nullable
+  underlying (`value class Nick(val name: String?)`) are flow elements too, and `null` stays distinct
+  from `Nick(null)`; see
+  [A generic value class at an erased position](value-classes.md#a-generic-value-class-at-an-erased-position).
 
 ## Settable `.Value` on `MutableStateFlow<T>` {id="settable-value"}
 
@@ -1387,8 +1387,9 @@ using var refused = new Outcome.Err<int>("no dinner");
 display.Verdict.Value = refused;
 ```
 
-A `MutableStateFlow` of a generic *value* class (`MutableStateFlow<VCrate<Int>>`) is not bound at
-all: the member is skipped with `SKIPPED_UNSUPPORTED_PROPERTY`.
+A `MutableStateFlow` of a generic *value* class (`MutableStateFlow<Sticker<Int>>`) is settable too, and
+the struct's `init` runs on every write; see
+[A generic value class at an erased position](value-classes.md#a-generic-value-class-at-an-erased-position).
 
 Reassigning the whole `MutableStateFlow<T>` member itself (a `var` holding a different flow
 instance) is not supported; only writes through `.Value` are.

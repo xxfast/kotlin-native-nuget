@@ -2,6 +2,12 @@ package io.github.xxfast.kotlin.native.nuget.test.stickers
 
 import io.github.xxfast.kotlin.native.nuget.test.cat.Cat
 import io.github.xxfast.kotlin.native.nuget.test.cat.Mood
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.yield
 
 /**
@@ -64,6 +70,18 @@ value class Sticker<T>(val value: T) {
     yield()
     return describe()
   }
+
+  /** ADR-228: a `Flow` member over the class's own `T`: `KotlinFlow<T> Trail()`. */
+  fun trail(): Flow<T> = flowOf(value, value)
+
+  /** ADR-228: a `Flow` member whose element is the struct itself: `KotlinFlow<Sticker<T>>`. */
+  fun echoes(): Flow<Sticker<T>> = flowOf(this, this)
+
+  /** ADR-228: a `StateFlow` property over the class's own `T`: `KotlinStateFlow<T> Glow`. */
+  val glow: StateFlow<T> get() = MutableStateFlow(value)
+
+  /** ADR-228: a `SharedFlow` property over the class's own `T`, read through its replay cache. */
+  val chirps: SharedFlow<T> get() = MutableSharedFlow<T>(replay = 1).also { it.tryEmit(value) }
 }
 
 /**
@@ -91,6 +109,9 @@ value class Decal<T>(val serial: Long) {
     yield()
     return serial
   }
+
+  /** ADR-228: a `Flow` member on a phantom. */
+  fun serials(): Flow<Long> = flowOf(serial, serial + 1)
 }
 
 /**
@@ -107,6 +128,9 @@ value class Badge<T : Any>(val value: T) {
  */
 value class Doze<T : Enum<T>>(val value: T) {
   fun label(): String = "dozing ${value.name}"
+
+  /** ADR-228: a `Flow` member over a self-bound `T`, whose receiver reads inside the trampoline. */
+  fun naps(): Flow<T> = flowOf(value, value)
 }
 
 /**

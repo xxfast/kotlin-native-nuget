@@ -381,3 +381,11 @@ works today, through the `Materialize<T>` normalisation below.
   as the plain `Invoke` does.
 - The box/unbox export symbols derived from the value class's export prefix are collision-free
   (the ADR-117 check will say if not).
+
+## Amendment 2026-10-22: a nullable underlying joins the pair
+
+[ADR-228](228-generic-value-class-erased-positions.md) supersedes the exclusion of a value class
+whose underlying is itself nullable (`value class Nick(val name: String?)`). Its box takes the
+nullable underlying and its unbox returns it, so `Nick(null)` and `null` stay distinct at a
+`Box<Nick?>`, a lambda payload or result, a `Flow` element and an awaited result. A generic value
+class gets one pair per class, dispatched through `INugetGenericValue`.

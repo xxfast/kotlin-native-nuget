@@ -195,7 +195,13 @@ internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
           declaration.isOwnParameterCarrierClass() || isProtocolCarrier()) &&
       arguments.all { argument ->
         val type: KSType? = argument.type?.resolve()?.expandAliases()
-        type != null && (!type.mentionsOwn() || type.carriesOwn())
+        // ADR-228: and a generic value class over the own `T`, boxed through its one pair, inside a
+        // class, lambda or `Flow` (a collection component keeps its own rule).
+        type != null && (
+          !type.mentionsOwn() || type.carriesOwn() ||
+            (type.isOwnInsideGenericValueClass() &&
+              declaration.qualifiedName?.asString() !in OWN_PARAMETER_COLLECTIONS)
+          )
       }
 
   // ADR-222: a generic interface PARAMETER (`Keepsake<T>`) whose arguments are the own `T` or

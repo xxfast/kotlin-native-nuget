@@ -527,6 +527,29 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine()
   appendLine("        public static void Dispose(IntPtr handle) => Native_dispose(handle);")
   appendLine()
+  // ADR-228: one extern call over a freshly minted box of [value], released after the call.
+  appendLine(
+    "        internal static TResult WithBox<TValue, TResult>(" +
+      "TValue value, Func<IntPtr, TResult> call)"
+  )
+  appendLine("        {")
+  appendLine("            IntPtr box = Wrap<TValue>(value, out bool owned);")
+  appendLine("            try { return call(box); }")
+  appendLine("            finally { if (owned && box != IntPtr.Zero) Dispose(box); }")
+  appendLine("        }")
+  appendLine()
+  appendLine("        internal delegate TResult BoxedCall<TResult>(IntPtr box, out IntPtr error);")
+  appendLine()
+  appendLine(
+    "        internal static TResult WithBox<TValue, TResult>(" +
+      "TValue value, BoxedCall<TResult> call, out IntPtr error)"
+  )
+  appendLine("        {")
+  appendLine("            IntPtr box = Wrap<TValue>(value, out bool owned);")
+  appendLine("            try { return call(box, out error); }")
+  appendLine("            finally { if (owned && box != IntPtr.Zero) Dispose(box); }")
+  appendLine("        }")
+  appendLine()
   // ADR-073: the boxing switch shared by CreateList/CreateSet/CreateMap, so a future component
   // type is added in exactly one place.
   // ADR-099: `owned` reports whether this call MINTED the box. A freshly wrapped primitive/string
@@ -581,7 +604,7 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   // `out`, so it writes through to the caller's local immediately: it must read false while the
   // box export can still throw (a value class's `init`), or the caller's `finally` disposes the
   // IntPtr.Zero it never received and `nuget_dispose` NPEs, uncatchably, in Kotlin.
-  // ADR-237: a generic value class struct, under the same `owned` rule as the Boxers arm below.
+  // ADR-228: a generic value class struct, under the same `owned` rule as the Boxers arm below.
   appendLine("            if (value is INugetGenericValue generic)")
   appendLine("            {")
   appendLine("                owned = false;")

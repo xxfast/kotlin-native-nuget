@@ -206,9 +206,17 @@ internal fun BridgeType.valueClassWithoutStruct(): BridgeType.Unsupported? =
  * planner builds that pair only for these four underlying kinds, and the suspend route's
  * [ForwardLegacyReturnShape.ValueClass] arm reads through `NugetUnbox`, so both read this one rule.
  */
-internal fun BridgeType.ValueClass.hasErasedCrossing(): Boolean =
-  underlying == BridgeType.String || underlying is BridgeType.Primitive ||
-      underlying is BridgeType.Enum || underlying is BridgeType.ObjectHandle
+internal fun BridgeType.ValueClass.hasErasedCrossing(): Boolean = underlying.isErasedUnderlying() ||
+    (underlying as? BridgeType.Nullable)?.type?.let { inner ->
+      // ADR-228: a nullable String, primitive or own `T` underlying (`Nick(val name: String?)`).
+      inner == BridgeType.String || inner is BridgeType.TypeParameter
+    } == true
+
+private fun BridgeType.isErasedUnderlying(): Boolean =
+  this == BridgeType.String || this is BridgeType.Primitive || this is BridgeType.Enum ||
+      this is BridgeType.ObjectHandle ||
+      // ADR-228: a generic value class's own `T`, crossing on the bare-`T` box.
+      this is BridgeType.TypeParameter
 
 /**
  * Classifies one legacy-route parameter.
@@ -280,6 +288,12 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
       typeParameter,
       nullable = classified is BridgeType.Nullable,
     )
+  }
+
+  // ADR-228: a value class with a box pair crosses as that box, generic or not, on the same
+  // boxed wire a `T` takes: C# mints it with `NugetMarshal.Wrap<V>`, Kotlin casts it back to `V`.
+  classified.valueClassBoxParameter(expanded)?.let { boxed ->
+    return ForwardLegacyParameterShape.Boxed(boxed, nullable = classified is BridgeType.Nullable)
   }
 
   if (expanded.arguments.isEmpty()) return when {
@@ -1018,7 +1032,11 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
   }
   // ...and a value class completes by `NugetUnbox`, never a handle constructor. The
   // `arguments.isEmpty()` guard keeps `kotlin.Result<T>` on the generic refusal below.
-  if (classified is BridgeType.ValueClass && expanded.arguments.isEmpty()) {
+  // ADR-228: a generic value class completes the same way, `Sticker<int>.NugetUnbox`.
+  if (
+    classified is BridgeType.ValueClass &&
+    (expanded.arguments.isEmpty() || classified.isDeclaredGeneric())
+  ) {
     return if (classified.hasErasedCrossing()) {
       ForwardLegacyReturnShape.ValueClass(classified, expanded.isMarkedNullable)
     } else {
@@ -1261,6 +1279,10 @@ internal fun ForwardBridgeTypeClassifier.legacyFlowElementShape(
   }
 
   if (expanded.arguments.isEmpty()) return ForwardLegacyFlowElementShape.Plain
+  // ADR-228: a generic value class element reads through its box pair like a non-generic one.
+  if (valueClass != null && valueClass.isDeclaredGeneric() && valueClass.hasErasedCrossing()) {
+    return ForwardLegacyFlowElementShape.Plain
+  }
 
   // ADR-208: a closed instantiation of an exported generic class reads through its `Factories`
   // entry as the generic sealed element above does, spelled by [legacyGenericElement].
@@ -2347,4 +2369,27 @@ private fun KSType.isGenericSealedReference(): Boolean {
   if (declaration.isEnumArm()) return false
   return declaration.isGenericSealedType() ||
       declaration.forwardArmSealedParent()?.isGenericSealedType() == true
+}
+
+/**
+ * ADR-228: a use of a declared generic value class (`Sticker<Int>`), as opposed to the
+ * `kotlin.Result<T>` value class ADR-108 classifies with type arguments too.
+ */
+internal fun BridgeType.ValueClass.isDeclaredGeneric(): Boolean =
+  typeArguments.isNotEmpty() && qualifiedName != "kotlin.Result"
+
+/**
+ * ADR-228: a value class (generic or not) with a box/unbox pair, as the boxed `T` the
+ * asynchronous routes already carry: spelled as its C# struct, read back in Kotlin as [type]'s
+ * applied spelling. Null for anything else, and for a value class with no pair. The underlying
+ * kinds a pair exists for are [hasErasedCrossing]'s, so widening that rule widens this shape.
+ */
+internal fun BridgeType.valueClassBoxParameter(type: KSType): BridgeType.TypeParameter? {
+  val valueClass: BridgeType.ValueClass = unwrapNullable() as? BridgeType.ValueClass ?: return null
+  if (valueClass.qualifiedName == "kotlin.Result" || !valueClass.hasErasedCrossing()) return null
+  return BridgeType.TypeParameter(
+    name = valueClass.csharpType,
+    boundQualifiedName = type.makeNotNullable().forwardKotlinArgumentSpelling(),
+    valueClass = true,
+  )
 }

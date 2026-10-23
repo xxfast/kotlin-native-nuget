@@ -31,8 +31,13 @@ internal fun FileSpec.Builder.addValueClassExports(
   // ADR-225: a generic value class's members and secondary constructors, and any value class's
   // members with their own type parameters, ride the ordinary route.
   callableCatalog.valueClassRouteMembers(qualifiedName).forEach { addForwardKotlinPlanExport(it) }
-  // ADR-220: no primary `_create` and no box pair for a generic value class.
-  if (role == ForwardValueClassUnderlying.GENERIC) return
+  // ADR-220: no primary `_create` for a generic value class. ADR-228: one box pair for all its
+  // instantiations.
+  if (role == ForwardValueClassUnderlying.GENERIC) {
+    callableCatalog.valueClassBoxing(qualifiedName)?.toList()
+      ?.forEach { addForwardKotlinPlanExport(it) }
+    return
+  }
   val isReferenceUnderlying: Boolean = role == ForwardValueClassUnderlying.REFERENCE
 
   val secondaryConstructors: List<KSFunctionDeclaration> = cls.declarations

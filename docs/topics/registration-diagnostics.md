@@ -208,7 +208,7 @@ A [generic value class](value-classes.md#a-generic-value-class) owns no handle o
 `Sticker<Cat>` wraps the `Cat`'s handle, so you dispose the `Cat` you read out of `.Value`, and the
 count returns to baseline. `LeakTests/LiveHandleTests.cs`'s
 `GenericValueClass_Instantiations_ReturnToBaseline` pins the closed, own-`T` and nullable shapes.
-`GenericValueClass_BoundedOwnTypeParameter_ReturnsToBaseline` pins an own `T` with a `Comparable`, `Enum` or intersection bound. `GenericValueClassMembers_ReceiverParameterAndResultBoxes_ReturnToBaseline` pins the receiver, parameter and result boxes of a member, `GenericValueClassMembers_FaultPaths_ReturnToBaseline` the throwing paths, and `GenericValueClassSuspendMembers_ReturnToBaseline` a `suspend` member.
+`GenericValueClass_BoundedOwnTypeParameter_ReturnsToBaseline` pins an own `T` with a `Comparable`, `Enum` or intersection bound. `GenericValueClassMembers_ReceiverParameterAndResultBoxes_ReturnToBaseline` pins the receiver, parameter and result boxes of a member, `GenericValueClassMembers_FaultPaths_ReturnToBaseline` the throwing paths, and `GenericValueClassSuspendMembers_ReturnToBaseline` a `suspend` member. `GenericValueClass_ErasedPositions_ReturnToBaseline`, `GenericValueClass_ErasedPositionInitThrows_ReturnsToBaseline` and `GenericValueClass_AsyncErasedPositions_ReturnToBaseline` pin a generic value class at an erased position: a `Box`, a lambda, a flow element, an `init` that throws on the re-wrap, and the awaited and `Flow` parameter shapes.
 
 The [members of a generic arm](interfaces-abstract-sealed.md#generic-sealed-arm-members) add no new
 handle kind either. Each element a flow collects from `Dish.Hot<string>.Portions` mints one owned

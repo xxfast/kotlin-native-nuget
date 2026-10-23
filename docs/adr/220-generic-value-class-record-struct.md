@@ -241,3 +241,12 @@ class plans "no members" and names each public own member or secondary construct
 bind on the record struct for every instantiation, phantom ones included, and a member's own `<R>`
 binds on any value class. The primary constructor still plans no `_create`, and `init` still runs
 at the first crossing for it.
+
+## Amendment 2026-10-22: erased positions bind
+
+[ADR-228](228-generic-value-class-erased-positions.md) supersedes the deferral of erased positions.
+`Box<Sticker<Int>>`, a lambda payload or result, a `Flow`, `StateFlow` or `MutableStateFlow`
+element, a `Flow` parameter and an awaited `suspend` result or parameter bind, for closed
+instantiations, the phantom `Decal<T>` and a function's own `T`. One box/unbox export pair per
+generic value class serves every instantiation, and the struct registers each closed type for
+reads.

@@ -1277,6 +1277,8 @@ internal class ForwardCallablePlanner(
       addAll(valueClassMethodEntries(cls, owner, prefix, receiver, memberReceiver, inherited))
       addAll(valueClassBoxingEntries(cls, owner, prefix))
     }
+      // ADR-228: properties too, so no value-class deferral stays silent.
+      .nameUnroutedPositions { skipped -> skipped.staticFlow != null }
   }
 
   /**
@@ -1382,6 +1384,18 @@ internal class ForwardCallablePlanner(
           doc = prop.forwardKdoc(expects),
         ).withValueClassConstruction(receiverConstruction)
       }
+      // ADR-228: a `Flow` family property binds on the static flow route over the same receiver.
+      .map { entry ->
+        val prop: KSPropertyDeclaration = entry.node as? KSPropertyDeclaration ?: return@map entry
+        entry.onStaticFlowProperty(
+          prop,
+          genericSuspendReceiver(cls, underlying)?.let { slot ->
+            ForwardStaticFlowOwner.ValueClass(
+              "${prefix}_get_${prop.simpleName.asString()}", cls, slot, receiverConstruction,
+            )
+          },
+        )
+      }
       .toList()
 
     val excluded: Set<String> = setOf("equals", "hashCode", "toString", "<init>")
@@ -1436,11 +1450,20 @@ internal class ForwardCallablePlanner(
             ForwardStaticSuspendOwner.ValueClass(stem, cls, slot, receiverConstruction)
           },
         )
+          // ADR-228: a `Flow` family return binds on the static flow route, the same slot.
+          .onStaticFlowRoute(
+            genericSuspendReceiver(cls, underlying)?.let { slot ->
+              ForwardStaticFlowOwner.ValueClass(stem, cls, slot, receiverConstruction)
+            },
+          )
       }
       .toList()
-      .nameUnroutedPositions()
 
-    return constructors + properties + methods
+    // ADR-228: one naming pass over every entry, properties included, so a deferral no route
+    // re-emits is a named drop rather than a silent one.
+    return (constructors + properties + methods)
+      .nameUnroutedPositions { skipped -> skipped.staticFlow != null } +
+      valueClassBoxingEntries(cls, owner, prefix)
   }
 
   /**
@@ -1481,14 +1504,29 @@ internal class ForwardCallablePlanner(
     owner: String,
     prefix: String,
   ): List<ForwardCallableCatalogEntry> {
-    if (cls.typeParameters.isNotEmpty()) return emptyList()
     // ADR-105: an exported sealed CLASS underlying is the handle its classification carries, read
     // back through the base's `FromHandle` discriminator, exactly as the ordinary route binds it.
-    val type: BridgeType.ValueClass =
-      classifier.classify(cls.asStarProjectedType()).sealedAsHandle() as? BridgeType.ValueClass
-        ?: return emptyList()
+    val type: BridgeType.ValueClass = (if (cls.typeParameters.isEmpty()) {
+      classifier.classify(cls.asStarProjectedType()).sealedAsHandle()
+    } else {
+      genericValueClassSelf(cls, owner)
+    }) as? BridgeType.ValueClass ?: return emptyList()
     // The four underlying kinds both value-class wires already implement (ADR-077 sub-item 4).
     if (!type.hasErasedCrossing()) return emptyList()
+    // ADR-228: a generic one is constructed with a phantom `T` spelled `Nothing` (within every
+    // bound, and never observed), read back as its star projection, and trampolined (ADR-198)
+    // for an own `T` with no erased spelling.
+    val underlyingName: String? = (cls.primaryConstructor?.parameters?.firstOrNull()?.type
+      ?.resolve()?.declaration as? KSTypeParameter)?.simpleName?.asString()
+    val construction: String? = cls.typeParameters.takeIf { it.isNotEmpty() }
+      ?.map { parameter ->
+        if (parameter.simpleName.asString() == underlyingName) "_" else "Nothing"
+      }
+      ?.takeIf { arguments -> arguments.any { it != "_" } }
+      ?.joinToString(", ", "$owner<", ">")
+    val star: String = if (cls.typeParameters.isEmpty()) owner
+    else cls.typeParameters.joinToString(", ", "$owner<", ">") { "*" }
+    val genericOwner: ForwardGenericOwner? = cls.forwardGenericOwner()
     val box: ForwardCallableCatalogEntry = planOrSkip(
       symbol = "$owner.<box>",
       publicName = "NugetBox",
@@ -1498,14 +1536,17 @@ internal class ForwardCallablePlanner(
       result = BridgeType.TypeParameter("T"),
       origin = ForwardCallableOrigin.VALUE_CLASS_BOX,
       target = owner,
+      ownerType = genericOwner,
       node = cls,
-    )
+    ).let { entry ->
+      if (construction == null) entry else entry.withValueClassConstruction(construction)
+    }
     val unbox: ForwardCallableCatalogEntry = planOrSkip(
       symbol = "$owner.<unbox>",
       publicName = "NugetUnbox",
       exportName = "${prefix}_unbox",
       receiver = ForwardReceiver.Static,
-      parameters = listOf("boxed" to BridgeType.TypeParameter("T", boundQualifiedName = owner)),
+      parameters = listOf("boxed" to BridgeType.TypeParameter("T", boundQualifiedName = star)),
       result = type,
       origin = ForwardCallableOrigin.VALUE_CLASS_BOX,
       target = owner,
@@ -1513,6 +1554,25 @@ internal class ForwardCallablePlanner(
     )
     val pair: List<ForwardCallableCatalogEntry> = listOf(box, unbox)
     return if (pair.all { it is ForwardCallableCatalogEntry.Planned }) pair else emptyList()
+  }
+
+  /**
+   * ADR-228: a generic value class as its own declaration spells it, `Sticker<T>` over its own `T`
+   * (or a phantom's plain underlying): the one type its box/unbox pair carries for every
+   * instantiation, since Kotlin boxes them all as one runtime class.
+   */
+  private fun genericValueClassSelf(cls: KSClassDeclaration, owner: String): BridgeType? {
+    val underlyingParam = cls.primaryConstructor?.parameters?.firstOrNull() ?: return null
+    val name: String = underlyingParam.name?.asString() ?: return null
+    val underlying: BridgeType = classifier.classify(underlyingParam.type.resolve())
+    val parameters: List<String> = cls.typeParameters.map { it.simpleName.asString() }
+    return BridgeType.ValueClass(
+      qualifiedName = owner,
+      underlying = underlying,
+      underlyingPropertyName = name,
+      csharpType = "${cls.simpleName.asString()}${parameters.joinToString(", ", "<", ">")}",
+      typeArguments = parameters.map { BridgeType.TypeParameter(it) },
+    )
   }
 
   private fun valueClassConstructorEntries(
@@ -4933,7 +4993,10 @@ internal class ForwardCallablePlanner(
    */
   private fun BridgeType.isOrdinaryValueClassUnderlying(): Boolean =
     this == BridgeType.String || this is BridgeType.Primitive ||
-        this is BridgeType.Enum || this is BridgeType.ObjectHandle || isOwnTypeParameterUnderlying()
+        this is BridgeType.Enum || this is BridgeType.ObjectHandle ||
+        isOwnTypeParameterUnderlying() ||
+        // ADR-228: a nullable String underlying (`Nick(val name: String?)`), null in-band.
+        (this is BridgeType.Nullable && type == BridgeType.String)
 
   /**
    * ADR-220: a member's own `T` substituted into a generic value class (`Sticker<T>`), either
@@ -5147,7 +5210,9 @@ internal class ForwardCallablePlanner(
       is BridgeType.ValueClass ->
         if (
           inner.underlying.isOrdinaryValueClassUnderlying() &&
-          !inner.underlying.isOwnTypeParameterUnderlying()
+          !inner.underlying.isOwnTypeParameterUnderlying() &&
+          // ADR-228: `Nick?` over `String?` would send `null` and `Nick(null)` as one null pointer.
+          inner.underlying !is BridgeType.Nullable
         ) {
           null
         } else {
@@ -5357,8 +5422,35 @@ internal class ForwardCallablePlanner(
     is BridgeType.Enum -> ForwardAbiWireType.INT32
     // ADR-220: a member's own `T` inside a generic value class is the bare-`T` box pointer.
     is BridgeType.ObjectHandle, is BridgeType.TypeParameter -> ForwardAbiWireType.POINTER
-    is BridgeType.Nullable ->
-      if (type is BridgeType.TypeParameter) ForwardAbiWireType.POINTER else wireType()
+    // ADR-228: a nullable String underlying is the nullable STRING slot.
+    is BridgeType.Nullable -> when (type) {
+      is BridgeType.TypeParameter -> ForwardAbiWireType.POINTER
+      BridgeType.String -> ForwardAbiWireType.STRING
+      BridgeType.Unit,
+      is BridgeType.Primitive,
+      BridgeType.Char,
+      BridgeType.Instant,
+      BridgeType.Duration,
+      is BridgeType.Throwable,
+      BridgeType.Uuid,
+      is BridgeType.Interface,
+      is BridgeType.BoundInterface,
+      is BridgeType.ValueClass,
+      BridgeType.ByteArray,
+      is BridgeType.Collection,
+      is BridgeType.Callback,
+      is BridgeType.AsyncCallback,
+      is BridgeType.FlowSource,
+      is BridgeType.ReturnedLambda,
+      is BridgeType.SpecializedProtocol,
+      is BridgeType.RawKSType,
+      is BridgeType.Unsupported,
+      is BridgeType.RawCollection,
+      is BridgeType.Enum,
+      is BridgeType.ObjectHandle,
+      is BridgeType.Nullable
+        -> wireType()
+    }
     BridgeType.Unit,
     is BridgeType.Primitive,
     BridgeType.Char,
