@@ -711,7 +711,33 @@ internal data class CirMarshalHelper(
    * plan hands a `T` from a C# lambda back to Kotlin (then neither is rendered).
    */
   val retainHandleExport: String? = null,
+  /**
+   * ADR-239: every closed collection a lambda type argument or a boxed callback result carries,
+   * read and written through `NugetMarshal.FromHandle<T>` / `Wrap<T>` by its static type.
+   */
+  val boxedCollections: List<CirBoxedCollection> = emptyList(),
+  /**
+   * ADR-239: every bound C# interface an erased position carries, read and written through
+   * `NugetMarshal.FromHandle<T>` / `Wrap<T>` by its static type over the two generated exports.
+   */
+  val boundBoxes: List<CirBoundBox> = emptyList(),
+  // ADR-239: the (envelope, from-text) exports when a `Throwable` crosses an erased position.
+  val throwableEntries: Pair<String, String>? = null,
 ) : CirDeclaration
+
+/** ADR-239: one bound C# interface at an erased position: its `typeof` key and its two exports. */
+internal data class CirBoundBox(
+  val csharpType: String,
+  val boxEntry: String,
+  val unboxEntry: String,
+)
+
+/**
+ * ADR-239: one closed collection at an erased position. [type] is the public C# spelling
+ * (`IReadOnlyList<string>`), the `typeof` key; [read] builds the C# collection from an owned
+ * handle (and disposes it); [write] mints the Kotlin collection from the value, as `object`.
+ */
+internal data class CirBoxedCollection(val type: String, val read: String, val write: String)
 
 /**
  * ADR-094 (write side): an enum's `Boxers` line. [qualifiedTypeName] is `global::`-free, as in
@@ -979,6 +1005,10 @@ internal data class CirStoredCallbackMethod(
   val nativeCallbackBody: String,     // body inside the nativeCallback lambda
   // "Cat": the owner the disposed-receiver check names; a sealed arm's own name, not its base's.
   val className: String,
+  // ADR-239: for a managed listener (a result, a widened payload, or a generic owner), the
+  // expression minting the Kotlin lambda over `listener` (`NugetManagedLambda.Mint(...)`); the
+  // delegate, thunk and callback body are then unused.
+  val managedMint: String? = null,
 ) : CirMember {
   init {
     requireUnescaped(csMethodName)

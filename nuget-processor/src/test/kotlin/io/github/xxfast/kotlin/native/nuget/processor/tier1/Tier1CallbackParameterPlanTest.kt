@@ -118,24 +118,23 @@ class Tier1CallbackParameterPlanTest {
       enum class Mood { CALM, BRISK }
 
       class Refusals(private val beats: Int) {
-        // Char payload, which no callback route has a crossing convention for, plus a scalar
-        // METHOD return: the ROADMAP line 75 shape.
-        fun countInitials(listener: (Char) -> Unit): Int {
-          listener('o')
+        // An `Any` payload, which no callback route carries (a `Char` one binds since ADR-239),
+        // plus a scalar METHOD return, the shape a callback refusal sits beside.
+        fun countInitials(listener: (Any) -> Unit): Int {
+          listener(beats)
           return beats
         }
 
-        // An enum LAMBDA return, refused for the same reason.
+        // An enum LAMBDA return: bound since ADR-239.
         fun pickMood(make: (Int) -> Mood): Int = make(beats).ordinal
 
-        // A `suspend` lambda whose result no End thunk casts: ADR-210 binds one at a parameter only
-        // for a Unit, primitive or String result.
+        // A `suspend` lambda with a `Char` result: bound since ADR-239 (the boxed End read).
         fun awaitAll(step: suspend (Int) -> Char): Int = if (step === step) beats else 0
 
         // A non-lambda parameter beside a lambda the plan declines: the legacy route drops `min`
         // from both halves and the generated Kotlin then fails to compile.
-        fun countInitialsAbove(min: Int, listener: (Char) -> Unit): Int {
-          listener('o')
+        fun countInitialsAbove(min: Int, listener: (Any) -> Unit): Int {
+          listener(beats)
           return min
         }
       }
@@ -147,15 +146,17 @@ class Tier1CallbackParameterPlanTest {
       result.generatedCSharp.contains("class Refusals"),
       "the rest of the owner must still be generated",
     )
-    listOf(
-      "CountInitials(", "PickMood(", "AwaitAll(", "CountInitialsAbove(",
-    ).forEach { member ->
+    // ADR-239: an enum and a `Char` callback result are in the erased vocabulary, so both bind.
+    listOf("PickMood(", "AwaitAll(").forEach { member ->
+      assertTrue(result.generatedCSharp.contains(member), "$member binds")
+    }
+    listOf("CountInitials(", "CountInitialsAbove(").forEach { member ->
       assertFalse(
         result.generatedCSharp.contains(member),
         "$member is refused, so no half of it may be rendered; got:\n${result.generatedCSharp}",
       )
     }
-    listOf("countInitials", "pickMood", "awaitAll", "countInitialsAbove")
+    listOf("countInitials", "countInitialsAbove")
       .forEach { member ->
         assertTrue(
           result.kspWarnings.any { warning -> warning.contains("Refusals.$member") },
@@ -326,15 +327,13 @@ class Tier1CallbackParameterPlanTest {
   }
 
   /**
-   * The other half of the gate: a payload shape the plan's callback lowering does not implement
-   * (`Char`, which has no by-value crossing convention on any callback route and is not a legal
-   * `[UnmanagedCallersOnly]` signature type) is NOT planned, and the hand-written route it stays on
-   * keeps emitting it exactly as before. This is the cell that fails if the classifier is ever
-   * widened past what both plan halves can lower, which would leave the legacy route retired for a
-   * member the plan then skips -- a silently dropped member.
+   * ADR-239: a `Char` payload, which has no by-value crossing (it is not a legal
+   * `[UnmanagedCallersOnly]` signature type), is planned on the boxed `Object` wire: Kotlin retains
+   * the boxed `Char` and the C# thunk reads it with `NugetMarshal.FromHandle<char>`. The legacy
+   * route it used to stay on no longer claims it.
    */
   @Test
-  fun `a Char lambda payload stays on the legacy route rather than being planned`() {
+  fun `a Char lambda payload is planned on the boxed wire`() {
     val result: Tier1Result = Tier1Harness.run(
       """
       package io.pkg
@@ -346,15 +345,10 @@ class Tier1CallbackParameterPlanTest {
     )
     assertTrue(result.compileErrors.isEmpty(), "compile errors: ${result.compileErrors}")
     val interop: String = result.generatedCSharp
+    assertTrue(interop.contains("EachInitial(Action<char>"), "EachInitial binds in:\n$interop")
     assertTrue(
-      interop.contains("EachInitial"),
-      "the legacy route must keep emitting a Char payload member in:\n$interop",
-    )
-    // The plan's own two-slot shape is what must be absent: no GCHandle ctx prelude of the ADR-160
-    // spelling, since the legacy route allocates its own under a different name.
-    assertFalse(
-      interop.contains("listenerCtx"),
-      "an unplanned member must not carry the plan's callback prelude in:\n$interop",
+      interop.contains("NugetMarshal.FromHandle<char>("),
+      "the thunk reads the boxed Char in:\n$interop",
     )
   }
 }

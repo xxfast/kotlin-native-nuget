@@ -232,7 +232,12 @@ internal fun asyncCallbackHolderConstruction(
 }
 
 /** ADR-210 amendment: whether [this] parameter type is a `Flow<T>?` whose key may be zero. */
-internal fun BridgeType.isNullableFlowSource(): Boolean = (this as? BridgeType.FlowSource)?.nullable == true
+internal fun BridgeType.isNullableFlowSource(): Boolean {
+  val flow: Boolean = (this as? BridgeType.FlowSource)?.nullable == true
+  // ADR-239: a nullable suspend lambda's key may be zero the same way.
+  val callback: Boolean = (this as? BridgeType.AsyncCallback)?.nullable == true
+  return flow || callback
+}
 
 /** The Kotlin spelling of one component of the function type, as the member declares it. */
 private fun BridgeType.asyncKotlinType(): String = when (this) {
@@ -246,15 +251,22 @@ private fun BridgeType.asyncKotlinType(): String = when (this) {
   // whichever of `Throwable` / `Exception` / `RuntimeException` the member declared.
   is BridgeType.Throwable -> "kotlin.Throwable"
   // ADR-215 lane C: `T` at its one bound (`kotlin.Any` when none), so the member's call infers it.
-  is BridgeType.TypeParameter, is BridgeType.Nullable -> asyncBoxedKotlinType()
-  BridgeType.Char,
-  BridgeType.Instant,
-  BridgeType.Duration,
-  BridgeType.Uuid,
-  is BridgeType.BoundInterface,
-  is BridgeType.ValueClass,
-  BridgeType.ByteArray,
-  is BridgeType.Collection,
+  is BridgeType.TypeParameter -> asyncBoxedKotlinType()
+  is BridgeType.Nullable ->
+    if (type is BridgeType.TypeParameter) asyncBoxedKotlinType() else "${type.asyncKotlinType()}?"
+  // ADR-239: the boxed result vocabulary, spelled as the member declares it.
+  BridgeType.Char -> "kotlin.Char"
+  BridgeType.Instant -> "kotlin.time.Instant"
+  BridgeType.Duration -> "kotlin.time.Duration"
+  BridgeType.Uuid -> "kotlin.uuid.Uuid"
+  BridgeType.ByteArray -> "kotlin.ByteArray"
+  is BridgeType.ValueClass -> qualifiedName
+  is BridgeType.Collection -> {
+    val components: String = listOfNotNull(element, key, value)
+      .joinToString(", ") { component -> component.asyncKotlinType() }
+    "kotlin.collections.${kind.kotlinSimpleName()}<$components>"
+  }
+  is BridgeType.BoundInterface -> qualifiedName
   is BridgeType.Callback,
   is BridgeType.AsyncCallback,
   is BridgeType.FlowSource,
@@ -326,37 +338,52 @@ private fun asyncBoxedRead(
 }
 
 /** The Kotlin `CFunction` spelling of one component on the wire. */
-private fun BridgeType.asyncKotlinWire(): String = when (this) {
-  BridgeType.Unit -> "Unit"
-  is BridgeType.Primitive ->
-    if (kind == PrimitiveKind.BOOLEAN) "Byte" else kind.simpleKotlinName()
+private fun BridgeType.asyncKotlinWire(): String {
+  // ADR-239: a boxed payload ([isBoxedCallbackPayload]) rides the `Object` wire, as on the plain
+  // route.
+  if (isBoxedCallbackPayload() || this is BridgeType.BoundInterface) return "$POINTER?"
 
-  is BridgeType.Enum -> "Int"
-  BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface,
-  is BridgeType.Throwable -> "$POINTER?"
-  // ADR-215 lane C: the boxed `Object` wire, `IntPtr.Zero` for a null `T`.
-  is BridgeType.TypeParameter, is BridgeType.Nullable -> "$POINTER?"
-  BridgeType.Char,
-  BridgeType.Instant,
-  BridgeType.Duration,
-  BridgeType.Uuid,
-  is BridgeType.BoundInterface,
-  is BridgeType.ValueClass,
-  BridgeType.ByteArray,
-  is BridgeType.Collection,
-  is BridgeType.Callback,
-  is BridgeType.AsyncCallback,
-  is BridgeType.FlowSource,
-  is BridgeType.ReturnedLambda,
-  is BridgeType.SpecializedProtocol,
-  is BridgeType.RawKSType,
-  is BridgeType.Unsupported,
-  is BridgeType.RawCollection,
-    -> error("ADR-210 admits no suspend lambda wire for $this")
+  return when (this) {
+    BridgeType.Unit -> "Unit"
+    is BridgeType.Primitive ->
+      if (kind == PrimitiveKind.BOOLEAN) "Byte" else kind.simpleKotlinName()
+
+    is BridgeType.Enum -> "Int"
+    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface,
+    is BridgeType.Throwable -> "$POINTER?"
+    // ADR-215: the boxed `Object` wire, `IntPtr.Zero` for a null `T`.
+    is BridgeType.TypeParameter, is BridgeType.Nullable -> "$POINTER?"
+    BridgeType.Char,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    BridgeType.Uuid,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    BridgeType.ByteArray,
+    is BridgeType.Collection,
+    is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+      -> error("ADR-210 admits no suspend lambda wire for $this")
+  }
 }
 
 /** One payload, lowered to its wire. ADR-036 ownership: C# frees a handle-passed payload. */
-private fun BridgeType.asyncPayloadArgument(argument: String): String = when (this) {
+private fun BridgeType.asyncPayloadArgument(argument: String): String = when {
+  this is BridgeType.BoundInterface -> handleOutExpression(argument)
+  // ADR-239: the plain route's boxed payload; a null mints nothing.
+  this is BridgeType.Nullable -> "$argument?.let { NugetHandles.retain(it) }"
+  isBoxedCallbackPayload() -> "NugetHandles.retain($argument)"
+  else -> asyncScalarPayloadArgument(argument)
+}
+
+/** [asyncPayloadArgument] for the payloads with a wire of their own. */
+private fun BridgeType.asyncScalarPayloadArgument(argument: String): String = when (this) {
   is BridgeType.Primitive ->
     if (kind == PrimitiveKind.BOOLEAN) "if ($argument) 1.toByte() else 0.toByte()" else argument
 
@@ -388,10 +415,13 @@ private fun BridgeType.asyncPayloadArgument(argument: String): String = when (th
 }
 
 /** `suspend (kotlin.Int) -> kotlin.String`. */
-internal fun BridgeType.AsyncCallback.kotlinFunctionType(): String =
-  parameters.joinToString(", ", "suspend (", ") -> ${result.asyncKotlinType()}") { parameter ->
-    parameter.asyncKotlinType()
-  }
+internal fun BridgeType.AsyncCallback.kotlinFunctionType(): String {
+  val function: String =
+    parameters.joinToString(", ", "suspend (", ") -> ${result.asyncKotlinType()}") { parameter ->
+      parameter.asyncKotlinType()
+    }
+  return if (nullable) "($function)?" else function
+}
 
 /**
  * ADR-210: the Kotlin `suspend` lambda that forwards one invocation out to the C# delegate, as one
@@ -432,15 +462,19 @@ internal fun asyncCallbackExpression(
         parameter.asyncPayloadArgument(arguments[index])
       } + listOf("nugetCallback", "nugetCtx", "$holder.key", "nugetErr")
       ).joinToString(", ")
-  val resultWire: String = type.result.asyncKotlinWire()
+  // ADR-239: a boxed result is the owned `Object` box, whatever its payload wire would be.
+  val resultWire: String =
+    if (type.result.isBoxedCallbackResult()) "$POINTER?" else type.result.asyncKotlinWire()
   val end: String = "nugetCallbackCall { nugetErr -> " +
       "${slots.end}.reinterpret<$CFUNCTION<($POINTER, $POINTER?) -> $resultWire>>()" +
       ".invoke($task, nugetErr) }"
   val header: String = if (arguments.isEmpty()) "{" else "{ ${arguments.joinToString(", ")} ->"
-  return buildString {
+  val body: String = buildString {
     appendLine("run {")
-    if (!holderBuilt) appendLine("  val $holder = ${asyncCallbackHolderConstruction(slots)}")
-    appendLine("  val $lambda: ${type.kotlinFunctionType()} = $header")
+    if (!holderBuilt && !type.nullable) {
+      appendLine("  val $holder = ${asyncCallbackHolderConstruction(slots)}")
+    }
+    appendLine("  val $lambda: ${type.copy(nullable = false).kotlinFunctionType()} = $header")
     appendLine("    val $task: $POINTER = $RUNTIME.awaitForKotlin(")
     appendLine(
       "      release = { nugetTask -> ${slots.releaseTask}" +
@@ -474,23 +508,40 @@ internal fun asyncCallbackExpression(
         appendLine("    $value")
       }
 
-      // ADR-215 lane C: `EndBoxed()` always hands back an owned box: read it, cast it to the
-      // bound, release it, exactly lane A's lambda result.
+      // ADR-239: a `Throwable` result is the managed-exception text the End thunk boxed, as on the
+      // plain route (ADR-201).
+      is BridgeType.Throwable -> {
+        appendLine("    val $box = $end!!")
+        appendLine("    val $value = $box.asStableRef<String>().get()")
+        appendLine("    NugetHandles.release($box)")
+        appendLine("    ${managedExceptionLowering(value, nullable = false)}")
+      }
+
+      // ADR-239: a bound C# interface result is the End thunk's fresh GCHandle.
+      is BridgeType.BoundInterface -> appendLine("    ${result.valueHelper()}($end!!)")
+
+      // ADR-239: a nullable result that is not a bare `T`, the same owned box cast to the declared
+      // result.
+      is BridgeType.Nullable if result.type !is BridgeType.TypeParameter ->
+        appendLine("    ${boxedCallbackResultRead(box, end)}")
+
+      // ADR-215: `EndBoxed()` always hands back an owned box: read it, cast it to the bound,
+      // release it.
       is BridgeType.TypeParameter, is BridgeType.Nullable ->
         asyncBoxedRead(result, end, box, value).forEach { line -> appendLine("    $line") }
 
       BridgeType.Char,
       BridgeType.Instant,
       BridgeType.Duration,
-      is BridgeType.Throwable,
       BridgeType.Uuid,
       is BridgeType.Enum,
       is BridgeType.ObjectHandle,
       is BridgeType.Interface,
-      is BridgeType.BoundInterface,
       is BridgeType.ValueClass,
-      BridgeType.ByteArray,
       is BridgeType.Collection,
+      BridgeType.ByteArray,
+        -> appendLine("    ${boxedCallbackResultRead(box, end)}")
+
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
       is BridgeType.FlowSource,
@@ -503,6 +554,16 @@ internal fun asyncCallbackExpression(
     }
     appendLine("  }")
     appendLine("  $lambda")
+    append("}")
+  }
+  if (!type.nullable) return body
+  // ADR-239: a zero key is a C# `null`, so no holder and no lambda, as for a `Flow<T>?` source.
+  return buildString {
+    appendLine("run {")
+    if (!holderBuilt) {
+      appendLine("  val $holder = ${asyncCallbackHolderConstruction(slots, nullable = true)}")
+    }
+    appendLine("  if ($holder == null) null else ${body.replace("\n", "\n  ")}")
     append("}")
   }
 }

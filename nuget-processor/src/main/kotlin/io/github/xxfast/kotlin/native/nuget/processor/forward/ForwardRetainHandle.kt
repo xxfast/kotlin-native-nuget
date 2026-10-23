@@ -17,9 +17,9 @@ internal fun ForwardSymbolTable.retainHandleExport(): String = "${librarySegment
  * (ADR-231) a lambda's exported class result.
  */
 internal fun BridgeType.boxesIntoKotlin(): Boolean = when (this) {
-  is BridgeType.Callback ->
-    result.unwrapNullable() is BridgeType.TypeParameter || result is BridgeType.ObjectHandle
-  is BridgeType.AsyncCallback -> result.unwrapNullable() is BridgeType.TypeParameter
+  // ADR-239: every boxed callback result, not only a `T` (ADR-215) or a class (ADR-231).
+  is BridgeType.Callback -> result.isBoxedCallbackResult()
+  is BridgeType.AsyncCallback -> result.isBoxedCallbackResult()
   is BridgeType.FlowSource -> element.unwrapNullable() is BridgeType.TypeParameter
   BridgeType.Unit,
   is BridgeType.Primitive,
@@ -66,3 +66,21 @@ private fun ForwardCallablePlanCatalog.genericBridgeOwner(): String? = plans.fir
     (parameter.transfer.type.unwrapNullable() as? BridgeType.Interface)?.bridgeEntry != null
   }
 }?.invocation?.symbol
+
+/**
+ * ADR-239: the generated per-library export that turns the GCHandle C# mints over a bound C#
+ * interface (ADR-088) into a Kotlin handle over the reverse pipeline's value, so the interface
+ * crosses an erased position (`NugetMarshal.Wrap<T>`) like any boxed type.
+ */
+internal fun ForwardSymbolTable.boundBoxExport(type: BridgeType.BoundInterface): String =
+  "${librarySegment}__bound_${type.qualifiedName.replace('.', '_')}_box"
+
+/** ADR-239: the reverse of [boundBoxExport], a fresh GCHandle over a Kotlin handle's value. */
+internal fun ForwardSymbolTable.boundUnboxExport(type: BridgeType.BoundInterface): String =
+  "${librarySegment}__bound_${type.qualifiedName.replace('.', '_')}_unbox"
+
+/** ADR-239: the export that turns a Kotlin handle over a `Throwable` into its ADR-107 envelope. */
+internal fun ForwardSymbolTable.throwableEnvelopeExport(): String = "${librarySegment}__throwable_envelope"
+
+/** ADR-239: the export that builds a `NugetManagedException` from C#'s managed-exception text. */
+internal fun ForwardSymbolTable.throwableFromTextExport(): String = "${librarySegment}__throwable_from_text"

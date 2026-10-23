@@ -71,11 +71,11 @@ class Tier1LambdaReturnParameterTest {
   }
 
   @Test
-  fun `an interface parameter binds and returns KotlinFunc of the projected interface`() {
+  fun `an interface parameter binds and returns a Func of the projected interface`() {
     val cs: String = Tier1Harness.run(source).generatedCSharp
     val line: String = signature(cs, "PetSupplier")
     assertTrue(
-      Regex("""KotlinFunc<(global::[\w.]+\.)?IPet> PetSupplier\((global::[\w.]+\.)?IPet pet\)""")
+      Regex("""Func<(global::[\w.]+\.)?IPet> PetSupplier\((global::[\w.]+\.)?IPet pet\)""")
         .containsMatchIn(line),
       "got: $line",
     )
@@ -86,7 +86,7 @@ class Tier1LambdaReturnParameterTest {
     val cs: String = Tier1Harness.run(source).generatedCSharp
     val line: String = signature(cs, "CatSupplier")
     assertTrue(
-      Regex("""KotlinFunc<(global::[\w.]+\.)?Cat> CatSupplier\((global::[\w.]+\.)?Cat cat\)""")
+      Regex("""Func<(global::[\w.]+\.)?Cat> CatSupplier\((global::[\w.]+\.)?Cat cat\)""")
         .containsMatchIn(line),
       "got: $line",
     )
@@ -98,7 +98,7 @@ class Tier1LambdaReturnParameterTest {
     val line: String = signature(cs, "ListSupplier")
     assertTrue(
       Regex(
-        """KotlinFunc<int> ListSupplier\((global::System\.Collections\.Generic\.)?""" +
+        """Func<int> ListSupplier\((global::System\.Collections\.Generic\.)?""" +
             """IReadOnlyList<int> xs\)""",
       )
         .containsMatchIn(line),
@@ -110,24 +110,24 @@ class Tier1LambdaReturnParameterTest {
   fun `a nullable primitive parameter keeps its null`() {
     val cs: String = Tier1Harness.run(source).generatedCSharp
     val line: String = signature(cs, "NullableSupplier")
-    assertTrue("KotlinFunc<int> NullableSupplier(int? n)" in line, "got: $line")
+    assertTrue("Func<int> NullableSupplier(int? n)" in line, "got: $line")
   }
 
   @Test
   fun `an arity-1 lambda return with a value parameter binds`() {
     val cs: String = Tier1Harness.run(source).generatedCSharp
     val line: String = signature(cs, "Adder")
-    assertTrue("KotlinFunc<int, int> Adder(int n)" in line, "got: $line")
+    assertTrue("Func<int, int> Adder(int n)" in line, "got: $line")
   }
 
   @Test
   fun `the parameterless relay and the primitive-parameter greeter keep binding`() {
     val cs: String = Tier1Harness.run(source).generatedCSharp
     assertTrue(
-      Regex("""KotlinFunc<(global::[\w.]+\.)?IPet, (global::[\w.]+\.)?IPet> PetRelay\(\)""")
+      Regex("""Func<(global::[\w.]+\.)?IPet, (global::[\w.]+\.)?IPet> PetRelay\(\)""")
         .containsMatchIn(signature(cs, "PetRelay")),
     )
-    assertTrue("KotlinFunc<string, string> Greeter(string greeting)" in signature(cs, "Greeter"))
+    assertTrue("Func<string, string> Greeter(string greeting)" in signature(cs, "Greeter"))
   }
 
   @Test
@@ -136,7 +136,7 @@ class Tier1LambdaReturnParameterTest {
     assertTrue(result.kspErrors.isEmpty(), "expected no KSP errors; got: ${result.kspErrors}")
     val line: String = signature(result.generatedCSharp, "MoodSupplier")
     assertTrue(
-      Regex("""KotlinFunc<int> MoodSupplier\((global::[\w.]+\.)?Mood m\)""").containsMatchIn(line),
+      Regex("""Func<int> MoodSupplier\((global::[\w.]+\.)?Mood m\)""").containsMatchIn(line),
       "got: $line",
     )
   }
@@ -161,11 +161,12 @@ class Tier1LambdaReturnParameterTest {
   }
 
   /**
-   * The issue #111 rule on the plan: a type argument C# cannot spell skips the function named,
-   * naming the argument, with no half-emitted export on either side.
+   * ADR-239: a collection type argument is in the erased vocabulary, so `() -> List<Int>` binds as
+   * `Func<IReadOnlyList<int>>` (the list read through `NugetMarshal.FromHandle<T>`'s collection
+   * table) and is named nowhere.
    */
   @Test
-  fun `an unspellable type argument skips the function naming the argument`() {
+  fun `a collection type argument binds`() {
     val result = Tier1Harness.run(
       """
       package tier1.lambdareturnlist
@@ -173,18 +174,18 @@ class Tier1LambdaReturnParameterTest {
       fun treatBag(n: Int): () -> List<Int> = { List(n) { it } }
       """.trimIndent(),
     )
-    val warning: String? = result.kspWarnings
-      .firstOrNull { "SKIPPED_UNSUPPORTED_RETURN" in it && "treatBag" in it }
-    assertTrue(warning != null, "expected a named skip; got: ${result.kspWarnings}")
-    assertTrue("kotlin.collections.List" in warning, "got: $warning")
-    assertTrue("TreatBag" !in result.generatedCSharp)
-    assertTrue("treatBag" !in result.generated, "no orphan Kotlin export expected")
+    assertTrue(result.kspWarnings.none { "treatBag" in it }, "got: ${result.kspWarnings}")
+    assertTrue(
+      Regex("""Func<IReadOnlyList<int>> TreatBag\(int n\)""")
+        .containsMatchIn(result.generatedCSharp),
+      "got: ${signature(result.generatedCSharp, "TreatBag")}",
+    )
   }
 
   /**
    * Measured on main before the route moved: a sealed interface and a sealed class type argument
-   * both bound (`KotlinFunc<global::Interop.Treat>`), read back through the ADR-009 `FromHandle`
-   * factory. The plan route keeps that, with and without a value parameter.
+   * both bound (`KotlinFunc<global::Interop.Treat>`, `Func` since ADR-239), read back through the
+   * ADR-009 `FromHandle` factory. The plan route keeps that, with and without a value parameter.
    */
   @Test
   fun `a sealed type argument keeps binding`() {
@@ -215,26 +216,25 @@ class Tier1LambdaReturnParameterTest {
     )
     val cs: String = result.generatedCSharp
     assertTrue(
-      "public static KotlinFunc<global::Interop.Treat> TreatSupplier()" in cs,
+      "public static Func<global::Interop.Treat> TreatSupplier()" in cs,
       signature(cs, "TreatSupplier"),
     )
     assertTrue(
-      "public static KotlinFunc<global::Interop.Toy> ToySupplier()" in cs,
+      "public static Func<global::Interop.Toy> ToySupplier()" in cs,
       signature(cs, "ToySupplier"),
     )
     assertTrue(
-      "public static KotlinFunc<global::Interop.Treat> KibbleFor(int grams)" in cs,
+      "public static Func<global::Interop.Treat> KibbleFor(int grams)" in cs,
       signature(cs, "KibbleFor"),
     )
   }
 
   /**
-   * Fold: a `suspend` lambda return used to pass the legacy generic-return gate, so the Kotlin
-   * half exported it while the C# half had no arm for it: an orphan export, no C# method, no
-   * diagnostic. The gate refuses it now, and the planner names the skip.
+   * ADR-239: a `suspend` lambda return binds as the ADR-210 delegate shape
+   * (`Func<CancellationToken, Task<int>>`) on both halves, with no orphan export.
    */
   @Test
-  fun `a suspend lambda return is a named skip with no orphan export`() {
+  fun `a suspend lambda return binds as an async delegate`() {
     val result = Tier1Harness.run(
       """
       package tier1.lambdareturnsuspend
@@ -245,24 +245,16 @@ class Tier1LambdaReturnParameterTest {
       """.trimIndent(),
     )
     assertTrue(result.kspErrors.isEmpty(), "expected no KSP errors; got: ${result.kspErrors}")
-    listOf("napper", "napFor").forEach { name ->
-      assertTrue(
-        result.kspWarnings.any { warning ->
-          "SKIPPED_UNSUPPORTED_RETURN" in warning && "lambdareturnsuspend.$name" in warning
-        },
-        "expected a named skip for $name; got: ${result.kspWarnings}",
-      )
-      assertTrue("__$name(" !in result.generated, "orphan Kotlin export for $name")
-    }
-    assertTrue("Napper" !in result.generatedCSharp && "NapFor" !in result.generatedCSharp)
-    // The sentence says where a suspend lambda DOES bind (a property, and since ADR-210 a
-    // parameter), not that it binds nowhere.
-    val napper: String = result.kspWarnings.first { "lambdareturnsuspend.napper" in it }
+    assertTrue(result.compiledClean, "got: ${result.compileErrors}")
+    val warnings: List<String> = result.kspWarnings
+    assertTrue(warnings.none { "lambdareturnsuspend" in it }, "got: $warnings")
+    val cs: String = result.generatedCSharp
+    val task: String = "Func<global::System.Threading.CancellationToken, " +
+        "global::System.Threading.Tasks.Task<int>>"
+    assertTrue("$task Napper()" in cs, "got: ${signature(cs, "Napper")}")
     assertTrue(
-      "a `suspend` lambda binds as a class property (`KotlinSuspendFunc<...>`) and as a " +
-          "parameter (`Func<T, CancellationToken, Task<R>>`" in napper,
-      "got: $napper",
+      "$task NapFor(int minutes)" in cs,
+      "got: ${signature(cs, "NapFor")}",
     )
-    assertTrue("not bridged at any position" !in napper, "got: $napper")
   }
 }

@@ -1015,6 +1015,20 @@ private fun StringBuilder.renderStoredCallbackMethod(method: CirStoredCallbackMe
     "            if (_handle.IsInvalid) " +
         "throw new ObjectDisposedException(nameof(${method.className}));"
   )
+  val mint: String? = method.managedMint
+  if (mint != null) {
+    // ADR-239: the export consumes the minted lambda handle whatever happens, so there is nothing
+    // to free on the failure path; the lambda's cleaner frees the delegate's key once the owner
+    // drops it.
+    appendLine("            IntPtr fn = $mint;")
+    appendLine("            IntPtr sub = ${method.csAddNativeName}(_handle, fn, IntPtr.Zero, out IntPtr error);")
+    appendLine("            if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
+    appendLine("            NugetErrorNative.ClearManagedFault();")
+    appendSubscriptionReturn("${method.csRemoveNativeName}(IntPtr.Zero, sub);")
+    appendLine("        }")
+    appendLine()
+    return
+  }
   appendLine("            ${method.delegateName} nativeCallback = ${method.delegateParamList} => { ${method.nativeCallbackBody} };")
   // ADR-161 part C: the ctx is a never-reused table key, not a GCHandle. A Kotlin emission that
   // lands after `Dispose()` removed the key is a lookup miss the thunk drops, where a freed

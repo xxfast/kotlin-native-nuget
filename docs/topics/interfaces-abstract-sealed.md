@@ -373,7 +373,9 @@ oreo.ClosestFriend().Speak(); // "Woof!" - Kotlin actually called into `dog`
 ```
 
 Only a limited set of member shapes can cross this bridge: `val` and `var` properties, and methods of
-arity 0-2 returning `Unit`, a primitive, `Boolean`, an enum, or `String`/`String?`. A `Throwable`,
+arity 0-2 returning `Unit`, a primitive, `Boolean`, an enum, `String`/`String?`, or a lambda (a
+`Func<>`/`Action<>` your member returns, `suspend` and nullable included; see
+[Lambdas a function returns](lambdas-and-callbacks.md#a-top-level-function-that-returns-a-lambda)). A `Throwable`,
 `Exception` or `RuntimeException` parameter or result crosses too, as a `System.Exception` (see
 [Throwable values](exceptions.md#throwable-values)); a result declared narrower than
 `RuntimeException` is named on a build warning. An interface with an object- or collection-typed
@@ -461,7 +463,7 @@ garbage-collection round, not the moment the C# reference goes out of scope. The
 
 Reading a stored C#-implemented object back from Kotlin, whether through a property, a `suspend
 fun` completion, a `Flow<T>` element, or any of the three erased generic routes (a
-`KotlinFunc<IPet, ...>` result, a `fun <T>` return, or an [ADR-147 generic class's `T`
+`Func<IPet, ...>` result, a `fun <T>` return, or an [ADR-147 generic class's `T`
 member](generics.md#an-interface-at-an-erased-position)), resolves to the **original C# instance**,
 not a fresh wrapper:
 
@@ -469,13 +471,13 @@ not a fresh wrapper:
 oreo.Befriend(dog);
 oreo.Friend; // the same `dog` instance, not a new Pet wrapper
 
-using KotlinFunc<IPet, IPet> relay = PetRelayKt.PetRelay();
-relay.Invoke(dog); // the same `dog` instance too
+Func<IPet, IPet> relay = PetRelayKt.PetRelay();
+relay(dog); // the same `dog` instance too
 ```
 
 An erased type argument spells an exported interface as the interface itself, never the
-ADR-040 backing wrapper: `PetRelayKt.PetRelay()` returns `KotlinFunc<IPet, IPet>`, not
-`KotlinFunc<Pet, Pet>`. A consumer that named the old wrapper type explicitly stops compiling;
+ADR-040 backing wrapper: `PetRelayKt.PetRelay()` returns `Func<IPet, IPet>`, not
+`Func<Pet, Pet>`. A consumer that named the backing wrapper type explicitly stops compiling;
 `var` and passing the result straight on keep working.
 
 This identity match is C#-side only. Passing the same C# object into Kotlin twice builds two
@@ -1513,6 +1515,24 @@ data class Running(val progress: Int) : Job() {
 oreo.Relabel(s => s.ToUpper()); // "RUNNING-9"
 ```
 
+A lambda an arm or the base *returns* binds as a delegate too, `suspend` and nullable included. A member
+declared on the base is present on every arm:
+
+```kotlin
+sealed class Routine(val label: String) {
+  fun cheer(): (String) -> String = { who -> "$label for $who" }
+  class Tumble(val flips: Int) : Routine("tumble") {
+    fun flip(): (Int) -> String = { extra -> "${flips + extra} flips" }
+  }
+}
+```
+
+```C#
+using var tumble = new Routine.Tumble(3);
+Func<int, string> flip = tumble.Flip();      // "5 flips" for flip(2)
+Func<string, string> cheer = tumble.Cheer(); // "tumble for Mylo"
+```
+
 #### Stored-callback and interface-bridge pairs on a sealed arm {id="sealed-callback-pair-generated-c"}
 
 An `addX`/`removeX` stored-callback or interface-bridge pair an arm declares returns the same
@@ -1643,7 +1663,7 @@ instantiated.
 
 A closed instantiation (`Outcome<Int>`, `Outcome<String>?`) binds as a parameter, return, property,
 constructor parameter or `List` element, as a `Flow` element returned from a class method, and in a
-returned lambda (`KotlinFunc<Outcome<int>, Outcome<int>>`). The argument can be a primitive,
+returned lambda (`Func<Outcome<int>, Outcome<int>>`). The argument can be a primitive,
 `String`, an exported class, object, interface or enum, or a type parameter of the declaring class
 (`Hamper<T>.Wrap(): Outcome<T>`). A `Hamper<Outcome<long>>` you pick yourself works too, once you
 hold an `Outcome<long>` to put in it.
@@ -1734,17 +1754,10 @@ binds on the arm, and an arm implementing an exported interface with a `suspend`
 its `IAsyncDisposable` and the interface member. See
 [Coroutines and Flow](coroutines-and-flow.md#suspend-generic-owner).
 
-A member of this kind on an arm with a Kotlin type parameter is skipped, named
-`SKIPPED_UNSUPPORTED_COMBINATION`, and the rest of the arm still binds:
-
-- **A stored lambda over the arm's `T`.** A per-call `fun each(action: (T) -> Unit)` binds (as `Each(Action<T>)`); an
-  `addTaste`/`removeTaste` pair over `(T) -> Unit` is reported with the sentence "one of its lambdas
-  takes or returns a type parameter of its generic sealed arm, and the bridge calls the arm with that
-  parameter erased: the lambda's payload crosses as `Any?`, which the callback route cannot marshal".
-  Give the pair a payload that does not name `T` (`withCount(cb: (Int) -> Unit)` and `spell` take
-  an `Int` and a `Char`), or declare the member on an arm that fixes the argument
-  (`class Cold : Dish<Int>()`), where the lambda is concrete. A member that itself returns `T`
-  keeps its own `SKIPPED_UNSUPPORTED_RETURN`.
+A lambda over the arm's `T` binds as a per-call parameter (`fun each(action: (T) -> Unit)` is
+`Each(Action<T>)`), as a per-call result (`fun pick(cb: (Char) -> T): T` is `Pick(Func<char, T> cb)`)
+and in a stored pair (`addTaste`/`removeTaste` over `(T) -> Unit` is `IDisposable AddTaste(Action<T> listener)`).
+The payload is typed by the closed `T`, so `Dish.Hot<string>` hands your callback a `string`.
 
 A `var` flow property on a generic arm keeps its getter and names its dropped setter once, as it does
 on an ordinary class; see [A `var` flow property is read-only](coroutines-and-flow.md#flow-var-property).
@@ -1752,7 +1765,7 @@ on an ordinary class; see [A `var` flow property is read-only](coroutines-and-fl
 ## Limitations {id="limitations"}
 
 - A C#-implemented interface's bridge only supports `val` getters and arity 0-2 methods returning
-  `Unit`, a primitive, `Boolean`, an enum, `String`/`String?`, or a `Throwable`/`Exception`/
+  `Unit`, a primitive, `Boolean`, an enum, `String`/`String?`, a lambda, or a `Throwable`/`Exception`/
   `RuntimeException` as a `System.Exception`. Anything else (an object- or collection-typed member,
   `suspend`, a member with its own type parameter) throws `NotSupportedException` the
   first time an implementation is passed. The build names each disqualifying member on one

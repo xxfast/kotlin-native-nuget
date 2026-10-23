@@ -384,7 +384,7 @@ internal fun BridgeType.readThroughTrampoline(host: KSFunctionDeclaration): Brid
   }
   return when (this) {
     is BridgeType.AsyncCallback ->
-      BridgeType.AsyncCallback(parameters.map { parameter -> parameter.mark() }, result.mark())
+      copy(parameters = parameters.map { parameter -> parameter.mark() }, result = result.mark())
     is BridgeType.FlowSource -> copy(element = element.mark())
     is BridgeType.Callback ->
       BridgeType.Callback(parameters.map { parameter -> parameter.mark() }, result.mark())
@@ -2211,39 +2211,6 @@ internal data class LegacyRefusedInterfaceBridgePair(
   val reason: String,
   val hint: String,
 )
-
-/**
- * The stored-callback (ADR-037) twin of [legacyRefusedInterfaceBridgePair]: why the `add`/`remove`
- * pair whose add half is [addMethod] cannot be carried, or null when it can. The route's bridge
- * lambda is always typed `(...) -> Unit` and its C# half is always an `Action`, so a listener that
- * returns anything else generated Kotlin that did not compile (`actual type is '() -> Unit', but
- * '() -> Int' was expected`).
- *
- * Applied AFTER pair detection, never before the per-call/stored partition: a non-`Unit` result is
- * a working shape on the per-call route (`fun ask(cb: (Int) -> String): String`), so a
- * pre-partition rule would drop members that bind. Pair detection keeps claiming both halves, so a
- * refused pair cannot fall through to the per-call route either.
- */
-internal fun legacyRefusedStoredCallbackPair(
-  addMethod: KSFunctionDeclaration,
-): LegacyRefusedInterfaceBridgePair? {
-  val lambda: KSValueParameter = addMethod.parameters.firstOrNull { parameter ->
-    parameter.type.resolve().expandAliases().declaration.qualifiedName?.asString() in
-        LEGACY_CALLBACK_TYPES
-  } ?: return null
-  val lambdaType: KSType = lambda.type.resolve().expandAliases()
-  val result: KSType = lambdaType.arguments.lastOrNull()?.type?.resolve()?.expandAliases()
-    ?: return null
-  if (result.declaration.qualifiedName?.asString() == "kotlin.Unit") return null
-  return LegacyRefusedInterfaceBridgePair(
-    kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
-    reason = "its listener `${lambda.name?.asString() ?: "_"}: ${lambdaType.kotlinSpelling()}` " +
-        "returns `${result.kotlinSpelling()}`, and a stored listener is called back as an " +
-        "`Action`, which returns nothing",
-    hint = "make the listener return `Unit`; hand a result back through a method on the " +
-        "subscribing class instead",
-  )
-}
 
 /**
  * ADR-039 amendment (2026-09-26): how one admitted listener parameter crosses the subscription

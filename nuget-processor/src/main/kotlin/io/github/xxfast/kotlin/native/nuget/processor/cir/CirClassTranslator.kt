@@ -56,10 +56,11 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.awaitsSettableMuta
 import io.github.xxfast.kotlin.native.nuget.processor.exports.returnsHeldMutableStateFlow
 import io.github.xxfast.kotlin.native.nuget.processor.exports.returnsHeldMutableSharedFlow
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
+import io.github.xxfast.kotlin.native.nuget.processor.exports.usesManagedListener
+import io.github.xxfast.kotlin.native.nuget.processor.forward.unwrapNullable
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardLegacyPairMembers
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardLegacyRoute
 import io.github.xxfast.kotlin.native.nuget.processor.exports.refusedLegacyLambdaShape
-import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedStoredCallbackPair
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInheritedOutcome
@@ -117,6 +118,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSignatureKe
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isDeclaredBy
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardScopeOwner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.takesGenericFlowRoute
+import io.github.xxfast.kotlin.native.nuget.processor.forward.takesGenericStoredRoute
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardOwnerTypeName
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyFlowReturn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardArmMemberProjectedByBase
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSealedBaseAsyncMethods
@@ -1261,6 +1264,7 @@ internal fun translateClass(
       // ADR-215: bar the Flow route, which reads the receiver erased on a plain generic class.
       if (cls.forwardTypeParametersInScope().isNotEmpty() &&
         !method.takesGenericFlowRoute(cls) &&
+        !method.takesGenericStoredRoute(cls, legacyPairMembers) &&
         method.isForwardLegacyRoute(classifier, legacyPairMembers)
       ) {
         return@filter false
@@ -1323,9 +1327,14 @@ internal fun translateClass(
       translateCallbackMethod(method, libraryName, prefix, exportedTypes, tracker)
     }
 
+  // ADR-239: `nameof(Shaker<T>)` on a generic owner, since a bare generic name is CS0305.
+  val nameofSpelling: String =
+    if (cls.typeParameters.isEmpty()) name
+    else cls.typeParameters.joinToString(", ", "$name<", ">") { parameter ->
+      cls.forwardCsharpTypeParameterName(parameter)
+    }
+
   val storedCallbackMembers: List<CirStoredCallbackMethod> = storedCallbackPairs
-    // ADR-037 amendment: the C# half of the Kotlin half's post-detection refusal.
-    .filter { (addMethod, _) -> legacyRefusedStoredCallbackPair(addMethod) == null }
     // ADR-115 / issue #121: the C# half of the Kotlin half's pair-wide marker gate.
     .filter { pair -> pair.toList().none { it.optInMarker(classifier.exportMarkers) != null } }
     .mapNotNull { (addMethod, removeMethod) ->
@@ -1334,10 +1343,12 @@ internal fun translateClass(
         removeMethod,
         libraryName,
         prefix,
-        name,
+        nameofSpelling,
         exportedTypes,
         tracker,
         context,
+        classifier,
+        erasedOwner = cls.forwardOwnerTypeName() != null,
       )
     }
 
@@ -1354,7 +1365,7 @@ internal fun translateClass(
     .filter { pair -> pair.toList().none { it.optInMarker(classifier.exportMarkers) != null } }
     .mapNotNull { (addMethod, removeMethod) ->
       translateInterfaceBridgeMethod(
-        addMethod, removeMethod, libraryName, prefix, name, tracker, classifier, context,
+        addMethod, removeMethod, libraryName, prefix, nameofSpelling, tracker, classifier, context,
       )
     }
 
@@ -3351,7 +3362,8 @@ internal fun translateSealedClass(
         subclass.forwardArmStoredCallbackPairs(classifier).mapNotNull { (addMethod, removeMethod) ->
           translateStoredCallbackMethod(
             addMethod, removeMethod, libraryName, subPrefix,
-            subclass.armNameofSpelling(cls, subName), exportedTypes, tracker, context,
+            subclass.armNameofSpelling(cls, subName), exportedTypes, tracker, context, classifier,
+            erasedOwner = subclass.forwardOwnerTypeName() != null,
           )
         }
 
@@ -5433,6 +5445,8 @@ private fun translateStoredCallbackMethod(
   exportedTypes: Set<String>,
   tracker: CollectionHelperTracker,
   context: NugetContext,
+  classifier: ForwardBridgeTypeClassifier,
+  erasedOwner: Boolean = false,
 ): CirStoredCallbackMethod? {
   val addMethodName: String = addMethod.simpleName.asString()
   val removeMethodName: String = removeMethod.simpleName.asString()
@@ -5451,6 +5465,34 @@ private fun translateStoredCallbackMethod(
   val lambdaArgTypes: List<KSType> = lambdaType.arguments.dropLast(1)
     .mapNotNull { it.type?.resolve()?.expandAliases() }
   val lambdaArity: Int = lambdaArgTypes.size
+
+  // ADR-239: a listener the void thunk cannot carry (a result, a widened payload, a generic owner;
+  // see `usesManagedListener`) is minted into a Kotlin lambda over the C# delegate (the ADR-236
+  // setter mechanism) and handed to the subscribe export as a handle, so the C# parameter is the
+  // plan's BCL delegate spelling and every payload and result `NugetMarshal` boxes crosses.
+  if (erasedOwner || lambdaType.usesManagedListener()) {
+    val callback: BridgeType.Callback =
+      classifier.classify(lambdaParam.type.resolve()).unwrapNullable() as? BridgeType.Callback
+        ?: return null
+    val delegate: String = callback.forwardPublicCsharpType()
+    tracker.lambdaArities.add(lambdaArity)
+    tracker.needsSubscription = true
+    return CirStoredCallbackMethod(
+      csMethodName = csMethodName,
+      csAddNativeName = csAddNativeName,
+      csRemoveNativeName = csRemoveNativeName,
+      subscribeEntryPoint = "${classPrefix}_$addMethodName",
+      removeEntryPoint = "${classPrefix}_$removeMethodName",
+      libraryName = libraryName,
+      delegateName = "",
+      delegateParamList = "",
+      csParamType = delegate,
+      nativeCallbackBody = "",
+      className = className,
+      managedMint =
+        "NugetManagedLambda.Mint($lambdaArity, new NugetManaged$delegate(listener), false)",
+    )
+  }
 
   // For enum args: ordinal Int. For reference types: IntPtr.
   val isEnumArgs: List<Boolean> = lambdaArgTypes.map { argType ->

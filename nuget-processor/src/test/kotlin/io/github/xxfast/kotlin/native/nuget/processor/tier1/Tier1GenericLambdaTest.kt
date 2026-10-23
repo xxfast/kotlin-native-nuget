@@ -170,7 +170,7 @@ class Tier1GenericLambdaTest {
     assertKotlinCompiles(result)
 
     assertTrue(
-      result.generatedCSharp.contains("KotlinFunc<T, T> Echoer<T>()"),
+      result.generatedCSharp.contains("Func<T, T> Echoer<T>()"),
       "got: ${result.publicLines("Echoer")} ${result.kspWarnings}",
     )
   }

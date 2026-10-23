@@ -30,12 +30,87 @@ internal fun BridgeType.Callback.forwardCallbackDelegate(): CirCallbackDelegate 
 internal fun BridgeType.Callback.forwardCallbackDelegateName(): String {
   val suffixes: String = parameters.joinToString("") { parameter -> parameter.wireSuffix() }
   // ADR-201 amendment: a Throwable RESULT is a `String` box on the wire, a payload an envelope.
-  val resultSuffix: String = if (result is BridgeType.Throwable) "String" else result.wireSuffix()
+  // ADR-239: any other boxed result is an `Object` box, whatever its payload wire would be.
+  val resultSuffix: String = when {
+    result is BridgeType.Throwable -> "String"
+    result.isBoxedCallbackResult() -> "Object"
+    else -> result.wireSuffix()
+  }
   return "Nuget$suffixes${resultSuffix}Callback"
 }
 
 internal fun BridgeType.Callback.forwardCallbackDelegateReturnType(): String =
-  result.callbackWireCsharpType()
+  if (result.isBoxedCallbackResult()) "IntPtr" else result.callbackWireCsharpType()
+
+/**
+ * ADR-239: a callback RESULT that crosses as the owned box C# mints with `WrapOwned<T>` and Kotlin
+ * reads back and releases: every result but `Unit`, a primitive, a `String` and a `Throwable`,
+ * which keep their by-value and string-box wires. A `T` (ADR-215) and a class (ADR-231) included.
+ */
+internal fun BridgeType.isBoxedCallbackResult(): Boolean = when (this) {
+  BridgeType.Unit, is BridgeType.Primitive, BridgeType.String, is BridgeType.Throwable -> false
+  BridgeType.Char,
+  BridgeType.Instant,
+  BridgeType.Duration,
+  BridgeType.Uuid,
+  is BridgeType.Enum,
+  is BridgeType.ObjectHandle,
+  is BridgeType.Interface,
+  is BridgeType.ValueClass,
+  is BridgeType.Collection,
+  is BridgeType.Nullable,
+  is BridgeType.TypeParameter,
+  BridgeType.ByteArray,
+    -> true
+
+  is BridgeType.BoundInterface,
+  is BridgeType.Callback,
+  is BridgeType.AsyncCallback,
+  is BridgeType.FlowSource,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+    -> false
+}
+
+/**
+ * ADR-239: a callback PAYLOAD that crosses as a box Kotlin retains and C# reads (and disposes) with
+ * `NugetMarshal.FromHandle<T>`: every erased type but the ones with their own payload wire (a
+ * primitive or enum by value, a `String`, a class or interface handle, a `Throwable` envelope).
+ * The payload twin of [isBoxedCallbackResult], over the same `NugetMarshal` tables.
+ */
+internal fun BridgeType.isBoxedCallbackPayload(): Boolean = when (this) {
+  is BridgeType.Primitive,
+  BridgeType.String,
+  is BridgeType.Enum,
+  is BridgeType.ObjectHandle,
+  is BridgeType.Interface,
+  is BridgeType.Throwable,
+    -> false
+
+  BridgeType.Unit,
+  BridgeType.Char,
+  BridgeType.Instant,
+  BridgeType.Duration,
+  BridgeType.Uuid,
+  is BridgeType.ValueClass,
+  BridgeType.ByteArray,
+  is BridgeType.Collection,
+  is BridgeType.Nullable,
+  is BridgeType.TypeParameter,
+  is BridgeType.BoundInterface,
+  is BridgeType.Callback,
+  is BridgeType.AsyncCallback,
+  is BridgeType.FlowSource,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+    -> isErasedBoxable()
+}
 
 /**
  * The delegate's own parameter list, ending in the echoed ADR-102 ctx slot. [names] are the
@@ -110,6 +185,8 @@ private fun forwardCallbackBody(
     .mapIndexed { index, parameter -> parameter.callbackArgumentExpression(lambdaNames[index]) }
     .joinToString(", ")
   val call: String = if (omittable) "$name!($arguments)" else "$name($arguments)"
+  // ADR-239: a bound C# interface result is a fresh GCHandle Kotlin's `nuget{Iface}Value` takes.
+  if (type.result is BridgeType.BoundInterface) return "return NugetMarshal.GiveGcHandle($call);"
   return when (val result: BridgeType = type.result) {
     BridgeType.Unit -> "$call;"
     // `WrapString` mints a StableRef box over the managed string; the Kotlin side reads it and
@@ -130,19 +207,14 @@ private fun forwardCallbackBody(
     // ADR-215 lane A: always an OWNED box, since the thunk returns before Kotlin reads it: a
     // borrowed wrapper handle is retained through the generated `<lib>__retain_handle`.
     // ADR-231: an exported class result is the same owned box, read back at its class.
-    is BridgeType.TypeParameter, is BridgeType.Nullable, is BridgeType.ObjectHandle ->
+    // ADR-239: and so is every other erased result ([isBoxedCallbackResult]).
+    is BridgeType.TypeParameter, is BridgeType.Nullable, is BridgeType.ObjectHandle,
+    BridgeType.Char, BridgeType.Instant, BridgeType.Duration, BridgeType.Uuid, is BridgeType.Enum,
+    is BridgeType.Interface, is BridgeType.ValueClass, is BridgeType.Collection,
+    BridgeType.ByteArray ->
       "return NugetMarshal.WrapOwned<${result.forwardPublicCsharpType()}>($call);"
 
-    BridgeType.Char,
-    BridgeType.Instant,
-    BridgeType.Duration,
-    BridgeType.Uuid,
-    is BridgeType.Enum,
-    is BridgeType.Interface,
     is BridgeType.BoundInterface,
-    is BridgeType.ValueClass,
-    BridgeType.ByteArray,
-    is BridgeType.Collection,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
     is BridgeType.FlowSource,
@@ -203,66 +275,82 @@ internal fun forwardCallbackArguments(name: String, type: BridgeType.Callback): 
  * the raw handle so the wrapper's own `Dispose()` is the free -- which is why the Kotlin side
  * retains without releasing. A by-value scalar and an enum ordinal free nothing.
  */
-private fun BridgeType.callbackArgumentExpression(slot: String): String = when (this) {
-  is BridgeType.Primitive -> if (kind == PrimitiveKind.BOOLEAN) "$slot != 0" else slot
-  is BridgeType.Enum -> "($csharpType)$slot"
-  BridgeType.String -> "NugetMarshal.FromHandle<string>($slot)"
-  is BridgeType.ObjectHandle -> "NugetMarshal.FromHandle<$csharpType>($slot)"
-  is BridgeType.Interface -> "NugetMarshal.FromHandle<$csharpType>($slot)"
-  // ADR-201 amendment: the ADR-107 envelope; `BuildException` disposes it as it reads.
-  is BridgeType.Throwable -> "NugetErrorNative.BuildException($slot)"
-  // ADR-215 lane A: a boxed `T`; `IntPtr.Zero` reads as null, and every box read is consumed.
-  is BridgeType.TypeParameter, is BridgeType.Nullable ->
-    "NugetMarshal.FromHandle<${forwardPublicCsharpType()}>($slot)"
-  BridgeType.Unit,
-  BridgeType.Char,
-  BridgeType.Instant,
-  BridgeType.Duration,
-  BridgeType.Uuid,
-  is BridgeType.BoundInterface,
-  is BridgeType.ValueClass,
-  BridgeType.ByteArray,
-  is BridgeType.Collection,
-  is BridgeType.Callback,
-  is BridgeType.AsyncCallback,
-  is BridgeType.FlowSource,
-  is BridgeType.ReturnedLambda,
-  is BridgeType.SpecializedProtocol,
-  is BridgeType.RawKSType,
-  is BridgeType.Unsupported,
-  is BridgeType.RawCollection,
-    -> error("Forward CIR callback projection has no payload lowering for $this")
+private fun BridgeType.callbackArgumentExpression(slot: String): String {
+  // ADR-239: a bound C# interface crosses as the GCHandle the reverse pipeline mints (ADR-088).
+  if (this is BridgeType.BoundInterface) return "NugetMarshal.TakeGcHandle<$csharpType>($slot)"
+  // ADR-239: a `Throwable?` payload is the ADR-107 envelope, or no handle for `null`.
+  if (this is BridgeType.Nullable && type is BridgeType.Throwable) {
+    return "$slot == IntPtr.Zero ? null : NugetErrorNative.BuildException($slot)"
+  }
+  if (isBoxedCallbackPayload()) {
+    return "NugetMarshal.FromHandle<${forwardPublicCsharpType()}>($slot)"
+  }
+
+  return when (this) {
+    is BridgeType.Primitive -> if (kind == PrimitiveKind.BOOLEAN) "$slot != 0" else slot
+    is BridgeType.Enum -> "($csharpType)$slot"
+    BridgeType.String -> "NugetMarshal.FromHandle<string>($slot)"
+    is BridgeType.ObjectHandle -> "NugetMarshal.FromHandle<$csharpType>($slot)"
+    is BridgeType.Interface -> "NugetMarshal.FromHandle<$csharpType>($slot)"
+    // ADR-201 amendment: the ADR-107 envelope; `BuildException` disposes it as it reads.
+    is BridgeType.Throwable -> "NugetErrorNative.BuildException($slot)"
+    // ADR-215: a boxed `T`; `IntPtr.Zero` reads as null, and every box read is consumed.
+    is BridgeType.TypeParameter, is BridgeType.Nullable ->
+      "NugetMarshal.FromHandle<${forwardPublicCsharpType()}>($slot)"
+    BridgeType.Unit,
+    BridgeType.Char,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    BridgeType.Uuid,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    BridgeType.ByteArray,
+    is BridgeType.Collection,
+    is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+      -> error("Forward CIR callback projection has no payload lowering for $this")
+  }
 }
 
 /** The C ABI spelling of one callback component. `Boolean` rides a `byte`: `bool` is not a legal
  *  `[UnmanagedCallersOnly]` signature type, which is also why `Char` never joined. */
-private fun BridgeType.callbackWireCsharpType(): String = when (this) {
-  BridgeType.Unit -> "void"
-  is BridgeType.Primitive ->
-    if (kind == PrimitiveKind.BOOLEAN) "byte" else kind.forwardPublicCsharpType()
+private fun BridgeType.callbackWireCsharpType(): String {
+  if (isBoxedCallbackPayload() || this is BridgeType.BoundInterface) return "IntPtr"
 
-  is BridgeType.Enum -> "int"
-  BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface,
-  is BridgeType.Throwable,
-  // ADR-215 lane A: a `T` or `T?` box.
-  is BridgeType.TypeParameter, is BridgeType.Nullable -> "IntPtr"
-  BridgeType.Char,
-  BridgeType.Instant,
-  BridgeType.Duration,
-  BridgeType.Uuid,
-  is BridgeType.BoundInterface,
-  is BridgeType.ValueClass,
-  BridgeType.ByteArray,
-  is BridgeType.Collection,
-  is BridgeType.Callback,
-  is BridgeType.AsyncCallback,
-  is BridgeType.FlowSource,
-  is BridgeType.ReturnedLambda,
-  is BridgeType.SpecializedProtocol,
-  is BridgeType.RawKSType,
-  is BridgeType.Unsupported,
-  is BridgeType.RawCollection,
-    -> error("Forward CIR callback projection has no wire type for $this")
+  return when (this) {
+    BridgeType.Unit -> "void"
+    is BridgeType.Primitive ->
+      if (kind == PrimitiveKind.BOOLEAN) "byte" else kind.forwardPublicCsharpType()
+
+    is BridgeType.Enum -> "int"
+    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface,
+    is BridgeType.Throwable,
+    // ADR-215: a `T` or `T?` box.
+    is BridgeType.TypeParameter, is BridgeType.Nullable -> "IntPtr"
+    BridgeType.Char,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    BridgeType.Uuid,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    BridgeType.ByteArray,
+    is BridgeType.Collection,
+    is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+      -> error("Forward CIR callback projection has no wire type for $this")
+  }
 }
 
 /**
@@ -270,33 +358,38 @@ private fun BridgeType.callbackWireCsharpType(): String = when (this) {
  * name can never promise a shape the delegate does not have: an enum crosses as its ordinal and is
  * therefore an `Int` segment, exactly like a `kotlin.Int`.
  */
-private fun BridgeType.wireSuffix(): String = when (this) {
-  BridgeType.Unit -> "Void"
-  // Kotlin's own simple name (`UInt`, not `Uint`), the spelling the legacy callback routes use, so
-  // a wire shared across routes dedupes to one delegate and one thunk.
-  is BridgeType.Primitive -> if (kind == PrimitiveKind.BOOLEAN) "Bool" else kind.simpleKotlinName()
+private fun BridgeType.wireSuffix(): String {
+  if (isBoxedCallbackPayload() || this is BridgeType.BoundInterface) return "Object"
 
-  is BridgeType.Enum -> "Int"
-  BridgeType.String -> "String"
-  is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Throwable,
-  is BridgeType.TypeParameter, is BridgeType.Nullable -> "Object"
-  BridgeType.Char,
-  BridgeType.Instant,
-  BridgeType.Duration,
-  BridgeType.Uuid,
-  is BridgeType.BoundInterface,
-  is BridgeType.ValueClass,
-  BridgeType.ByteArray,
-  is BridgeType.Collection,
-  is BridgeType.Callback,
-  is BridgeType.AsyncCallback,
-  is BridgeType.FlowSource,
-  is BridgeType.ReturnedLambda,
-  is BridgeType.SpecializedProtocol,
-  is BridgeType.RawKSType,
-  is BridgeType.Unsupported,
-  is BridgeType.RawCollection,
-    -> error("Forward CIR callback projection has no delegate name segment for $this")
+  return when (this) {
+    BridgeType.Unit -> "Void"
+    // Kotlin's own simple name (`UInt`, not `Uint`), the spelling the legacy callback routes use,
+    // so a wire shared across routes dedupes to one delegate and one thunk.
+    is BridgeType.Primitive ->
+      if (kind == PrimitiveKind.BOOLEAN) "Bool" else kind.simpleKotlinName()
+
+    is BridgeType.Enum -> "Int"
+    BridgeType.String -> "String"
+    is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Throwable,
+    is BridgeType.TypeParameter, is BridgeType.Nullable -> "Object"
+    BridgeType.Char,
+    BridgeType.Instant,
+    BridgeType.Duration,
+    BridgeType.Uuid,
+    is BridgeType.BoundInterface,
+    is BridgeType.ValueClass,
+    BridgeType.ByteArray,
+    is BridgeType.Collection,
+    is BridgeType.Callback,
+    is BridgeType.AsyncCallback,
+    is BridgeType.FlowSource,
+    is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol,
+    is BridgeType.RawKSType,
+    is BridgeType.Unsupported,
+    is BridgeType.RawCollection,
+      -> error("Forward CIR callback projection has no delegate name segment for $this")
+  }
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -311,7 +404,9 @@ internal fun BridgeType.AsyncCallback.forwardAsyncCallbackCsharpType(): String {
   val payload: List<String> = parameters.map { parameter -> parameter.forwardPublicCsharpType() }
   val task: String =
     if (result == BridgeType.Unit) TASK else "$TASK<${result.forwardPublicCsharpType()}>"
-  return (payload + CANCELLATION_TOKEN + task).joinToString(", ", "Func<", ">")
+  val delegate: String = (payload + CANCELLATION_TOKEN + task).joinToString(", ", "Func<", ">")
+  // ADR-239: a nullable suspend lambda takes a C# `null`.
+  return if (nullable) "$delegate?" else delegate
 }
 
 /** `NugetAsync{Payload}..Begin`, minted off the payload WIRE like the ADR-036 delegate names. */
@@ -320,7 +415,19 @@ internal fun BridgeType.AsyncCallback.forwardAsyncBeginName(): String =
 
 /** `NugetAsync{Result}End`, one per result type: the End thunk casts the `Task<R>` it names. */
 internal fun BridgeType.AsyncCallback.forwardAsyncEndName(): String =
-  "NugetAsync${result.wireSuffix()}End"
+  // ADR-239: every boxed result shares the one `Object` End, which reads the task untyped.
+  when {
+    result.isBoxedCallbackResult() -> "NugetAsyncObjectEnd"
+    // ADR-239: one End per bound interface, since each reads its own `Task<IFace>`.
+    result is BridgeType.BoundInterface -> {
+      val bound: String = result.csharpType.substringAfterLast(".").filter { it.isLetterOrDigit() }
+      "NugetAsyncBound${bound}End"
+    }
+    // ADR-239: a `Throwable` result reads its `Task<Exception>` and boxes the managed-exception
+    // text.
+    result is BridgeType.Throwable -> "NugetAsyncExceptionEnd"
+    else -> "NugetAsync${result.wireSuffix()}End"
+  }
 
 internal fun BridgeType.AsyncCallback.forwardAsyncBegin(): CirAsyncBegin =
   CirAsyncBegin(
@@ -336,6 +443,21 @@ internal fun BridgeType.AsyncCallback.forwardAsyncBegin(): CirAsyncBegin =
  */
 internal fun BridgeType.AsyncCallback.forwardAsyncEnd(): CirAsyncEnd {
   val name: String = forwardAsyncEndName()
+  // ADR-239: a `Throwable` result crosses as its managed-exception text, the plain route's box.
+  if (result is BridgeType.Throwable) {
+    val text: String = managedExceptionTextCs("e", nullable = false)
+    return CirAsyncEnd(
+      name,
+      "IntPtr",
+      "NugetMarshal.WrapString(((Func<global::System.Exception, string>)(e => $text))" +
+        "(NugetTasks.End<global::System.Exception>(a0)))",
+    )
+  }
+  // ADR-239: a bound C# interface result, read typed and handed over as a fresh GCHandle.
+  if (result is BridgeType.BoundInterface) {
+    val read: String = "NugetTasks.End<${result.csharpType}>(a0)"
+    return CirAsyncEnd(name, "IntPtr", "NugetMarshal.GiveGcHandle($read)")
+  }
   return when (val result: BridgeType = result) {
     BridgeType.Unit -> CirAsyncEnd(name, "void", "NugetTasks.End(a0)")
     BridgeType.String ->
@@ -350,21 +472,15 @@ internal fun BridgeType.AsyncCallback.forwardAsyncEnd(): CirAsyncEnd {
 
     // ADR-215 lane C: the Begin registration stored a `NugetBoxedTask<T>`, which boxes the result
     // through `WrapOwned<T>` on the read, so Kotlin always owns the box it reads.
-    is BridgeType.TypeParameter, is BridgeType.Nullable ->
+    // ADR-239: so does every other boxed result ([isBoxedCallbackResult]).
+    is BridgeType.TypeParameter, is BridgeType.Nullable, BridgeType.Char, BridgeType.Instant,
+    BridgeType.Duration, BridgeType.Uuid, is BridgeType.Enum, is BridgeType.ObjectHandle,
+    is BridgeType.Interface, is BridgeType.ValueClass, is BridgeType.Collection,
+    BridgeType.ByteArray ->
       CirAsyncEnd(name, "IntPtr", "NugetTasks.EndBoxed(a0)")
 
-    BridgeType.Char,
-    BridgeType.Instant,
-    BridgeType.Duration,
     is BridgeType.Throwable,
-    BridgeType.Uuid,
-    is BridgeType.Enum,
-    is BridgeType.ObjectHandle,
-    is BridgeType.Interface,
     is BridgeType.BoundInterface,
-    is BridgeType.ValueClass,
-    BridgeType.ByteArray,
-    is BridgeType.Collection,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
     is BridgeType.FlowSource,
@@ -412,10 +528,13 @@ internal fun forwardAsyncCallbackRegistration(
   } else {
     "NugetTasks.Begin"
   }
+  val assertNonNull: String = if (type.nullable) "!" else ""
   val delegate: String = "(${type.forwardAsyncBeginName()})(" +
       "(${(payloads + callback + awaitCtx).joinToString(", ")}) => " +
-      "$begin($token => $name($arguments), $callback, $awaitCtx))"
-  return "NugetTasks.Register($name, nameof($name), $delegate)"
+      "$begin($token => $name$assertNonNull($arguments), $callback, $awaitCtx))"
+  val register: String = "NugetTasks.Register($name, nameof($name), $delegate)"
+  // ADR-239: a `null` suspend lambda registers nothing; the zero key is Kotlin's `null`.
+  return if (type.nullable) "$name is null ? IntPtr.Zero : $register" else register
 }
 
 /** `NugetThunks.UnregisterCtx` is a no-op on `IntPtr.Zero`, so a handed-over key needs no flag. */

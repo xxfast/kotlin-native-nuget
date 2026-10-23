@@ -1,28 +1,25 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
  * Boundary nullability part A2: the per-call (ADR-036/102) and stored (ADR-037) callback routes.
  *
- * Two opposite edits, and they have to be read together, because before this change the tool got
- * each one exactly backwards:
- *  - a lambda whose PAYLOAD or RETURN is nullable bound with no diagnostic at all and then either
- *    aborted the author's `packNuget` inside generated Kotlin (`Int?` and handle payloads on the
- *    per-call route, every payload on the stored route) or crossed and killed the host process on a
- *    real null (`String?`, and a callback returning null at a generated `!!`). It is now a named
- *    skip, which replaces a broken build rather than removing a working member;
- *  - a lambda whose own TYPE is nullable (`listener: ((Int) -> Unit)?`) bound AND reported itself
- *    as skipped, on the very class that carried the member. It keeps binding, silently, with an
- *    `ArgumentNullException` guard in the wrapper.
+ * A lambda whose PAYLOAD or RETURN is nullable once bound with no diagnostic and then either
+ * aborted the author's `packNuget` inside generated Kotlin or killed the host on a real null; it
+ * then became a named skip. ADR-239 binds it: a nullable payload crosses as a box Kotlin retains
+ * (none for null) and C# reads with `NugetMarshal.FromHandle<T>`, a nullable result as the owned
+ * box C# mints (none for null), and a stored pair over a Kotlin lambda minted from the delegate.
+ *
+ * A lambda whose own TYPE is nullable (`listener: ((Int) -> Unit)?`) keeps binding, silently, with
+ * an `ArgumentNullException` guard in the wrapper.
  */
 class Tier1NullableLambdaPayloadTest {
 
   @Test
-  fun `a nullable lambda payload or return is a named skip on the per-call route`() {
+  fun `a nullable lambda payload or return binds on the per-call route`() {
     val result = Tier1Harness.run(
       """
       package tier1.nullablelambdapayload
@@ -43,43 +40,21 @@ class Tier1NullableLambdaPayloadTest {
       """.trimIndent(),
     )
 
-    // Red before the refusal: three of these five shapes made the generated Kotlin uncompilable.
-    assertTrue(
-      result.compiledClean,
-      "expected the refusal to leave compilable Kotlin; got: ${result.compileErrors}",
-    )
-
+    assertTrue(result.compiledClean, "expected compilable Kotlin; got: ${result.compileErrors}")
     val cs: String = result.generatedCSharp
-    assertFalse("EachCount(" in cs, "a nullable value payload must not bind")
-    assertFalse("EachName(" in cs, "a nullable reference payload must not bind")
-    assertFalse("EachCat(" in cs, "a nullable handle payload must not bind")
-    assertFalse("Ask(" in cs, "a nullable lambda RETURN must not bind")
-    // The non-null sibling is the control: this is a payload rule, not a lambda rule.
-    assertTrue("EachPlainCount(" in cs, "a non-null payload must keep binding")
-
-    val kotlin: String = result.generated
-    listOf("eachCount", "eachName", "eachCat", "ask").forEach { member ->
-      assertFalse(
-        "export_walker_$member" in kotlin,
-        "expected `$member` absent from the Kotlin half too, so the two halves agree",
-      )
-      assertTrue(
-        result.kspWarnings.any { warning ->
-          member in warning && "a callback parameter can carry" in warning
-        },
-        "expected a named callback-payload skip for `$member`; got: ${result.kspWarnings}",
-      )
-    }
+    listOf(
+      "EachCount(Action<int?>", "EachName(Action<string?>", "EachCat(Action<", "Ask(",
+      "EachPlainCount(",
+    ).forEach { member -> assertTrue(member in cs, "expected `$member` to bind") }
+    assertTrue(
+      result.kspWarnings.none { warning -> "Walker." in warning },
+      "a member that binds must not be reported; got: ${result.kspWarnings}",
+    )
   }
 
-  /**
-   * A member both callback gates refuse (its lambda shape, and its outer return or extra
-   * parameter) used to be named twice: once by the planner's generic CALLBACK_PROTOCOL wording and
-   * once by the class walk's specific one, and the C# remark kept the generic one. The walk owns
-   * the name, so exactly one warning survives and it says which type failed.
-   */
+  /** A member mixing a scalar parameter with a nullable-payload lambda binds whole. */
   @Test
-  fun `a member both callback gates refuse is named once, with the specific reason`() {
+  fun `a nullable payload beside another parameter binds and is named nowhere`() {
     val result = Tier1Harness.run(
       """
       package tier1.nullablelambdaonce
@@ -95,30 +70,17 @@ class Tier1NullableLambdaPayloadTest {
     )
 
     assertTrue(result.compiledClean, "expected compilable Kotlin; got: ${result.compileErrors}")
-    listOf("ask", "askPlain", "mixed").forEach { member ->
-      val named: List<String> = result.kspWarnings.filter { warning -> "Quiz.$member:" in warning }
-      assertEquals(1, named.size, "expected `$member` named exactly once; got: $named")
-      assertTrue(
-        "a lambda carrying the nullable type" in named.single(),
-        "expected the specific nullable-lambda reason for `$member`; got: $named",
-      )
+    listOf("Ask(", "AskPlain(", "Mixed(int x, Action<int?> cb)").forEach { member ->
+      assertTrue(member in result.generatedCSharp, "expected `$member` to bind")
     }
-
-    val cs: String = result.generatedCSharp
-    listOf("ask", "mixed").forEach { member ->
-      assertTrue(
-        "Not generated from Kotlin `$member`: a callback parameter can carry" in cs,
-        "expected the C# remark to carry the specific reason for `$member`; cs=$cs",
-      )
-      assertFalse(
-        "Not generated from Kotlin `$member`: a lambda parameter binds" in cs,
-        "the generic planner wording must not reach the remark for `$member`; cs=$cs",
-      )
-    }
+    assertTrue(
+      result.kspWarnings.none { warning -> "Quiz." in warning },
+      "a member that binds must not be reported; got: ${result.kspWarnings}",
+    )
   }
 
   @Test
-  fun `a nullable lambda payload drops both halves of a stored callback pair`() {
+  fun `a nullable lambda payload binds both halves of a stored callback pair`() {
     val result = Tier1Harness.run(
       """
       package tier1.nullablelambdastored
@@ -137,37 +99,20 @@ class Tier1NullableLambdaPayloadTest {
       """.trimIndent(),
     )
 
+    assertTrue(result.compiledClean, "expected compilable Kotlin; got: ${result.compileErrors}")
     assertTrue(
-      result.compiledClean,
-      "expected the refusal to leave compilable Kotlin; got: ${result.compileErrors}",
+      "AddRinger(Action<string?>" in result.generatedCSharp,
+      "the pair binds on the managed-listener route",
     )
-
-    // The pair goes together: a skip on the add alone would leave a cancel for a subscription
-    // nobody can make, and a skip on the remove alone an uncancellable subscription.
-    val cs: String = result.generatedCSharp
-    assertFalse("AddRinger(" in cs, "the add half must not bind")
-    assertFalse("RemoveRinger(" in cs, "the remove half must not bind")
-    listOf("addRinger", "removeRinger").forEach { member ->
-      assertTrue(
-        result.kspWarnings.any { warning -> member in warning },
-        "expected both halves of the pair named; got: ${result.kspWarnings}",
-      )
-    }
+    assertTrue(
+      result.kspWarnings.none { warning -> "Ringer" in warning },
+      "a pair that binds must not be reported; got: ${result.kspWarnings}",
+    )
   }
 
-  /**
-   * The sealed-ARM twin. ADR-116's amendment re-keyed the per-call and stored callback routes onto
-   * the arm, and the arm's routes read their own selector (`isArmCallbackRoutable`), so a refusal
-   * applied to the class walk alone leaves the arm aborting the generated-Kotlin compile with no
-   * diagnostic. Coverage found this refusal branch cold: the arm walk in
-   * `warnRefusedLegacyRouteMembers` and the `isArmCallbackRoutable` clause were both entered by
-   * every non-null arm fixture and never once taken.
-   *
-   * The non-null sibling on the same arm is the control: the refusal is per MEMBER, not per arm, so
-   * one refused member must not take the arm's working callback member with it.
-   */
+  /** The sealed-ARM twin: the arm's routes read their own selector (`isArmCallbackRoutable`). */
   @Test
-  fun `a nullable lambda payload is a named skip on a sealed arm too`() {
+  fun `a nullable lambda payload binds on a sealed arm too`() {
     val result = Tier1Harness.run(
       """
       package tier1.nullablearmlambda
@@ -189,23 +134,13 @@ class Tier1NullableLambdaPayloadTest {
       fileName = "ArmJobSample.kt",
     )
 
-    assertTrue(
-      result.compiledClean,
-      "expected the arm refusal to leave compilable Kotlin; got: ${result.compileErrors}",
-    )
-
+    assertTrue(result.compiledClean, "expected compilable Kotlin; got: ${result.compileErrors}")
     val cs: String = result.generatedCSharp
-    assertFalse("EachCount(" in cs, "a nullable payload must not bind on an arm either")
-    assertTrue("EachPlainCount(" in cs, "the arm's non-null sibling must keep binding")
-    assertFalse(
-      "export_job_running_eachCount" in result.generated,
-      "expected the arm's Kotlin half gone too, so the two halves agree",
-    )
+    assertTrue("EachCount(Action<int?>" in cs, "a nullable payload binds on an arm")
+    assertTrue("EachPlainCount(" in cs, "the arm's non-null sibling keeps binding")
     assertTrue(
-      result.kspWarnings.any { warning ->
-        "eachCount" in warning && "a callback parameter can carry" in warning
-      },
-      "expected the arm's member named by the sealed walk; got: ${result.kspWarnings}",
+      result.kspWarnings.none { warning -> "eachCount" in warning },
+      "a member that binds must not be reported; got: ${result.kspWarnings}",
     )
   }
 

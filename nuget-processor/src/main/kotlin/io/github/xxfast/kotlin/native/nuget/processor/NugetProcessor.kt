@@ -31,6 +31,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.KOTLIN_EXCEPTION_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.KotlinExceptionRow
 import io.github.xxfast.kotlin.native.nuget.processor.cir.withMethodTypeParameterConstraints
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFlowArgumentExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addBoundInterfaceBoxExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addThrowableBoxExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addRetainHandleExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.nugetMappedTypeFunction
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
@@ -59,7 +61,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addCompanionExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addEnumExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMember
 import io.github.xxfast.kotlin.native.nuget.processor.exports.refusedLegacyLambdaShape
-import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedStoredCallbackPair
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFlowMethodExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyFlowReturn
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFlowPropertyExports
@@ -1052,9 +1053,9 @@ internal fun warnRefusedLegacyRouteMembers(
     return true
   }
 
-  // ADR-037 amendment: the stored-callback route calls a listener back as an `Action`, so a pair
-  // whose listener returns anything but `Unit` is refused after pair detection on both halves. The
+  // ADR-115 / issue #121: a stored-callback pair with a marked half is dropped whole, and the
   // planner's CALLBACK_PROTOCOL skip is suppressed for these members, so this walk names both.
+  // ADR-239: a listener's result no longer refuses a pair (see `addStoredCallbackExports`).
   fun MutableList<ForwardDiagnostic>.nameRefusedStoredPairs(
     members: List<KSFunctionDeclaration>,
     owner: String,
@@ -1065,26 +1066,7 @@ internal fun warnRefusedLegacyRouteMembers(
         .filter { it.hasLegacyLambdaParameter() }
         .filter { it.refusedLegacyLambdaShape(classifier) == null },
     ).forEach { (addMethod, removeMethod) ->
-      if (nameMarkedPair(addMethod, removeMethod, "stored-callback", owner, ownerDeclaration)) {
-        return@forEach
-      }
-      val refused: LegacyRefusedInterfaceBridgePair =
-        legacyRefusedStoredCallbackPair(addMethod) ?: return@forEach
-      listOf(addMethod, removeMethod).forEach { member ->
-        add(
-          ForwardDiagnostic(
-            kind = refused.kind,
-            symbol = member,
-            declaration = "$owner.${member.simpleName.asString()}",
-            reason = "the `${addMethod.simpleName.asString()}` / " +
-                "`${removeMethod.simpleName.asString()}` stored-callback pair is not bound: " +
-                refused.reason,
-            hint = refused.hint,
-            owner = ownerDeclaration,
-            member = member.simpleName.asString(),
-          ),
-        )
-      }
+      nameMarkedPair(addMethod, removeMethod, "stored-callback", owner, ownerDeclaration)
     }
   }
 
@@ -3996,7 +3978,10 @@ internal class NugetProcessor(
           // ADR-199: the erased receiver of a generic arm, as on the arm flow route above.
           val armReceiver: String = subclass.forwardOwnerTypeName() ?: subQualifiedName
           storedPairs.forEach { (addMethod, removeMethod) ->
-            builder.addStoredCallbackExports(addMethod, removeMethod, armReceiver, armPrefix)
+            builder.addStoredCallbackExports(
+              addMethod, removeMethod, armReceiver, armPrefix,
+              erasedOwner = subclass.forwardOwnerTypeName() != null,
+            )
           }
           bridgePairs.forEach { (addMethod, removeMethod) ->
             builder.addInterfaceBridgeExports(
@@ -4058,6 +4043,9 @@ internal class NugetProcessor(
     builder.addRetainHandleExport(
       callableCatalog, context.symbols, legacyHost = forwardClassifier.boxedAsyncHost,
     )
+    // ADR-239: a bound C# interface at an erased position, once the routes above recorded it.
+    builder.addBoundInterfaceBoxExports(forwardClassifier.boundInterfaces, context.symbols)
+    if (forwardClassifier.boxesThrowable) builder.addThrowableBoxExports(context.symbols)
     // ADR-210: the holder a generated `suspend` lambda captures, and the two cinterop extensions
     // its lambda and cleaner call. Last for the same reason as the line above: the legacy suspend
     // routes record their sightings on the classifier as they emit. Everything else the lambda

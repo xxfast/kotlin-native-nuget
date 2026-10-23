@@ -600,15 +600,21 @@ await timer.RingAsync(3); // "ding1,ding2,ding3"
   `PlateAsync` faults with the original message; catch `Exception` rather than relying on the
   original type. A throw of `OperationCanceledException`, or a cancelled returned `Task`, cancels the
   invoking coroutine and surfaces as a cancellation, not a fault.
-- **Types.** A payload is a primitive, `String`, an enum or an exported class. The result is `Unit`,
-  a primitive or `String`. A `Char` or `Throwable` result, a collection, or a nullable payload or
-  result is refused by name, and so is a nullable lambda parameter (`(suspend (T) -> R)?`); the
-  member is then not generated. A plain `(T) -> R` lambda on a `suspend fun` binds separately; see
+- **Types.** A payload or result is anything in the
+  [callback vocabulary](lambdas-and-callbacks.md#callback-vocabulary): primitives, `String`, `Char`, an
+  enum, an exported class or bound C# interface, a collection, `ByteArray`, `Instant`, `Duration`,
+  `Uuid`, a value class, a member's own `T`, and a nullable of each, so `suspend (Char) -> String` and
+  `suspend (List<String>) -> Int` bind. A `Throwable` result binds as `Task<Exception>` (`suspend (Int) -> Throwable` is
+  `Func<int, CancellationToken, Task<Exception>>`), unless it is declared narrower than
+  `RuntimeException`. A lambda of four or more parameters or a `Pair`, `IntArray` or `Any` payload is
+  refused by name, and the member is then not generated.
+  A plain `(T) -> R` lambda on a `suspend fun` binds separately; see
   [A plain lambda on a `suspend` or `Flow` member](#plain-lambda-on-suspend-member). A
   `suspend` lambda parameter on a data class `copy`, an enum member or a value class member is
   untested.
-- **Null.** Passing `null` for the delegate throws `ArgumentNullException` before Kotlin runs, as
-  for any other lambda parameter.
+- **Null.** Passing `null` for a non-nullable delegate throws `ArgumentNullException` before Kotlin
+  runs, as for any other lambda parameter. A nullable one (`(suspend (T) -> R)?`) binds as `Func<..>?`
+  and takes `null`, which reaches Kotlin as `null`; a nullable payload or result crosses as `null` too.
 
 ## A `Flow` as a parameter {id="flow-parameter"}
 
@@ -751,8 +757,7 @@ int steps = await treadmill.RunAsync(3, seen.Add); // seen == [0, 1, 2]
 
 It binds on every owner that has a `suspend` or `Flow` route: a class, a sealed arm, a generic
 class, the top level, an `object`, a companion, an extension, an enum member and a value class.
-Payloads are the ones a [per-call lambda](lambdas-and-callbacks.md#c-kotlin-per-call-lambda-parameters)
-carries: primitives, `String`, an exported class in or out, and a member's own or the class's `T`.
+Payloads are primitives, `String`, an exported class in or out, and a member's own or the class's `T`.
 
 Your delegate stays registered until Kotlin is done with it, not until the first call returns:
 

@@ -23,6 +23,8 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.nanoseconds
 import kotlin.time.Instant
+import kotlin.uuid.ExperimentalUuidApi
+import kotlin.uuid.Uuid
 import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.CFunction
 import kotlinx.cinterop.COpaquePointer
@@ -326,6 +328,41 @@ public fun export_nuget_wrap_bool(`value`: Boolean): COpaquePointer =
 @NugetRuntimeApi
 @CName("nuget_wrap_char")
 public fun export_nuget_wrap_char(`value`: Char): COpaquePointer = NugetHandles.retain(value as Any)
+
+// ADR-239: the three known scalars at an erased position (a lambda's type argument, a callback's
+// boxed result), boxed and read over the wires their ordinary positions use: .NET ticks for an
+// `Instant` and a `Duration`, the RFC 9562 text for a `Uuid`. The caller disposes the handle.
+@NugetRuntimeApi
+@CName("nuget_wrap_instant")
+public fun export_nuget_wrap_instant(ticks: Long): COpaquePointer =
+  NugetHandles.retain(instantFromDotNetTicks(ticks) as Any)
+
+@NugetRuntimeApi
+@CName("nuget_unwrap_instant")
+public fun export_nuget_unwrap_instant(handle: COpaquePointer): Long =
+  (handle.asStableRef<Any>().get() as Instant).toDotNetTicks()
+
+@NugetRuntimeApi
+@CName("nuget_wrap_duration")
+public fun export_nuget_wrap_duration(ticks: Long): COpaquePointer =
+  NugetHandles.retain(durationFromDotNetTicks(ticks) as Any)
+
+@NugetRuntimeApi
+@CName("nuget_unwrap_duration")
+public fun export_nuget_unwrap_duration(handle: COpaquePointer): Long =
+  (handle.asStableRef<Any>().get() as Duration).toDotNetTicks()
+
+@OptIn(ExperimentalUuidApi::class)
+@NugetRuntimeApi
+@CName("nuget_wrap_uuid")
+public fun export_nuget_wrap_uuid(text: String): COpaquePointer =
+  NugetHandles.retain(Uuid.parse(text) as Any)
+
+@OptIn(ExperimentalUuidApi::class)
+@NugetRuntimeApi
+@CName("nuget_unwrap_uuid")
+public fun export_nuget_unwrap_uuid(handle: COpaquePointer): String =
+  (handle.asStableRef<Any>().get() as Uuid).toString()
 
 @NugetRuntimeApi
 @CName("nuget_func0_invoke")

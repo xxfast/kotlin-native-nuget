@@ -115,53 +115,37 @@ class ClawStrip(val name: String) {
   fun nestedScores(): List<Map<String?, Int>> = emptyList()
 
   /**
-   * Part A2, per-call callback route, VALUE payload. The legacy lambda selector keys on the
-   * expanded type's qualified name only, so the `?` on the payload is dropped: C# is handed
-   * `Action<int>` and the generated Kotlin passes `it0: Int?` into a
-   * `CFunction<(Int, COpaquePointer) -> Unit>`. That does not compile ("actual type is 'Int?', but
-   * 'Int' was expected"), with no KSP diagnostic first, so today this shape aborts the author's
-   * build with a Kotlin compiler error in generated code. The named skip replaces a broken build,
-   * which is why it owes no removal note.
+   * Per-call callback route, VALUE payload. It once aborted the author's build in generated
+   * Kotlin; ADR-239 binds it as a box Kotlin retains (none for null).
    */
   fun eachTumble(onTumble: (Int?) -> Unit) = onTumble(null)
 
   /**
-   * Part A2, per-call route, REFERENCE payload. This one compiles and is worse for it: the
-   * generated Kotlin is `NugetHandles.retain(it0 as Any)`, so a real null payload is an uncaught
-   * `NullPointerException` inside a `@CName` export with no error slot, i.e. the host process dies
-   * and no C# `catch` can see it. There is no xunit cell for that outcome on purpose: it would take
-   * the test host down rather than fail.
+   * Per-call route, REFERENCE payload. A real null once killed the host inside the export;
+   * ADR-239 crosses it as no box, which C# reads as null.
    */
   fun eachStrip(onStrip: (String?) -> Unit) = onStrip(null)
 
   /**
-   * Part A2, per-call route, HANDLE payload. `NugetHandles.retain` takes `Any`, so the generated
-   * `retain(it0)` against a `ClawStrip?` does not compile either. Declared with a payload from this
-   * same package so the cell does not drag an unrelated fixture type into the skip pool.
+   * Per-call route, HANDLE payload, from this same package. Bound since ADR-239.
    */
   fun eachNeighbour(onNeighbour: (ClawStrip?) -> Unit) = onNeighbour(null)
 
   /**
-   * Part A2, per-call route, nullable RETURN inside the lambda. The generated Kotlin ends in
-   * `cbFn.invoke(it0, cbUserData)!!`, so a C# callback that legitimately returns null NPEs at the
-   * `!!`. Nullability at the lambda's return is a separate seam from its argument and is dropped by
-   * a separate line of the same selector, so it is its own cell.
+   * Per-call route, nullable RETURN inside the lambda. ADR-239 binds it on the plan: a
+   * C# callback that returns null crosses as null, with no `!!` on the Kotlin half.
    */
   fun askWeave(onAsk: (Int) -> String?): String? = onAsk(1)
 
   /**
-   * Part A2, STORED callback route (ADR-037), the add half of the pair. Stricter than the per-call
-   * route: the generated bridge lambda is declared with the nullability stripped
-   * (`val bridge: (String) -> Unit = ...`) and then handed to a member expecting
-   * `(String?) -> Unit`, so BOTH halves of the pair fail the generated-Kotlin compile even for the
-   * reference payload that survives compilation on the per-call route. The pair must be named as a
-   * pair: a skip on the add alone would leave a remove with nothing to remove.
+   * STORED callback route (ADR-037), the add half of the pair. Both halves once failed the
+   * generated-Kotlin compile; ADR-239 binds the pair on the managed-listener route.
    */
   fun addRinger(listener: (String?) -> Unit) {
     ringers += listener
   }
 
-  /** Part A2, the remove half of the [addRinger] pair. */
+  /** The remove half of the [addRinger] stored-callback pair. */
   fun removeRinger(listener: (String?) -> Unit) {
     ringers -= listener
   }

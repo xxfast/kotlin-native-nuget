@@ -284,6 +284,9 @@ internal sealed interface BridgeType {
   data class AsyncCallback(
     val parameters: List<BridgeType>,
     val result: BridgeType,
+    // ADR-239: a `(suspend (A) -> R)?` parameter, whose C# `null` crosses as a zero key and reaches
+    // Kotlin as `null`, the way a `Flow<T>?` source does.
+    val nullable: Boolean = false,
   ) : BridgeType
 
   /**
@@ -412,6 +415,8 @@ internal sealed interface BridgeType {
   data class Unsupported(
     val rendered: kotlin.String,
     val reason: kotlin.String,
+    // A function type past the arity 0 to 3 rule: the diagnostic is [reason] itself.
+    val isArityRefusal: kotlin.Boolean = false,
     val isUnexportedDependency: kotlin.Boolean = false,
     val unexportedDependencyRefusal: ForwardAdmissionRefusal? = null,
     val isActualTypeAliasTarget: kotlin.Boolean = false,
@@ -503,6 +508,16 @@ internal enum class PrimitiveKind {
 }
 
 internal enum class CollectionKind { LIST, MUTABLE_LIST, MAP, MUTABLE_MAP, SET, MUTABLE_SET }
+
+/** ADR-239: the `kotlin.collections` simple name this kind is declared with. */
+internal fun CollectionKind.kotlinSimpleName(): kotlin.String = when (this) {
+  CollectionKind.LIST -> "List"
+  CollectionKind.MUTABLE_LIST -> "MutableList"
+  CollectionKind.MAP -> "Map"
+  CollectionKind.MUTABLE_MAP -> "MutableMap"
+  CollectionKind.SET -> "Set"
+  CollectionKind.MUTABLE_SET -> "MutableSet"
+}
 
 /** The direction of a value over the language boundary, independent of declaration syntax. */
 internal enum class ForwardFlow { INTO_KOTLIN, OUT_OF_KOTLIN }

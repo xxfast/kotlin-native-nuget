@@ -282,7 +282,7 @@ internal class CollectionHelperTracker {
     trackCollection(plan.publicSignature.result)
     // ADR-160 amendment: a planned lambda return needs its arity's `KotlinFunc`/`KotlinAction`
     // class and `NugetFunctionNative.Invoke{n}` import, which only the tracker declares.
-    (plan.publicSignature.result as? BridgeType.ReturnedLambda)?.let(::trackLambda)
+    (plan.publicSignature.result.unwrapNullable() as? BridgeType.ReturnedLambda)?.let(::trackLambda)
     plan.publicSignature.parameters.forEach { parameter -> trackCollection(parameter.type) }
   }
 

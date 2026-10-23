@@ -350,7 +350,8 @@ class Tier1SkipRemarksTest {
    * inherited method the object cannot bind is named on the OBJECT.
    *
    * Since ADR-230 no method type binds on a class and not on an object (a Flow return was the
-   * last), so the base no longer keeps it: a lambda return is dropped on BOTH. The ownership rule
+   * last), so the base no longer keeps it: a `Sequence` return is dropped on BOTH (a lambda
+   * return binds on both since ADR-239). The ownership rule
    * is what stays pinned: each walk names its own hole on its own type, exactly once, so the
    * inherited drop lands on `Annexe` and the declared one on `Shed`, neither borrowing the other's.
    */
@@ -406,7 +407,7 @@ class Tier1SkipRemarksTest {
    * inherited method, a companion's property and a top-level one. `Sequence` for the owners' own
    * members, stably unsupported at every position (a flow on a static owner binds since ADR-230).
    * The inherited property is a function type, which the class route binds and a static owner
-   * does not; the inherited method returns a lambda, which neither owner binds.
+   * does not; the inherited method returns a `Sequence`, which neither owner binds.
    */
   private fun staticPositions(): Tier1Result = Tier1Harness.run(
     """
@@ -419,7 +420,7 @@ class Tier1SkipRemarksTest {
 
     open class Shed(val origin: String) {
       val gauge: (Int) -> Unit = {}
-      fun readings(): (Int) -> Int = { it }
+      fun readings(): Sequence<Int> = emptySequence()
     }
 
     object Annexe : Shed("garden")

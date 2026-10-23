@@ -7,21 +7,21 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * The hand-written per-call (ADR-036/102) and stored (ADR-037) callback routes carry what ADR-160's
- * plan declines. Neither had an admission test of its own, so a Kotlin builtin that is not a scalar
- * (`List`, `Set`, `Map`, `Any`, `Pair`, an array, `Duration`) reached them as a payload and either
+ * A Kotlin builtin that is not a scalar (`List`, `Set`, `Map`, `Duration`, ...) once reached the
+ * hand-written per-call (ADR-036/102) and stored (ADR-037) callback routes as a payload, and either
  * aborted the KSP round inside the user-type C# speller (stored) or rendered `Action<List>`, which
- * no C# `using` resolves (per-call). A lambda RESULT neither route can marshal failed the generated
- * Kotlin compile. Each is now a named skip on both halves, class and sealed arm alike.
+ * no C# `using` resolves (per-call). Each was then a named skip on both halves.
  *
- * The controls are the point of the denylist: `Char` stays on the per-call route (the payload it
- * exists for), a primitive payload keeps its plan or stored binding, and a stored
- * `(Boolean) -> Unit` now compiles instead of passing a `Byte` where the C# half reads a handle.
+ * ADR-239 binds every erased type at both ends of a callback: a payload Kotlin boxes and C# reads
+ * with `NugetMarshal.FromHandle<T>`, a result C# boxes and Kotlin reads back, and a stored pair
+ * over a Kotlin lambda minted from the C# delegate. These cells pin that binding on a class, a
+ * sealed arm and a generic owner, and keep the shapes no erased position carries (`Any`, `Pair`,
+ * `IntArray`) as named skips on both halves.
  */
 class Tier1LegacyCallbackBuiltinPayloadTest {
 
   @Test
-  fun `a builtin payload or result is a named skip on the per-call and stored routes`() {
+  fun `a builtin payload or result binds on the per-call and stored routes`() {
     val result = Tier1Harness.run(
       """
       package tier1.legacybuiltinpayload
@@ -48,32 +48,18 @@ class Tier1LegacyCallbackBuiltinPayloadTest {
     assertTrue(result.compiledClean, "expected compilable Kotlin; got: ${result.compileErrors}")
 
     val cs: String = result.generatedCSharp
-    // ADR-231: an exported class result binds on the per-call route, over an owned box.
-    assertTrue("MakeCat(" in result.generatedCSharp, "MakeCat must bind")
-    listOf("OnBatch(", "OnAny(", "AddBatch(", "AddCounter(").forEach { member ->
-      assertFalse(member in cs, "$member must not bind")
-    }
-    assertFalse("Action<List>" in cs, "no unresolvable Action<List>")
+    listOf(
+      "OnBatch(Action<IReadOnlyList<int>>", "MakeCat(", "OnInitial(Action<char>", "OnCount(",
+      "AddBatch(Action<IReadOnlyList<int>>", "AddCounter(Func<int>", "AddTick(Action<int>",
+    ).forEach { member -> assertTrue(member in cs, "expected `$member` to bind") }
+    assertFalse("OnAny(" in cs, "OnAny must not bind")
     assertFalse("Action<Any>" in cs, "no unresolvable Action<Any>")
-    listOf("OnInitial(Action<char>", "OnCount(", "AddTick(Action<int>").forEach { control ->
-      assertTrue(control in cs, "expected the control `$control` to keep binding")
-    }
-
-    val kotlin: String = result.generated
-    listOf("onBatch", "onAny", "addBatch", "removeBatch", "addCounter", "removeCounter")
-      .forEach { member ->
-        assertFalse(
-          "export_walker_$member" in kotlin,
-          "expected `$member` absent from the Kotlin half too, so the two halves agree",
-        )
-      }
-    assertNamed(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT, "onBatch", "List")
+    assertFalse("export_walker_onAny" in result.generated, "the Kotlin half of onAny is gone too")
     assertNamed(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT, "onAny", "Any")
-    assertNamed(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT, "addBatch", "List")
-    assertNamed(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT, "removeBatch", "List")
-    assertNamed(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN, "addCounter", "Int")
-    assertNamed(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN, "removeCounter", "Int")
-    listOf("onInitial", "onCount", "addTick", "removeTick").forEach { member ->
+    listOf(
+      "onBatch", "makeCat", "onInitial", "onCount", "addBatch", "removeBatch", "addCounter",
+      "removeCounter", "addTick", "removeTick",
+    ).forEach { member ->
       assertFalse(
         result.kspWarnings.any { warning -> "Walker.$member" in warning },
         "a member that binds must not be reported; got: ${result.kspWarnings}",
@@ -81,12 +67,9 @@ class Tier1LegacyCallbackBuiltinPayloadTest {
     }
   }
 
-  /**
-   * The rest of the builtin family, one payload per member, plus the stored mixed payload that
-   * aborted the round even though its first component is a scalar.
-   */
+  /** The rest of the builtin family, one payload per member, plus a stored mixed payload. */
   @Test
-  fun `every non-scalar builtin payload is refused on both routes`() {
+  fun `the builtin family binds where an erased position carries it`() {
     val result = Tier1Harness.run(
       """
       package tier1.legacybuiltinfamily
@@ -114,26 +97,19 @@ class Tier1LegacyCallbackBuiltinPayloadTest {
 
     val cs: String = result.generatedCSharp
     listOf(
-      "OnSet(", "OnMap(", "OnPair(", "OnArray(", "OnElapsed(", "MakeList(", "MakeInitial(",
-      "AddMixed(", "AddWindow(",
-    ).forEach { member -> assertFalse(member in cs, "$member must not bind") }
-
-    listOf("onSet", "onMap", "onPair", "onArray", "onElapsed", "addMixed", "removeMixed",
-      "addWindow", "removeWindow").forEach { member ->
-      assertNamed(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT, member, null)
+      "OnSet(", "OnMap(", "OnElapsed(", "MakeList(", "MakeInitial(", "AddMixed(", "AddWindow(",
+    ).forEach { member -> assertTrue(member in cs, "expected `$member` to bind") }
+    listOf("OnPair(", "OnArray(").forEach { member ->
+      assertFalse(member in cs, "$member must not bind")
     }
-    listOf("makeList", "makeInitial").forEach { member ->
-      assertNamed(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN, member, null)
+    listOf("onPair", "onArray").forEach { member ->
+      assertNamed(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT, member, null)
     }
   }
 
-  /**
-   * The sealed-ARM twin: the arm's per-call and stored routes read `isArmCallbackRoutable`, which
-   * the class walk never exercises. The per-call primitive sibling is the control: the refusal is
-   * per member, not per arm.
-   */
+  /** The sealed-ARM twin: the arm's per-call and stored routes read `isArmCallbackRoutable`. */
   @Test
-  fun `a builtin payload or result is a named skip on a sealed arm too`() {
+  fun `a builtin payload or result binds on a sealed arm too`() {
     val result = Tier1Harness.run(
       """
       package tier1.legacybuiltinarm
@@ -164,22 +140,12 @@ class Tier1LegacyCallbackBuiltinPayloadTest {
     assertTrue(result.compiledClean, "expected compilable Kotlin; got: ${result.compileErrors}")
 
     val cs: String = result.generatedCSharp
-    listOf("OnBatch(", "AddBatch(", "AddCounter(").forEach { member ->
-      assertFalse(member in cs, "$member must not bind on an arm")
-    }
-    listOf("OnCount(", "AddTick(Action<int>").forEach { control ->
-      assertTrue(control in cs, "expected the arm control `$control` to keep binding")
-    }
-    listOf("onBatch", "addBatch", "removeBatch", "addCounter", "removeCounter").forEach { member ->
-      assertFalse(
-        "export_job_running_$member" in result.generated,
-        "expected the arm's Kotlin half of `$member` gone too",
-      )
-    }
-    assertNamed(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT, "onBatch", "List")
-    assertNamed(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT, "addBatch", "List")
-    assertNamed(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN, "addCounter", "Int")
-    assertNamed(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN, "removeCounter", "Int")
+    listOf("OnBatch(", "OnCount(", "AddBatch(", "AddCounter(Func<int>", "AddTick(Action<int>")
+      .forEach { member -> assertTrue(member in cs, "expected `$member` to bind on the arm") }
+    assertTrue(
+      result.kspWarnings.none { warning -> "Job.Running." in warning },
+      "a member that binds must not be reported; got: ${result.kspWarnings}",
+    )
   }
 
   /**
@@ -213,11 +179,11 @@ class Tier1LegacyCallbackBuiltinPayloadTest {
   }
 
   /**
-   * A GENERIC owner drops every legacy-route member on both halves (ADR-147). The class walk still
-   * reaches it, so each refused member must be named exactly once, not once per walk.
+   * ADR-239: a GENERIC owner's stored pairs bind over the erased receiver on the managed-listener
+   * route, which never spells the owner's `T`; its per-call members are on the plan.
    */
   @Test
-  fun `a non-Unit stored pair on a generic owner is named once`() {
+  fun `stored pairs and per-call callbacks bind on a generic owner`() {
     val result = Tier1Harness.run(
       """
       package tier1.legacybuiltingeneric
@@ -227,6 +193,8 @@ class Tier1LegacyCallbackBuiltinPayloadTest {
       class Crate<T>(val item: T) {
         fun addCounter(listener: () -> Int) {}
         fun removeCounter(listener: () -> Int) {}
+        fun addItem(listener: (T) -> Unit) {}
+        fun removeItem(listener: (T) -> Unit) {}
         fun onBatch(cb: (List<Int>) -> Unit) = cb(listOf(1))
         fun makeCat(cb: () -> Cat) { cb() }
       }
@@ -234,16 +202,15 @@ class Tier1LegacyCallbackBuiltinPayloadTest {
     )
 
     assertTrue(result.compiledClean, "expected compilable Kotlin; got: ${result.compileErrors}")
-    assertFalse("AddCounter(" in result.generatedCSharp, "a generic owner's pair must not bind")
-    // The lambda is spelled as the author wrote it, not as the `FunctionN` it expands to.
-    assertTrue(
-      result.kspWarnings.any { "`cb: (List<Int>) -> Unit`" in it },
-      "expected the lambda spelled in arrow syntax; got: ${result.kspWarnings}",
-    )
-    listOf("addCounter", "removeCounter", "onBatch", "makeCat").forEach { member ->
-      val named: List<String> = result.kspWarnings.filter { warning -> "Crate.$member" in warning }
-      assertEquals(1, named.size, "expected `$member` named exactly once; got: $named")
+    val cs: String = result.generatedCSharp
+    listOf("AddCounter(Func<int>", "AddItem(Action<T>", "OnBatch(", "MakeCat(").forEach { member ->
+      assertTrue(member in cs, "expected `$member` to bind on Crate<T>")
     }
+    assertTrue("nameof(Crate<T>)" in cs, "the disposed-receiver check names the generic owner")
+    assertTrue(
+      result.kspWarnings.none { warning -> "Crate." in warning },
+      "a member that binds must not be reported; got: ${result.kspWarnings}",
+    )
   }
 
   private fun assertNamed(

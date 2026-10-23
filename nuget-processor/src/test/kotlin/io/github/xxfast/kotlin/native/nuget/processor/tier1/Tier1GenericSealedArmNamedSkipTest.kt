@@ -81,16 +81,6 @@ class Tier1GenericSealedArmNamedSkipTest {
   private fun named(member: String): List<String> =
     result.kspWarnings.filter { warning -> "$member:" in warning }
 
-  private val erasedLambdaReason: String =
-    "one of its lambdas takes or returns a type parameter of its generic sealed arm, and the " +
-        "bridge calls the arm with that parameter erased: the lambda's payload crosses as " +
-        "`Any?`, which the callback route cannot marshal (ADR-199)"
-
-  private val erasedLambdaHint: String =
-    "give the lambda a concrete payload type (`(Int) -> Unit`), or declare the member on an arm " +
-        "that fixes the type argument (for example `class Whole : Base<Int>()`), where the " +
-        "lambda is concrete and the member binds"
-
   @Test
   fun `both halves compile`() {
     assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
@@ -140,30 +130,17 @@ class Tier1GenericSealedArmNamedSkipTest {
   }
 
   @Test
-  fun `a callback carrying the type parameter is named and reaches neither half`() {
-    listOf("Dish.Hot.addTaste", "Dish.Hot.removeTaste")
-      .forEach { member ->
-        val warnings: List<String> = named(member)
-        assertEquals(1, warnings.size, "expected `$member` named once; got: ${result.kspWarnings}")
-        assertEquals(
-          "[nuget:SKIPPED_UNSUPPORTED_COMBINATION] Skipping tier1.larder.$member: " +
-              "$erasedLambdaReason. $erasedLambdaHint",
-          warnings.single().lines().first(),
-        )
-        // The generic class's reason is false here: this arm's receiver is spelled.
-        assertFalse("cannot spell a generic receiver" in warnings.single())
-      }
-    // A type-parameter RESULT is one of the shapes the route already refuses by name, so it keeps
-    // that refusal and is not named a second time.
-    val pick: List<String> = named("Dish.Hot.pick")
-    assertEquals(1, pick.size, "expected `pick` named once; got: ${result.kspWarnings}")
-    assertContains(pick.single(), "SKIPPED_UNSUPPORTED_RETURN")
-    assertContains(pick.single(), "returns `T`")
-    listOf("hot_pick", "hot_addTaste", "hot_removeTaste").forEach { export ->
-      assertFalse(export in result.generated, "expected no Kotlin export for $export")
+  fun `a callback carrying the type parameter binds on both halves`() {
+    // ADR-239: a lambda over the arm's `T` binds (ADR-199 refused it): the per-call `pick` on the
+    // plan with its `T` boxed, the stored `addTaste` / `removeTaste` pair on the managed-listener
+    // route over the erased receiver.
+    listOf("Dish.Hot.pick", "Dish.Hot.addTaste", "Dish.Hot.removeTaste").forEach { member ->
+      assertTrue(named(member).isEmpty(), "`$member` binds; got: ${named(member)}")
     }
-    listOf("Pick(", "AddTaste(").forEach { member ->
-      assertFalse(member in result.generatedCSharp, "expected no `$member` in C#")
+    assertContains(result.generatedCSharp, "Pick(Func<char, T> cb)")
+    assertContains(result.generatedCSharp, "public IDisposable AddTaste(Action<T> listener)")
+    listOf("hot_addTaste", "hot_removeTaste").forEach { export ->
+      assertTrue(export in result.generated, "expected the Kotlin export for $export")
     }
   }
 

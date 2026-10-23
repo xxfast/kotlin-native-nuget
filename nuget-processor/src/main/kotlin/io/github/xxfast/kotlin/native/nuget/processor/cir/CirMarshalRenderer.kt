@@ -55,6 +55,26 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_unwrap_enum_ordinal\")]")
   appendLine("        private static extern int nuget_unwrap_enum_ordinal(IntPtr handle);")
   appendLine()
+  // ADR-239: Instant, Duration and Uuid at an erased position, over their ordinary wires (.NET
+  // ticks, ticks, RFC 9562 text).
+  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_unwrap_instant\")]")
+  appendLine("        private static extern long nuget_unwrap_instant(IntPtr handle);")
+  appendLine()
+  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_unwrap_duration\")]")
+  appendLine("        private static extern long nuget_unwrap_duration(IntPtr handle);")
+  appendLine()
+  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_unwrap_uuid\")]")
+  appendLine("        private static extern IntPtr nuget_unwrap_uuid(IntPtr handle);")
+  appendLine()
+  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_instant\")]")
+  appendLine("        private static extern IntPtr nuget_wrap_instant(long ticks);")
+  appendLine()
+  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_duration\")]")
+  appendLine("        private static extern IntPtr nuget_wrap_duration(long ticks);")
+  appendLine()
+  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_uuid\")]")
+  appendLine("        private static extern IntPtr nuget_wrap_uuid(string text);")
+  appendLine()
   appendLine("        internal static int UnwrapEnumOrdinal(IntPtr handle)")
   appendLine("            => UnwrapEnumOrdinal(new NugetKotlinHandle(handle));")
   appendLine()
@@ -198,6 +218,72 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine()
   helper.enumBoxers.forEach { boxer -> renderDllImport(boxer.boxImport) }
   helper.flowArgumentImports.forEach { import -> renderDllImport(import) }
+  // ADR-239: a bound C# interface at an erased position: the GCHandle wire (ADR-088) behind a
+  // Kotlin handle, through the two generated exports per interface.
+  helper.boundBoxes.forEachIndexed { index, bound ->
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${bound.boxEntry}\")]")
+    appendLine("        private static extern IntPtr Native_bound_box_$index(IntPtr gcHandle);")
+    appendLine()
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${bound.unboxEntry}\")]")
+    appendLine("        private static extern IntPtr Native_bound_unbox_$index(IntPtr handle);")
+    appendLine()
+  }
+  // ADR-239: a `Throwable` at an erased position, over the two generated throwable exports.
+  helper.throwableEntries?.let { (envelope, fromText) ->
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$envelope\")]")
+    appendLine("        private static extern IntPtr Native_throwable_envelope(IntPtr handle);")
+    appendLine()
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$fromText\")]")
+    appendLine("        private static extern IntPtr Native_throwable_from_text([MarshalAs(UnmanagedType.LPUTF8Str)] string text);")
+    appendLine()
+  }
+  appendLine("        internal static readonly System.Collections.Generic.Dictionary<Type, Func<object, IntPtr>> BoundBoxers =")
+  appendLine("            new System.Collections.Generic.Dictionary<Type, Func<object, IntPtr>>")
+  appendLine("        {")
+  helper.boundBoxes.forEachIndexed { index, bound ->
+    appendLine("            [typeof(${bound.csharpType})] = static value => Native_bound_box_$index(GiveGcHandle(value)),")
+  }
+  appendLine("        };")
+  appendLine()
+  appendLine("        internal static readonly System.Collections.Generic.Dictionary<Type, Func<IntPtr, IntPtr>> BoundUnboxers =")
+  appendLine("            new System.Collections.Generic.Dictionary<Type, Func<IntPtr, IntPtr>>")
+  appendLine("        {")
+  helper.boundBoxes.forEachIndexed { index, bound ->
+    appendLine("            [typeof(${bound.csharpType})] = static handle => Native_bound_unbox_$index(handle),")
+  }
+  appendLine("        };")
+  appendLine()
+  // ADR-239: the closed collections an erased position carries, keyed by their static type. Indexer
+  // initialisers, so two Kotlin spellings with one C# type (`List<String>` and `List<String?>`)
+  // write one entry instead of throwing at type initialisation.
+  appendLine("        internal static readonly System.Collections.Generic.Dictionary<Type, Func<IntPtr, object>> CollectionReaders =")
+  appendLine("            new System.Collections.Generic.Dictionary<Type, Func<IntPtr, object>>")
+  appendLine("        {")
+  helper.boxedCollections.forEach { collection ->
+    appendLine("            [typeof(${collection.type})] = static handle => ${collection.read},")
+  }
+  appendLine("        };")
+  appendLine()
+  appendLine("        internal static readonly System.Collections.Generic.Dictionary<Type, Func<object, IntPtr>> CollectionWriters =")
+  appendLine("            new System.Collections.Generic.Dictionary<Type, Func<object, IntPtr>>")
+  appendLine("        {")
+  helper.boxedCollections.forEach { collection ->
+    appendLine("            [typeof(${collection.type})] = static value => ${collection.write},")
+  }
+  appendLine("        };")
+  appendLine()
+  // ADR-239: a bound C# interface at a callback position crosses as a GCHandle (ADR-088): the
+  // receiving side takes the target and frees the handle; the sending side allocates a fresh one.
+  appendLine("        internal static T TakeGcHandle<T>(IntPtr handle)")
+  appendLine("        {")
+  appendLine("            GCHandle gcHandle = GCHandle.FromIntPtr(handle);")
+  appendLine("            T value = (T)gcHandle.Target!;")
+  appendLine("            gcHandle.Free();")
+  appendLine("            return value;")
+  appendLine("        }")
+  appendLine()
+  appendLine("        internal static IntPtr GiveGcHandle(object value) => GCHandle.ToIntPtr(GCHandle.Alloc(value));")
+  appendLine()
   appendLine("        internal static T Materialize<T>(IntPtr handle)")
   appendLine("        {")
   // ADR-171: `T = V?` is `Nullable<V>`, which never equals the `typeof(V)` key.
@@ -236,6 +322,47 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("        public static T FromHandle<T>(IntPtr handle)")
   appendLine("        {")
   appendLine("            if (handle == IntPtr.Zero) return default!;")
+  // ADR-239: the three known scalars, on the underlying so `DateTimeOffset?` takes the same read,
+  // then a closed collection by its static type.
+  appendLine("            Type scalar = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);")
+  appendLine("            if (scalar == typeof(DateTimeOffset))")
+  appendLine("            {")
+  appendLine("                long ticks = nuget_unwrap_instant(handle);")
+  appendLine("                Native_dispose(handle);")
+  appendLine("                return (T)(object)new DateTimeOffset(ticks, TimeSpan.Zero);")
+  appendLine("            }")
+  appendLine("            if (scalar == typeof(TimeSpan))")
+  appendLine("            {")
+  appendLine("                long ticks = nuget_unwrap_duration(handle);")
+  appendLine("                Native_dispose(handle);")
+  appendLine("                return (T)(object)new TimeSpan(ticks);")
+  appendLine("            }")
+  appendLine("            if (scalar == typeof(Guid))")
+  appendLine("            {")
+  appendLine("                Guid uuid = Guid.Parse(Marshal.PtrToStringUTF8(nuget_unwrap_uuid(handle))!);")
+  appendLine("                Native_dispose(handle);")
+  appendLine("                return (T)(object)uuid;")
+  appendLine("            }")
+  // ADR-239: a Kotlin `ByteArray` box, copied out (and disposed) by `ReadBytes`.
+  if (helper.includesBytes) {
+    appendLine("            if (typeof(T) == typeof(byte[])) return (T)(object)ReadBytes(handle);")
+  }
+  if (helper.throwableEntries != null) {
+    appendLine("            if (typeof(Exception).IsAssignableFrom(typeof(T)))")
+    appendLine("            {")
+    appendLine("                IntPtr envelope = Native_throwable_envelope(handle);")
+    appendLine("                Native_dispose(handle);")
+    appendLine("                return (T)(object)NugetErrorNative.BuildException(envelope);")
+    appendLine("            }")
+  }
+  appendLine("            if (BoundUnboxers.TryGetValue(typeof(T), out Func<IntPtr, IntPtr>? unboxBound))")
+  appendLine("            {")
+  appendLine("                IntPtr boundGcHandle = unboxBound(handle);")
+  appendLine("                Native_dispose(handle);")
+  appendLine("                return TakeGcHandle<T>(boundGcHandle);")
+  appendLine("            }")
+  appendLine("            if (CollectionReaders.TryGetValue(typeof(T), out Func<IntPtr, object>? readCollection))")
+  appendLine("                return (T)readCollection(handle);")
   appendLine("            // ADR-067: a nullable VALUE element (e.g. StateFlow<int?>) instantiates T as")
   appendLine("            // Nullable<int>; typeof(T) never equals typeof(int) for that T, so the plain")
   appendLine("            // per-primitive dispatch below would fall through to the Activator branch and")
@@ -423,6 +550,19 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("            owned = true;")
   appendLine("            if (type == typeof(IntPtr)) return (IntPtr)(object)value!;")
   appendLine("            if (type == typeof(string)) return nuget_wrap_string((string)(object)value!);")
+  // ADR-239: the three known scalars and a closed collection by its static type, each minted here.
+  appendLine("            if (type == typeof(DateTimeOffset)) return nuget_wrap_instant(((DateTimeOffset)(object)value!).UtcTicks);")
+  appendLine("            if (type == typeof(TimeSpan)) return nuget_wrap_duration(((TimeSpan)(object)value!).Ticks);")
+  appendLine("            if (type == typeof(Guid)) return nuget_wrap_uuid(((Guid)(object)value!).ToString());")
+  appendLine("            if (CollectionWriters.TryGetValue(typeof(T), out Func<object, IntPtr>? writeCollection)) return writeCollection(value!);")
+  appendLine("            if (BoundBoxers.TryGetValue(typeof(T), out Func<object, IntPtr>? boxBound)) return boxBound(value!);")
+  if (helper.throwableEntries != null) {
+    appendLine("            if (value is Exception exception) return Native_throwable_from_text((exception.GetType().FullName ?? \"System.Exception\") + \": \" + exception.Message);")
+  }
+  // ADR-239: a `byte[]` at an erased position, copied into a fresh Kotlin `ByteArray`.
+  if (helper.includesBytes) {
+    appendLine("            if (type == typeof(byte[])) return CreateBytes((byte[])(object)value!);")
+  }
   appendLine("            if (type == typeof(int)) return nuget_wrap_int((int)(object)value!);")
   appendLine("            if (type == typeof(long)) return nuget_wrap_long((long)(object)value!);")
   appendLine("            if (type == typeof(float)) return nuget_wrap_float((float)(object)value!);")

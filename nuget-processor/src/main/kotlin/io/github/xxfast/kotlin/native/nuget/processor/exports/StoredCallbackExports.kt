@@ -6,13 +6,14 @@ import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.symbol.KSTypeParameter
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedInterfaceBridgePair
-import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedStoredCallbackPair
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isValueClass
 
 /**
  * Detects `add{X}`/`remove{X}` (or `subscribe{X}`/`unsubscribe{X}`) method pairs where the
@@ -124,6 +125,9 @@ internal fun FileSpec.Builder.addStoredCallbackExports(
   removeMethod: KSFunctionDeclaration,
   qualifiedClassName: String,
   classPrefix: String,
+  // ADR-239: the receiver is a generic owner read erased (`Crate<Any?>`), which only the
+  // managed-listener route can carry: it never spells the listener's `T`.
+  erasedOwner: Boolean = false,
 ) {
   val addMethodName: String = addMethod.simpleName.asString()
   val removeMethodName: String = removeMethod.simpleName.asString()
@@ -136,6 +140,11 @@ internal fun FileSpec.Builder.addStoredCallbackExports(
   val lambdaArgTypes: List<KSType> = lambdaType.arguments.dropLast(1)
     .mapNotNull { it.type?.resolve()?.expandAliases() }
   val lambdaArity: Int = lambdaArgTypes.size
+
+  if (erasedOwner || lambdaType.usesManagedListener()) {
+    addResultStoredCallbackExports(addMethod, removeMethod, qualifiedClassName, classPrefix)
+    return
+  }
 
   // Determine whether each arg is an enum (ordinal Int) or reference type
   data class ArgInfo(val qualifiedName: String, val isEnum: Boolean)
@@ -270,8 +279,6 @@ internal fun KSClassDeclaration.forwardArmStoredCallbackPairs(
     .filter { (add, remove) ->
       add.isArmCallbackRoutable(classifier) && remove.isArmCallbackRoutable(classifier)
     }
-    // ADR-037 amendment: a non-`Unit` listener result, refused by name, after detection.
-    .filter { (add, _) -> legacyRefusedStoredCallbackPair(add) == null }
 
 /**
  * The interface-bridge (ADR-039) twin of [forwardArmStoredCallbackPairs]: a sealed arm's
@@ -294,3 +301,92 @@ internal fun KSClassDeclaration.forwardArmInterfaceBridgePairs(
     // ADR-090 / ADR-039 amendments (2026-09-26): an overloaded listener member, or one whose
     // parameter or return the route cannot carry, is refused by name.
     .filter { (add, _) -> classifier.legacyRefusedInterfaceBridgePair(add) == null }
+
+/**
+ * ADR-239: whether a stored listener rides the managed-lambda route rather than the void thunk:
+ * it returns something other than `Unit`, or takes a payload the void thunk has no wire for (a
+ * nullable, a type parameter, `Char`, `Instant`, `Duration`, `Uuid`, `ByteArray`, a collection or a
+ * value class).
+ * The C# half mints the delegate into a Kotlin lambda with `nuget_func_from_managed` (ADR-236's
+ * setter mechanism), which reads every payload with `NugetMarshal.FromHandle<T>` and boxes every
+ * result with `NugetMarshal.Wrap`, and hands that lambda's handle to the subscribe export.
+ */
+internal fun KSType.usesManagedListener(): Boolean {
+  val components: List<KSType> = arguments.mapNotNull { it.type?.resolve()?.expandAliases() }
+  if (components.lastOrNull()?.declaration?.qualifiedName?.asString() != "kotlin.Unit") return true
+  return components.dropLast(1).any { payload ->
+    val name: String = payload.declaration.qualifiedName?.asString().orEmpty()
+    payload.isMarkedNullable || payload.declaration is KSTypeParameter ||
+        name in MANAGED_LISTENER_PAYLOADS ||
+        name.startsWith("kotlin.collections.") ||
+        (payload.declaration as? KSClassDeclaration)?.isValueClass() == true
+  }
+}
+
+private val MANAGED_LISTENER_PAYLOADS: Set<String> = setOf(
+  "kotlin.Char", "kotlin.time.Instant", "kotlin.time.Duration", "kotlin.uuid.Uuid",
+  "kotlin.ByteArray",
+)
+
+/**
+ * ADR-239: the subscribe/unsubscribe exports of a stored pair whose listener has a result. Same
+ * ABI as the `Unit` route (`handle, listenerPtr, userData, errorOut`), so the C# imports do not
+ * change shape: `listenerPtr` is the retained handle of the Kotlin lambda minted over the C#
+ * delegate, consumed here, and `userData` is unused (C# passes null, so it is nullable here).
+ * The lambda's own cleaner frees the delegate's key once the owner drops it after `remove`.
+ */
+private fun FileSpec.Builder.addResultStoredCallbackExports(
+  addMethod: KSFunctionDeclaration,
+  removeMethod: KSFunctionDeclaration,
+  qualifiedClassName: String,
+  classPrefix: String,
+) {
+  val addMethodName: String = addMethod.simpleName.asString()
+  val removeMethodName: String = removeMethod.simpleName.asString()
+  val subscribeBody: String = buildString {
+    appendLine("return try {")
+    // Cast by inference at each call, so the listener's type (a generic owner's `T` included) is
+    // never spelled here.
+    appendLine("  val bridge: Any = try {")
+    appendLine("    listenerPtr.asStableRef<Any>().get()")
+    appendLine("  } finally {")
+    appendLine("    NugetHandles.release(listenerPtr)")
+    appendLine("  }")
+    appendLine("  val obj = handle.asStableRef<$qualifiedClassName>().get()")
+    appendLine("  obj.${addMethodName.kotlinIdentifier()}(nugetUncheckedCast(bridge))")
+    val remove: String = removeMethodName.kotlinIdentifier()
+    appendLine("  val unregister: () -> Unit = { obj.$remove(nugetUncheckedCast(bridge)) }")
+    appendLine("  NugetHandles.retain(unregister)")
+    appendLine("} catch (e: Throwable) {")
+    appendLine(
+      "  if (errorOut != null) errorOut.reinterpret<COpaquePointerVar>().pointed.value = " +
+        "NugetHandles.retain(buildError(e, ::nugetMappedType))"
+    )
+    appendLine("  null")
+    append("}")
+  }
+  addFunction(
+    FunSpec.builder("export_${classPrefix}_${addMethodName.asCSymbol()}")
+      .addAnnotation(cNameAnnotation("${classPrefix}_$addMethodName", ownedBy(addMethod)))
+      .addParameter("handle", cOpaquePointer)
+      .addParameter("listenerPtr", cOpaquePointer)
+      .addParameter("userData", cOpaquePointer.copy(nullable = true))
+      .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+      .returns(cOpaquePointer.copy(nullable = true))
+      .addCode(subscribeBody)
+      .build()
+  )
+  val unsubscribeBody: String = buildString {
+    appendLine("val ref = subscriptionHandle.asStableRef<() -> Unit>()")
+    appendLine("ref.get().invoke()")
+    append("NugetHandles.release(ref.asCPointer())")
+  }
+  addFunction(
+    FunSpec.builder("export_${classPrefix}_${removeMethodName.asCSymbol()}")
+      .addAnnotation(cNameAnnotation("${classPrefix}_$removeMethodName", ownedBy(removeMethod)))
+      .addParameter("handle", cOpaquePointer)
+      .addParameter("subscriptionHandle", cOpaquePointer)
+      .addCode(unsubscribeBody)
+      .build()
+  )
+}

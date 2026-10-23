@@ -74,11 +74,10 @@ internal fun BridgeType.forwardPublicCsharpType(): String = when (this) {
   is BridgeType.FlowSource ->
     "global::System.Collections.Generic.IAsyncEnumerable<${element.forwardPublicCsharpType()}>" +
       if (nullable) "?" else ""
-  // ADR-160 amendment: ADR-012's consumer type, `KotlinFunc<...>`, or `KotlinAction<...>` for a
-  // `Unit` result (issue #114). Only reached once [unnameableTypeArgument] found nothing.
-  is BridgeType.ReturnedLambda -> typeArguments
-    .map { argument -> argument.forwardPublicCsharpType() }
-    .let { spelled -> if (suspend) csSuspendLambdaType(spelled) else csLambdaType(spelled) }
+  // ADR-239: a lambda handed out of Kotlin (a result or a property, ADR-236) is the BCL delegate a
+  // C# lambda converts to, bound to the `KotlinFunc` wrapper that owns the handle. Only reached
+  // once [unnameableTypeArgument] found nothing.
+  is BridgeType.ReturnedLambda -> lambdaDelegateCsharpType()
 
   // ADR-147 amendment: a nullable-bounded bare `T` is `T`, not `T?`; the instantiation says
   // whether it holds null.
@@ -251,25 +250,47 @@ internal fun BridgeType.ReturnedLambda.unnameableTypeArgument(): String? =
     }
     ?.let { index -> kotlinTypeArguments[index] }
 
-private fun BridgeType.isLambdaTypeArgument(isResult: Boolean): Boolean = when (this) {
-  BridgeType.Unit -> isResult
+private fun BridgeType.isLambdaTypeArgument(isResult: Boolean): Boolean =
+  if (this == BridgeType.Unit) isResult else isErasedBoxable()
+
+/**
+ * ADR-239: whether a value of this type crosses an ERASED position, a box `NugetMarshal.Wrap<T>`
+ * mints and `NugetMarshal.FromHandle<T>` reads by its static C# type: a lambda's type argument
+ * (`KotlinFunc<A, R>`), and a C# callback's result, which Kotlin reads back out of the box it
+ * owns. One vocabulary for both, so a result a lambda property carries is a result a callback
+ * parameter carries.
+ */
+internal fun BridgeType.isErasedBoxable(): Boolean = when (this) {
   is BridgeType.Primitive, BridgeType.Char, BridgeType.String, is BridgeType.Enum,
   is BridgeType.ObjectHandle, is BridgeType.Interface,
+  // ADR-239: over the runtime's `nuget_wrap_*` / `nuget_unwrap_*` pairs for each.
+  BridgeType.Instant, BridgeType.Duration, BridgeType.Uuid,
+  // ADR-239: over `NugetMarshal.ReadBytes` / `CreateBytes`, a copy each way.
+  BridgeType.ByteArray,
     -> true
+
+  // ADR-239: a `Throwable` as its ADR-107 envelope out of Kotlin and its managed-exception text
+  // into it, over the two generated throwable exports; only where a `NugetManagedException` fits.
+  is BridgeType.Throwable -> acceptsManagedException
 
   // ADR-171: a value class with a box/unbox pair crosses an erased position; the same test the
   // planner mints that pair on, which it never does for a generic value class.
   is BridgeType.ValueClass -> typeArguments.isEmpty() && hasErasedCrossing()
-  is BridgeType.Nullable -> type != BridgeType.Unit && type.isLambdaTypeArgument(isResult = false)
+  is BridgeType.Nullable ->
+    type != BridgeType.Unit && type !is BridgeType.Nullable && type.isErasedBoxable()
   // ADR-215 lane A: an ADR-211 `fun <T>` own `T`, which `KotlinFunc<T, R>` boxes like any argument.
   is BridgeType.TypeParameter -> true
-  BridgeType.Instant,
-  BridgeType.Duration,
-  is BridgeType.Throwable,
-  BridgeType.Uuid,
-  is BridgeType.BoundInterface,
-  BridgeType.ByteArray,
-  is BridgeType.Collection,
+  // ADR-239: a closed collection, read and minted through `NugetMarshal`'s per-type tables. A `T`
+  // component has no closed `typeof` to key a table entry on, and a .NET dictionary holds no null
+  // key.
+  is BridgeType.Collection -> !containsTypeParameter() && key !is BridgeType.Nullable &&
+      listOfNotNull(element, key, value).all { component -> component.isErasedBoxable() }
+
+  // ADR-239: a bound C# interface at an erased position, through `NugetMarshal`'s per-type bound
+  // tables over the two generated box exports. A payload out of Kotlin needs a mintable bridge.
+  is BridgeType.BoundInterface -> implementable
+
+  BridgeType.Unit,
   is BridgeType.Callback,
   is BridgeType.AsyncCallback,
   is BridgeType.FlowSource,
@@ -279,6 +300,59 @@ private fun BridgeType.isLambdaTypeArgument(isResult: Boolean): Boolean = when (
   is BridgeType.Unsupported,
   is BridgeType.RawCollection,
     -> false
+}
+
+/** ADR-239: whether a `T` appears anywhere inside this collection's components. */
+private fun BridgeType.containsTypeParameter(): Boolean = when (this) {
+  is BridgeType.TypeParameter -> true
+  is BridgeType.Nullable -> type.containsTypeParameter()
+  is BridgeType.Collection ->
+    listOfNotNull(element, key, value).any { component -> component.containsTypeParameter() }
+  BridgeType.Unit,
+  is BridgeType.Primitive,
+  BridgeType.Char,
+  BridgeType.String,
+  BridgeType.Instant,
+  BridgeType.Duration,
+  is BridgeType.Throwable,
+  BridgeType.Uuid,
+  is BridgeType.Enum,
+  is BridgeType.ObjectHandle,
+  is BridgeType.Interface,
+  is BridgeType.BoundInterface,
+  is BridgeType.ValueClass,
+  BridgeType.ByteArray,
+  is BridgeType.Callback,
+  is BridgeType.AsyncCallback,
+  is BridgeType.FlowSource,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+    -> false
+}
+
+/** ADR-239: whether this erased type is, or holds, a boxed `ByteArray`. */
+internal fun BridgeType.boxesBytes(): Boolean {
+  val type: BridgeType = unwrapNullable()
+  if (type == BridgeType.ByteArray) return true
+  val collection: BridgeType.Collection = type as? BridgeType.Collection ?: return false
+  return listOfNotNull(collection.element, collection.key, collection.value)
+    .any { component -> component.boxesBytes() }
+}
+
+/**
+ * ADR-239: every closed collection inside [this] erased type, outermost first, nested components
+ * included, so each has its `NugetMarshal` table entry. Empty for a non-boxable type.
+ */
+internal fun BridgeType.boxedCollections(): List<BridgeType.Collection> {
+  if (!isErasedBoxable()) return emptyList()
+  val collection: BridgeType.Collection = unwrapNullable() as? BridgeType.Collection
+    ?: return emptyList()
+  return listOf(collection) +
+      listOfNotNull(collection.element, collection.key, collection.value)
+        .flatMap { component -> component.boxedCollections() }
 }
 
 /**
@@ -295,21 +369,11 @@ internal fun managedExceptionTextCs(name: String, nullable: Boolean): String {
 }
 
 /**
- * ADR-236: the public C# type of a lambda-typed PROPERTY, the BCL delegate a C# lambda converts
- * to: `Func<..., R>` / `Action<...>`, or the ADR-210 `Func<..., CancellationToken, Task<R>>` /
- * `Func<..., CancellationToken, Task>` for a `suspend` one, `?` when nullable. Every other type is
- * its [forwardPublicCsharpType]. The getter binds the delegate to the lambda's `KotlinFunc`
- * wrapper ([lambdaWrapperCsharpType]), whose own handle a setter passes straight back.
+ * ADR-236 / ADR-239: the BCL delegate spelling of [this] lambda, wherever it is handed out of
+ * Kotlin: `Func<..., R>` / `Action<...>`, or the ADR-210 `Func<..., CancellationToken, Task<R>>` /
+ * `Func<..., CancellationToken, Task>` for a `suspend` one. The delegate is bound to the lambda's
+ * `KotlinFunc` wrapper ([lambdaWrapperCsharpType]), whose own handle a setter passes straight back.
  */
-internal fun BridgeType.forwardPropertyCsharpType(): String {
-  val lambda: BridgeType.ReturnedLambda =
-    (if (this is BridgeType.Nullable) type else this) as? BridgeType.ReturnedLambda
-      ?: return forwardPublicCsharpType()
-  val mark: String = if (this is BridgeType.Nullable) "?" else ""
-  return lambda.lambdaDelegateCsharpType() + mark
-}
-
-/** ADR-236: the BCL delegate spelling of [this] lambda; see [forwardPropertyCsharpType]. */
 internal fun BridgeType.ReturnedLambda.lambdaDelegateCsharpType(): String {
   val spelled: List<String> = typeArguments.map { argument -> argument.forwardPublicCsharpType() }
   val parameters: List<String> = spelled.dropLast(1)
@@ -325,8 +389,35 @@ internal fun BridgeType.ReturnedLambda.lambdaDelegateCsharpType(): String {
 }
 
 /** ADR-236: the `KotlinFunc` (or sibling) wrapper that owns [this] lambda's handle. */
-internal fun BridgeType.ReturnedLambda.lambdaWrapperCsharpType(): String = forwardPublicCsharpType()
+internal fun BridgeType.ReturnedLambda.lambdaWrapperCsharpType(): String = typeArguments
+  .map { argument -> argument.forwardPublicCsharpType() }
+  .let { spelled -> if (suspend) csSuspendLambdaType(spelled) else csLambdaType(spelled) }
 
 /** ADR-236: the wrapper method a property getter binds its delegate to. */
 internal fun BridgeType.ReturnedLambda.lambdaInvokeMethod(): String =
   if (suspend) "InvokeAsync" else "Invoke"
+
+/**
+ * ADR-239: the delegate over an OWNED lambda handle [pointer], bound to the wrapper that releases
+ * it when the delegate is collected: `new KotlinFunc<A, R>(h).Invoke`.
+ */
+internal fun BridgeType.ReturnedLambda.lambdaDelegateRead(pointer: String): String =
+  "new ${lambdaWrapperCsharpType()}($pointer).${lambdaInvokeMethod()}"
+
+/** ADR-239: whether this erased type is, or holds, a `Throwable`. */
+internal fun BridgeType.boxesThrowable(): Boolean {
+  val type: BridgeType = unwrapNullable()
+  if (type is BridgeType.Throwable) return true
+  val collection: BridgeType.Collection = type as? BridgeType.Collection ?: return false
+  return listOfNotNull(collection.element, collection.key, collection.value)
+    .any { component -> component.boxesThrowable() }
+}
+
+/** ADR-239: every bound C# interface this erased type is, or holds. */
+internal fun BridgeType.boundInterfaceComponents(): List<BridgeType.BoundInterface> {
+  val type: BridgeType = unwrapNullable()
+  if (type is BridgeType.BoundInterface) return listOf(type)
+  val collection: BridgeType.Collection = type as? BridgeType.Collection ?: return emptyList()
+  return listOfNotNull(collection.element, collection.key, collection.value)
+    .flatMap { component -> component.boundInterfaceComponents() }
+}

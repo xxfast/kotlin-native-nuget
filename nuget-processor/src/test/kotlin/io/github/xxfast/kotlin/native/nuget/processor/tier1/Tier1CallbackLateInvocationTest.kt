@@ -129,11 +129,15 @@ class Tier1CallbackLateInvocationTest {
           "${csharpLinesFor(result, "GCHandle.FromIntPtr(a")}",
     )
     // The GCHandle reads that REMAIN are deliberate and are not thunk ctxs: ADR-084's identity
-    // token, read back by the shared probe in `NugetMarshal`. The Flow and async families keep
-    // their own GCHandle ctx too, but this fixture reaches neither, so they are pinned by
-    // Tier1CallbackFaultContainmentTest instead.
+    // token, read back by the shared probe in `NugetMarshal`, and ADR-239's `TakeGcHandle`, which
+    // reads a bound C# interface payload (ADR-088's GCHandle wire), never a dispatch ctx. The Flow
+    // and async families keep their own GCHandle ctx too, but this fixture reaches neither, so they
+    // are pinned by Tier1CallbackFaultContainmentTest instead.
     assertEquals(
-      listOf("original = (T)GCHandle.FromIntPtr(token).Target!;"),
+      listOf(
+        "GCHandle gcHandle = GCHandle.FromIntPtr(handle);",
+        "original = (T)GCHandle.FromIntPtr(token).Target!;",
+      ),
       csharpLinesFor(result, "GCHandle.FromIntPtr"),
       "expected the only surviving GCHandle read to be the ADR-084 identity probe",
     )

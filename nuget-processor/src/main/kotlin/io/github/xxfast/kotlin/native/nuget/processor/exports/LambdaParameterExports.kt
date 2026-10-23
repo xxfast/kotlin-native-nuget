@@ -317,24 +317,7 @@ internal fun KSFunctionDeclaration.isArmCallbackRoutable(
     // filter runs AFTER pair detection: a refused add half cannot leave its partner behind as a
     // per-call callback. Without it a `(Int?) -> Unit` on an arm still aborted the
     // generated-Kotlin compile with no diagnostic.
-    refusedLegacyLambdaShape(classifier) == null &&
-    // ADR-199: and a lambda that carries a type parameter, which only a generic arm can declare
-    // here. The planner names it (`nameGenericArmLegacyDrops`).
-    !carriesTypeParameterLambda()
-
-/**
- * ADR-199: whether a lambda parameter of this member names a TYPE PARAMETER as a payload or as its
- * result (`cb: (T) -> Unit` on `Hot<T>`). The hand-written callback routes marshal a payload by
- * its declared type and have none for `T`: the export reads the erased receiver (`Hot<Any?>`), so
- * the payload arrives as `Any?` and `NugetHandles.retain(it0)` does not compile. Refused on every
- * arm-keyed callback route, both halves, exactly as an ordinary generic class refuses the member
- * (ADR-147); not in [refusedLegacyLambdaShape], whose sentence the class walk reads too.
- */
-internal fun KSFunctionDeclaration.carriesTypeParameterLambda(): Boolean = parameters.any { param ->
-  val expanded: KSType = param.type.resolve().expandAliases()
-  val isLambda: Boolean = expanded.declaration.qualifiedName?.asString() in LAMBDA_TYPES
-  val namesTypeParameter: Boolean = expanded.arguments.any { argument ->
-    argument.type?.resolve()?.declaration is KSTypeParameter
-  }
-  isLambda && namesTypeParameter
-}
+    // ADR-239: a lambda carrying the arm's type parameter is not refused (ADR-199 once did): a
+    // per-call one is planned with its `T` boxed, and a stored pair rides the managed-listener
+    // route, which never spells `T`.
+    refusedLegacyLambdaShape(classifier) == null

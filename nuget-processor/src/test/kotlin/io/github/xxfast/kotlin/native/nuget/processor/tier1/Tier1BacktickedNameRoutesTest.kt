@@ -110,7 +110,7 @@ class Tier1BacktickedNameRoutesTest {
     listOf(
       "obj.`in`(", // suspend member
       "obj.`object`()", // Flow member
-      ".get().`class` {", // per-call lambda (legacy, `Char` payload)
+      ".get().`class`({", // per-call lambda (a `Char` payload, on the plan since ADR-239)
       "obj.`as`", // Flow property
       "tier1.routes.keywords.`when`()", // top-level suspend
       "tier1.routes.keywords.`return`<Any?>(", // generic function
@@ -293,7 +293,7 @@ class Tier1BacktickedNameRoutesTest {
       "steps_tug_hard", "gait_tug_hard", "kennel_tug_hard", "kennel_get_kennel_size",
     ).forEach { symbol -> assertContains(result.generated, "@CName(\"$owner$symbol\")") }
     assertContains(result.generated, "obj.`tug hard`()")
-    assertContains(result.generated, ".get().`pull back` {")
+    assertContains(result.generated, ".get().`pull back`({")
     val csharp: String = result.generatedCSharp
     listOf(
       "Task<int> TugHard(", "KotlinFlow<int> AddB(", "void PullBack(", "AddListener(",
