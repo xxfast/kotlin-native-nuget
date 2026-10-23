@@ -50,17 +50,6 @@ class Tier1InterfaceBridgeRefusalTest {
   }
 
   @Test
-  fun `a suspend member names the interface unimplementable`() {
-    val (_, warning) = refusal(
-      "refusesuspend",
-      "interface Pet { suspend fun fetch(id: Int): String }",
-    )
-
-    assertTrue("`suspend fun fetch`" in warning, warning)
-    assertTrue("suspend" in warning.substringAfter("`suspend fun fetch`"), warning)
-  }
-
-  @Test
   fun `a generic member names the interface unimplementable`() {
     val (_, warning) = refusal(
       "refusegeneric",
@@ -88,11 +77,12 @@ class Tier1InterfaceBridgeRefusalTest {
       """.trimIndent(),
     )
 
-    for (member in listOf("val tags", "suspend fun fetch", "fun pick", "fun walk")) {
+    for (member in listOf("val tags", "fun pick", "fun walk")) {
       assertTrue("`$member" in warning, "expected $member named; got: $warning")
     }
     // ADR-084 amendment (2026-10-22): a `var` bridges through a setter slot, so it is not named.
-    for (member in listOf("val name", "var mood")) {
+    // ADR-232: nor is a `suspend` member, which bridges through an awaited Begin and End pair.
+    for (member in listOf("val name", "var mood", "suspend fun fetch")) {
       assertFalse("`$member" in warning, "a bridgeable member is not named; got: $warning")
     }
   }

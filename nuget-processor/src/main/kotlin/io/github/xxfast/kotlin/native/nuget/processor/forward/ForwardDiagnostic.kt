@@ -900,13 +900,13 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
 
       // The ADR-064 audit amendment: one sentence for every owner the route skips, so it lists
       // each of them. ADR-229: the static owners bind on the top-level route now, and their `Flow`
-      // results too (ADR-230), so what is left is an extension on another receiver and an
-      // interface nothing returns.
+      // results too (ADR-230), so what is left is an extension on another receiver (ADR-232: an
+      // interface nothing returns binds too, for a C# implementation).
       ForwardPlanSkipReason.SUSPEND.name ->
         "a `suspend` function binds at the top level, on a class or sealed type, an object, a " +
           "companion, an enum or a value class, as an extension on a class, String, primitive " +
-          "or enum receiver, and on an interface a function returns, but not as an extension " +
-          "on any other receiver, or on an interface nothing returns"
+          "or enum receiver, and on an interface, but not as an extension on any other " +
+          "receiver"
 
       // ADR-197: a member's own type parameter binds too now, on the owners and at the positions
       // the boxed wire reaches, so the sentence names those rather than "top-level only".
@@ -1407,7 +1407,7 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
           "property of an ordinary class"
 
     ForwardPlanSkipReason.SUSPEND.name ->
-      "declare it as a `suspend` member of a class (or of an interface a function returns), or " +
+      "declare it as a `suspend` member of a class (or of an interface), or " +
           "as a top-level `suspend fun` taking the receiver, if it has one, as its first parameter"
 
     // ADR-197: the member route is the closer remedy for most authors, and its limits are named,

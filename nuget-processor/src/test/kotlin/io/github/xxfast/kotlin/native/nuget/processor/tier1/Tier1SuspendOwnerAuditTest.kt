@@ -88,6 +88,8 @@ class Tier1SuspendOwnerAuditTest {
       interface Holder<T> {
         suspend fun hold(): Int
       }
+
+      suspend fun List<Int>.total(): Int = sum()
     """.trimIndent(),
   )
 
@@ -112,8 +114,8 @@ class Tier1SuspendOwnerAuditTest {
   @Test
   fun `a suspend member on an owner no suspend route carries is named exactly once`() {
     listOf(
-      // An interface nothing returns: ADR-174's interface async route carries reachable ones only.
-      "tier1.suspendowners.Pacer.pace",
+      // A receiver the suspend route has no slot for: every owner binds now (ADR-229, ADR-232).
+      "tier1.suspendowners.total",
     ).forEach { member ->
       val matches: List<String> = warningsNaming(member)
       assertEquals(1, matches.size, "$member must be named once; kspWarnings=${result.kspWarnings}")
@@ -123,7 +125,7 @@ class Tier1SuspendOwnerAuditTest {
         "$member is a structural suspend drop; got=$warning",
       )
       assertTrue(
-        "or on an interface nothing returns" in warning,
+        "as an extension on any other receiver" in warning,
         "$member must read the widened suspend sentence; got=$warning",
       )
     }
@@ -249,7 +251,12 @@ class Tier1SuspendOwnerAuditTest {
   @Test
   fun `the suspend drops are absent from the C# and the controls still bind`() {
     val declarations: List<String> = declarations()
-    listOf("Pace", "Hold").forEach { member ->
+    // ADR-232: `Pacer` is an interface nothing returns, and `IPacer` still declares `PaceAsync`.
+    assertTrue(
+      declarations.any { line -> "Task<int> PaceAsync(" in line },
+      "an interface nothing returns declares its suspend member",
+    )
+    listOf("Total", "Hold").forEach { member ->
       val leaks: List<String> = declarations.filter { line ->
         Regex("\\b${member}(Async)?\\s*[(<]").containsMatchIn(line)
       }

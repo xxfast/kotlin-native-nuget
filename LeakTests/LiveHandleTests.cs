@@ -55,6 +55,7 @@ using Dash = TestLibrary.Dash;
 using Zoomrun = TestLibrary.Zoomrun;
 using Cheersquad = TestLibrary.Cheersquad;
 using Purrclock = TestLibrary.Purrclock;
+using Feedingtime = TestLibrary.Feedingtime;
 
 namespace LeakTests;
 
@@ -7460,5 +7461,270 @@ public class LiveHandleTests
             Exception verdict = await referee.VerdictLater()(3, CancellationToken.None);
             Assert.Contains("code 3", verdict.Message);
         }, iterations: 50);
+    }
+
+    // A C#-implemented `IFeeder` for the ADR-232 rows, here and in `CollectabilityTests`.
+    // `Feeding` and `Menu` replace the defaults per row; everything else answers a constant.
+    internal sealed class LeakBowl(string name) : Feedingtime.IFeeder
+    {
+        public Func<string, CancellationToken, Task<int>>? Feeding;
+        public Func<KotlinFlow<string>>? Menu;
+
+        public string Name { get; } = name;
+
+        public async Task<int> FeedAsync(string cat, CancellationToken cancellationToken = default)
+        {
+            if (Feeding != null) return await Feeding(cat, cancellationToken);
+            await Task.Delay(1, cancellationToken);
+            return cat.Length;
+        }
+
+        public Task RefillAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<bool> HungryAsync(string cat, CancellationToken cancellationToken = default) => Task.FromResult(true);
+        public Task<long> LastMealAsync(CancellationToken cancellationToken = default) => Task.FromResult(1L);
+        public Task<float> PortionAsync(CancellationToken cancellationToken = default) => Task.FromResult(0.5f);
+        public Task<double> WeighAsync(CancellationToken cancellationToken = default) => Task.FromResult(4.5);
+        public Task<Feedingtime.Craving> CravingAsync(string cat, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Feedingtime.Craving.Peckish);
+        public Task<string?> FavouriteAsync(string cat, CancellationToken cancellationToken = default) =>
+            Task.FromResult<string?>("tuna");
+        public Task<Exception> SpillAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<Exception>(new InvalidOperationException("kibble everywhere"));
+
+        public KotlinFlow<string> Meals() => Menu != null ? Menu() : KotlinFlow<string>.From(Courses());
+
+        internal static async IAsyncEnumerable<string> Courses(
+            [EnumeratorCancellation] CancellationToken token = default)
+        {
+            foreach (string course in new[] { "kibble", "tuna" })
+            {
+                await Task.Delay(1, token);
+                yield return course;
+            }
+        }
+
+        public void Dispose() { }
+        public ValueTask DisposeAsync() => default;
+    }
+
+    // Row 19a. ADR-232: a C#-implemented interface with `suspend` and `Flow` members, completing.
+    // Every result wire crosses (`CheckUpAsync` reads nine suspend slots, the `String?` and
+    // `Throwable` results minting a handle each), the `Unit` slot twice, a C#-made flow
+    // (`KotlinFlow<T>.From`) collected to the end and a Kotlin-made one passed back through the
+    // C# feeder. The slot's delegate is the bridge object's own method, so no per-call key is
+    // owed; anything minted per await or per element and not released is a positive delta.
+    [Fact]
+    public async Task CSharpAsyncInterface_Completion_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var bowl = new LeakBowl("Oreo's bowl");
+            Assert.Equal("Oreo's bowl gave Oreo 4 scoops", await Feedingtime.Feeders.ServeAsync(bowl, "Oreo"));
+            Assert.Equal("Oreo's bowl topped up twice", await Feedingtime.Feeders.TopUpAsync(bowl));
+            Assert.Contains("spill=kibble everywhere", await Feedingtime.Feeders.CheckUpAsync(bowl, "Mylo"));
+            Assert.Equal("kibble, tuna", await Feedingtime.Feeders.MenuAsync(bowl));
+            Assert.Equal("kibble", await Feedingtime.Feeders.FirstMealsAsync(bowl, 1));
+
+            using Feedingtime.IFeeder auto = Feedingtime.Feeders.AutoFeeder("Mylo's bowl");
+            bowl.Menu = () => auto.Meals();
+            Assert.Equal("tuna, salmon", await Feedingtime.Feeders.MenuAsync(bowl));
+
+            using var shelf = new LeakShelf(3, 4);
+            Assert.Equal(3 + 3 + 4, await Feedingtime.Feeders.TallyAsync(shelf));
+            Assert.Equal(4, await Feedingtime.Feeders.RaidAsync(shelf, 1));
+        });
+    }
+
+    // Row 19b. The FAULT rows: a C# fault caught in Kotlin, the same fault uncaught (the
+    // ADR-128/130 envelope crosses on the same call), a synchronous throw before any Task exists,
+    // and a flow that faults mid-stream after two elements were minted.
+    [Fact]
+    public async Task CSharpAsyncInterface_Fault_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var bowl = new LeakBowl("Mylo's bowl")
+            {
+                Feeding = async (_, token) =>
+                {
+                    await Task.Delay(1, token);
+                    throw new InvalidOperationException("the bowl is empty");
+                },
+            };
+            Assert.Contains("the bowl is empty", await Feedingtime.Feeders.ServeOrRecoverAsync(bowl, "Mylo"));
+            Exception uncaught = await Assert.ThrowsAnyAsync<Exception>(() => Feedingtime.Feeders.ServeAsync(bowl, "Mylo"));
+            Assert.Contains("the bowl is empty", uncaught.ToString());
+
+            bowl.Feeding = (_, _) => throw new InvalidOperationException("Mylo sat in the bowl");
+            Assert.Contains("Mylo sat in the bowl", await Feedingtime.Feeders.ServeOrRecoverAsync(bowl, "Mylo"));
+
+            bowl.Menu = () => KotlinFlow<string>.From(SpillMidMeal());
+            Assert.Contains("tipped mid-meal", await Feedingtime.Feeders.MenuOrRecoverAsync(bowl));
+            Exception spilled = await Assert.ThrowsAnyAsync<Exception>(() => Feedingtime.Feeders.MenuAsync(bowl));
+            Assert.Contains("tipped mid-meal", spilled.ToString());
+        });
+    }
+
+    private static async IAsyncEnumerable<string> SpillMidMeal(
+        [EnumeratorCancellation] CancellationToken token = default)
+    {
+        yield return "kibble";
+        await Task.Delay(1, token);
+        yield return "tuna";
+        throw new InvalidOperationException("tipped mid-meal");
+    }
+
+    // Row 19c. The CANCEL rows: Kotlin's own timeout cancels a pending C# call, the C# caller's
+    // token cancels a pending C# call, and the C# caller's token cancels a parked C# enumeration.
+    // Each pending C# Task is awaited to its end before the row returns, so a hold that lasts only
+    // until the abandoned Task completes is not read as a leak.
+    [Fact]
+    public async Task CSharpAsyncInterface_Cancellation_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(
+            async () =>
+            {
+                var feeding = new TaskCompletionSource<Task<int>>(TaskCreationOptions.RunContinuationsAsynchronously);
+                using var bowl = new LeakBowl("Oreo's bowl")
+                {
+                    Feeding = (_, token) =>
+                    {
+                        Task<int> pending = Task.Delay(Timeout.Infinite, token).ContinueWith(_ => -1, TaskScheduler.Default);
+                        feeding.TrySetResult(pending);
+                        return pending;
+                    },
+                };
+                Assert.Equal("Oreo gave up waiting", await Feedingtime.Feeders.ServeOrGiveUpAsync(bowl, "Oreo", 20));
+                await (await feeding.Task.WaitAsync(TimeSpan.FromSeconds(30))).WaitAsync(TimeSpan.FromSeconds(30));
+
+                feeding = new TaskCompletionSource<Task<int>>(TaskCreationOptions.RunContinuationsAsynchronously);
+                using (var cts = new CancellationTokenSource())
+                {
+                    Task<string> serving = Feedingtime.Feeders.ServeAsync(bowl, "Oreo", cts.Token);
+                    Task<int> pending = await feeding.Task.WaitAsync(TimeSpan.FromSeconds(30));
+                    cts.Cancel();
+                    await Assert.ThrowsAnyAsync<OperationCanceledException>(() => serving);
+                    await pending.WaitAsync(TimeSpan.FromSeconds(30));
+                }
+
+                var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                bowl.Menu = () => KotlinFlow<string>.From(ParkAfterOne(parked, closed));
+                using (var cts = new CancellationTokenSource())
+                {
+                    Task<string> listing = Feedingtime.Feeders.MenuAsync(bowl, cts.Token);
+                    await parked.Task.WaitAsync(TimeSpan.FromSeconds(30));
+                    cts.Cancel();
+                    await Assert.ThrowsAnyAsync<OperationCanceledException>(() => listing);
+                    await closed.Task.WaitAsync(TimeSpan.FromSeconds(30));
+                }
+            },
+            iterations: 5);
+    }
+
+    private static async IAsyncEnumerable<string> ParkAfterOne(
+        TaskCompletionSource parked, TaskCompletionSource closed,
+        [EnumeratorCancellation] CancellationToken token = default)
+    {
+        try
+        {
+            yield return "kibble";
+            parked.TrySetResult();
+            await Task.Delay(Timeout.Infinite, token);
+            yield return "never";
+        }
+        finally
+        {
+            closed.TrySetResult();
+        }
+    }
+
+    // The generic `ILarder<int>` of row 19a: a boxed `T` per suspend result and per element.
+    private sealed class LeakShelf(params int[] items) : Feedingtime.ILarder<int>
+    {
+        public async Task<int> FetchAsync(int shelf, CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(1, cancellationToken);
+            return items[shelf];
+        }
+
+        public KotlinFlow<int> Stock() => KotlinFlow<int>.From(Items());
+
+        private async IAsyncEnumerable<int> Items([EnumeratorCancellation] CancellationToken token = default)
+        {
+            foreach (int item in items)
+            {
+                await Task.Delay(1, token);
+                yield return item;
+            }
+        }
+
+        public void Dispose() { }
+        public ValueTask DisposeAsync() => default;
+    }
+
+    // A C#-implemented `IThermostat` for row 19d, over hot flows C# created.
+    private sealed class LeakBoiler : Feedingtime.IThermostat
+    {
+        public KotlinMutableStateFlow<int> LevelFlow { get; } = KotlinMutableStateFlow<int>.Create(18);
+        public KotlinMutableStateFlow<int> DialFlow { get; } = KotlinMutableStateFlow<int>.Create(0);
+        public KotlinMutableSharedFlow<string> Headlines { get; } = KotlinMutableSharedFlow<string>.Create(replay: 1);
+
+        public KotlinStateFlow<int> Level => LevelFlow;
+        public KotlinMutableStateFlow<int> Dial => DialFlow;
+        public KotlinSharedFlow<string> News() => Headlines;
+        public KotlinMutableSharedFlow<string> Bell() => Headlines;
+
+        public void Dispose()
+        {
+            LevelFlow.Dispose();
+            DialFlow.Dispose();
+            Headlines.Dispose();
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            Dispose();
+            return default;
+        }
+    }
+
+    private sealed class LeakPantry : Feedingtime.IPantry
+    {
+        public async Task<KotlinFlow<string>> DeliveryAsync(CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(1, cancellationToken);
+            return KotlinFlow<string>.From(LeakBowl.Courses());
+        }
+
+        public void Dispose() { }
+        public ValueTask DisposeAsync() => default;
+    }
+
+    // Row 19d. ADR-232: hot flows a C# implementation created (`KotlinMutableStateFlow<T>.Create`,
+    // `KotlinMutableSharedFlow<T>.Create`) read, written, collected and emitted from both sides,
+    // each slot handing back a retained handle Kotlin releases; and a suspend member returning a
+    // Flow, awaited then collected. Every flow is disposed, so its own handle and scope go too.
+    [Fact]
+    public async Task CSharpHotFlowInterface_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using (var boiler = new LeakBoiler())
+            {
+                Assert.Equal(18, Feedingtime.Feeders.Reading(boiler));
+                boiler.LevelFlow.Value = 25;
+                Assert.Equal(25, await Feedingtime.Feeders.WarmerThanAsync(boiler, 20));
+                Assert.Equal(1, Feedingtime.Feeders.TurnUp(boiler));
+                Assert.Equal(1, boiler.DialFlow.Value);
+                Assert.True(boiler.Headlines.TryEmit("tuna"));
+                Assert.Equal("tuna", await Feedingtime.Feeders.HeadlineAsync(boiler));
+                Assert.True(Feedingtime.Feeders.Ring(boiler, "ding"));
+                Assert.Equal(new[] { "ding" }, boiler.Headlines.ReplayCache);
+            }
+
+            using var pantry = new LeakPantry();
+            Assert.Equal("kibble, tuna", await Feedingtime.Feeders.UnpackAsync(pantry));
+        });
     }
 }

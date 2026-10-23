@@ -702,3 +702,11 @@ A generic Kotlin interface (`Keepsake<T>`) implemented in C# now crosses at a pa
 receiver, with one erased factory export per interface and a generic C# state class. The "generic
 interfaces" deferral above is lifted for those positions. A member's own type parameter
 (`fun <R> map(...)`) stays refused. See [ADR-222](222-csharp-implemented-generic-interfaces.md).
+
+## Amendment (2026-10-22): `suspend` and `Flow` members bridge
+
+The "Deferred" entry for `suspend` members, the `suspend` and `Flow`/`StateFlow` refusal in the
+2026-10-07 list, and the "`suspend`" case in the implementation notes no longer hold. A `suspend`
+member and a `Flow`, `StateFlow`, `SharedFlow` or mutable-form member is a slot, carried by the
+ADR-210 Begin/End pair or the `flowForKotlin` enumeration factory
+([ADR-232](232-csharp-implemented-async-interfaces.md)).
