@@ -758,16 +758,4 @@ public class AsyncInterfaceBridgeTests
         Assert.True(await values.MoveNextAsync());
         Assert.Equal(1, values.Current);
     }
-
-    /// <summary>A hot flow wrapping no Kotlin flow of its own fails at the slot, by name.</summary>
-    [Fact]
-    public void Reading_AWrapperWithNoKotlinFlow_FailsWithArgumentException()
-    {
-        using IThermostat wall = Feeders.WallThermostat();
-        using var dial = new Boiler { Level_ = () => wall.Level };
-
-        Exception ex = Assert.ThrowsAny<Exception>(() => Feeders.Reading(dial));
-        Assert.Contains("ArgumentException", ex.ToString());
-        Assert.Contains("wraps no Kotlin flow of its own", ex.ToString());
-    }
 }

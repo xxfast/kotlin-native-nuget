@@ -317,3 +317,11 @@ The sentence above that skips a position "when the interface's bridge cannot pla
 `<R>`, a suspend member)" no longer holds for a `suspend` member: a C# `IKeepsake<T>`-style
 implementation with `Task<T>` and `KotlinFlow<T>` members crosses, `T` boxed as for any slot
 ([ADR-232](232-csharp-implemented-async-interfaces.md)). A member's own `<R>` is still refused.
+
+## Amendment (2026-10-22): class and generic handles cross a slot
+
+The slot types listed above for a generic interface's members (`T`, `String`, primitives) are no
+longer the whole vocabulary: a class handle, a generic class handle such as `Crate<String>`,
+a collection, a nullable and the other plan types cross a slot too, and a slot declared by a
+generic super-interface is typed with the substituted argument
+([ADR-233](233-interface-slot-vocabulary.md)).

@@ -578,6 +578,27 @@ return to baseline:
 `LeakTests/CollectabilityTests.cs` `CSharpAsyncFeeder_ReleasedAfterKotlinGc` holds a `WeakReference`
 to the implementation and asserts Kotlin's garbage collection releases it once Kotlin drops its bridge.
 
+A C# class implementing a Kotlin interface whose members take or return classes, collections,
+lambdas and flows also adds no handle you dispose: a class a slot returns is Kotlin's, a class Kotlin
+passes is borrowed, and a lambda or flow a slot returns is released by Kotlin. `LeakTests/LiveHandleTests.cs`
+rows 20a to 20e return to baseline:
+
+- Row 20a, `CSharpInterfaceSlotVocabulary_Completion_ReturnsToBaseline`: a handle returned and passed,
+  a nullable and a generic handle, collections, a Kotlin lambda in, a C# lambda out, a suspend lambda,
+  a generic interface result, and `Uuid` and `ByteArray` values.
+- Row 20b, `CSharpInterfaceSlotVocabulary_Fault_ReturnsToBaseline`: a C# fault from a handle slot, a
+  collection slot, a passed-handle slot and a generic-interface slot.
+- Row 20c, `CSharpInterfaceFlowSlots_Completion_ReturnsToBaseline`: flows of a handle, an enum, a
+  nullable string and a value class, a `var` flow replaced by Kotlin, nullable flows and a `suspend`
+  member returning a hot flow.
+- Row 20d, `CSharpInterfaceFlowSlots_Fault_ReturnsToBaseline`: a handle flow faulting after its first
+  element.
+- Row 20e, `CreatedHotFlows_DisposeReleasesTheirScope_WithoutAGc`: `Dispose` on a `Create`d hot flow
+  releases its scope with no garbage collection.
+
+`LeakTests/CollectabilityTests.cs` `CSharpSitter_ReleasedAfterKotlinGc` asserts Kotlin's garbage
+collection releases such an implementation once Kotlin drops its bridge.
+
 An exception thrown from Kotlin allocates one error handle per call, and the
 [exception mapping](exceptions.md#catching-a-specific-exception-type) reads a mapped type from it
 for the exception and each cause. `LeakTests/LiveHandleTests.cs`'s

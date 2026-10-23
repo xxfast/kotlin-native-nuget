@@ -6,6 +6,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
+import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
@@ -15,6 +16,7 @@ import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.SUSPEND_LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
+import com.google.devtools.ksp.symbol.KSFunction
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedCsName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedInterfaceCsName
@@ -73,6 +75,16 @@ internal data class ForwardBridgeType(
    * handle on the OBJECT wire: retained by C# (`NugetHotFlowNative.Retain`), read and released here.
    */
   val hotFlow: Boolean = false,
+  /**
+   * ADR-233: every other classifier-admitted type (a class or generic class handle, an interface,
+   * a collection, a value class, a nullable primitive or enum, `Char`, `Instant`, `Duration`,
+   * `Uuid`, `ByteArray`), crossing on the OBJECT wire as one owned box: Kotlin retains the value it
+   * hands C# (C# reads and releases it with the plan's own read), and C# hands back an owned box
+   * that Kotlin reads with the plan's own lowering and releases.
+   */
+  val boxed: BridgeType? = null,
+  /** ADR-233: a star-projected `Flow<*>` element: `kotlin.Any?` here, `object?` in C#. */
+  val star: Boolean = false,
 )
 
 internal data class ForwardBridgeParameter(
@@ -244,9 +256,11 @@ private sealed interface ForwardBridgeSlotOutcome {
   data class Refused(val refusal: ForwardBridgeRefusal) : ForwardBridgeSlotOutcome
 }
 
-/** The vocabulary a slot carries, for every "cannot carry" remedy. */
-private const val CARRIED_TYPES: String = "String, String?, a non-null Boolean, Int, Long, " +
-  "Float or Double, a non-null enum, or a Throwable"
+/**
+ * The vocabulary a slot carries, for every "cannot carry" remedy. ADR-233: every type an ordinary
+ * class member takes or returns.
+ */
+private const val CARRIED_TYPES: String = "the types an ordinary class member takes and returns"
 
 /**
  * ADR-084 / ADR-064: the named skip for a reachable interface whose walk refused, naming every
@@ -380,7 +394,9 @@ internal object ForwardInterfaceBridgePlanner {
     owner: KSClassDeclaration? = null,
   ): ForwardBridgeSlotOutcome {
     val name: String = property.simpleName.asString()
-    val type: KSType = property.type.resolve().expandAliases()
+    val type: KSType = inherited(owner, property)
+      ?.let { owned -> property.asMemberOf(owned) }?.expandAliases()
+      ?: property.type.resolve().expandAliases()
     // Spelled, never the raw `KSType`: that prints a function type by its class name
     // (`SuspendFunction1<Int, String>`), which is not what the author wrote.
     val spelled: String = type.kotlinSpelling(keepProjections = true)
@@ -395,12 +411,6 @@ internal object ForwardInterfaceBridgePlanner {
     if (type.isFlowType()) {
       val outcome: FlowSlotOutcome = flowResult(type, classifier, owner)
       if (outcome is FlowSlotOutcome.Refused) return refuse(outcome.reason, outcome.hint)
-      if (property.isMutable) {
-        return refuse(
-          "is a `var`, and its setter would take a Flow, a type the bridge cannot carry",
-          "declare it a `val`",
-        )
-      }
       val getter = ForwardBridgeSlot(
         name = name,
         csName = property.csharpMemberName(),
@@ -408,17 +418,29 @@ internal object ForwardInterfaceBridgePlanner {
         result = ForwardBridgeType(ForwardBridgeWire.UNIT, "Unit", "void"),
         parameters = emptyList(),
       )
-      return ForwardBridgeSlotOutcome.Slot(
-        when (outcome) {
-          is FlowSlotOutcome.Hot -> getter.copy(result = outcome.result)
-          is FlowSlotOutcome.Element -> getter.copy(
-            result = flowSlotResult(outcome.result),
-            async = ForwardBridgeAsync.FLOW,
-            element = outcome.result,
-          )
-          is FlowSlotOutcome.Refused -> error("refused above")
-        },
-      )
+      val read: ForwardBridgeSlot = when (outcome) {
+        is FlowSlotOutcome.Hot -> getter.copy(result = outcome.result)
+        is FlowSlotOutcome.Element -> getter.copy(
+          result = flowSlotResult(outcome.result, outcome.nullable),
+          async = ForwardBridgeAsync.FLOW,
+          element = outcome.result,
+        )
+        is FlowSlotOutcome.Refused -> error("refused above")
+      }
+      // ADR-233: a `var` of a flow takes the Kotlin flow as its handle, which C# reads as the
+      // `KotlinFlow` a class member returning that flow hands out.
+      val setter: ForwardBridgeSlot? = if (property.isMutable) {
+        val value = ForwardBridgeType(
+          ForwardBridgeWire.OBJECT, read.result.kotlin, read.result.csharp, read.result.nullable,
+        )
+        getter.copy(
+          kind = ForwardBridgeSlotKind.SETTER,
+          parameters = listOf(ForwardBridgeParameter("value", value)),
+        )
+      } else {
+        null
+      }
+      return ForwardBridgeSlotOutcome.Slot(read, setter)
     }
     val result: ForwardBridgeType = lambdaSlotType(type, classifier)
       ?: bridgeType(type, classifier, owner)
@@ -467,20 +489,22 @@ internal object ForwardInterfaceBridgePlanner {
         "give it concrete parameter and result types",
       )
     }
-    if (function.parameters.size > 2) {
-      return refuse(
-        "takes ${function.parameters.size} parameters, and a bridge slot carries at most two",
-        "take at most two parameters, for example by grouping them in a value the bridge carries",
-      )
-    }
-    val returnType: KSType = function.returnType?.resolve()?.expandAliases()
+    // ADR-233: any arity: each parameter is one more slot argument, on its own wire.
+    val substituted: KSFunction? =
+      inherited(owner, function)?.let { owned -> function.asMemberOf(owned) }
+    val returnType: KSType =
+      (substituted?.returnType ?: function.returnType?.resolve())?.expandAliases()
       ?: return refuse("has no resolvable result type", "declare its result type")
     // ADR-232: a `Flow` result is a FLOW slot; a suspend member returning one awaits the C# task,
     // whose End thunk registers the flow it completed with.
     var hotResult: ForwardBridgeType? = null
+    var flowNullable = false
     val flow: ForwardBridgeType? = if (returnType.isFlowType()) {
       when (val outcome: FlowSlotOutcome = flowResult(returnType, classifier, owner)) {
-        is FlowSlotOutcome.Element -> outcome.result
+        is FlowSlotOutcome.Element -> {
+          flowNullable = outcome.nullable
+          outcome.result
+        }
         is FlowSlotOutcome.Hot -> {
           hotResult = outcome.result
           null
@@ -489,12 +513,6 @@ internal object ForwardInterfaceBridgePlanner {
       }
     } else {
       null
-    }
-    if (suspend && hotResult != null) {
-      return refuse(
-        "is a suspend member returning a hot flow, which the awaited result cannot hand back",
-        "return the hot flow from a non-suspend member",
-      )
     }
     // ADR-232: the End thunk is not generic, so it names the element; an own `T` has no spelling.
     if (suspend && flow?.typeParameter == true) {
@@ -506,7 +524,7 @@ internal object ForwardInterfaceBridgePlanner {
     }
     // ADR-239: a returned lambda crosses as a lambda property's getter does, the delegate C#
     // returned minted into a Kotlin lambda through the ADR-236 managed-lambda exports.
-    val result: ForwardBridgeType = hotResult ?: flow?.let { flowSlotResult(it) }
+    val result: ForwardBridgeType = hotResult ?: flow?.let { flowSlotResult(it, flowNullable) }
       ?: lambdaSlotType(returnType, classifier)
       ?: bridgeType(returnType, classifier, owner)
       ?: return refuse(
@@ -517,8 +535,9 @@ internal object ForwardInterfaceBridgePlanner {
     val parameters: MutableList<ForwardBridgeParameter> = mutableListOf()
     function.parameters.forEachIndexed { index, parameter ->
       val parameterName: String = parameter.name?.asString() ?: "arg$index"
-      val declared: KSType = parameter.type.resolve().expandAliases()
-      val type: ForwardBridgeType = bridgeType(declared, classifier, owner)
+      val declared: KSType =
+        (substituted?.parameterTypes?.getOrNull(index) ?: parameter.type.resolve()).expandAliases()
+      val type: ForwardBridgeType = bridgeType(declared, classifier, owner, parameter = true)
         ?.takeIf { it.wire != ForwardBridgeWire.UNIT }
         ?: return refuse(
           "takes `$parameterName: ${declared.kotlinSpelling(keepProjections = true)}`, a type " +
@@ -549,7 +568,11 @@ internal object ForwardInterfaceBridgePlanner {
   }
 
   private sealed interface FlowSlotOutcome {
-    data class Element(val result: ForwardBridgeType) : FlowSlotOutcome
+    data class Element(
+      val result: ForwardBridgeType,
+      val nullable: Boolean = false,
+    ) : FlowSlotOutcome
+
 
     data class Refused(val reason: String, val hint: String) : FlowSlotOutcome
 
@@ -570,42 +593,73 @@ internal object ForwardInterfaceBridgePlanner {
   ): FlowSlotOutcome {
     val qualifiedName: String? = type.declaration.qualifiedName?.asString()
     val hot: String? = HOT_FLOWS[qualifiedName]
-    if ((qualifiedName != "kotlinx.coroutines.flow.Flow" && hot == null) || type.isMarkedNullable) {
+    // ADR-233: a nullable flow is the null pointer on the same wire.
+    val mark: String = if (type.isMarkedNullable) "?" else ""
+    if (qualifiedName != "kotlinx.coroutines.flow.Flow" && hot == null) {
       return FlowSlotOutcome.Refused(
-        "is a `${type.kotlinSpelling(keepProjections = true)}`, a flow type the bridge cannot carry",
-        "declare it a `Flow<T>`, `StateFlow<T>`, `SharedFlow<T>` or a mutable form, non-null",
+        "is a `${type.kotlinSpelling(keepProjections = true)}`, " +
+          "a flow type the bridge cannot carry",
+        "declare it a `Flow<T>`, `StateFlow<T>`, `SharedFlow<T>` or a mutable form",
       )
     }
-    val argument: KSType = type.arguments.singleOrNull()?.type?.resolve()?.expandAliases()
-      ?: return FlowSlotOutcome.Refused(
-        "is a star-projected Flow, whose element the bridge cannot name",
-        "give the Flow a concrete element type",
+    val projection = type.arguments.singleOrNull()
+    val argument: KSType? = projection?.type?.resolve()?.expandAliases()
+      ?.takeIf { projection.variance != com.google.devtools.ksp.symbol.Variance.STAR }
+    // ADR-233: a star-projected element is whatever the C# value is at run time, boxed.
+    val element: ForwardBridgeType = if (argument == null) {
+      ForwardBridgeType(
+        ForwardBridgeWire.OBJECT, "kotlin.Any?", "object?", nullable = true, star = true,
       )
-    val element: ForwardBridgeType? = bridgeType(argument, classifier, owner)
-      ?.takeIf { element -> element.typeParameter || !element.nullable }
-      ?.takeIf { element -> element.throwable == null }
-      ?.takeIf { element ->
-        element.wire != ForwardBridgeWire.UNIT && element.wire != ForwardBridgeWire.ENUM
-      }
-    if (element == null) {
-      return FlowSlotOutcome.Refused(
-        "is a Flow of `${argument.kotlinSpelling(keepProjections = true)}`, an element the " +
-          "bridge cannot carry",
-        "use a Flow of String, Boolean, Int, Long, Float, Double or the interface's own type " +
-          "parameter",
-      )
+    } else {
+      bridgeType(argument, classifier, owner)
+        ?.takeIf { element -> element.typeParameter || !element.nullable }
+        ?.takeIf { element -> element.throwable == null && element.boxed == null }
+        ?.takeIf { element ->
+          element.wire != ForwardBridgeWire.UNIT && element.wire != ForwardBridgeWire.ENUM
+        }
+        ?: boxedElement(argument, classifier)
+        ?: return FlowSlotOutcome.Refused(
+          "is a Flow of `${argument.kotlinSpelling(keepProjections = true)}`, an element the " +
+            "bridge cannot carry",
+          "use a Flow of a type a class member can return",
+        )
     }
     if (hot != null) {
+      // ADR-233: a mutable hot flow whose element has no ADR-071 write arm is spelled read-only,
+      // as the interface member itself is.
+      val spelled: String =
+        if (element.boxed?.hasHotWriteArm() == false) hot.replace("Mutable", "") else hot
       return FlowSlotOutcome.Hot(
         ForwardBridgeType(
           ForwardBridgeWire.OBJECT,
-          "$qualifiedName<${element.kotlin}>",
-          "$hot<${element.csharp}>",
+          "$qualifiedName<${element.kotlin}>$mark",
+          "$spelled<${element.csharp}>$mark",
+          nullable = type.isMarkedNullable,
           hotFlow = true,
         ),
       )
     }
-    return FlowSlotOutcome.Element(element)
+    return FlowSlotOutcome.Element(element, type.isMarkedNullable)
+  }
+
+  /**
+   * ADR-233: a Flow element outside the unboxed `String` / primitive / own `T` set, read per
+   * element as the owned box `CurrentBoxed` mints from its run-time value, then cast to its
+   * declared type.
+   */
+  private fun boxedElement(
+    argument: KSType,
+    classifier: ForwardBridgeTypeClassifier,
+  ): ForwardBridgeType? {
+    val classified: BridgeType = classifier.classify(argument)
+    if (!classified.isSlotBoxable()) return null
+    return ForwardBridgeType(
+      ForwardBridgeWire.OBJECT,
+      argument.forwardKotlinDeclaredSpelling(),
+      classified.forwardPublicCsharpType(),
+      nullable = argument.isMarkedNullable,
+      boxed = classified,
+    )
   }
 
   /** ADR-232: each hot flow type, to the C# wrapper whose handle its slot hands back. */
@@ -617,12 +671,29 @@ internal object ForwardInterfaceBridgePlanner {
   )
 
   /** ADR-232: a FLOW slot crosses its enumeration factory's key on the OBJECT wire. */
-  private fun flowSlotResult(element: ForwardBridgeType): ForwardBridgeType =
+  private fun flowSlotResult(
+    element: ForwardBridgeType,
+    nullable: Boolean = false,
+  ): ForwardBridgeType =
     ForwardBridgeType(
       ForwardBridgeWire.OBJECT,
-      "kotlinx.coroutines.flow.Flow<${element.kotlin}>",
-      "KotlinFlow<${element.csharp}>",
+      "kotlinx.coroutines.flow.Flow<${element.kotlin}>${if (nullable) "?" else ""}",
+      "KotlinFlow<${element.csharp}>${if (nullable) "?" else ""}",
+      nullable = nullable,
     )
+
+  /**
+   * ADR-233: the planned interface as a type when [member] is inherited from a super-interface, so
+   * its slot types are the substituted ones (`Hamper : Basket<String>` reads `item: String`). Null
+   * for a member declared on the interface itself, and for a generic interface, whose own type
+   * parameters ride the ADR-222 box.
+   */
+  private fun inherited(owner: KSClassDeclaration?, member: KSDeclaration): KSType? {
+    if (owner == null || owner.typeParameters.isNotEmpty()) return null
+    val declared: String? = member.parentDeclaration?.qualifiedName?.asString()
+    if (declared == owner.qualifiedName?.asString()) return null
+    return owner.asType(emptyList())
+  }
 
   private fun refuseNarrow(
     member: String,
@@ -693,7 +764,11 @@ internal object ForwardInterfaceBridgePlanner {
     type: KSType,
     classifier: ForwardBridgeTypeClassifier,
     owner: KSClassDeclaration?,
+    // ADR-233: a function slot's parameter, a value Kotlin hands C#; a lambda there is a Kotlin
+    // lambda, read by C# as the plan reads a returned lambda.
+    parameter: Boolean = false,
   ): ForwardBridgeType? {
+    if (parameter) lambdaParameterOrNull(type, classifier)?.let { lambda -> return lambda }
     // ADR-222: the planned interface's OWN type parameter rides lane A's box. An inherited
     // super-interface `T` is not substituted, so it stays out of the vocabulary as before.
     val typeParameter: KSTypeParameter? = type.declaration as? KSTypeParameter
@@ -728,8 +803,8 @@ internal object ForwardInterfaceBridgePlanner {
     }
     val isEnum: Boolean = (type.declaration as? KSClassDeclaration)?.classKind == ClassKind.ENUM_CLASS
     if (isEnum) {
-      // A nullable enum has no sentinel on an `int` wire; only the non-null shape is in scope.
-      if (nullable) return null
+      // ADR-233: a nullable enum has no sentinel on an `int` wire, so it rides the box.
+      if (nullable) return boxedOrNull(type, classifier)
       // The enum's C# spelling is the classifier's to make, never this planner's: a bare simple
       // name names nothing for a nested enum (declared under its owner, `IKettle.Whistle`) and
       // resolves only by luck for one outside the file's `using` list. An undeclared enum (nested
@@ -742,7 +817,9 @@ internal object ForwardInterfaceBridgePlanner {
       return ForwardBridgeType(ForwardBridgeWire.ENUM, qualifiedName, classified.csharpType)
     }
     return when (qualifiedName) {
-      "kotlin.Unit" -> if (nullable) null else ForwardBridgeType(ForwardBridgeWire.UNIT, "Unit", "void")
+      "kotlin.Unit" ->
+        if (nullable) null
+        else ForwardBridgeType(ForwardBridgeWire.UNIT, "Unit", "void")
       "kotlin.String" -> ForwardBridgeType(
         ForwardBridgeWire.OBJECT,
         if (nullable) "String?" else "String",
@@ -750,13 +827,53 @@ internal object ForwardInterfaceBridgePlanner {
         nullable,
       )
 
-      "kotlin.Boolean" -> if (nullable) null else ForwardBridgeType(ForwardBridgeWire.BOOLEAN, "Boolean", "bool")
-      "kotlin.Int" -> if (nullable) null else ForwardBridgeType(ForwardBridgeWire.INT, "Int", "int")
-      "kotlin.Long" -> if (nullable) null else ForwardBridgeType(ForwardBridgeWire.LONG, "Long", "long")
-      "kotlin.Float" -> if (nullable) null else ForwardBridgeType(ForwardBridgeWire.FLOAT, "Float", "float")
-      "kotlin.Double" -> if (nullable) null else ForwardBridgeType(ForwardBridgeWire.DOUBLE, "Double", "double")
-      else -> null
+      "kotlin.Boolean" ->
+        if (nullable) boxedOrNull(type, classifier)
+        else ForwardBridgeType(ForwardBridgeWire.BOOLEAN, "Boolean", "bool")
+      "kotlin.Int" ->
+        if (nullable) boxedOrNull(type, classifier)
+        else ForwardBridgeType(ForwardBridgeWire.INT, "Int", "int")
+      "kotlin.Long" ->
+        if (nullable) boxedOrNull(type, classifier)
+        else ForwardBridgeType(ForwardBridgeWire.LONG, "Long", "long")
+      "kotlin.Float" ->
+        if (nullable) boxedOrNull(type, classifier)
+        else ForwardBridgeType(ForwardBridgeWire.FLOAT, "Float", "float")
+      "kotlin.Double" ->
+        if (nullable) boxedOrNull(type, classifier)
+        else ForwardBridgeType(ForwardBridgeWire.DOUBLE, "Double", "double")
+      else -> boxedOrNull(type, classifier)
     }
+  }
+
+  /**
+   * ADR-233: a Kotlin lambda (plain or `suspend`, nullable too) handed to a C# slot. It crosses as
+   * a lambda property's setter argument does (ADR-236): the handle Kotlin retained, wrapped C#-side
+   * in the plan's `KotlinFunc` / `KotlinSuspendFunc` and handed over as its BCL delegate.
+   */
+  private fun lambdaParameterOrNull(
+    type: KSType,
+    classifier: ForwardBridgeTypeClassifier,
+  ): ForwardBridgeType? = lambdaSlotType(type, classifier)
+
+  /**
+   * ADR-233: the slot wire is the plan's wire. Every type the classifier admits at a member
+   * position and the nine-entry vocabulary above does not carry rides the OBJECT wire as one box,
+   * read and written with the same projections a class member of that type uses.
+   */
+  private fun boxedOrNull(
+    type: KSType,
+    classifier: ForwardBridgeTypeClassifier,
+  ): ForwardBridgeType? {
+    val classified: BridgeType = classifier.classify(type)
+    if (!classified.isSlotBoxable()) return null
+    return ForwardBridgeType(
+      ForwardBridgeWire.OBJECT,
+      type.forwardKotlinDeclaredSpelling(),
+      classified.forwardPublicCsharpType(),
+      nullable = type.isMarkedNullable,
+      boxed = classified,
+    )
   }
 }
 
@@ -919,6 +1036,10 @@ internal fun ForwardBridgeSlot.asyncEndName(): String {
     element != null -> "Flow" + flowSource().forwardAsyncCurrentName().removePrefix("NugetAsync")
       .removeSuffix("Current")
     type.typeParameter -> "Boxed"
+    // ADR-233: one End per hot flow type and per boxed result type, named off its C# spelling.
+    type.hotFlow || type.boxed != null ->
+      "Box" + type.csharp.filter { char -> char.isLetterOrDigit() } +
+        if (type.nullable) "OrNull" else ""
     type.throwable != null -> if (type.nullable) "NullableException" else "Exception"
     type.wire == ForwardBridgeWire.OBJECT -> if (type.nullable) "NullableString" else "String"
     type.wire == ForwardBridgeWire.ENUM ->
@@ -931,6 +1052,15 @@ internal fun ForwardBridgeSlot.asyncEndName(): String {
 /** ADR-232: a FLOW slot's element as the ADR-210 `Flow` parameter element it is read as. */
 internal fun ForwardBridgeSlot.flowSource(): BridgeType.FlowSource {
   val element: ForwardBridgeType = requireNotNull(element) { "ADR-232: `$name` is not a FLOW slot" }
+  // ADR-233: a boxed or star element reads as the ADR-215 box, cast to its declared type.
+  if (element.boxed != null || element.star) {
+    val parameter = BridgeType.TypeParameter(
+      "T", boundQualifiedName = element.kotlin.removeSuffix("?"),
+    )
+    return BridgeType.FlowSource(
+      if (element.nullable) BridgeType.Nullable(parameter) else parameter,
+    )
+  }
   val type: BridgeType = if (element.typeParameter) {
     val parameter = BridgeType.TypeParameter(element.kotlin.removeSuffix("?"))
     if (element.nullable) BridgeType.Nullable(parameter) else parameter
@@ -947,4 +1077,54 @@ internal fun ForwardBridgeSlot.flowSource(): BridgeType.FlowSource {
     }
   }
   return BridgeType.FlowSource(type)
+}
+
+/**
+ * ADR-233: whether [this] crosses a bridge slot as one box, read and written with the plan's own
+ * projections ([ForwardBridgeType.boxed]). A type parameter rides the ADR-222 box instead, and a
+ * lambda or a flow its own wire.
+ */
+internal fun BridgeType.isSlotBoxable(): Boolean = when (this) {
+  is BridgeType.Primitive,
+  BridgeType.Char,
+  BridgeType.String,
+  BridgeType.Instant,
+  BridgeType.Duration,
+  BridgeType.Uuid,
+  is BridgeType.Enum,
+  is BridgeType.ObjectHandle,
+  is BridgeType.Interface,
+  is BridgeType.BoundInterface,
+  is BridgeType.ValueClass,
+  BridgeType.ByteArray,
+    -> true
+
+  is BridgeType.Collection -> listOfNotNull(element, key, value).all { component ->
+    component.isSlotBoxable() || component.unwrapNullable() is BridgeType.TypeParameter
+  }
+  is BridgeType.Nullable -> type.isSlotBoxable()
+  BridgeType.Unit,
+  is BridgeType.Throwable,
+  is BridgeType.TypeParameter,
+  is BridgeType.Callback,
+  is BridgeType.AsyncCallback,
+  is BridgeType.FlowSource,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+    -> false
+}
+
+/** ADR-071: whether a mutable hot flow of [this] element keeps its write surface in C#. */
+private fun BridgeType.hasHotWriteArm(): Boolean {
+  val inner: BridgeType = unwrapNullable()
+  val nullable: Boolean = this is BridgeType.Nullable
+  if (inner is BridgeType.Collection || inner == BridgeType.ByteArray) return false
+  if (inner == BridgeType.Instant || inner == BridgeType.Duration) return false
+  if (inner == BridgeType.Uuid) return false
+  if (!nullable) return true
+  return inner !is BridgeType.Enum && inner != BridgeType.Char &&
+    !(inner is BridgeType.Primitive && inner.kind == PrimitiveKind.BOOLEAN)
 }

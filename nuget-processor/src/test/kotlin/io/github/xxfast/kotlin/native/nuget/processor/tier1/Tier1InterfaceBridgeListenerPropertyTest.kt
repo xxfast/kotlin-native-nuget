@@ -323,23 +323,30 @@ class Tier1InterfaceBridgeListenerPropertyTest {
   }
 
   @Test
-  fun `a listener val of a type with no getter slot refuses the pair by name`() {
-    assertRefused(
-      "lvlist",
-      "val tags: List<String>",
-      "`BarkListener.val tags: List<String>`",
-      ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
-    )
-  }
+  fun `a listener val of a collection binds the pair through the slot box`() =
+    assertBinds("lvlist", "val tags: List<String>")
 
+  /** ADR-233: a nullable primitive rides the slot box like any plan position. */
   @Test
-  fun `a nullable Int listener val refuses the pair by name`() {
-    assertRefused(
-      "lvnint",
-      "val volume: Int?",
-      "`BarkListener.val volume: Int?`",
-      ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
+  fun `a nullable Int listener val binds the pair through the slot box`() =
+    assertBinds("lvnint", "val volume: Int?")
+
+  /** ADR-233: the slot wire is the plan's wire, so these listener vals now bind the pair. */
+  private fun assertBinds(pkg: String, listener: String) {
+    val result: Tier1Result = Tier1Harness.run(
+      """
+      package tier1.$pkg
+
+      interface BarkListener {
+        $listener
+        fun onBark(volume: Int)
+      }
+
+      $dog
+      """.trimIndent(),
     )
+    assertTrue(result.compiledClean, "compileErrors=${result.compileErrors}")
+    assertTrue(result.generated.contains("_dog_addBarkListener"), result.generated)
   }
 
   @Test

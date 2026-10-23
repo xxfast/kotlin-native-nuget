@@ -91,3 +91,12 @@ and `CSharpAsyncFeeder_ReleasedAfterKotlinGc` in `LeakTests/CollectabilityTests.
 
 Verified by reading: the element vocabulary and the two `suspend` refusals above come from
 `ForwardInterfaceBridgePlanner`; no test row pins the refusal text.
+
+## Amendment (2026-10-22): the `Flow` element vocabulary widens and a Kotlin-backed hot flow can be returned
+
+The element list (a non-null `String`, `Boolean`, `Int`, `Long`, `Float`, `Double` or the interface's
+own `T`) and the `suspend` result list no longer hold: a `Flow` slot carries any boxed element
+(a class handle, an enum, a nullable string, a value class), a `var` flow slot has a setter slot,
+and a nullable flow and a nullable hot flow are slots too. The `ArgumentException` for a hot-flow
+wrapper read from a Kotlin-backed member no longer applies: that wrapper mints its own Kotlin
+handle, so it can be returned from a C# implementation ([ADR-233](233-interface-slot-vocabulary.md)).

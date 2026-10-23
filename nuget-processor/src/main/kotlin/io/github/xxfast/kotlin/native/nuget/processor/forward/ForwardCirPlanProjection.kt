@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import io.github.xxfast.kotlin.native.nuget.processor.cir.csLambdaType
 import io.github.xxfast.kotlin.native.nuget.processor.RESULT_FAILED_SLOT
 import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
@@ -2153,10 +2154,12 @@ internal object ForwardCirPlanProjection {
     prelude,
     cleanup,
     buildString {
-      appendLine("            IntPtr bytesHandle = $nativeName($arguments);")
+      // ADR-233: `nativeResult`, as every sibling body names it: a `bytes` parameter's own
+      // prelude declares `bytesHandle`, which this local used to redeclare (CS0128).
+      appendLine("            IntPtr nativeResult = $nativeName($arguments);")
       appendErrorCheck(exit)
-      if (nullable) appendNullHandleExit("bytesHandle", exit)
-      append("            ${exit.returning("NugetMarshal.ReadBytes(bytesHandle)")}")
+      if (nullable) appendNullHandleExit("nativeResult", exit)
+      append("            ${exit.returning("NugetMarshal.ReadBytes(nativeResult)")}")
     },
   )
 

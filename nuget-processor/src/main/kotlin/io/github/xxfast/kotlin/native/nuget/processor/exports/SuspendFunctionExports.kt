@@ -583,12 +583,17 @@ internal fun FileSpec.Builder.addAcquiredFlowCollectExport(
   val element: KSType = requireNotNull(returnType)
     .arguments.firstOrNull()?.type?.resolve()?.expandAliases()
     ?: error("Acquired Flow must declare an element type")
+  // ADR-233: an element typed by the generic owner's own `T` is read over the erased flow, as
+  // ADR-224 reads the owner itself: `T` names nothing in the generated file.
+  val erased: Boolean = element.declaration is com.google.devtools.ksp.symbol.KSTypeParameter
   val type = ClassName("kotlinx.coroutines.flow", "Flow").parameterizedBy(
-    element.toBridgeTypeName(),
+    if (erased) com.squareup.kotlinpoet.STAR else element.toBridgeTypeName(),
   )
   val collection: BridgeType.Collection? = classifier.legacyFlowElementCollection(returnType)
   val boxed: String = itemBoxExpr(
-    element.isMarkedNullable, collection, classifier.legacyFlowElementEnvelope(returnType),
+    element.isMarkedNullable || erased,
+    collection,
+    classifier.legacyFlowElementEnvelope(returnType),
   )
   addFunction(handleKeyedFlowCollectExport(prefix, ownedBy(method), type, boxed))
 }

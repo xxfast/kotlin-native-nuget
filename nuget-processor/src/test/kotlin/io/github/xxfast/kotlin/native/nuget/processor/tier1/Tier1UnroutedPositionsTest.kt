@@ -63,7 +63,7 @@ class Tier1UnroutedPositionsTest {
     Cell(member, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_COMBINATION)
 
   /**
-   * The 18 individually-named silent cells (ADR-210 took the `suspend` lambda parameter and the
+   * The 17 individually-named silent cells (ADR-210 took the `suspend` lambda parameter and the
    * five `Flow<Int>` parameters out; ADR-160 took three of the original 29 out: the object,
    * top-level and extension per-call lambda parameters all bind off the plan now, and ADR-197 two
    * more: the class and object structural own-`<T>` members). The `Dock` secondary constructors

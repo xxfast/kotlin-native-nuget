@@ -757,8 +757,7 @@ public KotlinFlow<string> Meals() => KotlinFlow<string>.From(Courses()); // an I
   `KotlinMutableStateFlow<T>.Create(initial)` or `KotlinMutableSharedFlow<T>.Create(replay)`.
   Kotlin reads and writes the same flow you hold, so `flow.Value = 23` in C# is seen by
   `thermostat.level.value` in Kotlin. A wrapper that holds no Kotlin flow of its own, such as a
-  flow read from a Kotlin-backed object, throws
-  `ArgumentException` when it is returned from one of these members.
+  flow read from a Kotlin-backed object, can be returned from these members as it is.
 - A `suspend` member that returns a `Flow` is `Task<KotlinFlow<T>>`.
 
 See [Implementing a Kotlin interface in C#](interfaces-abstract-sealed.md#implementing-async-members-in-c)
@@ -961,29 +960,28 @@ await foreach (var item in feeder.MealAnnouncements)
 `Flow<T>` becomes `KotlinFlow<T> : IAsyncEnumerable<T>`. It is cold: each `await foreach` re-runs
 the Kotlin flow from the start. `WithCancellation` stops the enumeration early.
 
-### A `var` flow property is read-only {id="flow-var-property"}
+### A `var` flow property {id="flow-var-property"}
 
-A public `var` of type `Flow<T>`, `StateFlow<T>`, `SharedFlow<T>`, `MutableStateFlow<T>` or
-`MutableSharedFlow<T>` binds a get-only C# property, because no setter route turns a C# stream back
-into a Kotlin flow. The build reports `SKIPPED_UNSUPPORTED_INPUT` naming the property, and the C#
-property carries a `<remarks>` comment with the same reason. A `val`, a `private set` and an
-`internal set` bind the same way and report nothing, since there is no public setter to lose.
+A public `var` of type `Flow<T>` on a non-generic, non-sealed class or interface binds a `KotlinFlow<T>`
+property with a setter. Assigning replaces the Kotlin flow. A `KotlinFlow<T>` you got from Kotlin
+can be assigned; one made in C# with `KotlinFlow<T>.From(...)` wraps no Kotlin flow and throws
+`ArgumentException`. To hand Kotlin a flow made in C#, take it as a [`Flow` parameter](#flow-parameter).
 
 ```kotlin
 class CatFeeder(val name: String) {
   var source: Flow<Int> = flowOf(1)
-  var level: MutableStateFlow<Int> = MutableStateFlow(0)
 }
 ```
 
-The cold `Flow<T>` diagnostic reads:
+```C#
+feeder.Source = other.Source; // another feeder's Kotlin flow
+```
 
-```
-its setter is not generated because a Flow property binds read-only: its getter hands out the
-Kotlin flow, and no setter route turns a C# stream back into one. the C# property Source is
-read-only; to let C# replace the flow, expose a function taking a `Flow<T>` parameter instead,
-which binds as `IAsyncEnumerable<T>` for a primitive or String element
-```
+A hot `var` (`StateFlow<T>`, `SharedFlow<T>`, `MutableStateFlow<T>`, `MutableSharedFlow<T>`), and
+a `var` on a generic or sealed owner, binds a get-only C# property. The build reports
+`SKIPPED_UNSUPPORTED_INPUT` naming the property, and the C# property carries a `<remarks>` comment
+with the same reason. A `val`, a `private set` and an `internal set` bind the same way and report
+nothing, since there is no public setter to lose.
 
 A hot flow cannot be taken as a parameter either, so its diagnostic names the type
 (`StateFlow`, `SharedFlow`, `MutableStateFlow` or `MutableSharedFlow`) and points at
@@ -1761,9 +1759,9 @@ members. A `Throwable`, `Exception` or `RuntimeException` parameter does bind, a
   [read-only](#flow-type-argument).
 - A top-level non-`suspend` `fun f(): Flow<T>?` and an `object` or companion `Flow<T>?` member are
   skipped with a diagnostic, like their non-null forms.
-- A `var` property of a flow type binds get-only: the setter is dropped and reported as
-  `SKIPPED_UNSUPPORTED_INPUT`. Take a `Flow<T>` parameter to replace the flow from C#; see
-  [a `var` flow property](#flow-var-property).
+- A `var` property of a hot flow type, or of a flow type on a generic or sealed owner, binds
+  get-only: the setter is dropped and reported as `SKIPPED_UNSUPPORTED_INPUT`. Take a `Flow<T>`
+  parameter to replace the flow from C#; see [a `var` flow property](#flow-var-property).
 - A `Pair` or a nullable collection (`List<T>?`) as a `Flow`/`StateFlow` element is not supported.
 - `Boolean?` / `Char?` value elements on a nullable `StateFlow` are not supported.
 - A `suspend inline fun <reified T> Receiver.f(...): Result<T>` extension has no bridge at all:
