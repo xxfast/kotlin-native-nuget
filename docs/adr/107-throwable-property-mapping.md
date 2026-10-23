@@ -401,3 +401,9 @@ likewise skipped); extension-property coverage. None of these silently corrupts 
 the first two fail at KSP/compile time or produce a visibly different diagnostic, the third only
 changes the content of `KotlinStackTrace`, and the fourth shows up as a missing class in
 `Interop.cs`.
+
+## Amendment (2026-10-23): lambda-typed properties bind
+
+The class translator's "not a lambda" reference-type predicate (cited above) is no longer the only
+route a lambda property can take: a lambda property binds on every owner with a setter for a `var`
+([ADR-236](236-lambda-properties-on-every-owner.md)).

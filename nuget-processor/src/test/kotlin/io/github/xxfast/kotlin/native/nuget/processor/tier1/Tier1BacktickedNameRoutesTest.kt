@@ -455,7 +455,7 @@ class Tier1BacktickedNameRoutesTest {
     val csharp: String = result.generatedCSharp
     listOf(
       "public bool TryLoad(int @object, out int value", "public override int Tag",
-      "public int Open(int @object)", "KotlinAction<int> OnPurr", "int Loud { get; }",
+      "public int Open(int @object)", "Action<int> OnPurr", "int Loud { get; }",
       "listener.Bark(arg0)", "IntPtr tug_hardPtr",
     ).forEach { spelling -> assertContains(csharp, spelling) }
   }

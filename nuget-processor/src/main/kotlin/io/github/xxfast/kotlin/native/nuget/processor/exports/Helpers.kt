@@ -168,6 +168,8 @@ internal val NUGET_RUNTIME_MEMBERS: List<String> = listOf(
   "nugetInstallMappedType",
   // ADR-161: the forward callback error channel's Kotlin half.
   "nugetCallbackCall",
+  // ADR-236: a lambda property setter's read of the erased lambda handle.
+  "nugetUncheckedCast",
   "NugetCSharpBridge",
   "toDotNetTicks",
   "instantFromDotNetTicks",

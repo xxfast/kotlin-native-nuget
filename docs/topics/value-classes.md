@@ -234,7 +234,7 @@ using var box = new Box<ChartId>(id);
 Assert.Equal(id, box.Value);
 
 using var courier = new ChartCourier("Ward 9");
-using KotlinFunc<ChartId, string> onChart = courier.OnChart;
+Func<ChartId, string> onChart = courier.OnChart;
 Assert.Equal("Ward 9 filed CH-OREO-1", onChart.Invoke(new ChartId("CH-OREO-1")));
 ```
 

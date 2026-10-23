@@ -26,6 +26,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticK
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyReceiver
+import io.github.xxfast.kotlin.native.nuget.processor.forward.unwrapNullable
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isValueClass
@@ -268,18 +269,28 @@ internal class CollectionHelperTracker {
     collection.value?.let { trackCollection(it) }
   }
 
+  private fun trackLambda(lambda: BridgeType.ReturnedLambda) {
+    if (!lambda.suspend) {
+      lambdaArities.add(lambda.arity)
+      return
+    }
+    suspendLambdaArities.add(lambda.arity)
+    needsAsync = true
+  }
+
   fun trackPlan(plan: ForwardCallablePlan) {
     trackCollection(plan.publicSignature.result)
     // ADR-160 amendment: a planned lambda return needs its arity's `KotlinFunc`/`KotlinAction`
     // class and `NugetFunctionNative.Invoke{n}` import, which only the tracker declares.
-    (plan.publicSignature.result as? BridgeType.ReturnedLambda)?.let { lambda ->
-      lambdaArities.add(lambda.arity)
-    }
+    (plan.publicSignature.result as? BridgeType.ReturnedLambda)?.let(::trackLambda)
     plan.publicSignature.parameters.forEach { parameter -> trackCollection(parameter.type) }
   }
 
   fun trackProperty(plan: ForwardPropertyPlan) {
     trackCollection(plan.type)
+    // ADR-236: a lambda property needs its arity's wrapper class and invoke imports, as a planned
+    // lambda return does; a suspend one also needs the async helpers its `InvokeAsync` reads.
+    (plan.type.unwrapNullable() as? BridgeType.ReturnedLambda)?.let(::trackLambda)
     // ADR-132 (2026-09-20): an extension property's RECEIVER is a marshalled slot like any other,
     // and since the receiver set admits `Collection` it can be the only collection in a file. The
     // property's declared type alone used to answer here, so `val List<String>.longestName: String`
@@ -1167,6 +1178,18 @@ internal fun csLambdaType(typeArgs: List<String>): String {
   val parameters: List<String> = typeArgs.dropLast(1)
   if (parameters.isEmpty()) return "KotlinAction"
   return "KotlinAction<${parameters.joinToString(", ")}>"
+}
+
+/**
+ * ADR-236: the suspend twin of [csLambdaType], the spelling the class route has always given a
+ * suspend lambda property: `KotlinSuspendFunc<...>`, or `KotlinSuspendAction<...>` for a `Unit`
+ * result.
+ */
+internal fun csSuspendLambdaType(typeArgs: List<String>): String {
+  if (typeArgs.lastOrNull() != "void") return "KotlinSuspendFunc<${typeArgs.joinToString(", ")}>"
+  val parameters: List<String> = typeArgs.dropLast(1)
+  if (parameters.isEmpty()) return "KotlinSuspendAction"
+  return "KotlinSuspendAction<${parameters.joinToString(", ")}>"
 }
 
 /**

@@ -504,8 +504,8 @@ public class ExceptionTypeMappingTests
         // Kotlin: val onSplitBag: suspend () -> String, throwing kotlinx.io.IOException for Oreo.
         // Invoked through `nuget_suspend_func0_invoke`, which lives in the runtime, not the module.
         using var feeder = new CatFeeder("Oreo");
-        using var onSplitBag = feeder.OnSplitBag;
-        var ex = await Assert.ThrowsAnyAsync<System.IO.IOException>(() => onSplitBag.InvokeAsync());
+        var onSplitBag = feeder.OnSplitBag;
+        var ex = await Assert.ThrowsAnyAsync<System.IO.IOException>(() => onSplitBag.Invoke(CancellationToken.None));
         var kio = Assert.IsType<KotlinIOException>(ex);
         Assert.Equal("kotlinx.io.IOException", kio.KotlinType);
         Assert.Equal("the bag split mid-pour", ex.Message);
@@ -515,8 +515,8 @@ public class ExceptionTypeMappingTests
     public async Task Mylo_SplitBag_SuspendLambda_Succeeds()
     {
         using var feeder = new CatFeeder("Mylo");
-        using var onSplitBag = feeder.OnSplitBag;
-        Assert.Equal("Mylo's bowl is full", await onSplitBag.InvokeAsync());
+        var onSplitBag = feeder.OnSplitBag;
+        Assert.Equal("Mylo's bowl is full", await onSplitBag.Invoke(CancellationToken.None));
     }
 
     // --- IOException as a cause: each node of the chain is classified on its own ---

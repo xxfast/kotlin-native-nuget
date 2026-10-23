@@ -73,6 +73,10 @@ internal object Tier1RuntimeStub {
     @NugetRuntimeApi
     fun <R> nugetCallbackCall(block: (COpaquePointer) -> R): R = TODO()
 
+    // ADR-236: a lambda property setter's read of the erased lambda handle.
+    @NugetRuntimeApi
+    fun <T> nugetUncheckedCast(value: Any?): T = TODO()
+
     // ADR-152's await seam, which ADR-210's generated `suspend` lambda composes. A `suspend`
     // modifier needs no kotlinx.coroutines, so it sits with the coroutine-free surface.
     @NugetRuntimeApi

@@ -7,6 +7,19 @@ shape lets a C# class implement a Kotlin interface and register it as such an ob
 
 ## Kotlin → C#: lambda properties and returns {id="kotlin-c-lambda-properties-and-returns"}
 
+A lambda-typed property binds as a plain .NET delegate property, on every owner and whether it is a
+`val` or a `var`:
+
+| Kotlin | C# |
+|---|---|
+| `(A) -> R` | `Func<A, R>` |
+| `(A) -> Unit` | `Action<A>` |
+| `suspend (A) -> R` | `Func<A, CancellationToken, Task<R>>` |
+| `suspend (A) -> Unit` | `Func<A, CancellationToken, Task>` |
+
+A nullable lambda is the same type with `?`. There is nothing to dispose: the delegate you read
+calls the Kotlin lambda, and the bridge frees its native handle when the delegate is collected.
+
 ```kotlin
 val onMeow: () -> String = { "Meow! My name is $name" }
 val onPet: (String) -> String = { action -> "$name $action contentedly" }
@@ -15,21 +28,103 @@ val onNap: () -> Unit = { naps++ }
 
 ```C#
 using var cat = new Cat("Oreo", 9);
-using var onPet = cat.OnPet;
-string result = onPet.Invoke("purrs"); // "Oreo purrs contentedly"
+string result = cat.OnPet.Invoke("purrs"); // "Oreo purrs contentedly"
 
-using var onNap = cat.OnNap;
-onNap.Invoke();
+cat.OnNap.Invoke();
 ```
 
-`OnPet` and `OnMeow` are `KotlinFunc<...>`, a disposable handle wrapping the Kotlin lambda; `Invoke`
-calls into Kotlin and marshals the result back. A lambda returning `Unit` binds as `KotlinAction`
-instead of `KotlinFunc<void>`, since `void` cannot be a C# type argument; `Invoke` returns `void`
-and disposal works the same way. Each property access mints a new native handle, so read the
-property once into a `using var` rather than calling `cat.OnPet.Invoke(...)` inline, which
-leaves the handle undisposed until the GC finalizes it.
+A `var` also takes a delegate from C#, with no cast, and Kotlin calls it from then on. A nullable
+`var` reads and writes `null`:
 
-`Invoke` accepts and returns `string`, any narrow or wide primitive (including `char`), any
+```kotlin
+object Landing {
+  var format: (Double) -> String = { metres -> "Oreo ran $metres m" }
+  var onBump: ((String) -> String)? = null
+  var onSettle: (suspend (String) -> String)? = null
+  fun describe(metres: Double): String = format(metres)
+}
+```
+
+```C#
+Landing.Format = metres => $"Mylo timed {metres} m";
+Landing.Describe(4.0); // "Mylo timed 4 m"
+
+Landing.OnBump = who => $"Oreo bumped into {who}";
+Landing.OnBump = null; // Kotlin sees null again
+
+Landing.OnSettle = async (who, token) =>
+{
+    await Task.Delay(1, token);
+    return $"{who} curled up on the stairs";
+};
+```
+
+A delegate you read from a Kotlin property and set back goes back as the same Kotlin lambda. A delegate
+you wrote stays alive for as long as the property holds it, and Kotlin releases it when you replace
+or clear the property. A `suspend` property is awaited with the token you pass:
+
+```C#
+Func<int, CancellationToken, Task<string>> onSprint = Landing.OnSprint;
+string s = await onSprint(4, CancellationToken.None); // "Oreo sprinted 4 laps"
+```
+
+### Which owners bind {id="which-lambda-properties-bind"}
+
+Every owner binds, each in the spelling its other members use:
+
+| Kotlin owner | C# |
+|---|---|
+| class, sealed base and arm | instance property |
+| `object`, companion (default or named), top level | static property on the object, owning class or file class |
+| enum body | `Name()` getter extension and, for a `var`, `SetName(...)`: `Stride.Trot.OnStride()`, `Stride.Gallop.SetOnTrip(f)` |
+| enum companion | static property on `{Enum}Extensions` |
+| generic class | instance property typed by the closed `T`: `Relay<string>.OnPass` is `Func<string, string>` |
+| Kotlin interface | property on the interface; a C# class implements it and Kotlin reads and writes it |
+| [listener interface](#a-listener-val) | the same, read back by Kotlin through the subscription |
+
+```C#
+// A C# class implementing a Kotlin interface that declares lambda properties
+private sealed class FeatherWand : IPouncer
+{
+    public Func<int, string> OnPounce { get; } = times => $"Oreo swatted the feather {times} times";
+    public Func<string, string>? Cue { get; set; }
+    public Func<int, CancellationToken, Task<int>> OnLeap { get; } = async (height, token) =>
+    {
+        await Task.Delay(1, token);
+        return height * 10;
+    };
+    public void Dispose() { }
+}
+```
+
+A generic payload binds too: `val unwind: () -> Tote<Tote<Skein>>` is `Func<Tote<Tote<Skein>>>`, and
+the `Tote` instances you read are wrappers you dispose as usual (see
+[Ownership of a callback payload](#ownership-of-a-callback-payload)).
+
+An exception a Kotlin getter throws surfaces as a `KotlinException` on the read, on a sealed arm too.
+
+### Migrating from `KotlinFunc` properties {id="migrating-from-kotlinfunc-properties"}
+
+Lambda properties used to be `KotlinFunc<..>`, `KotlinAction<..>` and `KotlinSuspendFunc<..>`
+handles, read-only and non-null. If you upgrade, expect these compile errors:
+
+| Before | After |
+|---|---|
+| `using var f = obj.OnPet;` | `var f = obj.OnPet;` (a delegate is not `IDisposable`) |
+| `KotlinFunc<A, R>` / `KotlinAction<A>` | `Func<A, R>` / `Action<A>` |
+| `await f.InvokeAsync(a)` | `await f.Invoke(a, token)`; pass `CancellationToken.None` if you have none |
+| `typeof(KotlinFunc<A, R>)` on the property type, by reflection | `typeof(Func<A, R>)` |
+
+A `var` lambda property now has a setter and a nullable one binds, where both were skipped before.
+The reason the property type is a delegate rather than a wrapper with an implicit conversion: C# never
+applies a user-defined conversion to a lambda literal (CS1660), so `obj.OnLap = i => ...` would not
+compile against a wrapper type.
+
+A function that *returns* a lambda still returns the `KotlinFunc` family, below.
+
+### Lambdas a function returns
+
+`Invoke` on a returned `KotlinFunc` accepts and returns `string`, any narrow or wide primitive (including `char`), any
 exported object, a [value class](value-classes.md#at-an-erased-generic-position), or a nullable
 spelling of any of those (`string?`, `int?`, `char?`, and so on): a lambda's type argument carries
 `?` when the Kotlin declaration is nullable at that position, and `null` reaches the Kotlin lambda,
@@ -82,7 +177,7 @@ using KotlinFunc<int, int> twoMore = PetRelayKt.Adder(2);
 int five = twoMore.Invoke(3);
 ```
 
-Dispose the returned `KotlinFunc`, as for a lambda property above. A C#-implemented interface you
+Dispose the returned `KotlinFunc`; unlike a lambda property, a returned lambda is a handle you own. A C#-implemented interface you
 pass stays alive for as long as the lambda does, so `rex` above remains valid after the call
 returns; a `null` for a nullable parameter reaches Kotlin as `null`.
 
@@ -91,25 +186,6 @@ The lambda's type arguments follow the rules above. One Kotlin cannot have C# sp
 return (`suspend () -> Int`) and a lambda returned from a class, object or companion member are named
 skips too; expose a lambda property on the class instead.
 
-### Which lambda properties bind {id="which-lambda-properties-bind"}
-
-A lambda property binds on an ordinary class and on a sealed arm. A lambda declared on a sealed base
-binds on every arm, not on the base type. Every other owner names the property in a
-`SKIPPED_UNSUPPORTED_PROPERTY` warning and generates no C# member: an interface, an `object`, a
-companion, a top-level property and a generic class. A `suspend` lambda property binds on an
-ordinary class only; on a sealed arm or base, or an interface, it is named the same way.
-
-The binding is read-only and non-null:
-
-```kotlin
-var onPurr: (Int) -> Unit = {}
-val onWake: (() -> Unit)? = null
-```
-
-`OnPurr` is a get-only `KotlinAction<int>`, and its setter is named once as
-`SKIPPED_UNSUPPORTED_INPUT`. `onWake` is not generated at all: the warning says only the non-null
-form binds, so declare it non-null with a no-op lambda in place of `null`.
-
 ### A lambda's type arguments across a namespace boundary {id="type-arguments-across-a-namespace-boundary"}
 
 A lambda property's type arguments are qualified with their full namespace automatically, so a
@@ -117,13 +193,13 @@ property whose parameter or result type lives outside the declaring class's name
 compiles without you spelling it out:
 
 ```C#
-public KotlinFunc<global::TestLibrary.Catcam.Lens.CamId, global::TestLibrary.Catcam.Lens.Snapshot> OnPick => ...
+public Func<global::TestLibrary.Catcam.Lens.CamId, global::TestLibrary.Catcam.Lens.Snapshot> OnPick => ...
 ```
 
 If a type argument has no C# spelling at all, for example a lambda returning `Flow<T>`, the
 property is dropped from the generated class instead of emitting code that won't compile. If a
 lambda-typed property you expect is missing, check the build's warnings, and the owner and
-nullability rules above.
+owner rules above.
 
 ## C# → Kotlin: per-call lambda parameters {id="c-kotlin-per-call-lambda-parameters"}
 
@@ -510,8 +586,8 @@ box.Purr(3); // Kotlin reads Sleepy, then calls OnPurr(3)
 ```
 
 A property binds when it is a `val` or `var` declared on the listener itself, typed `String`,
-`String?`, `Boolean`, `Int`, `Long`, `Float`, `Double`, or a non-null enum. Kotlin reads the current
-value on every access, and a write to a `var` lands on your C# property:
+`String?`, `Boolean`, `Int`, `Long`, `Float`, `Double`, a non-null enum, or a lambda type (see below).
+Kotlin reads the current value on every access, and a write to a `var` lands on your C# property:
 
 ```kotlin
 interface NameTagListener {
@@ -530,6 +606,25 @@ private sealed class RecordingNameTagListener(string tag) : INameTagListener
 
 using IDisposable sub = board.AddNameTagListener(new RecordingNameTagListener("Oreo"));
 board.RetagAll("cat"); // Kotlin writes "cat:Oreo" to Tag, then reads it back
+```
+
+A lambda property is a delegate on your class, nullable and `suspend` included. Kotlin reads it back
+through the subscription and calls it, and writes a `var`:
+
+```kotlin
+interface LapListener {
+  val onLap: (Int) -> String
+  var onSplit: ((Int) -> Int)?
+}
+```
+
+```C#
+private sealed class LapCounter : ILapListener
+{
+    public Func<int, string> OnLap { get; } = count => $"Mylo clocked lap {count}";
+    public Func<int, int>? OnSplit { get; set; }
+    public void Dispose() { }
+}
 ```
 
 Any other property refuses the whole pair, named on both `add` and `remove`: one inherited from a

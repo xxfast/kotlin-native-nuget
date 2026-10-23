@@ -8,18 +8,14 @@ import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
-import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLambdaPropertyCarrier
-import io.github.xxfast.kotlin.native.nuget.processor.forward.carriesLegacyLambdaProperty
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ENUM_ARM_VALUE_MEMBER
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEnumArm
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardStarSpelling
-import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardOwnerTypeName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardKotlinPlanExport
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardPropertyPlanExports
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOptInRefused
-import io.github.xxfast.kotlin.native.nuget.processor.forward.handleBody
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 
 /**
@@ -130,20 +126,8 @@ internal fun FileSpec.Builder.addSealedClassExports(
       // declaration must reach neither artifact, so the legacy arm below never runs for one.
       if (prop.isOptInRefused(exportMarkers)) continue
 
-      // Residual legacy route: a lambda-typed property, which has no plan shape yet (the C# half
-      // still spells its own `KotlinFunc<...>` arm in `translateSealedClass`). Everything else the
-      // planner declined is skipped, with a `SKIPPED_UNSUPPORTED_PROPERTY` diagnostic behind it.
-      // A nullable lambda is refused (named by the planner), so the body has no null path.
-      if (!prop.carriesLegacyLambdaProperty(ForwardLambdaPropertyCarrier.SEALED_ARM)) continue
-      val receiver: String = subclass.forwardOwnerTypeName() ?: subQualifiedName
-      val access: String = "handle.asStableRef<$receiver>().get().$propName"
-      val body: String = handleBody(access, "errorOut")
-      addFunction(
-        sealedPropertyGetter(prop, subPrefix, propName)
-          .returns(cOpaquePointer.copy(nullable = true))
-          .addCode(body, nugetHandles, cOpaquePointerVar, nugetHandles)
-          .build()
-      )
+      // ADR-236: a lambda-typed property is planned like any other, so nothing the planner
+      // declined has a route here.
     }
 
     // ADR-116: the arm's declared member functions, off the same catalog and the same emitter an
@@ -232,21 +216,3 @@ internal fun FileSpec.Builder.addSealedDiscriminatorExport(
   )
 }
 
-/**
- * Issue #38: every sealed-subclass property getter now carries the `errorOut` slot the top-level
- * property path carries (ADR-024/ADR-062), so a throwing getter reports through the same
- * convention instead of crossing the boundary as an unhandled Kotlin exception. [exportSuffix] is
- * the property name for a single-call getter, or the `_has_value` / `_value` suffixed name for the
- * nullable-primitive pair.
- */
-private fun sealedPropertyGetter(
-  // ADR-117 amendment: the arm property this getter exports, threaded so a colliding entry point
-  // names the property rather than the sealed class it hangs under.
-  prop: KSPropertyDeclaration,
-  subPrefix: String,
-  exportSuffix: String,
-): FunSpec.Builder =
-  FunSpec.builder("export_${subPrefix}_get_$exportSuffix")
-    .addAnnotation(cNameAnnotation("${subPrefix}_get_$exportSuffix", ownedBy(prop)))
-    .addParameter("handle", cOpaquePointer)
-    .addParameter("errorOut", cOpaquePointer.copy(nullable = true))

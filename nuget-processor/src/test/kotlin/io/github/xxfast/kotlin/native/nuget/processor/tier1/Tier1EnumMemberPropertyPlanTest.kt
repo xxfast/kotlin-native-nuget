@@ -110,19 +110,13 @@ class Tier1EnumMemberPropertyPlanTest {
     )
     assertFalse(cs.contains("IntPtr Crate(this"), "a class-typed member must not surface as IntPtr")
 
-    // A lambda-typed member has no property shape: a named skip, and no member on either half.
-    assertFalse(result.generated.contains("litter_get_onPet"), "no Kotlin export for onPet")
-    assertFalse(cs.contains("OnPet("), "no C# member for onPet")
+    // ADR-236: a lambda-typed member binds on the plan as the lambda handle, no skip named.
+    assertContains(result.generated, "@CName(\"library_tier1_enummemberplan__litter_get_onPet\")")
+    assertContains(cs, " OnPet(this global::Interop.Litter litter)")
     val skips: List<String> = result.kspWarnings.filter {
       it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name) && it.contains("onPet")
     }
-    assertEquals(
-      1, skips.size, "expected one named skip for onPet; kspWarnings=${result.kspWarnings}",
-    )
-    // ...and the hole is named on the C# enum that lost the member, as a `<remarks>` paragraph.
-    val enumBlock: String = cs.substringBefore("public enum Litter").substringAfterLast("}")
-    assertContains(enumBlock, "<remarks>")
-    assertContains(enumBlock, "onPet")
+    assertEquals(emptyList(), skips, "onPet binds; kspWarnings=${result.kspWarnings}")
 
     // `Enum<E>`'s own members stay unbridged.
     assertFalse(cs.contains(" Name(this"), "name is Enum<E>'s own member")

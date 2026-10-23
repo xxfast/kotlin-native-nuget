@@ -176,8 +176,8 @@ public class AbstractBackingTests
         using Hibernator oreo = den.Hibernator();
 
         // One `OnWake`, declared on `Hibernator`; Kotlin's dispatch picks each subclass's lambda.
-        using var stretch = napper.OnWake;
-        using var wake = oreo.OnWake;
+        var stretch = napper.OnWake;
+        var wake = oreo.OnWake;
         Assert.Equal("Mylo stretches", stretch.Invoke("Mylo"));
         Assert.Equal("Oreo wakes", wake.Invoke("Oreo"));
     }

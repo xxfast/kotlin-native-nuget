@@ -651,6 +651,27 @@ asserts it is collected: `SuspendPlainLambda_AfterCompletion_ItsDelegateIsCollec
 without enumerating; and `SuspendReturningFlowPlainLambda_*` for a disposed flow, a flow disposed
 uncollected, a fault, a cancellation or a `null` flow, and a static owner.
 
+### A lambda-typed property
+
+Reading a [lambda property](lambdas-and-callbacks.md#kotlin-c-lambda-properties-and-returns) mints one
+handle that is released when the delegate is collected; writing a C# delegate mints one Kotlin lambda
+whose callback key `nuget_live_handles` does not count. The ledger rows return to baseline; the
+collectability rows prove a replaced or cleared delegate is collected.
+
+| Row | Test | Pins |
+|---|---|---|
+| LeakTests | `LambdaProperty_EveryOwner_ReadAndWrite_ReturnsToBaseline` | read and write on an `object`, companions, top level, enum, generic class and class |
+| LeakTests | `LambdaProperty_Interface_BothHalves_ReturnsToBaseline` | a Kotlin-backed and a C#-implemented interface |
+| LeakTests | `LambdaProperty_SuspendStateAndSharedFlowResult_ReturnsToBaseline` | a delegate kept by a returned `StateFlow` or `SharedFlow` |
+
+Collectability: `LambdaProperty_ObjectNullableVar_ClearedDelegateIsCollected`,
+`LambdaProperty_CompanionVar_ReplacedDelegateIsCollected`,
+`LambdaProperty_TopLevelNullableVar_ClearedDelegateIsCollected`,
+`LambdaProperty_EnumBodyVar_ReplacedDelegateIsCollected`,
+`LambdaProperty_GenericClassVar_ReplacedDelegateIsCollected`,
+`LambdaProperty_KotlinBackedInterfaceVar_ClearedDelegateIsCollected` and
+`LambdaProperty_SuspendStateFlowResult_DelegateIsCollectedOnceTheFlowIsDisposed`.
+
 ### A `Flow` parameter
 
 Each pull of a [`Flow` parameter](coroutines-and-flow.md#flow-parameter) mints a counted

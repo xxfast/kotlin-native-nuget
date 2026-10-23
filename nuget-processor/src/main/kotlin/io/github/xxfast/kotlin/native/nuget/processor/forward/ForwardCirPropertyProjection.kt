@@ -48,7 +48,7 @@ internal object ForwardCirPropertyProjection {
    * declaration can be projected from the *same* call the implementing class's property goes
    * through. A second spelling of the same plan is what CS0738 is made of.
    */
-  fun publicType(plan: ForwardPropertyPlan): String = plan.type.forwardPublicCsharpType()
+  fun publicType(plan: ForwardPropertyPlan): String = plan.type.forwardPropertyCsharpType()
 
   fun staticProperty(plan: ForwardPropertyPlan, libraryName: String): List<CirMember> {
     // ROADMAP Phase 4: an `object`'s own property is the third static position, projected by this
@@ -118,7 +118,7 @@ internal object ForwardCirPropertyProjection {
     val property = CirExtensionProperty(
       receiverType = publicReceiver,
       name = plan.publicName,
-      type = plan.type.forwardPublicCsharpType(),
+      type = plan.type.forwardPropertyCsharpType(),
       getter = getterBody(plan, receiverArgument, receiverStep, receiverCleanup),
       setter = plan.setter?.let {
         setterBody(plan, receiverArgument, receiverStep, receiverCleanup)
@@ -157,7 +157,7 @@ internal object ForwardCirPropertyProjection {
     val getter = CirMethod(
       doc = plan.doc?.toCirDoc(),
       name = plan.publicName,
-      returnType = plan.type.forwardPublicCsharpType(),
+      returnType = plan.type.forwardPropertyCsharpType(),
       nativeReturnType = plan.getter.calls().first().result.csharpWireType(),
       parameters = listOf(CirParameter(receiverName, publicReceiver)),
       body = getterBody(plan, receiverArgument),
@@ -171,7 +171,7 @@ internal object ForwardCirPropertyProjection {
         returnType = "void",
         parameters = listOf(
           CirParameter(receiverName, publicReceiver),
-          CirParameter("value", plan.type.forwardPublicCsharpType()),
+          CirParameter("value", plan.type.forwardPropertyCsharpType()),
         ),
         body = setterBody(plan, receiverArgument),
         isStatic = true,
@@ -193,7 +193,7 @@ internal object ForwardCirPropertyProjection {
     val directGetter: ForwardNativeCall = plan.getter.calls().first()
     return CirProperty(
       name = plan.publicName,
-      type = plan.type.forwardPublicCsharpType(),
+      type = plan.type.forwardPropertyCsharpType(),
       nativeReturnType = directGetter.result.csharpWireType(),
       nativeSetterType = if (plan.setter != null) setterNativeType(plan.type) else directGetter.result.csharpWireType(),
       nativeName = plan.kotlinName.asCSymbol(),
@@ -366,7 +366,8 @@ internal object ForwardCirPropertyProjection {
       // ADR-147: a `T` getter reads the same boxed-handle wire.
       // ADR-151: and so does a ByteArray getter.
       is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
-      BridgeType.ByteArray, is BridgeType.TypeParameter ->
+      BridgeType.ByteArray, is BridgeType.TypeParameter,
+      is BridgeType.ReturnedLambda ->
         appendLine("            IntPtr nativeResult = $native($callArgs);")
 
       // ADR-107: the error envelope's pointer. ONE call, deliberately: the export mints a
@@ -391,7 +392,6 @@ internal object ForwardCirPropertyProjection {
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
       is BridgeType.FlowSource,
-      is BridgeType.ReturnedLambda,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,
       is BridgeType.Unsupported,
@@ -427,6 +427,12 @@ internal object ForwardCirPropertyProjection {
         is BridgeType.ObjectHandle -> append(
           "            return nativeResult == IntPtr.Zero ? null : " +
               "${inner.handleReconstruction()};",
+        )
+        // ADR-236: the null pointer is a null lambda; anything else is a delegate bound to the
+        // wrapper that owns the lambda handle.
+        is BridgeType.ReturnedLambda -> append(
+          "            return nativeResult == IntPtr.Zero ? null : " +
+              "new ${inner.lambdaWrapperCsharpType()}(nativeResult).${inner.lambdaInvokeMethod()};",
         )
         // ADR-083/147: `FromHandle<T>` answers `default!` for the null pointer itself.
         is BridgeType.TypeParameter ->
@@ -469,7 +475,6 @@ internal object ForwardCirPropertyProjection {
         is BridgeType.Callback,
         is BridgeType.AsyncCallback,
         is BridgeType.FlowSource,
-        is BridgeType.ReturnedLambda,
         is BridgeType.SpecializedProtocol,
         is BridgeType.RawKSType,
         is BridgeType.Unsupported,
@@ -491,6 +496,10 @@ internal object ForwardCirPropertyProjection {
         append("            return NugetErrorNative.BuildException(nativeResult);")
 
       is BridgeType.ObjectHandle -> append("            return ${value.handleReconstruction()};")
+      // ADR-236: a delegate bound to the `KotlinFunc` (or sibling) that owns the lambda handle.
+      is BridgeType.ReturnedLambda -> append(
+        "            return new ${value.lambdaWrapperCsharpType()}(nativeResult).${value.lambdaInvokeMethod()};",
+      )
       // ADR-147: read the box back and dispose it, whatever `T` was instantiated to.
       is BridgeType.TypeParameter ->
         append("            return NugetMarshal.FromHandle<${value.name}>(nativeResult);")
@@ -510,7 +519,6 @@ internal object ForwardCirPropertyProjection {
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
       is BridgeType.FlowSource,
-      is BridgeType.ReturnedLambda,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,
       is BridgeType.Unsupported,
@@ -672,6 +680,8 @@ internal object ForwardCirPropertyProjection {
     // ADR-187: a wrapper value is passed as its owned handle, which the call keeps alive.
     is BridgeType.ObjectHandle -> KOTLIN_HANDLE
     is BridgeType.Interface -> "IntPtr"
+    // ADR-236: the wrapper's own lambda handle, borrowed for the call.
+    is BridgeType.ReturnedLambda -> KOTLIN_HANDLE
     // ADR-077: the underlying's wire crosses the setter (sub-item 4 keys it per kind); the outer
     // nullability decides the String spelling, exactly like the plain-String arm above.
     is BridgeType.ValueClass -> when (value.underlying) {
@@ -715,7 +725,6 @@ internal object ForwardCirPropertyProjection {
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
     is BridgeType.FlowSource,
-    is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
     is BridgeType.Unsupported,
@@ -901,6 +910,13 @@ internal object ForwardCirPropertyProjection {
       is BridgeType.ObjectHandle ->
         if (this is BridgeType.Nullable) "$name?._handle ?? NugetKotlinHandle.Null"
         else "$name._handle"
+      // ADR-236: the wrapper's conversion hands back the lambda a getter's delegate is bound to, or
+      // mints a Kotlin lambda over any other delegate.
+      is BridgeType.ReturnedLambda -> {
+        val wrapper: String = value.lambdaWrapperCsharpType()
+        if (this is BridgeType.Nullable) "(($wrapper?)$name)?._handle ?? NugetKotlinHandle.Null"
+        else "(($wrapper)$name)._handle"
+      }
       // ADR-040 sub-decision B: the setter's static parameter type is `IFoo`, so extraction goes
       // through the shared reflective helper rather than a direct `._handle` field read.
       // ADR-084 stage 3: extraction moved into [handleStep], because a C#-implemented value
@@ -988,7 +1004,6 @@ internal object ForwardCirPropertyProjection {
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
       is BridgeType.FlowSource,
-      is BridgeType.ReturnedLambda,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,
       is BridgeType.Unsupported,
@@ -1002,7 +1017,7 @@ internal object ForwardCirPropertyProjection {
     BridgeType.Char -> ForwardAbiWireType.CHAR16
     BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface,
     is BridgeType.Collection, BridgeType.ByteArray,
-    is BridgeType.TypeParameter -> ForwardAbiWireType.POINTER
+    is BridgeType.TypeParameter, is BridgeType.ReturnedLambda -> ForwardAbiWireType.POINTER
 
     is BridgeType.Enum -> ForwardAbiWireType.INT32
     // ADR-076: wires as its own INT64 tick representation, same as a Primitive(LONG).
@@ -1022,7 +1037,6 @@ internal object ForwardCirPropertyProjection {
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
     is BridgeType.FlowSource,
-    is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
     is BridgeType.Unsupported,

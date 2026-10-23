@@ -94,7 +94,7 @@ class Tier1UnitLambdaPropertyTest {
 
   /** The reported repro, at the ordinary-class property arm (`:372`). */
   @Test
-  fun `a zero-arg Unit lambda property renders KotlinAction`() {
+  fun `a zero-arg Unit lambda property renders Action`() {
     val result = run()
 
     val onTick: List<String> = memberLines(result, "OnTick")
@@ -104,8 +104,8 @@ class Tier1UnitLambdaPropertyTest {
     )
     onTick.forEach { line ->
       assertTrue(
-        line.contains("KotlinAction") && !line.contains("KotlinAction<"),
-        "expected the zero-arg Unit lambda to render the non-generic `KotlinAction`; " +
+        line.contains("Action OnTick"),
+        "ADR-236: expected the zero-arg Unit lambda property to render the BCL `Action`; " +
             "got: ${line.trim()}",
       )
     }
@@ -117,27 +117,28 @@ class Tier1UnitLambdaPropertyTest {
    * CS1547. The Unit return is dropped and the parameters stay: `KotlinAction<int>`.
    */
   @Test
-  fun `an arity-N Unit lambda property renders KotlinAction of its parameters`() {
+  fun `an arity-N Unit lambda property renders Action of its parameters`() {
     val result = run()
 
     val onCount: List<String> = memberLines(result, "OnCount")
     assertTrue(onCount.isNotEmpty(), "expected an OnCount member; got none")
     onCount.forEach { line ->
       assertTrue(
-        line.contains("KotlinAction<int>"),
-        "expected `(Int) -> Unit` to render `KotlinAction<int>`; got: ${line.trim()}",
+        line.contains("Action<int>"),
+        "expected `(Int) -> Unit` to render `Action<int>`; got: ${line.trim()}",
       )
     }
   }
 
   /** The sealed subclass arm (`:1168`), which is a separate copy of the same expression. */
   @Test
-  fun `a Unit lambda property on a sealed subclass renders KotlinAction`() {
+  fun `a Unit lambda property on a sealed subclass renders Action`() {
     val result = run()
 
-    val sealedGetters: List<String> = memberLines(result, "OnTick").filter(::isSealedGetter)
+    // ADR-236: the arm binds on the same plan, so Ticker and Feed.Live each declare one.
+    val sealedGetters: List<String> = memberLines(result, "OnTick")
     assertTrue(
-      sealedGetters.isNotEmpty(),
+      sealedGetters.size >= 2,
       "expected Feed.Live to keep its OnTick member; got: ${memberLines(result, "OnTick")}",
     )
     sealedGetters.forEach { line ->
@@ -179,25 +180,32 @@ class Tier1UnitLambdaPropertyTest {
     )
   }
 
-  /** Control: a non-Unit lambda keeps `KotlinFunc`, and the suspend Unit arm does not regress. */
+  /** Control: a non-Unit lambda property renders `Func`, a suspend Unit one the ADR-210 shape. */
   @Test
   fun `non-Unit and suspend lambdas are untouched`() {
     val result = run()
 
     assertTrue(
-      memberLines(result, "OnName").any { it.contains("KotlinFunc<string>") },
-      "control: `() -> String` must keep rendering KotlinFunc<string>; " +
+      memberLines(result, "OnName").any { it.contains("Func<string> OnName") },
+      "control: `() -> String` must render Func<string>; " +
           "got: ${memberLines(result, "OnName")}",
     )
     assertTrue(
-      memberLines(result, "OnCleanup").any { it.contains("KotlinSuspendAction") },
-      "control: `suspend () -> Unit` was already correct and must stay so; " +
+      memberLines(result, "OnCleanup").any {
+        it.contains(
+          "Func<global::System.Threading.CancellationToken, " +
+            "global::System.Threading.Tasks.Task> OnCleanup",
+        )
+      },
+      "control: `suspend () -> Unit` must render the ADR-210 delegate; " +
           "got: ${memberLines(result, "OnCleanup")}",
     )
   }
 
   private fun memberLines(result: Tier1Result, member: String): List<String> =
-    result.generatedCSharp.lines().filter { it.contains(" $member ") || it.contains(" $member=>") }
+    // ADR-236: a planned class property renders its header alone on its line (`... OnCount`).
+    result.generatedCSharp.lines().filter {
+      it.contains(" $member ") || it.contains(" $member=>") || it.trimEnd().endsWith(" $member")
+    }
 
-  private fun isSealedGetter(line: String): Boolean = line.contains("out _")
 }

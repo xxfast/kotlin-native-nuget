@@ -96,7 +96,7 @@ find_gnu_nm() {
   return 1
 }
 
-EXPECTED="$(grep -o '@CName("nuget_[a-z0-9_]*")' "$RUNTIME_SOURCE" | sed 's/@CName("//; s/")//' | sort -u)"
+EXPECTED="$(grep -ho '@CName("nuget_[a-z0-9_]*")' "$(dirname "$RUNTIME_SOURCE")"/*.kt | sed 's/@CName("//; s/")//' | sort -u)"
 EXPECTED_COUNT="$(printf '%s\n' "$EXPECTED" | wc -l | tr -d ' ')"
 
 case "$LIBRARY" in

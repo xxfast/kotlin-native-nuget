@@ -116,8 +116,8 @@ colliding with it directly.
 
 An `Int?`-style nullable property round-trips its null branch the same way a class property does. A
 `lateinit var` read before it is assigned surfaces in C# as a `KotlinException`, not a crash. A
-lambda-typed object property has no static-owner adapter, so it generates no C# member at all and is
-named with a `SKIPPED_UNSUPPORTED_PROPERTY` warning instead of vanishing silently.
+lambda-typed `object` or companion property binds as a static delegate property, with a setter for a
+`var` (see [Lambdas and callbacks](lambdas-and-callbacks.md#which-lambda-properties-bind)).
 
 A `Flow`, `StateFlow` or `SharedFlow` object property (and a `Mutable*` one) binds as a static
 `KotlinFlow<T>` or its variant, read fresh on every access:

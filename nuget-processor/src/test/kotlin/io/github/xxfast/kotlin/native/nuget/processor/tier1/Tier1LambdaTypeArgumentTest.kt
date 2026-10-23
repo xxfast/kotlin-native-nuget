@@ -107,6 +107,10 @@ class Tier1LambdaTypeArgumentTest {
   private val qualifiedPick: String =
     "KotlinFunc<global::Interop.Catcam.Lens.CamId, global::Interop.Catcam.Lens.Snapshot>"
 
+  // ADR-236: a lambda PROPERTY spells the BCL delegate; a lambda-returning function keeps
+  // KotlinFunc.
+  private val qualifiedPickProperty: String = qualifiedPick.removePrefix("Kotlin")
+
   private fun run(): Tier1Result = Tier1Harness.run(
     fixture,
     processorOptions = mapOf("nuget.rootPackage" to "tier1"),
@@ -129,9 +133,9 @@ class Tier1LambdaTypeArgumentTest {
     )
     onPick.forEach { line ->
       assertTrue(
-        line.contains(qualifiedPick),
+        line.contains(qualifiedPickProperty),
         "expected the lambda's exported type arguments to be namespace-qualified " +
-            "($qualifiedPick); got: ${line.trim()}",
+            "($qualifiedPickProperty); got: ${line.trim()}",
       )
     }
 
@@ -286,7 +290,11 @@ class Tier1LambdaTypeArgumentTest {
 
   /** The generated C# property declaration lines for [member], if it was emitted at all. */
   private fun memberLines(result: Tier1Result, member: String): List<String> =
-    result.generatedCSharp.lines().filter { it.contains(" $member =>") }.map(String::trim)
+    // ADR-236: a planned class property renders its header alone on its line (`... OnPick`).
+    result.generatedCSharp.lines()
+      .filter { it.contains(" $member =>") || it.trimEnd().endsWith(" $member") }
+      .filterNot { it.trimStart().startsWith("///") }
+      .map(String::trim)
 
   /**
    * The sealed-subclass route (`CirClassTranslator.kt:1118`) is the only one whose getter swallows

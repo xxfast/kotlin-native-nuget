@@ -249,13 +249,12 @@ class Tier1SealedSubclassPropertyPlanTest {
   }
 
   /**
-   * ADR-111 Scope: a lambda-typed property has no plan shape, so both halves keep their legacy arm
-   * (a raw `[DllImport]` and a `KotlinFunc<...>` getter that still swallows the error slot) until
-   * lambda properties migrate for ordinary classes too. Pinned so the residual route stays
-   * exercised now that nothing else falls into it.
+   * ADR-236: a lambda-typed property on a sealed arm binds on the property plan, as on every other
+   * owner: a BCL delegate getter over the error-slotted export. It rode a hand-written route that
+   * swallowed the error slot until then.
    */
   @Test
-  fun `a lambda property on a sealed subclass stays on the legacy route`() {
+  fun `a lambda property on a sealed subclass binds on the property plan`() {
     // The property is not named like its arm: `class OnTap(val onTap: ...)` renders `OnTap.OnTap`,
     // which C# rejects (CS0542) and is a named error now (`Tier1AbstractChainBackingTest`).
     val result = Tier1Harness.run(
@@ -279,7 +278,7 @@ class Tier1SealedSubclassPropertyPlanTest {
     )
     assertContains(
       result.generatedCSharp,
-      "            public KotlinFunc<int, string> Action => new KotlinFunc<int, string>(Native_Get_action(_handle, out _));",
+      "            public Func<int, string> Action\n",
     )
     assertContains(result.generated, "@CName(\"library_tier1_sealedlambda__handler_ontap_get_action\")")
     assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
@@ -295,12 +294,15 @@ class Tier1SealedSubclassPropertyPlanTest {
               public static string Run()
               {
                   using Handler handler = Fixture.Handler();
-                  using var action = ((Handler.OnTap)handler).Action;
+                  var action = ((Handler.OnTap)handler).Action;
                   return action.Invoke(4);
               }
           }
       }
       """.trimIndent(),
+      // ADR-236: the lambda wrappers' delegate conversions are `unsafe`, as every packaged
+      // library allows.
+      allowUnsafe = true,
     )
   }
 }

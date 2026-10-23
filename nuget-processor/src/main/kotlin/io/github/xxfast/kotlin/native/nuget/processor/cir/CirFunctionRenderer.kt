@@ -40,6 +40,10 @@ internal fun StringBuilder.renderFuncHelper(helper: CirFuncHelper) {
       appendLine()
       appendLine("        internal KotlinFunc(IntPtr handle) { _handle = new $ns.NugetKotlinHandle(handle); }")
       appendLine()
+      appendManagedConversion(
+        "KotlinFunc<${managedTypeParameters(arity)}>", managedPlainDelegate(arity, unit = false),
+        "NugetManagedFunc<${managedTypeParameters(arity)}>", "NugetManagedLambda.Mint", arity, unit = false,
+      )
       appendLine("        public TResult Invoke()")
       appendLine("        {")
       appendLine("            IntPtr result = $funcNativeRef.Invoke0(_handle);")
@@ -65,6 +69,10 @@ internal fun StringBuilder.renderFuncHelper(helper: CirFuncHelper) {
       appendLine()
       appendLine("        internal KotlinFunc(IntPtr handle) { _handle = new $ns.NugetKotlinHandle(handle); }")
       appendLine()
+      appendManagedConversion(
+        "KotlinFunc<${managedTypeParameters(arity)}>", managedPlainDelegate(arity, unit = false),
+        "NugetManagedFunc<${managedTypeParameters(arity)}>", "NugetManagedLambda.Mint", arity, unit = false,
+      )
       appendLine("        public TResult Invoke($methodParams)")
       appendLine("        {")
       // Boundary nullability part A1: `NugetMarshal.Wrap<T>` in place of the private `WrapArg<T>`
@@ -102,6 +110,10 @@ internal fun StringBuilder.renderFuncHelper(helper: CirFuncHelper) {
       appendLine()
       appendLine("        internal KotlinAction(IntPtr handle) { _handle = new $ns.NugetKotlinHandle(handle); }")
       appendLine()
+      appendManagedConversion(
+        "KotlinAction${managedActionGeneric(arity)}", managedPlainDelegate(arity, unit = true),
+        "NugetManagedAction${managedActionGeneric(arity)}", "NugetManagedLambda.Mint", arity, unit = true,
+      )
       appendLine("        public void Invoke()")
       appendLine("        {")
       // `nuget_func0_invoke` returns `StableRef.create(fn.invoke() as Any)`, a live ref to the
@@ -130,6 +142,10 @@ internal fun StringBuilder.renderFuncHelper(helper: CirFuncHelper) {
       appendLine()
       appendLine("        internal KotlinAction(IntPtr handle) { _handle = new $ns.NugetKotlinHandle(handle); }")
       appendLine()
+      appendManagedConversion(
+        "KotlinAction${managedActionGeneric(arity)}", managedPlainDelegate(arity, unit = true),
+        "NugetManagedAction${managedActionGeneric(arity)}", "NugetManagedLambda.Mint", arity, unit = true,
+      )
       appendLine("        public void Invoke($actionMethodParams)")
       appendLine("        {")
       // Boundary nullability part A1, the Unit-returning twin; see `KotlinFunc.Invoke` above.
@@ -147,6 +163,7 @@ internal fun StringBuilder.renderFuncHelper(helper: CirFuncHelper) {
       appendLine()
     }
   }
+  renderManagedLambdaAdapters(helper.libraryName, ns, helper.arities)
 }
 
 // Boundary nullability part A1 deleted the suspend twin of the private `WrapArg<T>` copy too, for
@@ -188,6 +205,11 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
       appendLine()
       appendLine("        internal KotlinSuspendFunc(IntPtr handle) { _handle = new $ns.NugetKotlinHandle(handle); }")
       appendLine()
+      appendManagedConversion(
+        "KotlinSuspendFunc<${managedTypeParameters(arity)}>", managedSuspendDelegate(arity, unit = false),
+        "NugetManagedSuspendFunc<${managedTypeParameters(arity)}>", "NugetManagedSuspendLambda.Mint", arity,
+        unit = false,
+      )
       appendLine("        public Task<TResult> InvokeAsync(CancellationToken cancellationToken = default)")
       appendLine("        {")
       appendLine("            var tcs = new TaskCompletionSource<TResult>(TaskCreationOptions.RunContinuationsAsynchronously);")
@@ -234,6 +256,11 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
       appendLine()
       appendLine("        internal KotlinSuspendFunc(IntPtr handle) { _handle = new $ns.NugetKotlinHandle(handle); }")
       appendLine()
+      appendManagedConversion(
+        "KotlinSuspendFunc<${managedTypeParameters(arity)}>", managedSuspendDelegate(arity, unit = false),
+        "NugetManagedSuspendFunc<${managedTypeParameters(arity)}>", "NugetManagedSuspendLambda.Mint", arity,
+        unit = false,
+      )
       appendLine("        public Task<TResult> InvokeAsync($methodParams, CancellationToken cancellationToken = default)")
       appendLine("        {")
       appendLine("            var tcs = new TaskCompletionSource<TResult>(TaskCreationOptions.RunContinuationsAsynchronously);")
@@ -286,6 +313,11 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
       appendLine()
       appendLine("        internal KotlinSuspendAction(IntPtr handle) { _handle = new $ns.NugetKotlinHandle(handle); }")
       appendLine()
+      appendManagedConversion(
+        "KotlinSuspendAction${managedActionGeneric(arity)}", managedSuspendDelegate(arity, unit = true),
+        "NugetManagedSuspendAction${managedActionGeneric(arity)}", "NugetManagedSuspendLambda.Mint", arity,
+        unit = true,
+      )
       appendLine("        public Task InvokeAsync(CancellationToken cancellationToken = default)")
       appendLine("        {")
       appendLine("            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);")
@@ -329,6 +361,11 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
       appendLine()
       appendLine("        internal KotlinSuspendAction(IntPtr handle) { _handle = new $ns.NugetKotlinHandle(handle); }")
       appendLine()
+      appendManagedConversion(
+        "KotlinSuspendAction${managedActionGeneric(arity)}", managedSuspendDelegate(arity, unit = true),
+        "NugetManagedSuspendAction${managedActionGeneric(arity)}", "NugetManagedSuspendLambda.Mint", arity,
+        unit = true,
+      )
       appendLine("        public Task InvokeAsync($methodParams, CancellationToken cancellationToken = default)")
       appendLine("        {")
       appendLine("            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);")
@@ -363,6 +400,7 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
       appendLine()
     }
   }
+  renderManagedSuspendLambdaAdapters(helper.libraryName, ns, helper.arities)
 }
 
 /**

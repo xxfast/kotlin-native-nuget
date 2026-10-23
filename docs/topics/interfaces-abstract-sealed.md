@@ -409,7 +409,10 @@ Retagging.Retag(collar, "OREO"); // "OREO"; collar.Tag is now "OREO"
 ```
 
 The same holds for a `var` on a [listener](lambdas-and-callbacks.md#a-listener-val) passed to an
-`add`/`remove` pair.
+`add`/`remove` pair. A lambda-typed property (`val onPounce: (Int) -> String`, `var cue: ((String) -> String)?`)
+is a `Func<>`/`Action<>` property on your class, `suspend` ones included; Kotlin reads it and writes a `var` back
+to your object. A Kotlin-backed implementation exposes the same delegate properties, see
+[Lambdas and callbacks](lambdas-and-callbacks.md#which-lambda-properties-bind).
 
 #### A generic interface {id="implementing-a-generic-interface-in-c"}
 

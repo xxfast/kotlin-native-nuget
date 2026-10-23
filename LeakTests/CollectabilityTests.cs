@@ -4,6 +4,7 @@ using TestLibrary.Cat;
 using TestLibrary.Catnap;
 using Purrclock = TestLibrary.Purrclock;
 using Dash = TestLibrary.Dash;
+using Zoomrun = TestLibrary.Zoomrun;
 using TestLibrary.Roster;
 using Playroom = TestLibrary.Playroom;
 using Stamps = TestLibrary.Stamps;
@@ -1724,5 +1725,179 @@ public class CollectabilityTests
         Assert.True(
             MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
             "the delegate passed to Sprint.WarmUpLapsAsync stayed reachable after its KotlinFlow was disposed");
+    }
+
+    // ADR-236: a C# delegate set into a Kotlin lambda-typed property is held by Kotlin through a
+    // callback-context key, which `nuget_live_handles` does not count, so only a collectability row
+    // proves the key is released once Kotlin no longer holds the lambda: the delegate captures a
+    // marker, and the marker must die once the property is replaced (a `var`) or cleared (a
+    // nullable `var`), on every owner. Oreo hides the laser pointer; Mylo stops looking for it.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (Func<string, string> Bump, WeakReference Marker) BumpMarker()
+    {
+        var marker = new object();
+        Func<string, string> bump = who =>
+        {
+            GC.KeepAlive(marker);
+            return who;
+        };
+        return (bump, new WeakReference(marker));
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference SetAndClearLandingBump()
+    {
+        (Func<string, string> bump, WeakReference marker) = BumpMarker();
+        Zoomrun.Landing.OnBump = bump;
+        Assert.Equal("Oreo", Zoomrun.Landing.Bump("Oreo"));
+        Zoomrun.Landing.OnBump = null;
+        return marker;
+    }
+
+    [Fact]
+    public void LambdaProperty_ObjectNullableVar_ClearedDelegateIsCollected()
+    {
+        WeakReference marker = SetAndClearLandingBump();
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the delegate set into Landing.OnBump stayed reachable after the property was cleared");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference SetAndReplaceRacetrackAnnounce(Func<string, string> original)
+    {
+        (Func<string, string> announce, WeakReference marker) = BumpMarker();
+        Zoomrun.Racetrack.Announce = announce;
+        Assert.Equal("Mylo", Zoomrun.Racetrack.Call("Mylo"));
+        Zoomrun.Racetrack.Announce = original;
+        return marker;
+    }
+
+    [Fact]
+    public void LambdaProperty_CompanionVar_ReplacedDelegateIsCollected()
+    {
+        Func<string, string> original = Zoomrun.Racetrack.Announce;
+        WeakReference marker = SetAndReplaceRacetrackAnnounce(original);
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the delegate set into Racetrack.Announce stayed reachable after it was replaced");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference SetAndClearTopLevelZoomOut()
+    {
+        (Func<string, string> zoomOut, WeakReference marker) = BumpMarker();
+        Zoomrun.ZoomrunSample.OnZoomOut = zoomOut;
+        Assert.Equal("Oreo", Zoomrun.ZoomrunSample.ZoomOut("Oreo"));
+        Zoomrun.ZoomrunSample.OnZoomOut = null;
+        return marker;
+    }
+
+    [Fact]
+    public void LambdaProperty_TopLevelNullableVar_ClearedDelegateIsCollected()
+    {
+        WeakReference marker = SetAndClearTopLevelZoomOut();
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the delegate set into ZoomrunSample.OnZoomOut stayed reachable after the property was cleared");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference SetAndReplaceStrideCheer(Func<string, string> original)
+    {
+        (Func<string, string> cheer, WeakReference marker) = BumpMarker();
+        Zoomrun.StrideExtensions.SetCheer(Zoomrun.Stride.Gallop, cheer);
+        Assert.Equal("Mylo", Zoomrun.StrideExtensions.Shout(Zoomrun.Stride.Gallop, "Mylo"));
+        Zoomrun.StrideExtensions.SetCheer(Zoomrun.Stride.Gallop, original);
+        return marker;
+    }
+
+    [Fact]
+    public void LambdaProperty_EnumBodyVar_ReplacedDelegateIsCollected()
+    {
+        Func<string, string> original = Zoomrun.StrideExtensions.Cheer(Zoomrun.Stride.Gallop);
+        WeakReference marker = SetAndReplaceStrideCheer(original);
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the delegate set into Stride.Gallop's cheer stayed reachable after it was replaced");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference SetAndClearRelayInspect(Zoomrun.Relay<string> relay)
+    {
+        (Func<string, string> inspect, WeakReference marker) = BumpMarker();
+        relay.Inspect = inspect;
+        Assert.Equal("Oreo", relay.Describe());
+        relay.Inspect = held => held;
+        return marker;
+    }
+
+    [Fact]
+    public void LambdaProperty_GenericClassVar_ReplacedDelegateIsCollected()
+    {
+        using var relay = new Zoomrun.Relay<string>("Oreo");
+        WeakReference marker = SetAndClearRelayInspect(relay);
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the delegate set into Relay<string>.Inspect stayed reachable after it was replaced");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference SetAndClearLaserDotCue()
+    {
+        (Func<string, string> cue, WeakReference marker) = BumpMarker();
+        Zoomrun.IPouncer dot = Zoomrun.ZoomrunSample.LaserDot();
+        dot.Cue = cue;
+        Assert.Equal("treats", Zoomrun.ZoomrunSample.Cue(dot, "treats"));
+        dot.Cue = null;
+        (dot as IDisposable)?.Dispose();
+        return marker;
+    }
+
+    [Fact]
+    public void LambdaProperty_KotlinBackedInterfaceVar_ClearedDelegateIsCollected()
+    {
+        WeakReference marker = SetAndClearLaserDotCue();
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the delegate set into a Kotlin-backed IPouncer.Cue stayed reachable after it was cleared");
+    }
+
+    // A suspend member returning a StateFlow with a plain lambda: the delegate must outlive the
+    // Task (Kotlin calls it from `Pulse`), and die once the KotlinStateFlow is disposed.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference> BeamAndDispose(Zoomrun.LaserTower tower)
+    {
+        var marker = new object();
+        Func<int, int> brightness = level =>
+        {
+            GC.KeepAlive(marker);
+            return level;
+        };
+        using (KotlinStateFlow<int> glow = await tower.BeamAsync(brightness))
+        {
+            Assert.Equal(4, tower.Pulse(4));
+            Assert.Equal(4, glow.Value);
+        }
+        brightness = null!;
+        await Task.Yield();
+        return new WeakReference(marker);
+    }
+
+    [Fact]
+    public async Task LambdaProperty_SuspendStateFlowResult_DelegateIsCollectedOnceTheFlowIsDisposed()
+    {
+        using var tower = new Zoomrun.LaserTower("Mylo");
+        WeakReference marker = await BeamAndDispose(tower);
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the delegate passed to LaserTower.BeamAsync stayed reachable after its KotlinStateFlow was disposed");
     }
 }

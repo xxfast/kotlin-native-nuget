@@ -319,6 +319,11 @@ internal sealed interface BridgeType {
   data class ReturnedLambda(
     val typeArguments: List<BridgeType>,
     val kotlinTypeArguments: List<kotlin.String>,
+    /**
+     * ADR-236: a `suspend` function type, wrapped C#-side as `KotlinSuspendFunc<...>` (or
+     * `KotlinSuspendAction<...>`) over the runtime `nuget_suspend_func{n}_invoke` exports.
+     */
+    val suspend: kotlin.Boolean = false,
   ) : BridgeType {
     val arity: Int get() = typeArguments.size - 1
   }

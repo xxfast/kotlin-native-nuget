@@ -502,3 +502,10 @@ Kotlin through the same `NugetAsyncReleaseContext` thunk and the same hand-over 
 `finally` around the launched body or the `.collect` releases it, and a `suspend` member returning a
 `Flow` ties it to the returned flow's handle. The cleaner-owned lifetime above is unchanged for a
 `suspend` lambda and a `Flow` parameter.
+
+## Amendment (2026-10-23): the shape of a `suspend` lambda property
+
+A `suspend` lambda property now binds as `Func<A, CancellationToken, Task<R>>` (`Func<A, CancellationToken, Task>`
+for `Unit`), the shape this ADR gives a parameter, on every owner and nullable too, and a `var`
+takes a C# delegate ([ADR-236](236-lambda-properties-on-every-owner.md)). It was `KotlinSuspendFunc<A, R>`
+with `InvokeAsync`.

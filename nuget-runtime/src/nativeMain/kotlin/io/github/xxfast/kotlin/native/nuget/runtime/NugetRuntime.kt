@@ -975,3 +975,13 @@ public fun export_nuget_stateflow_value(flowHandle: COpaquePointer): COpaquePoin
 @CName("nuget_stateflow_value_or_null")
 public fun export_nuget_stateflow_value_or_null(flowHandle: COpaquePointer): COpaquePointer? =
   flowHandle.asStableRef<StateFlow<*>>().get().value?.let { NugetHandles.retain(it) }
+
+/**
+ * ADR-236: a lambda property setter's read of the lambda handle C# passed. The handle is erased to
+ * `Any` (a `KotlinFunc` carries either the Kotlin lambda it was read from or the one
+ * `nuget_func{n}_from_managed` minted over a C# delegate), and the property's own function type is
+ * the expected type at the assignment, so the cast is unchecked by construction.
+ */
+@NugetRuntimeApi
+@Suppress("UNCHECKED_CAST")
+public fun <T> nugetUncheckedCast(value: Any?): T = value as T

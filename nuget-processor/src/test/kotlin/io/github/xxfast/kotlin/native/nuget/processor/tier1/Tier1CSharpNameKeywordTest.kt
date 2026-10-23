@@ -104,7 +104,7 @@ class Tier1CSharpNameKeywordTest {
       }
       """.trimIndent(),
     ).generatedCSharp
-    assertEquals(2, Regex("KotlinAction<int> @event").findAll(cs).count(), cs)
+    assertEquals(2, Regex("Action<int> @event").findAll(cs).count(), cs)
   }
 
   @Test

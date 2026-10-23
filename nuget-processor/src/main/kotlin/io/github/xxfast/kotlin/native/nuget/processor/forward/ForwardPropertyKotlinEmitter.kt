@@ -4,6 +4,7 @@ import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.TypeName
+import io.github.xxfast.kotlin.native.nuget.processor.exports.INSTALL_MODULE_MAPPED_TYPE
 import io.github.xxfast.kotlin.native.nuget.processor.exports.cNameAnnotation
 import io.github.xxfast.kotlin.native.nuget.processor.exports.cOpaquePointer
 import io.github.xxfast.kotlin.native.nuget.processor.exports.cOpaquePointerVar
@@ -32,6 +33,11 @@ internal fun FileSpec.Builder.addForwardPropertyPlanExports(plan: ForwardPropert
 private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardNativeCall) {
   val builder: FunSpec.Builder = exportBuilder(call, plan.receiver, plan.ownerTag())
   val access: String = plan.accessExpression()
+  // ADR-202: a suspend lambda handed out is invoked through the runtime-owned
+  // `nuget_suspend_func*`, which maps a thrown exception through this module's classifier.
+  if ((plan.type.unwrapNullable() as? BridgeType.ReturnedLambda)?.suspend == true) {
+    builder.addStatement(INSTALL_MODULE_MAPPED_TYPE)
+  }
   when (val type: BridgeType = plan.type) {
     BridgeType.Unit -> builder.addCode(
       unitBody(access, "errorOut"), cOpaquePointerVar, nugetHandles,
@@ -89,8 +95,9 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
       // ADR-083/147: `T?` ships the null pointer for null, the retained box otherwise.
       // ADR-151: `ByteArray?` too -- `NugetMarshal.ReadBytes` never sees a zero handle, the
       // generated C# returns null before it.
+      // ADR-236: a nullable lambda property ships the null pointer, the retained lambda otherwise.
       is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
-      BridgeType.ByteArray, is BridgeType.TypeParameter -> {
+      BridgeType.ByteArray, is BridgeType.TypeParameter, is BridgeType.ReturnedLambda -> {
         // ADR-081: a value-class component is projected to its underlying before boxing, with the
         // whole chain `?.`-guarded so a null property value still ships a null pointer.
         val boxed: String = if (inner is BridgeType.Collection) {
@@ -149,7 +156,6 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
       is BridgeType.FlowSource,
-      is BridgeType.ReturnedLambda,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,
       is BridgeType.Unsupported,
@@ -178,8 +184,9 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
 
     // ADR-147: a `T` getter mints the same `NugetHandles.retain` box.
     // ADR-151: a ByteArray getter mints one too, read back by `NugetMarshal.ReadBytes`.
+    // ADR-236: a lambda property getter mints the same handle, wrapped C#-side as `KotlinFunc`.
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
-    BridgeType.ByteArray, is BridgeType.TypeParameter -> {
+    BridgeType.ByteArray, is BridgeType.TypeParameter, is BridgeType.ReturnedLambda -> {
       // ADR-081: read side of a collection property whose component is a value class -- box a copy
       // projected to the underlying, the shape a C# per-element re-wrap can read.
       val boxed: String =
@@ -266,7 +273,6 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
     is BridgeType.FlowSource,
-    is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
     is BridgeType.Unsupported,
@@ -623,6 +629,9 @@ private fun inputLowering(type: BridgeType, name: String): String = when (type) 
     BridgeType.ByteArray -> "$name?.asStableRef<kotlin.ByteArray>()?.get()"
     // ADR-218: a null `T?` (or a nullable-bounded `T`) arrives as the null pointer.
     is BridgeType.TypeParameter -> typeParameterLowering(name, inner, nullable = true)
+    // ADR-236: the borrowed lambda handle, read as the property's own function type.
+    is BridgeType.ReturnedLambda ->
+      "if ($name == null) null else nugetUncheckedCast($name.asStableRef<Any>().get())"
     // ADR-077 sub-items 3/4: `?.let` re-wraps only a non-null wire value, matching the callable
     // parameter lowering in ForwardKotlinPlanEmitter.
     // ADR-079: a Primitive/Enum underlying takes the NullableDispatch route instead, whose `set`
@@ -642,7 +651,6 @@ private fun inputLowering(type: BridgeType, name: String): String = when (type) 
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
     is BridgeType.FlowSource,
-    is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
     is BridgeType.Unsupported,
@@ -672,6 +680,8 @@ private fun inputLowering(type: BridgeType, name: String): String = when (type) 
   BridgeType.ByteArray -> "$name.asStableRef<kotlin.ByteArray>().get()"
   // ADR-218: the box C# minted with `Wrap<T>` (or a borrowed wrapper's handle).
   is BridgeType.TypeParameter -> typeParameterLowering(name, type, nullable = false)
+  // ADR-236: the borrowed lambda handle a C# `KotlinFunc` (Kotlin-made or C#-made) carries.
+  is BridgeType.ReturnedLambda -> "nugetUncheckedCast($name.asStableRef<Any>().get())"
   // ADR-077 sub-items 2/4: re-wrap the raw underlying wire value, re-running the value class's
   // own `init` validation, exactly like the callable parameter lowering in
   // ForwardKotlinPlanEmitter.
@@ -682,7 +692,6 @@ private fun inputLowering(type: BridgeType, name: String): String = when (type) 
   is BridgeType.Callback,
   is BridgeType.AsyncCallback,
   is BridgeType.FlowSource,
-  is BridgeType.ReturnedLambda,
   is BridgeType.SpecializedProtocol,
   is BridgeType.RawKSType,
   is BridgeType.Unsupported,
@@ -705,14 +714,14 @@ private fun kotlinInputType(type: BridgeType): TypeName = when (type) {
   is BridgeType.ValueClass -> kotlinInputType(type.underlying)
   // ADR-088: the bound-interface transfer GCHandle is the same opaque pointer slot.
   is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
-  is BridgeType.BoundInterface, BridgeType.ByteArray, is BridgeType.TypeParameter ->
+  is BridgeType.BoundInterface, BridgeType.ByteArray, is BridgeType.TypeParameter,
+  is BridgeType.ReturnedLambda ->
     cOpaquePointer.copy(nullable = type is BridgeType.Nullable)
 
   BridgeType.Unit,
   is BridgeType.Callback,
   is BridgeType.AsyncCallback,
   is BridgeType.FlowSource,
-  is BridgeType.ReturnedLambda,
   is BridgeType.SpecializedProtocol,
   is BridgeType.RawKSType,
   is BridgeType.Unsupported,
