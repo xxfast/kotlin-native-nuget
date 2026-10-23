@@ -130,6 +130,54 @@ public class GenericValueClassTests
         Assert.Equal("Oreo", Stickers.Firm(new Sticker<string>("Oreo")));
     }
 
+    // --- a function's own T inside the struct, whatever its bound -------------------------
+
+    // `T : Comparable<T>` erases to `Comparable<Any?>`: no trampoline, the value converts on the
+    // primitive and string routes.
+    [Fact]
+    public void OwnComparableBound_InsideTheStruct_Binds()
+    {
+        Assert.Equal(3, Stickers.Ranked(new Sticker<int>(3)));
+        Assert.Equal("Oreo", Stickers.Ranked(new Sticker<string>("Oreo")));
+        Assert.Equal(
+            new Sticker<string>("Oreo"),
+            Stickers.Higher(new Sticker<string>("Mylo"), new Sticker<string>("Oreo")));
+        Assert.Equal(new Sticker<int>(9), Stickers.Higher(new Sticker<int>(9), new Sticker<int>(2)));
+    }
+
+    // `T : Enum<T>` has no erased spelling: unwrap, call and re-wrap run in the trampoline, and the
+    // enum converts to and from its ordinal on the way.
+    [Fact]
+    public void OwnEnumSelfBound_InsideTheStruct_RunsThroughTheTrampoline()
+    {
+        Assert.Equal(new Sticker<Mood>(Mood.Sleepy), Stickers.NapOf(new Sticker<Mood>(Mood.Sleepy)));
+        Assert.Equal(Mood.Grumpy, Stickers.NapOf(new Sticker<Mood>(Mood.Grumpy)).Value);
+    }
+
+    // `where T : CharSequence, T : Comparable<T>`: the ADR-217 trampoline checks both bounds.
+    [Fact]
+    public void OwnIntersectionBound_InsideTheStruct_RunsThroughTheTrampoline()
+    {
+        Assert.Equal(new Sticker<string>("Oreo"), Stickers.Loudest(new Sticker<string>("Oreo")));
+    }
+
+    // Kotlin's init still runs at the crossing inside the trampoline.
+    [Fact]
+    public void OwnBoundedTypeParameter_InitRunsAtTheCrossing()
+    {
+        Assert.Throws<KotlinArgumentException>(() => Stickers.Ranked(new Sticker<int>(-1)));
+    }
+
+    [Fact]
+    public void StickerBook_MemberOwnBoundedTypeParameter_CrossesInsideTheStruct()
+    {
+        using var book = new StickerBook(new Sticker<string>("Mylo's"), new Sticker<int>(1));
+
+        Assert.Equal(new Sticker<Mood>(Mood.Happy), book.NapOf(new Sticker<Mood>(Mood.Happy)));
+        Assert.Equal(7, book.Ranked(new Sticker<int>(7)));
+        Assert.Equal("Mylo", book.Ranked(new Sticker<string>("Mylo")));
+    }
+
     // --- default(Sticker<T>) into a non-null slot throws in C# -------------------------------
 
     // Exact ArgumentException, not the KotlinArgumentException subclass: the C# guard must refuse

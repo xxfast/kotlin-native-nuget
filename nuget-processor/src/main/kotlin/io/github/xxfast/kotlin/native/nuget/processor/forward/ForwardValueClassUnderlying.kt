@@ -100,8 +100,9 @@ internal fun BridgeType.valueClassUnderlyingRole(): ForwardValueClassUnderlying 
  */
 internal fun BridgeType.ValueClass.hasNullDefault(): Boolean =
   underlying == BridgeType.String || underlying is BridgeType.ObjectHandle ||
-      // ADR-220: a bound own `T` (`T : Any`) inside a generic value class is a non-null slot.
-      underlying is BridgeType.TypeParameter
+      // ADR-220: a bound own `T` (`T : Any`) inside a generic value class is a non-null slot, but a
+      // `struct`-constrained one (`T : Enum<T>`) defaults to a real value, its first entry.
+      underlying is BridgeType.TypeParameter && !underlying.valueType
 
 /**
  * ADR-220: the member's own type parameter this generic value class instantiation carries as its
