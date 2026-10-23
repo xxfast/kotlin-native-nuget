@@ -527,9 +527,14 @@ internal sealed interface BridgeType {
  * ADR-216 (second amendment): one `NugetFactory<T>` slot a generated C# body fills on entry, so
  * an erased read of an open instantiation (`Basket<T>` read through `Basket<Basket<T>>.Item`)
  * finds a factory even when the consumer never held that instantiation. [factory] is the
- * expression the slot's lambda returns for its `handle` parameter.
+ * expression the slot's lambda returns for its `handle` parameter. ADR-228: a [register] slot is an
+ * open generic value class instantiation, filled by its own `NugetRegister()` (plain and nullable).
  */
-internal data class OpenSlot(val csharpType: String, val factory: String)
+internal data class OpenSlot(
+  val csharpType: String,
+  val factory: String,
+  val register: Boolean = false,
+)
 
 /**
  * ADR-216 (second amendment): every open exported generic instantiation this type mentions, at
@@ -557,8 +562,12 @@ private fun BridgeType.collectOpenSlots(): List<OpenSlot> = when (this) {
   BridgeType.Instant, BridgeType.Duration, is BridgeType.Throwable, BridgeType.Uuid,
   is BridgeType.Enum, is BridgeType.BoundInterface,
   is BridgeType.ValueClass, BridgeType.ByteArray, is BridgeType.RawKSType,
-  is BridgeType.Unsupported, is BridgeType.RawCollection, is BridgeType.TypeParameter,
+  is BridgeType.Unsupported, is BridgeType.RawCollection,
     -> emptyList()
+  // ADR-226: an open value class box handle (`Sticker<T>?`) is read through its own slot.
+  is BridgeType.TypeParameter ->
+    if (valueClass && '<' in name) listOf(OpenSlot(name, factory = "", register = true))
+    else emptyList()
 }
 
 /**
@@ -576,13 +585,11 @@ private fun BridgeType.ObjectHandle.openSlot(): OpenSlot = OpenSlot(
 
 /**
  * ADR-228: every open generic value class instantiation this handle nests (`Sticker<T>` in
- * `Box<Sticker<T>>`), the plain and nullable slot `NugetRegister()` fills, since a Kotlin-made
- * value of it may be read before C# ever constructed that instantiation.
+ * `Box<Sticker<T>>`), registered since a Kotlin-made value of it may be read before C# ever
+ * constructed that instantiation.
  */
 private fun BridgeType.ObjectHandle.valueClassSlots(): List<OpenSlot> =
-  openValueClasses.flatMap { struct ->
-    listOf(OpenSlot(struct, "$struct.NugetUnbox(handle)"), OpenSlot("$struct?", "$struct.NugetUnbox(handle)"))
-  }
+  openValueClasses.map { struct -> OpenSlot(struct, factory = "", register = true) }
 
 /** ADR-224: a generic interface's slot constructs its generic backing wrapper. */
 private fun BridgeType.Interface.openSlot(): OpenSlot =
@@ -598,7 +605,8 @@ internal fun List<BridgeType>.openSlotFills(indent: String = "            "): St
 /** The `??=` lines for these slots, one per C# type, at [indent]. */
 internal fun List<OpenSlot>.fills(indent: String = "            "): String =
   distinctBy { it.csharpType }.joinToString("") { slot ->
-    "${indent}NugetFactory<${slot.csharpType}>.Create ??= static handle => ${slot.factory};\n"
+    if (slot.register) "$indent${slot.csharpType}.NugetRegister();\n"
+    else "${indent}NugetFactory<${slot.csharpType}>.Create ??= static handle => ${slot.factory};\n"
   }
 
 /**

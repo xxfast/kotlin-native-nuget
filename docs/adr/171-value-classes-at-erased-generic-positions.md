@@ -389,3 +389,12 @@ whose underlying is itself nullable (`value class Nick(val name: String?)`). Its
 nullable underlying and its unbox returns it, so `Nick(null)` and `null` stay distinct at a
 `Box<Nick?>`, a lambda payload or result, a `Flow` element and an awaited result. A generic value
 class gets one pair per class, dispatched through `INugetGenericValue`.
+
+## Amendment 2026-10-22: nullable-underlying fixes and ordinary positions
+
+A value class over a nullable underlying now builds and keeps `null` apart from `V(null)` outside the
+erased pair too. The constructor import of `value class X(val n: Int?)` no longer breaks the module
+build, `List<Nick?>` binds as a parameter and keeps `Nick(null)` as a result, and a `String?`
+underlying no longer feeds a non-null string import (CS8604).
+[ADR-226](226-generic-value-class-nullable-and-collections.md) carries the same value classes to
+ordinary positions through this pair.

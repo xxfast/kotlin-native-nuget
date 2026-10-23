@@ -439,3 +439,73 @@ private fun componentReadLambda(
   if (read.declaration == null) return "static $parameter => ${read.expression}"
   return "static $parameter => { ${read.declaration} return ${read.expression}; }"
 }
+
+/**
+ * ADR-226: a nullable value class at an ordinary position whose underlying can itself be null
+ * (`Nick?`, `TreatCount?`, a closed `Sticker<String?>?`, an own-`T` `Sticker<T>?`) crosses as the
+ * value class's own box handle: the null pointer is `null`, a live handle is the boxed value, so
+ * `null` and `Nick(null)` stay apart. Rewritten here, once, into ADR-228's value-class `T` box, so
+ * every position (parameter, result, property, constructor, receiver) inherits the `Wrap<T>` /
+ * `FromHandle<T>` wire. An own `T : Any` takes the same box: its null is the null pointer either
+ * way. Returns [this] unchanged for every other type.
+ */
+internal fun BridgeType.asValueClassBoxHandle(): BridgeType {
+  val valueClass: BridgeType.ValueClass =
+    (this as? BridgeType.Nullable)?.type as? BridgeType.ValueClass ?: return this
+  if (valueClass.qualifiedName == "kotlin.Result" || !valueClass.hasErasedCrossing()) return this
+  val underlying: BridgeType = valueClass.underlying
+  if (underlying !is BridgeType.Nullable && underlying !is BridgeType.TypeParameter) return this
+  return BridgeType.Nullable(
+    BridgeType.TypeParameter(
+      name = valueClass.csharpType,
+      boundQualifiedName = valueClass.kotlinBoxSpelling(),
+      valueType = true,
+      valueClass = true,
+    ),
+  )
+}
+
+/**
+ * ADR-226: the Kotlin spelling a value class box is cast back to: closed arguments spelled, an
+ * own `T` as its erased bound (the explicit argument the call passes), anything unspellable `*`.
+ */
+private fun BridgeType.ValueClass.kotlinBoxSpelling(): String {
+  if (typeArguments.isEmpty()) return qualifiedName
+  return typeArguments.joinToString(", ", "$qualifiedName<", ">") { argument ->
+    argument.kotlinArgumentSpelling() ?: "*"
+  }
+}
+
+private fun BridgeType.kotlinArgumentSpelling(): String? = when (this) {
+  BridgeType.String -> "kotlin.String"
+  BridgeType.Char -> "kotlin.Char"
+  is BridgeType.Primitive -> "kotlin.${kind.simpleKotlinName()}"
+  is BridgeType.Enum -> qualifiedName
+  is BridgeType.Nullable -> type.kotlinArgumentSpelling()?.let { "$it?" }
+  // An own `T` is the explicit argument the call site passes: its erased bound.
+  is BridgeType.TypeParameter -> boundQualifiedName ?: "kotlin.Any"
+  is BridgeType.ValueClass -> if (typeArguments.isEmpty()) qualifiedName else null
+  BridgeType.Unit,
+  BridgeType.Instant,
+  BridgeType.Duration,
+  is BridgeType.Throwable,
+  BridgeType.Uuid,
+  is BridgeType.ObjectHandle,
+  is BridgeType.Interface,
+  is BridgeType.BoundInterface,
+  BridgeType.ByteArray,
+  is BridgeType.Collection,
+  is BridgeType.Callback,
+  is BridgeType.AsyncCallback,
+  is BridgeType.FlowSource,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+    -> null
+}
+
+/** ADR-226: `Int?` and other nullable primitives, an underlying with no in-band null. */
+internal fun BridgeType.isNullablePrimitive(): Boolean =
+  this is BridgeType.Nullable && type is BridgeType.Primitive

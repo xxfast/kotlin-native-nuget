@@ -1074,9 +1074,10 @@ internal class ForwardPropertyPlanner(
       return null
     }
     // ADR-236: a function-type property crosses as the lambda handle on every owner.
+    // ADR-226: a nullable value class over a nullable-admitting underlying is its box handle.
     val declaredType: KSType = typeOverride ?: prop.type.resolve()
     val type: BridgeType = classifier.lambdaPropertyOrNull(declaredType)
-      ?: classifier.classify(declaredType).sealedAsHandle()
+      ?: classifier.classify(declaredType).sealedAsHandle().asValueClassBoxHandle()
     // ADR-075: getter eligibility never depended on mutability or on the collection facet — a
     // `Collection` (nullable or not) plans whenever the C# read can spell every component
     // (`isReadable`; `isPlannable` already recurses through `Nullable`). Whether a *setter* can

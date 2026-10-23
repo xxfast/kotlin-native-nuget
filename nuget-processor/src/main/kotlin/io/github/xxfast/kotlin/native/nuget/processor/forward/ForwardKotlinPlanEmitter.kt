@@ -216,7 +216,9 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(
     )
 
     is BridgeType.ValueClass ->
-      addValueClassOrdinaryResult(builder, result, invocation, call.result, error.name)
+      addValueClassOrdinaryResult(
+        builder, result, invocation, call.result, error.name, call.valueOutName(),
+      )
 
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
@@ -253,6 +255,7 @@ private fun addValueClassOrdinaryResult(
   invocation: String,
   nativeResult: ForwardAbiWireType,
   errorName: String?,
+  valueOut: String? = null,
 ) {
   val unboxed = "$invocation.${type.underlyingPropertyName}"
   when (val underlying: BridgeType = type.underlying) {
@@ -304,6 +307,18 @@ private fun addValueClassOrdinaryResult(
     is BridgeType.Nullable -> if (underlying.type == BridgeType.String) {
       builder.returns(kotlinType("String").copy(nullable = true))
       builder.addCode(errorHandlingValueBody(unboxed, errorName, "null"), *errorTypes(errorName))
+    } else if (underlying.type is BridgeType.Primitive) {
+      // ADR-226: a nullable primitive underlying ships its has-value flag and writes `valueOut`.
+      builder.returns(kotlinType("Boolean"))
+      builder.addCode(
+        nullablePrimitiveResultBody(
+          unboxed,
+          requireNotNull(valueOut) { "Value class $type result has no valueOut" },
+          errorName,
+        ),
+        cVarType((underlying.type as BridgeType.Primitive).kind),
+        *errorTypes(errorName),
+      )
     } else {
       require(underlying.type is BridgeType.TypeParameter) {
         "Forward Kotlin plan emitter has no ordinary value-class result for underlying $underlying"
@@ -509,7 +524,9 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
     }
 
     is BridgeType.ValueClass ->
-      addValueClassOrdinaryResult(builder, result, invocation, call.result, error?.name)
+      addValueClassOrdinaryResult(
+        builder, result, invocation, call.result, error?.name, call.valueOutName(),
+      )
 
     // ADR-201: the ordinary route's envelope result, with or without an error slot.
     is BridgeType.Throwable -> {
@@ -660,6 +677,38 @@ private fun elementKotlinTypeName(type: BridgeType): String = when (type) {
     -> error("Forward Kotlin plan emitter has no element type name for $type")
 }
 
+/**
+ * ADR-226: one value class read out of its own box handle, [read] being the `Any?` the handle
+ * holds: `null` for the null pointer, the boxed value class otherwise. A generic one is read back
+ * through its star projection and re-wrapped over its checked underlying, since its type arguments
+ * have no erased spelling here; an own `T` re-wraps at `Any?`, which every `T` call site infers.
+ */
+internal fun boxedValueClassRead(
+  read: String,
+  valueClass: BridgeType.ValueClass,
+  parameter: String,
+): String {
+  if (valueClass.typeArguments.isEmpty()) return "($read as ${valueClass.qualifiedName}?)"
+  val star: String = valueClass.typeArguments.joinToString(", ", "<", ">") { "*" }
+  val underlying: String = underlyingElementCast(
+    "$parameter.${valueClass.underlyingPropertyName}", valueClass.underlying,
+  )
+  return "($read as ${valueClass.qualifiedName}$star?)?.let { $parameter -> " +
+      "${valueClass.qualifiedName}($underlying) }"
+}
+
+/** A value class underlying read out of a box as [expression]: an own `T` takes ADR-212's bound
+ *  cast, anything else the checked cast to its element spelling. */
+private fun underlyingElementCast(expression: String, underlying: BridgeType): String {
+  val parameter: BridgeType.TypeParameter? =
+    underlying.unwrapNullable() as? BridgeType.TypeParameter
+  if (parameter != null) {
+    val nullable: Boolean = underlying is BridgeType.Nullable
+    return typeParameterElementCast(expression, parameter, nullable)
+  }
+  return "$expression as ${underlyingElementTypeName(underlying)}"
+}
+
 /** A value class underlying's cast target in a collection box: a nullable underlying
  *  (`Nick(val name: String?)`) casts to the nullable spelling of its own type. */
 private fun underlyingElementTypeName(underlying: BridgeType): String =
@@ -724,7 +773,7 @@ internal fun componentLowering(
     is BridgeType.Unsupported,
     is BridgeType.RawCollection,
     is BridgeType.TypeParameter,
-      -> "${type.qualifiedName}($name as ${underlyingElementTypeName(underlying)})"
+      -> "${type.qualifiedName}(${underlyingElementCast(name, underlying)})"
   }
 
   // A nullable value class over a nullable underlying (`Nick?` over `String?`) arrived as the
@@ -733,15 +782,7 @@ internal fun componentLowering(
   // checked underlying, since the element's own type arguments have no erased spelling here.
   is BridgeType.Nullable if type.boxedValueClassComponent() != null -> {
     val valueClass: BridgeType.ValueClass = requireNotNull(type.boxedValueClassComponent())
-    if (valueClass.typeArguments.isEmpty()) {
-      "$name as ${valueClass.qualifiedName}?"
-    } else {
-      val star: String = valueClass.typeArguments.joinToString(", ", "<", ">") { "*" }
-      val parameter: String = letParameter(depth)
-      "($name as ${valueClass.qualifiedName}$star?)?.let { $parameter -> " +
-          "${valueClass.qualifiedName}($parameter.${valueClass.underlyingPropertyName} as " +
-          "${underlyingElementTypeName(valueClass.underlying)}) }"
-    }
+    boxedValueClassRead(name, valueClass, letParameter(depth))
   }
 
   // ADR-083: a null component arrived as the null pointer and is already `null` in the `Any?` box,
@@ -786,9 +827,14 @@ internal fun componentLowering(
       is BridgeType.Unsupported,
       is BridgeType.RawCollection,
       is BridgeType.TypeParameter,
-        ->
+        -> if (underlying.unwrapNullable() is BridgeType.TypeParameter) {
+        // ADR-226: a `T : Any` own `T` rides the null pointer in-band; the box holds the `T`.
+        "($name)?.let { ${letParameter(depth)} -> " +
+            "${inner.qualifiedName}(${underlyingElementCast(letParameter(depth), underlying)}) }"
+      } else {
         "($name as ${elementKotlinTypeName(underlying)}?)?.let { ${letParameter(depth)} -> " +
             "${inner.qualifiedName}(${letParameter(depth)}) }"
+      }
     }
 
     // ADR-201 amendment: a null element arrived as the null text and stays null.
@@ -1822,6 +1868,8 @@ private fun invocationExpression(
   // mentions (`fun <T> make(): T?`) resolves; `_` lets Kotlin infer a multi-bound one.
   val typeArguments: List<String> =
     plan.publicSignature.typeParameters.map { parameter -> parameter.kotlinTypeArgument }
+      // ADR-226: a star projection's synthesized parameter is C#-only.
+      .filter { argument -> argument.isNotEmpty() }
   val functionName: String =
     if (typeArguments.isEmpty()) declaredName
     else declaredName + typeArguments.joinToString(", ", "<", ">")
@@ -1940,7 +1988,8 @@ private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): Typ
   is BridgeType.Callback -> cOpaquePointer
   // ADR-077 sub-item 1: a value class crosses as its underlying wire value, so the export's
   // parameter is typed as the underlying (String today) and `loweredArgument` re-wraps it.
-  is BridgeType.ValueClass -> kotlinInputType(type.underlying, wireType)
+  // ADR-226: a nullable primitive underlying's value slot is the bare primitive.
+  is BridgeType.ValueClass -> kotlinInputType(type.underlying.unwrapNullablePrimitive(), wireType)
   is BridgeType.Nullable -> when (val inner = type.type) {
     BridgeType.String, BridgeType.Uuid, is BridgeType.Throwable ->
       kotlinType("String").copy(nullable = true)
@@ -2204,8 +2253,12 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
 
     // ADR-077: re-wrap the underlying wire value (re-running the value class's own `init`), with
     // the underlying's own lowering composed inside the constructor call (sub-item 4).
-    is BridgeType.ValueClass ->
+    // ADR-226: a nullable primitive underlying arrives as the has-value pair.
+    is BridgeType.ValueClass -> if (type.underlying.isNullablePrimitive()) {
+      "${type.qualifiedName}(if (${parameter.hasValueSlot}) ${parameter.ref} else null)"
+    } else {
       "${type.qualifiedName}(${valueClassUnderlyingLowering(parameter.ref, type.underlying)})"
+    }
 
     is BridgeType.Nullable -> when (val inner: BridgeType = type.type) {
       BridgeType.String -> parameter.ref
@@ -2672,3 +2725,11 @@ private fun BridgeType.Interface.handleRead(ref: String, nullable: Boolean): Str
 internal fun boxedCallbackResultRead(box: String, invocation: String): String =
   "$invocation.let { $box -> try { nugetUncheckedCast($box?.asStableRef<Any>()?.get()) } " +
     "finally { if ($box != null) NugetHandles.release($box) } }"
+
+/** ADR-226: the has-value `valueOut` slot this call writes, if it has one. */
+private fun ForwardNativeCall.valueOutName(): String? =
+  parameters.firstOrNull { parameter -> parameter.role == ForwardAbiRole.VALUE_OUT }?.name
+
+/** ADR-226: `Int?` read as `Int` for the value slot of a has-value pair. */
+private fun BridgeType.unwrapNullablePrimitive(): BridgeType =
+  if (isNullablePrimitive()) (this as BridgeType.Nullable).type else this

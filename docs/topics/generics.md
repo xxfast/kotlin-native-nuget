@@ -578,7 +578,7 @@ Assert.Equal("4 x2", Descriptions.Tally(4, 2));
 // public static string Tally<T>(T x, int n) where T : notnull
 ```
 
-A top-level `fun <T>` with a `suspend` lambda or `Flow` in the signature (a `Flow` return has no top-level route), an extension receiver,
+A top-level `fun <T>` with a `suspend` lambda or `Flow` in the signature (a `Flow` return has no top-level route)
 or a `reified` `T` whose bound C# cannot spell is not generated, and the warning names
 which one. A `suspend fun <T>` binds as a `Task<T>`; see
 [A `suspend fun` with its own type parameter](coroutines-and-flow.md#suspend-fun-generic).
@@ -650,7 +650,7 @@ What differs from a generic class:
   prefix (`THold`).
 
 These stay a named skip, with the specific reason in the warning: a generic method on an interface,
-an `enum class`, a value class, or an extension function; a `reified` type parameter on a member (a top-level `fun <T>` binds one); a bound that
+an `enum class`, or a value class (a top-level extension `fun <T> X.f()` binds); a `reified` type parameter on a member (a top-level `fun <T>` binds one); a bound that
 is itself a type parameter; a `T` nested in a type that is not an exported generic class or
 [generic value class](value-classes.md#a-generic-value-class) (`List`, `Set`, `Map` and `Result` aside); a multi-bound `T` that no parameter mentions; and a
 `T` that shadows a type parameter in scope (the owner's, or one an `inner` class captures). A
@@ -820,8 +820,7 @@ using Basket<short> inner = nested.Item;            // no prior use of Basket<sh
 
 What still skips, named:
 
-- `kotlin.Array<T>`, and a `T` inside a [generic value class](value-classes.md#a-generic-value-class)
-  under `?` or in a `List`, `Set` or `Map`.
+- `kotlin.Array<T>`.
 - A nested generic class argument the wire cannot read, such as `Box<List<T>>`.
 
 ## Type aliases
