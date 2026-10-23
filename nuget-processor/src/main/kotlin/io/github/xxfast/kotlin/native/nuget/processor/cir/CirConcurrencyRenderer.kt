@@ -576,7 +576,8 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
   // ADR-114: the native call is synchronous even though the await is not, so the wire container is
   // built immediately before it and disposed in a `finally` immediately after it returns. The
   // Kotlin export copies out of it before `launch`, so the coroutine never sees the handle.
-  val scoped: List<String>? = method.parameters
+  // ADR-225: a value-class receiver box is minted and released with the parameters' boxes.
+  val scoped: List<String>? = (listOfNotNull(method.asyncReceiver) + method.parameters)
     .map { parameter ->
       val held: String? = parameter.flowHeldKey?.takeIf { key -> key in heldKeys }
       if (held == null) parameter

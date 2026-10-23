@@ -259,6 +259,8 @@ internal fun CirValueClass.ordinaryNativeImports(): List<CirDllImport> = buildLi
     add(pair.boxImport)
     add(pair.unboxImport)
   }
+  // ADR-225: the ordinary-route members, each carrying its own plan-derived extern.
+  routeMembers.forEach { member -> add(member.import) }
 }
 
 internal fun CirValueClass.constructorNativeImport(ctor: CirValueClassConstructor): CirDllImport =

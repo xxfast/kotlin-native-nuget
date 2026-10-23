@@ -11,6 +11,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.freshName
 import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticSuspendReceiver
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.nullableRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpAsyncMemberName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
@@ -174,7 +175,8 @@ internal fun translateSuspendFunction(
   val slotNames: ForwardLegacyNames =
     legacyCsharpNames(func.parameters, classifier, callableCatalog.legacyDefaultFlags(func))
   val nativeParams: List<CirParameter> =
-    listOfNotNull(structReceiver).nativeImportParameters() + params.nativeImportParameters() +
+    listOfNotNull(structReceiver?.copy(name = "receiver")).nativeImportParameters() +
+      params.nativeImportParameters() +
       listOf(
         CirParameter(slotNames.callback, callbackType),
         CirParameter(slotNames.userData, "IntPtr"),
@@ -326,6 +328,20 @@ internal fun ForwardStaticSuspendReceiver.cirReceiverParameter(name: String): Ci
       isReferenceType = false,
       nativeArgumentExpression = "(int)$name",
     )
+
+    // ADR-225: the ADR-214 boxed `T`, minted before the extern and released after it returns.
+    is ForwardStaticSuspendReceiver.Box -> {
+      val csharp: String = if (nullable) type.nullableRead() else type.name
+      CirParameter(
+        name,
+        type = csharp,
+        nativeType = "IntPtr",
+        isReferenceType = false,
+        collectionCreate = "NugetMarshal.Wrap<$csharp>($name!, out bool ${name}Owned)",
+        collectionHandle = "${name}Box",
+        boxOwnedLocal = "${name}Owned",
+      )
+    }
   }
 
 /**

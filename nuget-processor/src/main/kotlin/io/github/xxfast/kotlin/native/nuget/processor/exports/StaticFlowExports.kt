@@ -21,6 +21,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticSuspe
 import io.github.xxfast.kotlin.native.nuget.processor.forward.importIfDefaultPackage
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinPackageReference
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyHandleStatement
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardBoundedRead
 
 /**
  * ADR-230: how a static flow member is reached. [stem] is the planner's export stem; [qualifier]
@@ -59,13 +60,19 @@ internal fun ForwardStaticFlowCall.slots(
         names.scopeHandle),
   )
   val read: String = when (val receiver = receiver) {
-    is ForwardStaticSuspendReceiver.Handle -> names.obj
+    is ForwardStaticSuspendReceiver.Handle, is ForwardStaticSuspendReceiver.Box -> names.obj
     is ForwardStaticSuspendReceiver.Enum -> "${receiver.kotlinType}.entries[$slot]"
     is ForwardStaticSuspendReceiver.Scalar, null -> slot
   }
   val prelude: String = when (val receiver = receiver) {
     is ForwardStaticSuspendReceiver.Handle ->
       legacyHandleStatement(slot, names.obj, receiver.type, receiver.nullable) + "\n"
+    // ADR-225: a generic value class own `T` box, read through its bound checks first.
+    is ForwardStaticSuspendReceiver.Box -> {
+      val bounds: List<String> = listOfNotNull(receiver.type.boundQualifiedName) +
+        receiver.type.additionalBounds
+      "val ${names.obj} = ${forwardBoundedRead(slot, bounds, receiver.nullable)}\n"
+    }
     is ForwardStaticSuspendReceiver.Scalar, is ForwardStaticSuspendReceiver.Enum, null -> ""
   }
   val parameter: ParameterSpec? = when (val receiver = receiver) {
@@ -74,6 +81,8 @@ internal fun ForwardStaticFlowCall.slots(
     is ForwardStaticSuspendReceiver.Scalar ->
       ParameterSpec.builder(slot, ClassName.bestGuess(receiver.kotlinType)).build()
     is ForwardStaticSuspendReceiver.Enum -> ParameterSpec.builder(slot, INT).build()
+    is ForwardStaticSuspendReceiver.Box ->
+      ParameterSpec.builder(slot, cOpaquePointer.copy(nullable = receiver.nullable)).build()
     null -> null
   }
   return ForwardStaticFlowSlots(

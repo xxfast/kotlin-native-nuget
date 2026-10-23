@@ -17,6 +17,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirProperty
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirTypeParameter
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirValueClassBoxing
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirValueClassConstructor
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirValueClassRouteKind
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirValueClassRouteMember
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirVisibility
 import io.github.xxfast.kotlin.native.nuget.processor.cir.KOTLIN_HANDLE
 
@@ -194,6 +196,85 @@ internal object ForwardCirPlanProjection {
       isSyncErrorCheckEnabled = plan.errorSlot != null,
       nativeParameters = nativeParams,
       doc = plan.publicSignature.cirDoc(),
+    )
+  }
+
+  /**
+   * ADR-225: a value-class member on the ordinary route, rendered on the struct. The receiver is
+   * `this`, copied into a local (a struct's `this` cannot be captured, CS1673) and entered into
+   * [resultProjection] as parameter zero, so it shares `callArgument`, the `T` box prelude and its
+   * cleanup with every declared parameter, and the `default(V)` guard of a non-null slot. A
+   * secondary constructor has no receiver: it is a private static helper returning the underlying.
+   */
+  fun valueClassRouteMember(
+    plan: ForwardCallablePlan,
+    libraryName: String,
+  ): CirValueClassRouteMember {
+    require(plan.invocation.origin == ForwardCallableOrigin.VALUE_CLASS_MEMBER) {
+      "Forward CIR value-class route projection received ${plan.invocation.origin}"
+    }
+    val nativeCall: ForwardNativeCall = plan.singleNativeImport()
+    val declared: String = plan.invocation.symbol.substringAfterLast('.')
+    val kind: CirValueClassRouteKind = when {
+      declared.startsWith("<init>") -> CirValueClassRouteKind.CONSTRUCTOR
+      plan.invocation.target?.endsWith("#property") == true -> CirValueClassRouteKind.PROPERTY
+      else -> CirValueClassRouteKind.METHOD
+    }
+    val suffix: String = declared.removePrefix("<init>")
+    val externName: String = when (kind) {
+      CirValueClassRouteKind.CONSTRUCTOR -> "Native_Create$suffix"
+      CirValueClassRouteKind.PROPERTY -> "Native_Get${plan.publicSignature.name}"
+      CirValueClassRouteKind.METHOD ->
+        "Native_${declared.asCSymbol().replaceFirstChar { it.uppercase() }}"
+    }
+    val self: List<ForwardPublicParameter> = plan.publicSignature.receiver
+      ?.let { receiver -> listOf(ForwardPublicParameter(VALUE_CLASS_SELF, receiver.type)) }
+      .orEmpty()
+    val selfLocal: String =
+      if (self.isEmpty()) "" else "\n            var $VALUE_CLASS_SELF = this;"
+    val result: CirResultProjection = plan.resultProjection(
+      nativeName = externName,
+      parameters = self + plan.publicSignature.parameters,
+      forceCustomBody = true,
+    )
+    val method = CirMethod(
+      name = if (kind == CirValueClassRouteKind.CONSTRUCTOR) "CreateChecked$suffix"
+      else plan.publicSignature.name,
+      returnType = result.returnType,
+      nativeReturnType = result.nativeReturnType,
+      nativeName = externName,
+      parameters = plan.publicParameters()
+        .map { parameter -> parameter.copy(nativeType = parameter.type) },
+      body = selfLocal + result.body,
+      isStatic = kind == CirValueClassRouteKind.CONSTRUCTOR,
+      visibility = if (kind == CirValueClassRouteKind.CONSTRUCTOR) CirVisibility.PRIVATE
+      else CirVisibility.PUBLIC,
+      typeParameters = plan.cirTypeParameters(isOverride = false),
+      isSyncErrorCheckEnabled = false,
+      hasCustomBody = true,
+      doc = if (kind == CirValueClassRouteKind.CONSTRUCTOR) null else plan.publicSignature.cirDoc(),
+    )
+    val tryOverload: CirMethod? = plan.resultTry(method) { names ->
+      val twin: CirResultProjection = plan.resultProjection(
+        externName, self + plan.publicSignature.parameters, forceCustomBody = true,
+        tryNames = names,
+      )
+      twin.copy(body = selfLocal + twin.body)
+    }
+    return CirValueClassRouteMember(
+      import = CirDllImport(
+        libraryName = libraryName,
+        entryPoint = nativeCall.exportName,
+        returnType = result.nativeReturnType,
+        name = externName,
+        parameters = plan.nativeInCirParameters(nativeCall.parameters) +
+            plan.nativeOutCirParameters(nativeCall),
+        visibility = CirVisibility.PRIVATE,
+        hasSyncErrorOut = plan.errorSlot != null,
+      ),
+      method = method.copy(tryOverload = tryOverload),
+      kind = kind,
+      doc = if (kind == CirValueClassRouteKind.CONSTRUCTOR) plan.publicSignature.cirDoc() else null,
     )
   }
 

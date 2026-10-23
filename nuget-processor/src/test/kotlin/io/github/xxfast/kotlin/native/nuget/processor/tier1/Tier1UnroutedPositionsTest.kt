@@ -679,8 +679,7 @@ class Tier1UnroutedPositionsTest {
     // (a) on a generic owner: an override of an unexported interface's `suspend` member.
     structural("tier1.residuals.Crate.pace"),
     // (b) value-class members no route binds. A lambda parameter is one too: the ADR-160 plan
-    // binds it on ordinary owners, not on a value class.
-    structural("tier1.residuals.Tag.tagPick"),
+    // binds it on ordinary owners, not on a value class. `fun <T> tagPick` binds since ADR-225.
     input("tier1.residuals.Tag.tagFeed"),
     input("tier1.residuals.Tag.tagOn"),
     // (c) class companion members (already named before this cell existed; coverage only). Its
@@ -723,7 +722,8 @@ class Tier1UnroutedPositionsTest {
     val declarations: List<String> = result.csharpDeclarations()
 
     listOf(
-      "OkShelf(", "OkRack(", "OkLedge(", "OkHidden(", "OkBase(", "OkCrate(", "OkTag(", "OkDen(",
+      "OkShelf(", "OkRack(", "OkLedge(", "OkHidden(", "OkBase(", "OkCrate(", "OkTag(",
+      "TagPick<T>(", "OkDen(",
       "OkDenCompanion(", "Greet(", "OkJob(",
       // ADR-229: a value class's suspend member binds on the static suspend route.
       "public Task<int> TagSettleAsync(",
@@ -769,7 +769,7 @@ class Tier1UnroutedPositionsTest {
     val declarations: List<String> = result.csharpDeclarations()
 
     listOf(
-      "Tally", "TagPick", "TagFeed",
+      "Tally", "TagFeed",
       "TagOn", "Summon", "TagBlank", "Hire",
       "HireCook",
     ).forEach { member ->

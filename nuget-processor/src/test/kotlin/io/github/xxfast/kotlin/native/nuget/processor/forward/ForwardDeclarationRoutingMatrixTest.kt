@@ -157,6 +157,9 @@ class ForwardDeclarationRoutingMatrixTest {
       // ADR-171: the box/unbox pair is not a declared callable; its own cells cover it.
       ForwardCallableOrigin.VALUE_CLASS_BOX -> error("VALUE_CLASS_BOX is not in the routing matrix")
       ForwardCallableOrigin.ENUM_BOX -> error("ENUM_BOX is not in the routing matrix")
+      // ADR-225: planned only off a value-class declaration; its Tier 1 cell covers it.
+      ForwardCallableOrigin.VALUE_CLASS_MEMBER ->
+        error("VALUE_CLASS_MEMBER is not in the routing matrix")
     }
     val receiverParams: List<ForwardAbiParameter> = parts.receiverParams
     val invocation: ForwardInvocation = parts.invocation
@@ -276,6 +279,9 @@ class ForwardDeclarationRoutingMatrixTest {
 
       ForwardCallableOrigin.VALUE_CLASS_BOX -> error("VALUE_CLASS_BOX is not in the routing matrix")
       ForwardCallableOrigin.ENUM_BOX -> error("ENUM_BOX is not in the routing matrix")
+      // ADR-225: planned only off a value-class declaration; its Tier 1 cell covers it.
+      ForwardCallableOrigin.VALUE_CLASS_MEMBER ->
+        error("VALUE_CLASS_MEMBER is not in the routing matrix")
     }
   }
 
