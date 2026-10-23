@@ -36,6 +36,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeC
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeContext
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
+import com.google.devtools.ksp.symbol.KSTypeParameter
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
@@ -830,8 +831,13 @@ internal fun translate(
   // which is both the class-name stem and -- spelled identically by `ForwardPropertyPlanner` --
   // the middle of an extension property's plan symbol. A top-level receiver keys on its own simple
   // name exactly as before.
-  fun KSDeclaration.extensionReceiverKey(): String =
-    (this as? KSClassDeclaration)?.nestedCsName() ?: simpleName.asString()
+  // ADR-238: a bare `T` receiver keys on its first bound, or on `Object` when unbounded.
+  fun KSDeclaration.extensionReceiverKey(): String {
+    if (this is KSTypeParameter) {
+      return extensionHomeDeclaration()?.extensionReceiverKey() ?: OBJECT_EXTENSIONS_KEY
+    }
+    return (this as? KSClassDeclaration)?.nestedCsName() ?: simpleName.asString()
+  }
 
   // ADR-006 amendment: every C# method the `{Receiver}Extensions` partial class gains, per class,
   // with the Kotlin declaration behind it, so an enum member property and an extension of the
@@ -1426,12 +1432,32 @@ internal fun extensionNamespace(
   declaring: KSDeclaration,
   exportedTypes: Set<String>,
   namespaceOf: (String) -> String,
-): String =
-  if ((receiver.qualifiedName?.asString() ?: "") in exportedTypes) {
-    namespaceOf(receiver.packageName.asString())
+): String {
+  // ADR-238: a bare `T` receiver homes on its first bound's class, an unbounded one on the
+  // declaring package's `ObjectExtensions`.
+  val home: KSDeclaration = receiver.extensionHomeDeclaration() ?: declaring
+  return if ((home.qualifiedName?.asString() ?: "") in exportedTypes) {
+    namespaceOf(home.packageName.asString())
   } else {
     namespaceOf(declaring.packageName.asString())
   }
+}
+
+/** ADR-238: the `{Receiver}Extensions` key of an unbounded bare `T` receiver. */
+internal const val OBJECT_EXTENSIONS_KEY: String = "Object"
+
+/**
+ * ADR-238: the declaration a receiver's `{Receiver}Extensions` class is named and homed after: the
+ * receiver itself, or for a bare type parameter its first declared bound (the one ADR-198 spells
+ * first), recursively; null for an unbounded one (`Any` or `Any?`), which homes on `ObjectExtensions`.
+ */
+internal fun KSDeclaration.extensionHomeDeclaration(): KSDeclaration? {
+  if (this !is KSTypeParameter) return this
+  val bound: KSDeclaration =
+    bounds.firstOrNull()?.resolve()?.expandAliases()?.declaration ?: return null
+  if (bound.qualifiedName?.asString() == "kotlin.Any") return null
+  return bound.extensionHomeDeclaration()
+}
 
 private fun List<CirNamespace>.withoutEmptyStaticClasses(): List<CirNamespace> = this
   .map { namespace ->

@@ -8,6 +8,7 @@ using Playroom = TestLibrary.Playroom;
 using Stamps = TestLibrary.Stamps;
 using Treatprep = TestLibrary.Treatprep;
 using Trickle = TestLibrary.Trickle;
+using Bindle = TestLibrary.Bindle;
 
 namespace LeakTests;
 
@@ -1272,5 +1273,101 @@ public class CollectabilityTests
         Assert.True(
             MarkerCollectedWithin(leash, TimeSpan.FromSeconds(5)),
             "the CancellationTokenSource passed to PurrClock.Forever stayed reachable after it cancelled the enumeration");
+    }
+
+    // ADR-238: a suspend extension on an interface receiver. Mylo is a C#-side dozer, so the
+    // receiver crosses as a bridge Kotlin drops after the call; once the task completes nothing
+    // may keep him or the token's source reachable. Mirror of the RockAsync row.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (Task<string> Greeting, WeakReference Leash, WeakReference Dozer) StartDozerGreeting()
+    {
+        var leash = new CancellationTokenSource();
+        var mylo = new BindleCrossings.MyloDozer();
+        Task<string> greeting = Bindle.DozerExtensions.GreetAsync(mylo, leash.Token);
+        return (greeting, new WeakReference(leash), new WeakReference(mylo));
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<(WeakReference Leash, WeakReference Dozer)> GreetDozerAndDrop()
+    {
+        (Task<string> greeting, WeakReference leash, WeakReference dozer) = StartDozerGreeting();
+
+        Assert.Equal("hi Mylo", await greeting);
+        await Task.Yield();
+        return (leash, dozer);
+    }
+
+    [Fact]
+    public async Task SuspendInterfaceReceiver_IsCollectedOnceTheTaskCompletes()
+    {
+        (WeakReference leash, WeakReference dozer) = await GreetDozerAndDrop();
+
+        Assert.True(
+            MarkerCollectedWithin(leash, TimeSpan.FromSeconds(5)),
+            "the CancellationTokenSource passed to GreetAsync stayed reachable after the call completed");
+        Assert.True(
+            MarkerCollectedWithin(dozer, TimeSpan.FromSeconds(5)),
+            "the C#-side IDozer receiver of GreetAsync stayed reachable after the call completed");
+    }
+
+    // ADR-238: a suspend extension on a bound C# interface receiver. The goat crosses as a
+    // transfer GCHandle Kotlin's cleaner owns, so it is collectable once Kotlin's GC runs.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (Task<int> Feeding, WeakReference Goat) StartFeeding()
+    {
+        var nibbles = new BindleCrossings.Goat();
+        Task<int> feeding = Bindle.IFeedableExtensions.BowlsLaterAsync(nibbles);
+        return (feeding, new WeakReference(nibbles));
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference> FeedAndDrop()
+    {
+        (Task<int> feeding, WeakReference goat) = StartFeeding();
+
+        Assert.Equal(4, await feeding);
+        await Task.Yield();
+        return goat;
+    }
+
+    [Trait("Direction", "Reverse")]
+    [Fact]
+    public async Task SuspendBoundInterfaceReceiver_IsCollectedOnceTheTaskCompletes()
+    {
+        WeakReference goat = await FeedAndDrop();
+
+        Assert.True(
+            MarkerCollectedWithin(goat, TimeSpan.FromSeconds(5)),
+            "the C#-side IFeedable receiver of BowlsLaterAsync stayed reachable after the call completed: its transfer GCHandle was never freed");
+    }
+
+    // ADR-238: a suspend extension on a collection receiver. The C#-built list is copied into a
+    // Kotlin container in the prelude, so the C# list must not be pinned by the finished call.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (Task<int> Totalling, WeakReference List) StartTotalling()
+    {
+        var treats = new List<int> { 1, 2 };
+        Task<int> totalling = Bindle.ListExtensions.TotalAsync(treats);
+        return (totalling, new WeakReference(treats));
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference> TotalAndDrop()
+    {
+        (Task<int> totalling, WeakReference list) = StartTotalling();
+
+        Assert.Equal(3, await totalling);
+        await Task.Yield();
+        return list;
+    }
+
+    [Fact]
+    public async Task SuspendCollectionReceiver_IsCollectedOnceTheTaskCompletes()
+    {
+        WeakReference list = await TotalAndDrop();
+
+        Assert.True(
+            MarkerCollectedWithin(list, TimeSpan.FromSeconds(5)),
+            "the List<int> receiver of TotalAsync stayed reachable after the call completed");
     }
 }

@@ -978,6 +978,13 @@ internal data class ForwardInvocation(
    * the erased arguments for a secondary constructor no parameter witnesses (`pkg.Sticker<Any?>`).
    */
   val valueClassConstruction: String? = null,
+  /**
+   * ADR-238: a [ForwardCallableOrigin.CLASS] member declared with an extension receiver
+   * (`class Groomhand { fun Loafer.brush() }`). The receiver is the plan's first public parameter
+   * (`hand.Brush(loafer, 3)`, Kotlin/JVM's own lowering), and Kotlin calls it in the owner's scope:
+   * `owner.run { receiver.brush(strokes) }`.
+   */
+  val memberExtension: Boolean = false,
 )
 
 /**

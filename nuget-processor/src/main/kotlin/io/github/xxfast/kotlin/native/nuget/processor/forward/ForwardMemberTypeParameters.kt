@@ -214,8 +214,8 @@ internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
     }
   }
 
-  val parameterTypes: List<KSType> =
-    parameters.map { parameter -> parameter.type.resolve().expandAliases() }
+  // ADR-238: an extension receiver is an input, checked and counted as a witness like a parameter.
+  val parameterTypes: List<KSType> = forwardInputTypes()
   val returned: KSType? = returnType?.resolve()?.expandAliases()
   parameterTypes.forEach { type ->
     if (type.mentionsOwn() && !type.carriesOwn() && !type.isOwnInsideGenericValueClass() &&
@@ -253,7 +253,7 @@ internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
  */
 private fun KSFunctionDeclaration.needsTypeVariable(parameter: KSTypeParameter): Boolean {
   val name: String = parameter.simpleName.asString()
-  val types: List<KSType> = parameters.map { it.type.resolve().expandAliases() }
+  val types: List<KSType> = forwardInputTypes()
   // ADR-215 lane C: the generated suspend lambda and flow declare their `T` component, and a
   // multi-bound or generic-bound `T` has no closed spelling there, so it takes the type variable.
   val bounds: List<String> = parameter.forwardBoundSpellings()
@@ -263,6 +263,11 @@ private fun KSFunctionDeclaration.needsTypeVariable(parameter: KSTypeParameter):
   return types.any { type -> type.mentionsTypeParameter(name) } &&
       types.none { type -> type.witnessesTypeParameter(name) }
 }
+
+/** ADR-238: the extension receiver, if any, then the declared parameters, alias-expanded. */
+private fun KSFunctionDeclaration.forwardInputTypes(): List<KSType> =
+  listOfNotNull(extensionReceiver?.resolve()?.expandAliases()) +
+    parameters.map { parameter -> parameter.type.resolve().expandAliases() }
 
 /** ADR-215 lane C: whether `T` [name] sits inside a suspend lambda or a `Flow` in this type. */
 private fun KSType.carriesInsideAsync(name: String): Boolean {

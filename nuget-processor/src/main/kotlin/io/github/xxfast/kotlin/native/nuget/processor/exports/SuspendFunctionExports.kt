@@ -22,6 +22,10 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.simpleKotlinName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.unwrapNullable
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyInvocation
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyArgument
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyParameterShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.suspendAwaitedType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.suspendResultUnwrap
 import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.ParameterSpec
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyWireLowering
@@ -145,7 +149,13 @@ internal fun FileSpec.Builder.addStaticSuspendExports(
       val alias: String =
         forwardExtensionImportAlias(func.packageName.asString(), func.simpleName.asString())
       addAliasedImport(MemberName(func.packageName.asString(), func.simpleName.asString()), alias)
-      ({ read -> "$read.$alias" })
+      // ADR-238: an enum receiver arrives as its ordinal (ADR-080), read back as the entry.
+      val enum: ForwardStaticSuspendReceiver.Enum? = owner.receiver as? ForwardStaticSuspendReceiver.Enum
+      if (enum != null) {
+        ({ read -> "${enum.type.qualifiedName}.entries[$read].$alias" })
+      } else {
+        ({ read -> "$read.$alias" })
+      }
     }
     is ForwardStaticSuspendOwner.EnumMember -> {
       importIfDefaultPackage(owner.enum)
@@ -191,7 +201,8 @@ private fun FileSpec.Builder.addStaticSuspendExport(
   classifier: ForwardBridgeTypeClassifier,
   callableCatalog: ForwardCallablePlanCatalog,
 ) {
-  val returnType = func.returnType?.resolve()?.expandAliases()
+  // ADR-238: a `Result<T>` result awaits its `T`.
+  val returnType = func.suspendAwaitedType()
   val qualifiedReturn: String = returnType?.declaration?.qualifiedName?.asString() ?: "kotlin.Unit"
   val isUnit: Boolean =
     qualifiedReturn == "kotlin.Unit" && returnType?.declaration !is KSTypeParameter
@@ -204,11 +215,22 @@ private fun FileSpec.Builder.addStaticSuspendExport(
   // parameters, exactly as `translateSuspendFunction` reads them for the C# half.
   val paramShapes: List<ForwardLegacyParameterShape> =
     classifier.legacyParameterShapes(func.parameters, callableCatalog.legacyDefaultFlags(func))
-  val names: ForwardLegacyNames = legacyKotlinNames(func.parameters, paramShapes)
+  // ADR-238: a receiver on the parameter path is the leading slot of one shared name set.
+  val shaped: ForwardStaticSuspendReceiver.Parameter? =
+    receiver as? ForwardStaticSuspendReceiver.Parameter
+  val declaredNames: List<String> = func.legacyParameterNames()
+  val leading: String? = shaped?.let { freshName("receiver", declaredNames.toSet()) }
+  val slotNames: List<String> = listOfNotNull(leading) + declaredNames
+  val names: ForwardLegacyNames = if (shaped == null) {
+    legacyKotlinNames(func.parameters, paramShapes)
+  } else {
+    ForwardLegacyNames(slotNames, listOf(shaped.shape) + paramShapes)
+  }
+  val offset: Int = if (shaped == null) 0 else 1
   // ADR-229: the receiver slot, named apart from every parameter and generated slot.
-  val receiverSlot: String = freshName(
+  val receiverSlot: String = leading ?: freshName(
     "receiver",
-    func.legacyParameterNames().toSet() +
+    declaredNames.toSet() +
       setOf(names.callback, names.userData, names.obj, names.scope, names.scopeHandle),
   )
   // A handle receiver is read before the launch, as a borrowed handle parameter is (ADR-122).
@@ -226,11 +248,15 @@ private fun FileSpec.Builder.addStaticSuspendExport(
     }
     // ADR-240: the receiver's wire read into the local; a value class re-wraps at the call.
     is ForwardStaticSuspendReceiver.Wire -> receiver.wirePrelude(receiverSlot, names.obj) + "\n"
+    // ADR-238: read by the shared prelude below, as parameter zero.
+    is ForwardStaticSuspendReceiver.Parameter,
     is ForwardStaticSuspendReceiver.Scalar, is ForwardStaticSuspendReceiver.Enum, null -> ""
   }
   val receiverRead: String = when (receiver) {
     is ForwardStaticSuspendReceiver.Handle, is ForwardStaticSuspendReceiver.Box -> names.obj
     is ForwardStaticSuspendReceiver.Wire -> receiver.shape.view?.kotlinWrap(names.obj) ?: names.obj
+    is ForwardStaticSuspendReceiver.Parameter ->
+      names.legacyArgument(0, receiverSlot.kotlinIdentifier())
     is ForwardStaticSuspendReceiver.Scalar, is ForwardStaticSuspendReceiver.Enum, null ->
       receiverSlot
   }
@@ -249,9 +275,10 @@ private fun FileSpec.Builder.addStaticSuspendExport(
   }
   val call: String = names.legacyInvocation(
     callee(receiverRead) + func.legacyTypeArguments(),
-    func.legacyParameterNames(),
-  )
-  val paramPrelude: String = receiverPrelude + names.legacyPrelude(func.legacyParameterNames())
+    slotNames,
+    from = offset,
+  ) + func.suspendResultUnwrap()
+  val paramPrelude: String = receiverPrelude + names.legacyPrelude(slotNames)
   val boxed: String = legacyBoxedResult(returnShape)
 
   val body: String = buildSuspendFunctionBody(
@@ -273,15 +300,18 @@ private fun FileSpec.Builder.addStaticSuspendExport(
       builder.addParameters(receiver.wireParameters(receiverSlot))
     is ForwardStaticSuspendReceiver.Box ->
       builder.addParameter(receiverSlot, cOpaquePointer.copy(nullable = receiver.nullable))
+    is ForwardStaticSuspendReceiver.Parameter -> builder.addLegacySlots(
+      receiverSlot, 0, receiver.shape, names,
+    ) { receiver.type.toBridgeTypeName(nullable = false) }
     null -> Unit
   }
   builder
-    .addLegacySuspendParameters(func, paramShapes, names)
+    .addLegacySuspendParameters(func, paramShapes, names, offset)
     .addParameter(names.callback, cOpaquePointer)
     .addParameter(names.userData, cOpaquePointer)
     .returns(cOpaquePointer)
     .addCode(body)
-  if (paramShapes.legacyCastsGenericBound()) {
+  if ((listOfNotNull(shaped?.shape) + paramShapes).legacyCastsGenericBound()) {
     builder.addAnnotation(forwardUncheckedCastSuppression)
   }
 
@@ -335,7 +365,8 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
     // ADR-118: the planner's overload number, so two `suspend` overloads take two C symbols. The
     // Kotlin call site below stays bare -- the suffix names the export, not the method.
     val cname: String = toCName(methodName) + callableCatalog.overloadSuffix(method)
-    val returnType = method.returnType?.resolve()?.expandAliases()
+    // ADR-238: a `Result<T>` result awaits its `T`.
+    val returnType = method.suspendAwaitedType()
     val qualifiedReturn: String = returnType?.declaration?.qualifiedName?.asString() ?: "kotlin.Unit"
     val isUnit: Boolean =
     qualifiedReturn == "kotlin.Unit" && returnType?.declaration !is KSTypeParameter
@@ -346,18 +377,35 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
     val paramShapes: List<ForwardLegacyParameterShape> = classifier.legacyParameterShapes(
       method.parameters, callableCatalog.legacyDefaultFlags(method),
     )
-    val names: ForwardLegacyNames = legacyKotlinNames(method.parameters, paramShapes)
+    // ADR-238: a member extension's receiver is the leading slot of one shared name set.
+    val extensionType: KSType? = method.extensionReceiver?.resolve()?.expandAliases()
+    val extensionShape: ForwardLegacyParameterShape? =
+      extensionType?.let { type -> classifier.legacyParameterShape(type) }
+    val declaredNames: List<String> = method.legacyParameterNames()
+    val extensionSlot: String? =
+      extensionShape?.let { freshName("receiver", declaredNames.toSet() + "handle") }
+    val slotNames: List<String> = listOfNotNull(extensionSlot) + declaredNames
+    val offset: Int = if (extensionShape == null) 0 else 1
+    val names: ForwardLegacyNames = if (extensionShape == null) {
+      legacyKotlinNames(method.parameters, paramShapes)
+    } else {
+      ForwardLegacyNames(slotNames, listOf(extensionShape) + paramShapes)
+    }
     // ADR-219: the Flow route's trampoline (ADR-215): a trampolined own `T`, or a multi-bound
     // owner `T` the star-projected receiver cannot be called with.
     val trampoline: ForwardFlowTrampoline? =
       flowTrampoline(method, owner = cls, paramShapes)
     names.trampolineVariables = trampoline?.ownerVariables.orEmpty()
-    val call: String =
-      names.legacyInvocation(
-        "${names.obj}.${methodName.kotlinIdentifier()}${method.legacyTypeArguments()}",
-        method.legacyParameterNames(),
-      )
-    val paramPrelude: String = names.legacyPrelude(method.legacyParameterNames())
+    val member: String = "${methodName.kotlinIdentifier()}${method.legacyTypeArguments()}"
+    // ADR-238: a member extension is called on its receiver inside the owner's scope.
+    val invocation: String = if (extensionSlot == null) {
+      names.legacyInvocation("${names.obj}.$member", slotNames)
+    } else {
+      val extension: String = names.legacyArgument(0, extensionSlot.kotlinIdentifier())
+      "${names.obj}.run { ${names.legacyInvocation("$extension.$member", slotNames, from = 1)} }"
+    }
+    val call: String = invocation + method.suspendResultUnwrap()
+    val paramPrelude: String = names.legacyPrelude(slotNames)
     val boxed: String = legacyBoxedResult(returnShape)
 
     val body: String = buildSuspendMethodBody(
@@ -369,39 +417,21 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
       .addAnnotation(cNameAnnotation("${prefix}_${cname}_async", ownedBy(method)))
       .addParameter("handle", cOpaquePointer)
       .addParameter(names.scopeHandle, cOpaquePointer)
-    if (paramShapes.legacyCastsGenericBound()) {
+    if ((listOfNotNull(extensionShape) + paramShapes).legacyCastsGenericBound()) {
       builder.addAnnotation(forwardUncheckedCastSuppression)
     }
 
+    if (extensionSlot != null && extensionShape != null && extensionType != null) {
+      builder.addLegacySlots(
+        extensionSlot, 0, extensionShape, names,
+      ) { extensionType.legacyScalarTypeName() }
+    }
+    // ADR-114: a collection crosses as a handle to its boxed wire container.
+    // ADR-122: so does a class/object/sealed parameter, as the borrowed handle C# already holds.
     method.parameters.forEachIndexed { index, param ->
-      val paramName: String = param.name?.asString() ?: "_"
-      // ADR-210: a suspend lambda's flat thunk and key slots, in the planner's order.
-      names.asyncSlots[index]?.let { slots ->
-        slots.declared.forEach { slot -> builder.addParameter(slot, cOpaquePointer) }
-        return@forEachIndexed
-      }
-      // ADR-114: a collection crosses as a handle to its boxed wire container.
-      // ADR-122: so does a class/object/sealed parameter, as the borrowed handle C# already holds.
-      // ADR-240: a type riding its ordinary-route wire.
-      val wire = paramShapes[index] as? ForwardLegacyParameterShape.Wire
-      if (wire != null) {
-        builder.addLegacyWireParameter(paramName, wire, names.hasValueSlots[index])
-        return@forEachIndexed
-      }
-      if (paramShapes[index].isLegacyLowered()) {
-        val nullable: Boolean = paramShapes[index].isLegacyNullableSlot
-        // ADR-164 rule 2: an optional handle's leading `IsSet` slot.
-        names.isSetSlots[index]?.let { isSet -> builder.addParameter(isSet, BOOLEAN) }
-        builder.addParameter(paramName, cOpaquePointer.copy(nullable = nullable))
-        return@forEachIndexed
-      }
-      val resolved: KSType = param.type.resolve().expandAliases()
-      val type: String = resolved.declaration.qualifiedName?.asString()
-        ?: resolved.declaration.simpleName.asString()
-      builder.addLegacyScalarParameter(
-        paramName, paramShapes[index], ClassName.bestGuess(type), names.hasValueSlots[index],
-        names.isSetSlots[index],
-      )
+      builder.addLegacySlots(
+        param.name?.asString() ?: "_", index + offset, paramShapes[index], names,
+      ) { param.type.resolve().expandAliases().legacyScalarTypeName() }
     }
 
     builder
@@ -531,6 +561,10 @@ private fun legacyBoxedResult(shape: ForwardLegacyReturnShape): String = when (s
   else -> "result"
 }
 
+/** The class route's spelling of a passed scalar slot: the bare qualified name. */
+private fun KSType.legacyScalarTypeName(): TypeName =
+  ClassName.bestGuess(declaration.qualifiedName?.asString() ?: declaration.simpleName.asString())
+
 /** ADR-214: a boxed `T` result whose null crosses as the null pointer. */
 private fun ForwardLegacyReturnShape.isNullableBox(): Boolean =
   this is ForwardLegacyReturnShape.Boxed && nullable
@@ -566,35 +600,50 @@ private fun FunSpec.Builder.addLegacySuspendParameters(
   func: KSFunctionDeclaration,
   shapes: List<ForwardLegacyParameterShape>,
   names: ForwardLegacyNames,
+  // ADR-238: how many leading [names] slots (an extension receiver) precede the parameters.
+  offset: Int = 0,
 ): FunSpec.Builder {
   func.parameters.forEachIndexed { index, param ->
-    val name: String = param.name?.asString() ?: "_"
-    // ADR-210: a suspend lambda's flat thunk and key slots, in the planner's order.
-    names.asyncSlots[index]?.let { slots ->
-      slots.declared.forEach { slot -> addParameter(slot, cOpaquePointer) }
-      return@forEachIndexed
-    }
-    // ADR-240: a type riding its ordinary-route wire.
-    val wire = shapes[index] as? ForwardLegacyParameterShape.Wire
-    if (wire != null) {
-      addLegacyWireParameter(name, wire, names.hasValueSlots[index])
-      return@forEachIndexed
-    }
-    if (shapes[index].isLegacyLowered()) {
-      // ADR-164 rule 2: an optional handle's leading `IsSet` slot.
-      names.isSetSlots[index]?.let { isSet -> addParameter(isSet, BOOLEAN) }
-      addParameter(name, cOpaquePointer.copy(nullable = shapes[index].isLegacyNullableSlot))
-      return@forEachIndexed
-    }
-    addLegacyScalarParameter(
-      name,
+    addLegacySlots(
+      param.name?.asString() ?: "_",
+      index + offset,
       shapes[index],
-      param.type.resolve().expandAliases().toBridgeTypeName(nullable = false),
-      names.hasValueSlots[index],
-      names.isSetSlots[index],
-    )
+      names,
+    ) { param.type.resolve().expandAliases().toBridgeTypeName(nullable = false) }
   }
   return this
+}
+
+/**
+ * The ABI slots of legacy-route slot [index] of [names], spelled [name] with shape [shape];
+ * [type] is its non-null Kotlin spelling for a passed scalar. ADR-238: an extension receiver's
+ * slots are a parameter's.
+ */
+internal fun FunSpec.Builder.addLegacySlots(
+  name: String,
+  index: Int,
+  shape: ForwardLegacyParameterShape,
+  names: ForwardLegacyNames,
+  // Lazy: only a passed scalar is spelled, and a lowered `T` has no class name to guess.
+  type: () -> TypeName,
+): FunSpec.Builder {
+  // ADR-210: a suspend lambda's flat thunk and key slots, in the planner's order.
+  names.asyncSlots[index]?.let { slots ->
+    slots.declared.forEach { slot -> addParameter(slot, cOpaquePointer) }
+    return this
+  }
+  // ADR-240: a type riding its ordinary-route wire.
+  if (shape is ForwardLegacyParameterShape.Wire) {
+    return addLegacyWireParameter(name, shape, names.hasValueSlots[index])
+  }
+  if (shape.isLegacyLowered()) {
+    // ADR-164 rule 2: an optional handle's leading `IsSet` slot.
+    names.isSetSlots[index]?.let { isSet -> addParameter(isSet, BOOLEAN) }
+    return addParameter(name, cOpaquePointer.copy(nullable = shape.isLegacyNullableSlot))
+  }
+  return addLegacyScalarParameter(
+    name, shape, type(), names.hasValueSlots[index], names.isSetSlots[index],
+  )
 }
 
 /**
@@ -754,11 +803,10 @@ internal fun FunSpec.Builder.addLegacyWireParameter(
     is BridgeType.Enum -> INT
     BridgeType.String, BridgeType.Uuid -> STRING.copy(nullable = nullable)
     BridgeType.ByteArray, is BridgeType.Interface, is BridgeType.Collection,
-    is BridgeType.ObjectHandle -> cOpaquePointer.copy(nullable = nullable)
+    is BridgeType.ObjectHandle, is BridgeType.BoundInterface -> cOpaquePointer.copy(nullable = nullable)
     BridgeType.Unit,
     BridgeType.Char,
     is BridgeType.Throwable,
-    is BridgeType.BoundInterface,
     is BridgeType.ValueClass,
     is BridgeType.Nullable,
     is BridgeType.Callback,

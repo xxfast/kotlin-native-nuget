@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import io.github.xxfast.kotlin.native.nuget.processor.freshName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.suspendAwaitedType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isValueClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.mentionsAnyTypeParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticFlowGetter
@@ -2700,7 +2702,8 @@ internal fun suspendMembers(
     val cname: String = toCName(methodName) + suffix
     val csMethodName: String = methodName.asCSymbol().replaceFirstChar { it.uppercase() }
     val nativeStem: String = "Native_$csMethodName${suffix}Async"
-    val resolvedReturn: KSType? = method.returnType?.resolve()?.expandAliases()
+    // ADR-238: a `Result<T>` result awaits its `T`.
+    val resolvedReturn: KSType? = method.suspendAwaitedType()
     val methodReturn: String = resolvedReturn?.declaration?.simpleName?.asString() ?: "Unit"
     val isUnit: Boolean = methodReturn == "Unit"
 
@@ -2721,12 +2724,20 @@ internal fun suspendMembers(
 
     // ADR-114: a collection parameter takes the public collection type with an IntPtr native
     // slot; every other parameter keeps mapParamType's shipped spelling.
-    val methodParams: List<CirParameter> =
+    val declaredParams: List<CirParameter> =
       legacyRouteParameters(
         method.parameters, classifier, tracker,
         callableCatalog.legacyDefaultFlags(method),
         callableCatalog.legacySuspendSiblingArities(method),
       )
+    // ADR-238: a member extension's receiver leads, lowered as a parameter (`hand.BrushLaterAsync(loafer)`).
+    val methodParams: List<CirParameter> = listOfNotNull(
+      method.extensionReceiver?.resolve()?.let { receiver ->
+        legacyReceiverParameter(
+          freshName("receiver", declaredParams.localScopeNames()), receiver, classifier, tracker,
+        )
+      },
+    ) + declaredParams
 
     // Issue #108: carry the nullability through, same as the top-level suspend route.
     val asyncReturnType: String = when {

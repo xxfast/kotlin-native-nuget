@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedExtensionReceiver
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.ClassKind
@@ -75,6 +76,8 @@ internal fun KSClassDeclaration.forwardSuspendRouteMethods(
     // ADR-114 / ADR-119: a parameter or return this route cannot marshal drops the member on both
     // halves, named once by `warnRefusedLegacyRouteMembers`.
     .filter { method -> classifier.legacyRefusedParameter(method.parameters) == null }
+    // ADR-238: and a member extension's receiver, lowered as the leading parameter.
+    .filter { method -> classifier.legacyRefusedExtensionReceiver(method) == null }
     // ADR-214: a member's own type parameters route under ADR-197's rules; a refusal is named once
     // by `warnRefusedLegacyRouteMembers`, never emitted as a C# method missing its `<T>`.
     .filter { method -> method.forwardMemberGenericRefusal() == null }

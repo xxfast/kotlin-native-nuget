@@ -55,6 +55,7 @@ using Purrclock = TestLibrary.Purrclock;
 using Furcoat = TestLibrary.Furcoat;
 using Pawpost = TestLibrary.Pawpost;
 using TestLibrary.Pawpost;
+using Bindle = TestLibrary.Bindle;
 
 namespace LeakTests;
 
@@ -7276,5 +7277,80 @@ public class LiveHandleTests
             }
             Assert.NotEmpty(shelf.Summary());
         }, iterations: 30);
+    }
+
+    // ADR-238
+    // Generic and bare-`T` receivers on the sync plan route: the receiver is borrowed and a boxed
+    // `T` result released. Accounting in `BindleCrossings.GenericReceivers`. Net zero.
+    [Fact]
+    public void GenericExtension_Unpack_ReturnsToBaseline()
+    {
+        using var oreo = new Bindle.Loafer("Oreo");
+        AssertNoLeak(() => BindleCrossings.GenericReceivers(oreo));
+    }
+
+    // ADR-238
+    // Generic extension properties, a handle `T` through the setter included. Net zero.
+    [Fact]
+    public void GenericExtensionProperty_Lid_ReturnsToBaseline()
+    {
+        using var oreo = new Bindle.Loafer("Oreo");
+        using var mylo = new Bindle.Loafer("Mylo");
+        AssertNoLeak(() => BindleCrossings.GenericProperties(oreo, mylo));
+    }
+
+    // ADR-238
+    // The sync receivers that mint a handle for the crossing, each nullable too. Net zero.
+    [Trait("Direction", "Reverse")]
+    [Fact]
+    public void SyncExtension_HandleMintingReceivers_ReturnToBaseline()
+    {
+        var goat = new BindleCrossings.Goat();
+        AssertNoLeak(() => BindleCrossings.HandleMintingReceivers(goat));
+    }
+
+    // ADR-238
+    // A suspend extension on a collection receiver: the C#-built list container is disposed once
+    // the call completes or is cancelled. Net zero.
+    [Fact]
+    public async Task SuspendCollectionReceiver_TotalAsync_ReturnsToBaseline()
+    {
+        await BindleCrossings.SuspendCollectionReceivers();
+        await AssertNoLeakAsync(BindleCrossings.SuspendCollectionReceivers, iterations: 50);
+    }
+
+    // ADR-238
+    // A suspend extension on a bound C# interface receiver: the transfer GCHandle is Kotlin's.
+    // Net zero.
+    [Trait("Direction", "Reverse")]
+    [Fact]
+    public async Task SuspendBoundInterfaceReceiver_ReturnsToBaseline()
+    {
+        var goat = new BindleCrossings.Goat();
+        await BindleCrossings.SuspendBoundInterfaceReceivers(goat);
+        await AssertNoLeakAsync(() => BindleCrossings.SuspendBoundInterfaceReceivers(goat), iterations: 50);
+    }
+
+    // ADR-238
+    // Every other suspend receiver kind, the member extensions and a `Flow` result, on completion.
+    // The Groomhand's lazy scope is warmed before the baseline. Net zero.
+    [Fact]
+    public async Task SuspendEveryReceiver_Completion_ReturnsToBaseline()
+    {
+        using var oreo = new Bindle.Loafer("Oreo");
+        using var hand = new Bindle.Groomhand("Oreo");
+        await BindleCrossings.WarmGroomhand(hand);
+        await AssertNoLeakAsync(() => BindleCrossings.SuspendEveryReceiver(oreo, hand), iterations: 50);
+    }
+
+    // ADR-238
+    // A `Result<T>` failure on an extension, a top-level and a class suspend member. Net zero.
+    [Fact]
+    public async Task SuspendResult_Failure_ReturnsToBaseline()
+    {
+        using var oreo = new Bindle.Loafer("Oreo");
+        using var hand = new Bindle.Groomhand("Oreo");
+        await BindleCrossings.WarmGroomhand(hand);
+        await AssertNoLeakAsync(() => BindleCrossings.SuspendResultFailures(oreo, hand), iterations: 50);
     }
 }

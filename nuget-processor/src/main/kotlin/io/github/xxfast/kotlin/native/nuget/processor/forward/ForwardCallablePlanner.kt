@@ -8,6 +8,7 @@ import com.google.devtools.ksp.getConstructors
 import com.google.devtools.ksp.isConstructor
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
+import io.github.xxfast.kotlin.native.nuget.processor.cir.extensionHomeDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.Origin
@@ -2014,12 +2015,14 @@ internal class ForwardCallablePlanner(
         method.hasNullableLegacyFlowReturn() -> ForwardPlanSkipReason.FLOW_PROTOCOL
         else -> null
       }
+      // ADR-238: a member extension's receiver leads its parameters (`hand.Brush(loafer, 3)`).
+      val extension: Pair<String, BridgeType>? = method.memberExtensionParameter()
       fun plan(): ForwardCallableCatalogEntry = planOrSkip(
         symbol = symbol,
         publicName = method.csharpMemberName(),
         exportName = "${prefix}_$name$suffix",
         receiver = ForwardReceiver.Handle(receiverType),
-        parameters = method.parameters.map { parameter ->
+        parameters = listOfNotNull(extension) + method.parameters.map { parameter ->
           parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
         },
         result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
@@ -2030,10 +2033,11 @@ internal class ForwardCallablePlanner(
         isOverride = isOverride,
         isVirtual = isVirtual,
         node = method,
-        defaults = declaredDefaults(method.parameters, memberDefaultFlags(method)),
+        defaults = declaredDefaults(method.parameters, memberDefaultFlags(method))
+          .withLeading(extension?.first),
         doc = method.forwardKdoc(expects).forParameters(method.parameters),
         isAbstract = isAbstract,
-      ).withMethodTypeParameters(method)
+      ).withMethodTypeParameters(method).asMemberExtension(extension != null)
       // An abstract member of an owner with no wrapper (a generic one) is declared `abstract` in
       // C# with no export, by `CirClassTranslator`'s abstract walk, and every Kotlin subclass's
       // plan overrides it. The declaration must not promise what those plans refuse (a lambda
@@ -3158,6 +3162,38 @@ internal class ForwardCallablePlanner(
   ): Boolean = typeParameters.isNotEmpty() &&
       (forwardMemberGenericRefusal() != null || this in pairMembers)
 
+  /**
+   * ADR-238: a class member's extension receiver as the plan's leading parameter, named apart from
+   * the declared ones, or null for an ordinary member.
+   */
+  private fun KSFunctionDeclaration.memberExtensionParameter(): Pair<String, BridgeType>? {
+    val receiver: KSType = extensionReceiver?.resolve() ?: return null
+    // Named after its type (`Brush(Loafer loafer, int strokes)`), off the plan-owned names.
+    val base: String = receiver.expandAliases().declaration.simpleName.asString()
+      .replaceFirstChar { it.lowercase() }.bridgeParameterName()
+    val name: String = freshName(base, parameters.map { it.bridgeName() }.toSet())
+    return name to (classifier.genericInterfaceOrNull(receiver.expandAliases())
+      ?: classifier.classifyParameter(receiver)).sealedAsHandle()
+  }
+
+  /** ADR-238: [ForwardDeclaredDefaults] with a non-defaulted [name] slot in front, if any. */
+  private fun ForwardDeclaredDefaults.withLeading(name: String?): ForwardDeclaredDefaults {
+    if (name == null) return this
+    return copy(
+      flags = listOf(false) + flags,
+      kotlinNames = listOf(name) + kotlinNames,
+      marked = marked.mapKeys { (index, _) -> index + 1 },
+    )
+  }
+
+  /** ADR-238: marks a planned member extension, whose Kotlin call runs in its owner's scope. */
+  private fun ForwardCallableCatalogEntry.asMemberExtension(
+    memberExtension: Boolean,
+  ): ForwardCallableCatalogEntry {
+    if (!memberExtension || this !is ForwardCallableCatalogEntry.Planned) return this
+    return copy(plan = plan.copy(invocation = plan.invocation.copy(memberExtension = true)))
+  }
+
   /** ADR-225: stamps the Kotlin constructor spelling a value-class member re-wraps through. */
   private fun ForwardCallableCatalogEntry.withValueClassConstruction(
     spelling: String,
@@ -3224,9 +3260,12 @@ internal class ForwardCallablePlanner(
     // ADR-163: the receiver's UNQUALIFIED chain. The package part of an extension's symbol is the
     // EXTENSION's own package, not the receiver's (ADR-095's counter is scoped per package and
     // name), so `symbols.extension` supplies the qualifier from `function` below.
-    val receiverPrefix: String = (receiver.declaration as? KSClassDeclaration)
+    // ADR-238: a bare `T` takes its home's prefix (`dozer_`), `any_` when unbounded.
+    val home: KSDeclaration? = receiver.declaration.extensionHomeDeclaration()
+    val receiverPrefix: String = (home as? KSClassDeclaration)
       ?.let { declaration -> ForwardSymbolTable.ownerChain(declaration) }
-      ?: receiver.declaration.simpleName.asString().lowercase()
+      ?: home?.simpleName?.asString()?.lowercase()
+      ?: "any"
     // ADR-095 keeps an extension symbol receiver-agnostic (the overload counter is per package and
     // name, not per receiver). ADR-133 amendment: the receiver's enclosing-owner chain joins it,
     // because that chain now scopes the counter, so two nested receivers under different owners can
@@ -3240,20 +3279,9 @@ internal class ForwardCallablePlanner(
       "${function.packageName.asString()}.$ownerChain.$functionName$suffix"
     }
 
-    // ADR-064 cell 23 / BUG-010: a generic + suspend + inline + reified extension returning
-    // Result<T> has no legacy route at all — inline+reified erases at the C ABI and suspend
-    // needs a concrete continuation type — so it must be recognized as a genuine drop *before*
-    // the general SUSPEND/GENERIC structural checks below classify it as a silent legacy-route
-    // deferral. That classification is correct for an *ordinary* suspend or generic extension
-    // (each has its own working legacy route individually); it is wrong for this specific
-    // combination, since nothing re-emits it. Gated narrowly (suspend + inline + a reified type
-    // parameter + a `kotlin.Result` return) so ordinary suspend/generic extensions are unaffected.
-    if (function.isUnsupportedSuspendGenericResultExtension()) {
-      return ForwardCallableCatalogEntry.Skipped(
-        symbol, ForwardPlanSkipReason.UNSUPPORTED_COMBINATION, node = function,
-      )
-    }
-
+    // ADR-064 cell 23 / BUG-010 (ADR-238): `suspend inline fun <reified T> R.get(): Result<T>`
+    // binds on the static suspend route below, `T` reified at its bound (ADR-213) and the
+    // `Result` unwrapped inside the coroutine, so it needs no case of its own.
     val structuralReason: ForwardPlanSkipReason? = when {
       function.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
       // ADR-226: a top-level extension's own `T` binds as a top-level function's does.
@@ -3272,8 +3300,9 @@ internal class ForwardCallablePlanner(
       // ADR-229: a suspend extension binds on the static suspend route, the receiver crossing as
       // the leading slot. A receiver that route has no slot for stays the named drop.
       if (structuralReason == ForwardPlanSkipReason.SUSPEND) {
-        val slot: ForwardStaticSuspendReceiver? = classifier.staticSuspendReceiver(receiver)
-          .takeIf { receiver.declaration !is KSTypeParameter }
+        // ADR-238: any receiver a legacy parameter shape carries, a bare `T` included.
+        val slot: ForwardStaticSuspendReceiver? =
+          classifier.staticSuspendReceiver(receiver, extension = true)
         return ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = function)
           .onStaticSuspendRoute(
             slot?.let { receiverSlot ->
@@ -3326,18 +3355,6 @@ internal class ForwardCallablePlanner(
       // all, and `genericFunctions` excludes extensions outright), so every deferral here is a
       // drop, with no exemption.
       .nameUnroutedPosition { false }
-  }
-
-  /**
-   * ADR-064 cell 23 / BUG-010: the one suspend+generic extension shape with no working legacy
-   * route (`suspend inline fun <reified T> Receiver.get(...): Result<T>`, NYTimes-KMP BUG-010).
-   */
-  private fun KSFunctionDeclaration.isUnsupportedSuspendGenericResultExtension(): Boolean {
-    if (!modifiers.contains(Modifier.SUSPEND)) return false
-    if (!modifiers.contains(Modifier.INLINE)) return false
-    if (typeParameters.none { it.isReified }) return false
-    val returnDeclaration: String? = returnType?.resolve()?.declaration?.qualifiedName?.asString()
-    return returnDeclaration == "kotlin.Result"
   }
 
   private fun declaredDefaults(

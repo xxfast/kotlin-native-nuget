@@ -60,6 +60,7 @@ internal fun ForwardStaticFlowCall.slots(
     is ForwardStaticSuspendReceiver.Wire -> receiver.shape.view?.kotlinWrap(names.obj) ?: names.obj
     is ForwardStaticSuspendReceiver.Enum -> "${receiver.kotlinType}.entries[$slot]"
     is ForwardStaticSuspendReceiver.Scalar, null -> slot
+    is ForwardStaticSuspendReceiver.Parameter -> receiver.unrouted()
   }
   val prelude: String = when (val receiver = receiver) {
     is ForwardStaticSuspendReceiver.Handle ->
@@ -75,6 +76,7 @@ internal fun ForwardStaticFlowCall.slots(
     }
     is ForwardStaticSuspendReceiver.Wire -> receiver.wirePrelude(slot, names.obj) + "\n"
     is ForwardStaticSuspendReceiver.Scalar, is ForwardStaticSuspendReceiver.Enum, null -> ""
+    is ForwardStaticSuspendReceiver.Parameter -> receiver.unrouted()
   }
   val parameter: List<ParameterSpec> = when (val receiver = receiver) {
     is ForwardStaticSuspendReceiver.Wire ->
@@ -86,10 +88,15 @@ internal fun ForwardStaticFlowCall.slots(
     is ForwardStaticSuspendReceiver.Enum -> ParameterSpec.builder(slot, INT).build()
     is ForwardStaticSuspendReceiver.Box ->
       ParameterSpec.builder(slot, cOpaquePointer.copy(nullable = receiver.nullable)).build()
+    is ForwardStaticSuspendReceiver.Parameter -> receiver.unrouted()
     null -> null
   }.let(::listOfNotNull)
   return slotsOf(qualifiedName, names, read, prelude, parameter)
 }
+
+/** ADR-238: only an extension's suspend receiver takes the parameter path; no flow owner is one. */
+private fun ForwardStaticSuspendReceiver.Parameter.unrouted(): Nothing =
+  error("ADR-238: the static flow route has no extension receiver, but got $kotlinType")
 
 private fun ForwardStaticFlowCall.slotsOf(
   qualifiedName: String,

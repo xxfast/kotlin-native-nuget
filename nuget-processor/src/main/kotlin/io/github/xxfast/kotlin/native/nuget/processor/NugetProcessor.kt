@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedExtensionReceiver
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.findActualType
 import com.google.devtools.ksp.getDeclaredFunctions
@@ -968,8 +969,10 @@ internal fun warnRefusedLegacyRouteMembers(
       )
       return
     }
+    // ADR-238: a member extension's receiver is its leading parameter.
     val parameter: Pair<String, ForwardLegacyParameterShape.Refused>? =
-      classifier.legacyRefusedParameterShape(member.parameters)
+      classifier.legacyRefusedExtensionReceiver(member)
+        ?: classifier.legacyRefusedParameterShape(member.parameters)
     if (parameter != null) {
       val (name, shape) = parameter
       add(

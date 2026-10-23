@@ -817,6 +817,8 @@ internal object ForwardCirPlanProjection {
       isExtension = true,
       isSyncErrorCheckEnabled = !result.hasCustomBody && plan.errorSlot != null,
       hasCustomBody = result.hasCustomBody,
+      // ADR-238: a generic receiver's own `T`, with its constraints (`where T : IDozer`).
+      typeParameters = plan.cirTypeParameters(isOverride = false),
       // ADR-150: the `this` receiver is a C# parameter of this member but not of the plan, so it
       // has to be named here or a documented parameter beside it is CS1573.
       doc = plan.publicSignature.cirDoc(listOf(receiverParam.name)),
