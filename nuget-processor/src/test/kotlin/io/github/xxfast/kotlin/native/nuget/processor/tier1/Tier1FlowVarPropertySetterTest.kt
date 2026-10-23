@@ -290,7 +290,7 @@ class Tier1FlowVarPropertySetterTest {
       listOf(
         "[nuget:$propertyCode] Skipping Feeder.odd: a Flow or StateFlow element can be a " +
             "List/Set/Map, but not the generic type Pair<Int, Int>. make the element a " +
-            "non-nullable List/Set/Map, or a non-generic type",
+            "List/Set/Map, nullable or not, or a non-generic type",
       ),
       diagnostics.filter { line -> "Feeder.odd" in line },
     )
@@ -374,7 +374,7 @@ class Tier1FlowVarPropertySetterTest {
       listOf(
         "[nuget:$propertyCode] Skipping Crate.odd: a Flow or StateFlow element can be a " +
             "List/Set/Map, but not the generic type Pair<Int, Int>. make the element a " +
-            "non-nullable List/Set/Map, or a non-generic type",
+            "List/Set/Map, nullable or not, or a non-generic type",
       ),
       diagnostics.filter { line -> "Crate." in line && "Crate.source" !in line },
     )

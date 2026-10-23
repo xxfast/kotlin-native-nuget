@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -230,23 +231,23 @@ class Tier1FlowCollectionElementTest {
     )
   }
 
-  /** ADR-114 refuses a nullable collection parameter; the element position keeps the same rule. */
+  /**
+   * A nullable collection element binds: null crosses as a null handle, as a nullable `ByteArray`
+   * element does, and the read is guarded on it before `ReadList` touches the pointer.
+   */
   @Test
-  fun `a nullable collection flow element skips the member named`() {
+  fun `a nullable collection flow element binds with a null handle for null`() {
     val result = run()
 
-    assertFalse(
-      result.generatedCSharp.contains("Maybe"),
-      "expected no Maybe member for a StateFlow<List<String>?>; got: " +
-          "${csharpLinesFor(result, "Maybe")}",
+    assertContains(result.generatedCSharp, "public KotlinStateFlow<IReadOnlyList<string>?> Maybe")
+    assertContains(
+      result.generatedCSharp,
+      "read: static h => h == IntPtr.Zero ? null : NugetMarshal.ReadList<string>(",
     )
+    assertContains(result.generated, "return if (v != null) NugetHandles.retain(v) else null")
     assertTrue(
-      result.kspWarnings.any {
-        it.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name}]") &&
-            it.contains("maybe") && it.contains("List<String>?")
-      },
-      "expected a SKIPPED_UNSUPPORTED_PROPERTY naming Hub.maybe and quoting `List<String>?`; " +
-          "kspWarnings=${result.kspWarnings}",
+      result.kspWarnings.none { it.contains("[nuget:") && it.contains("Hub.maybe") },
+      "expected no diagnostic for Hub.maybe; kspWarnings=${result.kspWarnings}",
     )
   }
 

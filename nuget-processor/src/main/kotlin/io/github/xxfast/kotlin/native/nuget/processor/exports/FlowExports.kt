@@ -184,8 +184,9 @@ internal fun KSFunctionDeclaration.returnsHeldMutableStateFlow(): Boolean {
  * ADR-071 held-route amendment (cross-noted on ADR-068): whether a class `suspend fun`'s awaited
  * `MutableStateFlow<T>` is settable. Its `_async` export already hands the flow back by handle, so
  * the write is the held route's flow-keyed `_set_value` sibling. One predicate for the Kotlin
- * export and the C# translator. A nullable member or element stays read-only: the write side of
- * `suspend fun (): MutableStateFlow<T?>` is deferred.
+ * export and the C# translator. A nullable element writes through the held route's nullable arms
+ * (a null handle, a nullable string slot or a has-value pair); a nullable member stays read-only,
+ * as on the held route, which has no null arm.
  */
 internal fun KSFunctionDeclaration.awaitsSettableMutableStateFlow(): Boolean {
   if (!modifiers.contains(Modifier.SUSPEND)) return false
@@ -194,7 +195,6 @@ internal fun KSFunctionDeclaration.awaitsSettableMutableStateFlow(): Boolean {
   if (resolved.isMarkedNullable) return false
   val element: KSType? = resolved.arguments.firstOrNull()?.type?.resolve()?.expandAliases()
   if (element?.declaration is KSTypeParameter) return false
-  if (element?.isMarkedNullable == true) return false
   return isMutableStateFlowElementWritable(element)
 }
 
@@ -756,7 +756,7 @@ private fun memberAccessor(receiver: String, memberNullable: Boolean): String =
 // `value as Any` box (ADR-065 unchanged).
 // ADR-123: a collection element is boxed per-element projected, so a value class leaves as its
 // underlying and an enum as its ordinal, exactly as the ordinary route's collection result does.
-// The two are exclusive: a nullable collection element is refused before either half sees it.
+// A nullable collection element is projected the same way, behind its null guard.
 internal fun itemBoxExpr(
   elementNullable: Boolean,
   collection: BridgeType.Collection?,
@@ -771,6 +771,8 @@ internal fun itemBoxExpr(
   envelope && elementNullable ->
     "if (value != null) NugetHandles.retain(buildError(value, ::nugetMappedType)) else null"
   envelope -> "NugetHandles.retain(buildError(value, ::nugetMappedType))"
+  collection != null && elementNullable ->
+    "if (value != null) NugetHandles.retain(${flowValueExpression("value", collection)}) else null"
   elementNullable -> "if (value != null) NugetHandles.retain(value) else null"
   collection != null -> "NugetHandles.retain(${flowValueExpression("value", collection)} as Any)"
   else -> "NugetHandles.retain(value as Any)"
@@ -872,7 +874,8 @@ private fun buildStateFlowValuePropertyBody(
     append("return NugetHandles.retain($box)")
   } else {
     appendLine("val v = obj.${memberAccessor(propName, memberNullable)}.value")
-    val box: String = wire?.legacyWireBox("v") ?: stateFlowNullableBox(envelope)
+    val box: String =
+      wire?.legacyWireBox("v") ?: stateFlowNullableBox(envelope, elementCollection)
     append("return if (v != null) NugetHandles.retain($box) else null")
   }
 }
@@ -897,7 +900,8 @@ private fun buildStateFlowValueMethodBody(
     append("return NugetHandles.retain($box)")
   } else {
     appendLine("val v = ${memberAccessor(call, memberNullable)}.value")
-    val box: String = wire?.legacyWireBox("v") ?: stateFlowNullableBox(envelope)
+    val box: String =
+      wire?.legacyWireBox("v") ?: stateFlowNullableBox(envelope, elementCollection)
     append("return if (v != null) NugetHandles.retain($box) else null")
   }
 }
@@ -907,8 +911,9 @@ private fun buildStateFlowValueMethodBody(
 private fun stateFlowBox(read: String, envelope: Boolean): String =
   if (envelope) "buildError($read, ::nugetMappedType)" else "$read as Any"
 
-private fun stateFlowNullableBox(envelope: Boolean): String =
-  if (envelope) "buildError(v, ::nugetMappedType)" else "v"
+// A collection element, nullable or under a nullable member, leaves projected as a non-null one.
+private fun stateFlowNullableBox(envelope: Boolean, collection: BridgeType.Collection?): String =
+  if (envelope) "buildError(v, ::nugetMappedType)" else flowValueExpression("v", collection)
 
 // ADR-067: nullable-member presence probe -- backs the C# `_has_value` two-call pattern. A pure,
 // idempotent read of a `val`/getter-backed Flow or StateFlow reference; safe to call before

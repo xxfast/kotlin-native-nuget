@@ -272,8 +272,9 @@ if (den is not null)
 ```
 
 Both work on class methods and top-level functions, and combine as `StateFlow<T?>?`. A
-`suspend fun` returning `MutableStateFlow<T?>` or `MutableStateFlow<T>?` binds as a read-only holder;
-its `.Value` setter is not available.
+`suspend fun` returning `MutableStateFlow<T?>` awaits to a settable holder whatever the element,
+and `null` is a valid write. One returning `MutableStateFlow<T>?` (the holder itself nullable) binds
+a read-only holder; its `.Value` setter is not available.
 
 ### Collection element {id="suspend-stateflow-collection-element"}
 
@@ -291,7 +292,9 @@ IReadOnlyList<int> sizes = litters.Value;
 
 A `suspend fun (): MutableStateFlow<List<T>>` awaits to a settable
 `KotlinMutableStateFlow<IReadOnlyList<T>>`, and so does one over a `ByteArray` or an interface:
-each write mints the handle for the call and releases it afterwards. An awaited nullable
+each write mints the handle for the call and releases it afterwards. A nullable element
+(`MutableStateFlow<List<T>?>`) awaits settable too and `null` clears it; see
+[Nullable collection element](#mutable-nullable-collection-element). An awaited nullable
 `StateFlow<List<T>>?` is not covered by an end-to-end test.
 
 ## `suspend fun` returning `Flow<T>` {id="suspend-fun-returning-flow-t"}
@@ -454,7 +457,9 @@ A `suspend inline fun <reified T> ...: Result<T>` binds the same way, with `T` r
 A `Flow`, `StateFlow`, `SharedFlow`, `MutableStateFlow` or `MutableSharedFlow` return or property
 binds as the matching `KotlinFlow<T>` wrapper on every owner that has no instance to dispose: the top
 level, an `object`, a companion (default or named), an enum body and enum companion, and a
-value class, generic or not. A member's own `T` binds as on a class member.
+value class, generic or not. A member's own `T` binds as on a class member, and so does a nullable
+collection element (`MutableStateFlow<List<Int>?>`, see
+[Nullable collection element](#mutable-nullable-collection-element)).
 
 ```kotlin
 fun purrs(count: Int): Flow<Int>
@@ -496,7 +501,21 @@ Differences from a class member:
 - A property read mints a new holder each time, so `Chimes.Bedtime` read twice gives two holders over
   one flow.
 - A `var` flow property binds get-only and its setter is skipped, named: unlike a class, a static
-  owner has no receiver to set the flow on.
+  owner has no receiver to set the flow on. That holds on an enum too.
+- An enum's flow property (a body `val`, a constructor `val`, or an `abstract val` each entry
+  overrides) is an extension property on `{Enum}Extensions` of every flow kind. Each entry keeps its
+  own storage, so `Tail.Oreo.Height` and `Tail.Mylo.Height` are two different `MutableStateFlow`s,
+  and an overridden `abstract val` runs the entry's own body:
+
+  ```C#
+  using KotlinMutableStateFlow<int> oreo = Tail.Oreo.Height;
+  oreo.Value = 42;                        // Tail.Mylo.Height is untouched
+  await foreach (string s in Tail.Mylo.Mood) { }
+  ```
+
+  Reach these through a plain `using` of the namespace or `using static` of the extensions class
+  (`using static TestLibrary.Purrclock.TailExtensions;`); a C# 14 extension property is not found
+  through a namespace alias.
 - A `suspend` member with a flow result awaits to the same wrapper
   (`await PurrClock.WinderAsync()` is a settable `KotlinMutableStateFlow<int>`, the top level included).
 - A sync extension returning a `Flow`, `StateFlow` or `SharedFlow` (`fun Loafer.ticks(count: Int): Flow<Int>`) binds
@@ -1086,7 +1105,9 @@ await foreach (int? naps in window.NapsPassingBy()) seen.Add(naps);
 ```
 
 An interface element still resolves a stored C#-implemented instance the same way the non-null form
-does; only a genuinely absent element is `null`. This is the element's own nullability
+does; only a genuinely absent element is `null`. A nullable `List`, `Set` or `Map` element
+(`Flow<List<Int>?>`) binds the same way, as `KotlinFlow<IReadOnlyList<int>?>`; `null` is never an
+empty collection. This is the element's own nullability
 (`Flow<T?>`); the whole stream being absent is the next section.
 
 ### Nullable member `Flow<T>?` {id="flow-nullable-member"}
@@ -1205,8 +1226,10 @@ The elements you can write are those a `MutableStateFlow<T>` can set, described 
 same underlyings and the same `ArgumentException` for `default(CatId)` as a
 [`MutableStateFlow` of a value class](#enum-elements). That includes a nullable `Boolean`, `Char`
 or enum (`KotlinMutableSharedFlow<Mood?>`), where `null` is an emit of its own. A
-`MutableSharedFlow` of any other element (a `List`, `Set` or `Map`, a `ByteArray` or an interface)
-binds a read-only `KotlinSharedFlow<T>` and the build reports `SKIPPED_UNSUPPORTED_INPUT`. On a
+`MutableSharedFlow` of a `List`, `Set` or `Map` (nullable too, see
+[Nullable collection element](#mutable-nullable-collection-element)), a `ByteArray` or an interface
+emits as well. One of an element a `MutableStateFlow` cannot set binds a read-only
+`KotlinSharedFlow<T>` and the build reports `SKIPPED_UNSUPPORTED_INPUT`. On a
 property the remark names the read-only C# property; expose a function that takes the element to
 emit it. A value class over anything the list above does not admit is not bound at all: the member
 is skipped by name (see [value class elements](#enum-elements)). `resetReplayCache()` is not
@@ -1343,8 +1366,7 @@ tracker.SpareChipId.Value = null;
 - `CompareAndSet`, `Update`, `UpdateAndGet` and `GetAndUpdate` compare with Kotlin `equals` on the
   underlying value, never C# record-struct equality, so a freshly built `CatId` matches the stored
   one and a stale one does not.
-- A nullable element (`MutableStateFlow<CatId?>`) is settable too and `null` clears it, except on a
-  `suspend` return, which stays get-only for a nullable element of any kind.
+- A nullable element (`MutableStateFlow<CatId?>`) is settable too and `null` clears it.
 - `default(CatId)` has no `Id`, so writing it, or passing it to `CompareAndSet`, throws
   `ArgumentException` in C# before anything crosses. This applies to a value class over a `String`
   or an object.
@@ -1410,7 +1432,43 @@ tracker.Purring.Value = null;
 tracker.Initial.Value = '한';     // MutableStateFlow<Char?>
 ```
 
-A nullable element is read-only on a `suspend fun` return, whatever the element.
+A nullable element is settable on a `suspend fun` return too; only a nullable holder
+(`MutableStateFlow<T>?`) stays read-only there.
+
+### Nullable collection element {id="mutable-nullable-collection-element"}
+
+A `MutableStateFlow` or `MutableSharedFlow` over a nullable `List`, `Set` or `Map`
+(`MutableStateFlow<List<Int>?>`) is settable like a non-null collection. `null` crosses as no
+collection, so C# can tell `null` from an empty one, and so can Kotlin. It binds on a class, an
+`object`, the top level, a held return and an awaited return, and a plain `Flow<Map<String, Int>?>`
+yields `null` as one of its items. `CompareAndSet`, `EmitAsync`, `TryEmit` and `ReplayCache` work
+with `null`:
+
+```kotlin
+class SockDrawer {
+  val socks: MutableStateFlow<List<Int>?> = MutableStateFlow(null)
+  val labels: MutableSharedFlow<Set<String>?> = MutableSharedFlow(replay = 1)
+  val tallies: Flow<Map<String, Int>?> = flowOf(null, mapOf("Oreo" to 3))
+  suspend fun awaitSocks(): MutableStateFlow<List<Int>?> = socks
+}
+```
+
+```C#
+var drawer = new SockDrawer();
+using KotlinMutableStateFlow<IReadOnlyList<int>?> socks = drawer.Socks;
+
+socks.Value = [3, 4];
+socks.CompareAndSet([], [1]);    // false: [3, 4] is neither empty nor null
+socks.Value = null;              // Kotlin sees null, not an empty list
+
+using KotlinMutableSharedFlow<IReadOnlySet<string>?> labels = drawer.Labels;
+labels.TryEmit(null);            // an emit of its own; ReplayCache holds the null
+
+using KotlinMutableStateFlow<IReadOnlyList<int>?> awaited = await drawer.AwaitSocksAsync();
+```
+
+The collection you write is copied for the call, as for a non-null collection, and the holder is
+disposed like any other `MutableStateFlow`.
 
 An element that is a [generic class](generics.md) instantiation (`Box<String>`) or a generic
 sealed type (`Outcome<Int>`) is settable like any other class element, nullable (`Box<String>?`)
@@ -1837,8 +1895,7 @@ print.Value = new PostPrint(new byte[] { 1, 2, 3, 4 });                   // re-
 
 - `Emit`, `TryEmit`, `ReplayCache`, and `SubscriptionCount` on
   `MutableStateFlow<T>` are not exposed (`CompareAndSet` and `Update` are; see [Atomic updates](#atomic-updates)).
-- A `suspend fun` returning `MutableStateFlow<T?>` or `MutableStateFlow<T>?`, a top-level
-  `suspend fun` returning `MutableStateFlow<T>`, and a non-`suspend` function returning
+- A `suspend fun` returning `MutableStateFlow<T>?`, and a non-`suspend` function returning
   `MutableStateFlow<T>?`, bind a read-only holder. The build names each with
   `SKIPPED_UNSUPPORTED_INPUT`.
 - A `StateFlow<T>`, `SharedFlow<T>` or `MutableStateFlow<T>` as a function parameter is not
@@ -1846,7 +1903,7 @@ print.Value = new PostPrint(new byte[] { 1, 2, 3, 4 });                   // re-
   [read-only](#flow-type-argument).
 - A top-level non-`suspend` `fun f(): Flow<T>?` and an `object` or companion `Flow<T>?` member are
   skipped with a diagnostic, like their non-null forms.
-- A `Pair` or a nullable collection (`List<T>?`) as a `Flow`/`StateFlow` element is not supported.
+- A `Pair` as a `Flow`/`StateFlow` element is not supported.
 - `Boolean?` / `Char?` value elements on a nullable `StateFlow` are not supported.
 - `suspend fun (): StateFlow<Throwable>` and any `MutableStateFlow<Throwable>` have no binding, for
   the same shared-export reason. A read-only `StateFlow<Throwable>` property or method binds; see

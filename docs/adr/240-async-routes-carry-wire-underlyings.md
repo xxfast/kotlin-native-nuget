@@ -110,3 +110,13 @@ another `default(V)` and hashes to 0.
 - A class owner mints its coroutine scope on its first `suspend` call and holds it until disposed,
   so the leak rows warm it before the baseline, as the other class-route rows do: the first call
   inside the window read as a constant +1 handle, not a per-crossing leak.
+
+## Amendment 2026-10-23: a null collection handle on the hot-flow wire
+
+The `Minted` write of a bare `ByteArray` or collection element (section 2) also carries a nullable
+one. `null` crosses as a null handle, nothing is minted or released for it, and C# reads
+`IntPtr.Zero` as `null` on a `Value` read, a `ReplayCache` read and an emission. The same wire
+serves `MutableStateFlow<List<Int>?>` and `MutableSharedFlow<Set<String>?>`; see the
+[ADR-230](230-flow-on-static-owners.md) 2026-10-23 amendment. Verified by
+`NullableCollectionFlowTests` (a nullable `ByteArray` among them) and the leak row
+`NullableCollectionFlows_SettableHolders_ReturnToBaseline`.

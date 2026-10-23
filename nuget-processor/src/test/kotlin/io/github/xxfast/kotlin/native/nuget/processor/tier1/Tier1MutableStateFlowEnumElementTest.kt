@@ -206,16 +206,39 @@ class Tier1MutableStateFlowEnumElementTest {
     assertContains(heldBody, "() => NugetStateFlowNative.ValueOrNull(")
   }
 
-  /** The awaited route keeps a nullable element read-only for every kind (ADR-071). */
+  /**
+   * The awaited route writes a nullable element through the held route's nullable arm (the
+   * has-value pair over the ordinal) and reads a null current value through the null-aware export.
+   */
   @Test
-  fun `an awaited nullable enum element stays read-only`() {
+  fun `an awaited nullable enum element awaits settable`() {
     val result = Tier1Harness.run(source, libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore))
 
+    assertTrue(result.compiledClean, "got: ${result.compileErrors} ${result.kspErrors}")
     val csharp: String = result.generatedCSharp
-    assertContains(csharp, Regex("""Task<KotlinStateFlow<[\w.:]*Mood\?>> AwaitMaybeDial"""))
-    assertFalse(
-      "tracker_awaitMaybeDial_set_value" in result.generated,
-      "expected no Kotlin setter for an awaited nullable element; generated=${result.generated}",
+    assertContains(csharp, Regex("""Task<KotlinMutableStateFlow<[\w.:]*Mood\?>> AwaitMaybeDial"""))
+    assertContains(result.generated, "tracker_awaitMaybeDial_set_value")
+    Tier1CSharpCompile.assertCompiles(
+      result,
+      """
+      using System.Threading.Tasks;
+      using Interop;
+
+      namespace Consumer
+      {
+          public static class Probe
+          {
+              public static async Task<bool> Run(Tracker tracker)
+              {
+                  using KotlinMutableStateFlow<Mood?> dial = await tracker.AwaitMaybeDialAsync();
+                  dial.Value = null;
+                  dial.Value = Mood.Grumpy;
+                  return dial.CompareAndSet(Mood.Grumpy, null) && dial.Value == null;
+              }
+          }
+      }
+      """.trimIndent(),
+      allowUnsafe = true,
     )
   }
 

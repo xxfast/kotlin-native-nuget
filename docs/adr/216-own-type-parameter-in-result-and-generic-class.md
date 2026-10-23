@@ -224,7 +224,7 @@ Identical to ADR-208 and ADR-212:
   `Set` or `Map`, inside an exported generic class or a `Result` payload, and inside a lambda or
   `Flow`", the text the Phase 4 lanes share (the `suspend` and lambda/`Flow` clauses are ADR-214's
   and ADR-215's). The hint lists what is still refused: a `T` bounded by another type parameter, a
-  `reified` member `T`, a generic value class. The `forwardMemberGenericRefusal` KDoc changes with
+  `reified` member `T`, a generic value class (bound since ADR-220, ADR-225, ADR-226 and ADR-228). The `forwardMemberGenericRefusal` KDoc changes with
   them.
 - `Tier1UnroutedPositionsTest` row 16's sentinel becomes `fun <T, U : T>
   structuralRefusedOnTopLevel(item: U): T` (and its twin in `unrouted/UnroutedPositionsSample.kt`),

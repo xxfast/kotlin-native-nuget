@@ -29,7 +29,7 @@ import kotlinx.coroutines.flow.flowOf
  * | 4 | [NodeHub.ticks] `Flow<List<Kind>>` | a plain `Flow`, not a `StateFlow`, with a **handle** component, over several emissions |
  * | 5 | [NodeHub.visible] | the method route: a collection parameter (already right) and a collection element (wrong) on one signature |
  * | 6 | [NodeHub.paired] `StateFlow<Pair<String, Int>>` | refusal. Absent from C#, named `SKIPPED_UNSUPPORTED_PROPERTY`, never rendered as a bare `Pair` |
- * | 7 | [NodeHub.maybe] `StateFlow<List<String>?>` | refusal by the nullable-collection rule ADR-114 and ADR-119 already apply on their routes |
+ * | 7 | [NodeHub.maybe] `StateFlow<List<String>?>` | a nullable collection element, null crossing as a null handle |
  *
  * Cells 1 and 4 together are the pair that matters at runtime: a projecting component read per
  * element, and a handle component read per element over more than one emission. A fix that only
@@ -81,6 +81,6 @@ class NodeHub {
   /** Cell 6: refused. A `Pair` element has no wire shape here, so the member must be absent. */
   val paired: StateFlow<Pair<String, Int>> = MutableStateFlow("Oreo" to 9)
 
-  /** Cell 7: refused. A nullable collection element, by the same rule ADR-114 uses on parameters. */
+  /** Cell 7: a nullable collection element. Null crosses as a null handle. */
   val maybe: StateFlow<List<String>?> = MutableStateFlow(null)
 }

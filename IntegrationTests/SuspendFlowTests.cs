@@ -314,9 +314,12 @@ public class SuspendFlowTests
     }
 
     [Fact]
-    public void NullableCollectionElement_IsRefused()
+    public async Task NullableCollectionElement_YieldsNull()
     {
-        Assert.Null(typeof(SuspendFlowCafe).GetMethod("NullableCollectionsAsync"));
+        await using var cafe = new SuspendFlowCafe();
+        using KotlinFlow<IReadOnlyList<int>?> flow = await cafe.NullableCollectionsAsync();
+
+        Assert.Null(Assert.Single(await Read(flow)));
     }
 
     [Fact]

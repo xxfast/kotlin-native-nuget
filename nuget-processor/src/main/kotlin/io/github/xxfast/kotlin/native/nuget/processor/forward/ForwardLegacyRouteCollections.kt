@@ -1272,15 +1272,15 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
   // read-only `StateFlow` of a collection now reads through its own handle-keyed `_value` /
   // `_collect` pair (the seam ADR-202 gave the acquired `Flow`), so it is `Plain` here: the
   // awaited result is still the flow handle, and the element reaches each half through
-  // `legacyFlowElementCollection`. A `MutableStateFlow` of a collection stays refused: its element
-  // has no write seam, and awaiting it to a read-only holder would drop the settable `.Value`.
+  // `legacyFlowElementCollection`. A `MutableStateFlow` of a collection reads through the same
+  // pair and writes through the held route's flow-keyed setter (ADR-240).
   if (expanded.declaration.qualifiedName?.asString() in STATE_FLOW_TYPES) {
     val element: KSType? = expanded.arguments.firstOrNull()?.type?.resolve()?.expandAliases()
     // A NULLABLE scalar, string, object or sealed element binds: its `.Value` reads through the
     // runtime's null-aware `nuget_stateflow_value_or_null` and `nuget_stateflow_collect` sends a
     // null value as a null item (ADR-067's null-element wire). It was refused by name from
-    // 2026-09-20 until the runtime gained that pair. A nullable collection or ByteArray element
-    // is still not `Plain` below, so it stays refused.
+    // 2026-09-20 until the runtime gained that pair. A collection or ByteArray element, nullable
+    // or not, reads through its own per-member pair below (a null one as a null handle).
     // ADR-201 amendment: a Throwable element is refused here for the runtime-pair reason first,
     // whatever its nullability, so the diagnostic names the real constraint.
     if (legacyFlowElementShape(element) is ForwardLegacyFlowElementShape.Envelope) {
@@ -1294,7 +1294,7 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
     // ADR-240: a wire element reads through the same per-member pair, boxed on its result wire.
     // ADR-240: an awaited `MutableStateFlow` of a collection or `ByteArray` reads through the
     // same pair, and writes its minted handle through the held route's flow-keyed setter.
-    val mintedMutable: Boolean = !readOnly && element?.isMarkedNullable != true &&
+    val mintedMutable: Boolean = !readOnly &&
       (elementShape is ForwardLegacyFlowElementShape.Marshalled ||
         elementShape is ForwardLegacyFlowElementShape.Bytes)
     val bindsPerMember: Boolean = mintedMutable || readOnly &&
@@ -1395,7 +1395,12 @@ internal sealed interface ForwardLegacyFlowElementShape {
   data object Plain : ForwardLegacyFlowElementShape
 
   /** A collection the ordinary route's wire container and helpers already cover. */
-  data class Marshalled(val type: BridgeType.Collection) : ForwardLegacyFlowElementShape
+  data class Marshalled(
+    val type: BridgeType.Collection,
+    // A nullable collection element (`Flow<List<T>?>`) crosses as a null handle for null, the
+    // encoding a nullable `ByteArray` element already uses.
+    val nullable: Boolean = false,
+  ) : ForwardLegacyFlowElementShape
 
   /**
    * ROADMAP Phase 4 (ADR-151 amendment): a bare `ByteArray` element, the return shape's twin.
@@ -1439,7 +1444,8 @@ internal sealed interface ForwardLegacyFlowElementShape {
  *
  * The admission is the ordinary route's own return-position rule (`isBridgeableComponent`), so an
  * element type crosses here exactly when it crosses on the property route. A nullable collection
- * element is [ForwardLegacyFlowElementShape.Refused], keeping ADR-114's and ADR-119's rule.
+ * element is [ForwardLegacyFlowElementShape.Marshalled] with `nullable`: null crosses as a null
+ * handle, as a nullable `ByteArray` element does.
  */
 internal fun ForwardBridgeTypeClassifier.legacyFlowElementShape(
   type: KSType?,
@@ -1536,11 +1542,12 @@ internal fun ForwardBridgeTypeClassifier.legacyFlowElementShape(
 
   // ADR-119 amendment: the suspend return's ADR-105 rewrite, so `Flow<List<Shape>>` of an eligible
   // sealed base admits its `ObjectHandle(viaDiscriminator)` elements. A nullable collection element
-  // is still `Nullable`, not `Collection`, so it stays refused (the `StateFlow<T?>` problem).
+  // comes off its `Nullable` wrapper and crosses as a null handle for null.
   val rewritten: BridgeType = classify(type).sealedAsHandle()
-  val collection: BridgeType.Collection? = rewritten as? BridgeType.Collection
+  val collection: BridgeType.Collection? =
+    (if (rewritten is BridgeType.Nullable) rewritten.type else rewritten) as? BridgeType.Collection
   return if (collection != null && collection.isBridgeableComponent()) {
-    ForwardLegacyFlowElementShape.Marshalled(collection)
+    ForwardLegacyFlowElementShape.Marshalled(collection, nullable = expanded.isMarkedNullable)
   } else {
     ForwardLegacyFlowElementShape.Refused(
       expanded.legacyDescription(),
@@ -1721,10 +1728,24 @@ internal fun ForwardLegacyReturnShape.Interface.legacyInterfaceRead(handle: Stri
  * read but could not hand out is a collection nobody can reach, so the wrappers inside it are
  * released through `NugetMarshal.ReleaseAbandoned`. Both slots are named and trail every other
  * constructor argument, so the one string fits every flow construction site.
+ *
+ * A [nullable] element is guarded on the item pointer first: the enumerator hands `IntPtr.Zero`
+ * to the read for a null item, and `ReadList(IntPtr.Zero)` would call `nuget_list_count` on it.
  */
-internal fun legacyFlowElementReadArgument(type: BridgeType.Collection): String =
-  "read: static h => ${legacyCollectionRead("h", type)}, " +
-      "release: static v => NugetMarshal.ReleaseAbandoned(v)"
+internal fun legacyFlowElementReadArgument(
+  type: BridgeType.Collection,
+  nullable: Boolean = false,
+): String {
+  val read: String = legacyCollectionRead("h", type)
+  val guarded: String = if (nullable) "h == IntPtr.Zero ? null : $read" else read
+  return "read: static h => $guarded, release: static v => NugetMarshal.ReleaseAbandoned(v)"
+}
+
+/** The C# type a collection `Flow` element is declared with, `?` when [nullable]. */
+internal fun legacyFlowElementCollectionCsharpType(
+  type: BridgeType.Collection,
+  nullable: Boolean,
+): String = if (nullable) "${type.forwardPublicCsharpType()}?" else type.forwardPublicCsharpType()
 
 /**
  * ADR-040 at a `Flow`/`StateFlow` **element**: the projected interface the element is declared

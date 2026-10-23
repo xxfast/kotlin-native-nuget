@@ -171,13 +171,22 @@ public class Issue127Tests
         }
     }
 
-    // ---- Cells 6 and 7: refused, absent, never present-and-broken. ----
+    // ---- Cell 6: refused, absent, never present-and-broken. ----
 
-    [Theory]
-    [InlineData("Paired")]
-    [InlineData("Maybe")]
-    public void ARefusedFlowElement_IsAbsentFromTheClass(string name)
+    [Fact]
+    public void ARefusedFlowElement_IsAbsentFromTheClass()
     {
-        Assert.Null(typeof(NodeHub).GetProperty(name));
+        Assert.Null(typeof(NodeHub).GetProperty("Paired"));
+    }
+
+    // ---- Cell 7: a nullable collection element binds, null crossing as a null handle. ----
+
+    [Fact]
+    public void ANullableCollectionElement_ReadsNull()
+    {
+        using var hub = new NodeHub();
+        using KotlinStateFlow<IReadOnlyList<string>?> maybe = hub.Maybe;
+
+        Assert.Null(maybe.Value);
     }
 }
