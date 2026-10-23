@@ -141,8 +141,7 @@ the delegate is collected. An extension binds as an extension method (`tassel.En
 A returned lambda's payloads and results are the [callback vocabulary](#callback-vocabulary). A value
 class crosses boxed, not by its underlying, so its own `init` still validates. That includes a generic
 one (`Func<Sticker<string>, Sticker<int>>`) and one over a nullable underlying (`Func<Nick?, string>`).
-One with no crossing at this position is refused by name, and so is one with no C# record struct (see
-[Value classes](value-classes.md)). An exported interface type argument (`Func<IPet, IPet>`) is
+One with no C# record struct is refused by name instead (see [Value classes](value-classes.md)). An exported interface type argument (`Func<IPet, IPet>`) is
 spelled with the interface itself, never the ADR-040 backing wrapper, and passing your own C#
 implementation to the delegate returns that same instance; a Kotlin-backed value still materializes
 through the interface, see

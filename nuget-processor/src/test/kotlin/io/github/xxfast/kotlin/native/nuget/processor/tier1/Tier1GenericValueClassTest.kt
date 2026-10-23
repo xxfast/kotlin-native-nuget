@@ -19,6 +19,9 @@ import kotlin.test.assertTrue
  */
 class Tier1GenericValueClassTest {
 
+  // ADR-234: `Sticker<Char>` binds now; an underlying no value-class wire carries still skips.
+  private val structless: Tier1StructlessUnderlying = Tier1StructlessValueClassWitness.underlying
+
   private val result: Tier1Result by lazy {
     Tier1Harness.run(
       """
@@ -67,7 +70,7 @@ class Tier1GenericValueClassTest {
       fun <T : Enum<T>> napOf(sticker: Sticker<T>): Sticker<T> = sticker
       fun <T> loudest(sticker: Sticker<T>): Sticker<T>
           where T : CharSequence, T : Comparable<T> = sticker
-      fun initial(): Sticker<Char> = Sticker('o')
+      fun initial(): Sticker<${structless.kotlin}> = Sticker(${structless.sample})
       fun starred(sticker: Sticker<*>): String = "star"
       fun <T : Any> firmly(value: T): Sticker<T> = Sticker(value)
       fun <T> stickAll(values: List<T>): List<Sticker<T>> = values.map { Sticker(it) }

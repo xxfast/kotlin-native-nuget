@@ -29,15 +29,40 @@ string name = result.Cat.Name;              // "Oreo" -- dispose result.Cat like
 another class, only a secondary constructor's validation crosses the bridge -- the primary
 constructor's `init` does not run when called from C#.
 
-A value class over `String`, a primitive other than `Char`, an enum, a nullable `String` or
-primitive, an object handle, a sealed base/eligible sealed interface, `Instant`, `Duration`, `Uuid`,
-`ByteArray`, a collection, another value class, or a plain interface is declared at all (the last
-group is [below](#over-instant-bytearray-collection-interface)). A value class over `Char`, a
-nullable non-scalar, or a type outside the export set is refused by
-name; every member typed with it, at any position, is a separate named skip
-(`SKIPPED_UNSUPPORTED_TYPE`: "its value class type `X` has no C# record struct, because it wraps
-`kotlin.Char`, which no value-class wire carries"). That covers a `Box<X>`, `List<X>`, lambda or
-`Flow` of one.
+A value class over a `String`, a primitive, a `Char`, an enum, a nullable `String`, primitive or
+`Char`, an object handle, a sealed base or interface, `Instant`, `Duration`, `Uuid`, `ByteArray`, a
+collection, another value class, or a plain interface binds (the last group is
+[below](#over-instant-bytearray-collection-interface)). A value class over a `Throwable`, a nullable
+non-scalar, or a type outside the export set is refused by name; every member typed with it, at any
+position, is a separate named skip (`SKIPPED_UNSUPPORTED_TYPE`: "its value class type `X` has no C#
+record struct, because it wraps `kotlin.Throwable`, which no value-class wire carries"). That covers
+a `Box<X>`, `List<X>`, lambda or `Flow` of one.
+
+A `Char` underlying is a plain `char` property, and its `init` runs in the C# constructor like a
+`String` one. `Char?` surfaces as `char?`.
+
+```kotlin
+value class Monogram(val letter: Char) {
+  init { require(letter != ' ') { "Mylo left the monogram blank" } }
+  fun shout(): String = "$letter!"
+}
+value class MaybeMonogram(val letter: Char?)
+
+fun monogramOf(monogram: Monogram): String = "signed ${monogram.letter}"
+fun signAll(letters: List<Monogram>): List<Monogram> = letters.reversed()
+```
+
+```C#
+var oreo = new Monogram('O');
+string text = StickerWidenings.MonogramOf(oreo);        // "signed O"
+string shout = oreo.Shout();                            // "O!"
+new Monogram(' ');                                      // throws, init ran in Kotlin
+char? none = new MaybeMonogram(null).Letter;            // null
+```
+
+It works at every position a `String` underlying does: parameter, result, property, collection
+element and map key, `Box<Monogram>`, a lambda, a `Flow` element, a settable `MutableStateFlow`
+and an awaited result.
 
 ## Over `Instant`, `Duration`, `Uuid`, `ByteArray`, a collection, another value class or an interface {id="over-instant-bytearray-collection-interface"}
 
@@ -211,6 +236,26 @@ string text = StickerGaps.Starred(new Sticker<int>(3));                       //
 - A star-projected `Sticker<*>` parameter becomes a method type parameter you pick at the call
   (`Starred<TSticker>`), on a class member too.
 
+### A star- or `out`-projected result {id="a-star-projected-result"}
+
+A `Sticker<*>` or `Sticker<out Animal>` result, nullable too, takes the same kind of type parameter,
+and you supply the one Kotlin actually returned.
+
+```kotlin
+fun anySticker(): Sticker<*> = Sticker(7)
+fun anyStickerOrNone(present: Boolean): Sticker<*>? = if (present) Sticker("Oreo") else null
+fun animalSticker(name: String): Sticker<out Animal> = Sticker(Cat(name))
+```
+
+```C#
+Sticker<int> sticker = StickerWidenings.AnySticker<int>();                 // Sticker(7)
+Sticker<string>? maybe = StickerWidenings.AnyStickerOrNone<string>(false); // null
+Sticker<Cat> cat = StickerWidenings.AnimalSticker<Cat>("Mylo");            // dispose cat.Value
+```
+
+A type argument that disagrees with what Kotlin returned fails when you read the value, as a wrong
+`T` does on any `fun <T> f(): T`. A star-projected result on an interface member is not bound.
+
 ### Members, properties and constructors
 
 The struct carries the class's own members, properties, secondary constructors and `suspend`
@@ -372,6 +417,7 @@ NickExtensions.CallName(null);              // "no nick"
 StickerGaps.TreatsOr(new TreatCount(null)); // -1
 ```
 
+- A non-null property typed `TreatCount` binds, and a `MutableStateFlow<TreatCount>` is settable.
 - A `this Nick?` extension needs a `Nick?` receiver, so call it on a variable typed `Nick?`.
 - The closed `Sticker<String?>` and `Sticker<String?>?` behave the same way.
 
@@ -454,12 +500,11 @@ using var nameless = new Patient("");
 Assert.ThrowsAny<ArgumentException>(() => new Box<WardBand>(new WardBand(nameless)));
 ```
 
-Not every declared value class crosses here: a value class over an ineligible sealed interface has
-no crossing at this position. A lambda payload, a bare `Flow`/`StateFlow`/`SharedFlow` element or an
-awaited result over one is a named skip (inside a `List` it still binds), and so is a `Box<V>`
-member over one. But `Box<T>` is an open C# generic with no build-time gate of its own, so
-`new Box<V>(v)` written in your C# code for such a `V` still compiles and throws
-`NotSupportedException` at the call.
+A value class over a sealed type crosses here too (`Box<Clue>`, a `Flow<Dossier>` element, an
+awaited result, a `MutableStateFlow` write), and so does one over a `Char`. A value class with no
+C# record struct (over a `Throwable` and the like) is a named skip at a lambda payload, a `Flow`
+element, an awaited result or a `Box<V>` member. `Box<T>` is an open C# generic with no build-time
+gate, so `new Box<V>(v)` for such a `V` still compiles and throws `NotSupportedException`.
 
 A value class over a nullable underlying (`value class Nick(val name: String?)`) crosses here too.
 `null` and `Nick(null)` stay distinct: a `Box<Nick?>` or a `Flow<Nick?>` element holds either no

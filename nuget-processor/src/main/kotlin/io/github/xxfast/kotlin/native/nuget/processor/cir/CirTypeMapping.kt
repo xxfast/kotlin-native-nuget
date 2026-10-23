@@ -358,7 +358,7 @@ internal sealed interface MutableStateFlowElement {
 
   /**
    * ADR-071 amendment (value-class element write): a value class whose underlying the synchronous
-   * value-class setter carries (ADR-077: a non-null String or primitive other than `Char`, an
+   * value-class setter carries (ADR-077: a non-null String, primitive or `Char` (ADR-234), an
    * enum, or an exported class or object). It crosses as that [underlying] (`v.Id`, `(int)v.Mood`,
    * `v.Cat._handle`) and Kotlin re-wraps it, re-running the value class's `init`.
    * [underlyingProperty] is the Kotlin name of the underlying (the C# record struct capitalizes
@@ -455,9 +455,9 @@ internal fun classifyMutableStateFlowElement(elementType: KSType?): MutableState
 
 /**
  * ADR-071 amendment (value-class element write): admits exactly the underlyings the synchronous
- * value-class property setter lowers (`ForwardPropertyPlanner.isPlannable`): a non-null String or
- * primitive other than `Char`, an enum, or an exported class or object. A generic value class, a
- * nullable, `Char`, nested value-class, collection or `kotlin.*` class underlying (which the
+ * value-class property setter lowers (`ForwardPropertyPlanner.isPlannable`): a non-null String,
+ * primitive or `Char` (ADR-234), an enum, or an exported class or object. A generic value class, a
+ * nullable, nested value-class, collection or `kotlin.*` class underlying (which the
  * ordinary classifier maps to `Instant`, `Uuid` or `Throwable`, never to an object handle) is
  * refused, naming that underlying.
  */
@@ -481,8 +481,8 @@ private fun valueClassElement(
   val underlying: MutableStateFlowElement.Writable = when (
     val element: MutableStateFlowElement = classifyMutableStateFlowElement(type)
   ) {
-    MutableStateFlowElement.Scalar ->
-      if (underlyingSimpleName == "Char") return refused else MutableStateFlowElement.Scalar
+    // ADR-234: `Char` included, on the `char` slot a bare `MutableStateFlow<Char>` writes.
+    MutableStateFlowElement.Scalar -> MutableStateFlowElement.Scalar
 
     is MutableStateFlowElement.Enum -> element
     is MutableStateFlowElement.Handle -> {
@@ -1329,20 +1329,24 @@ internal fun lambdaTypeArgumentDiagnostic(
 /**
  * ADR-228: a value class whose erased crossing is its own box pair rather than its underlying's
  * wire: a generic one (every instantiation shares the pair), or one over a nullable `String`,
- * whose `null` underlying the plain wire cannot tell from an absent value.
+ * whose `null` underlying the plain wire cannot tell from an absent value. ADR-234: and one over
+ * any nullable scalar (`TreatCount(val count: Int?)`, `Char?`) for the same reason, and one over a
+ * sealed interface, whose underlying is read back through the interface's own `FromHandle`.
  */
 internal fun KSClassDeclaration.writesAsOwnBox(): Boolean {
   if (typeParameters.isNotEmpty()) return true
   val underlying: KSType = primaryConstructor?.parameters?.singleOrNull()?.type?.resolve()
     ?.expandAliases() ?: return false
-  val name: String? = underlying.declaration.qualifiedName?.asString()
-  if (underlying.isMarkedNullable && name == "kotlin.String") return true
+  val declaration: KSDeclaration = underlying.declaration
+  val isScalar: Boolean = declaration.packageName.asString() == "kotlin" &&
+      KOTLIN_TO_CSHARP_PARAM.containsKey(declaration.simpleName.asString())
+  if (underlying.isMarkedNullable) return isScalar
+  val wire: KSClassDeclaration? = declaration as? KSClassDeclaration
+  if (wire?.isSealedInterface() == true) return true
   // ADR-240: an ADR-235 WIRE underlying writes through the box pair too, which takes the struct on
   // that underlying's ordinary wire.
-  if (underlying.isMarkedNullable) return false
-  val wire: KSClassDeclaration? = underlying.declaration as? KSClassDeclaration
-  return name in WIRE_UNDERLYING_NAMES || wire?.isValueClass() == true ||
-    wire?.classKind == ClassKind.INTERFACE
+  return declaration.qualifiedName?.asString() in WIRE_UNDERLYING_NAMES ||
+    wire?.isValueClass() == true || wire?.classKind == ClassKind.INTERFACE
 }
 
 /** ADR-240: the `MutableStateFlow` elements that write on the ticks or text wire. */

@@ -404,3 +404,9 @@ ordinary positions through this pair.
 [ADR-235](235-value-class-wire-underlyings.md) binds a value class over `Instant`, `Duration`,
 `Uuid`, `ByteArray`, a collection, another value class or a plain interface at ordinary positions, so
 those seven are no longer REFUSED there. The REFUSED list above is the one that applied to ADR-171.
+
+## Amendment 2026-10-23: `Char` and a sealed underlying
+
+[ADR-234](234-value-class-underlying-widenings.md) removes `Char` and `Char?` from the refused
+underlyings above: they are value underlyings and cross at every position. A value class over an
+ineligible sealed interface or an eligible sealed class joins the erased-position pair.

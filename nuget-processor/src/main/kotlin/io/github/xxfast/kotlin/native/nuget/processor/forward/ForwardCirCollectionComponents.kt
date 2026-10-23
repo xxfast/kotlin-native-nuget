@@ -516,6 +516,20 @@ internal fun BridgeType.asValueClassBoxHandle(): BridgeType {
 }
 
 /**
+ * ADR-234: [asValueClassBoxHandle] at a property, where a NON-null value class over a nullable
+ * underlying (`TreatCount`, `MaybeMonogram`, `Nick`) takes the same box too: the property route has
+ * no has-value pair for an underlying's own null, and the box carries it in-band.
+ */
+internal fun BridgeType.asPropertyValueClassBoxHandle(): BridgeType {
+  val valueClass: BridgeType.ValueClass = this as? BridgeType.ValueClass
+    ?: return asValueClassBoxHandle()
+  if (valueClass.underlying !is BridgeType.Nullable) return this
+  val boxed: BridgeType = BridgeType.Nullable(valueClass).asValueClassBoxHandle()
+  return if (boxed is BridgeType.Nullable && boxed.type is BridgeType.TypeParameter) boxed.type
+  else this
+}
+
+/**
  * ADR-226: the Kotlin spelling a value class box is cast back to: closed arguments spelled, an
  * own `T` as its erased bound (the explicit argument the call passes), anything unspellable `*`.
  */
@@ -556,6 +570,9 @@ private fun BridgeType.kotlinArgumentSpelling(): String? = when (this) {
     -> null
 }
 
-/** ADR-226: `Int?` and other nullable primitives, an underlying with no in-band null. */
+/**
+ * ADR-226: `Int?` and other nullable primitives, an underlying with no in-band null. ADR-234: and
+ * `Char?`, which ADR-098 part C already fans out to the same has-value pair.
+ */
 internal fun BridgeType.isNullablePrimitive(): Boolean =
-  this is BridgeType.Nullable && type is BridgeType.Primitive
+  this is BridgeType.Nullable && (type is BridgeType.Primitive || type == BridgeType.Char)

@@ -1547,7 +1547,7 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
     detail != null && VALUE_CLASS_WRAPS in detail
   ) {
     "change the underlying of value class `${detail.substringBefore(VALUE_CLASS_WRAPS)}` to a " +
-        "String, a primitive other than Char, an enum, or an exported class or sealed type (the " +
+        "String, a primitive, a Char, an enum, or an exported class or sealed type (the " +
         "SKIPPED_UNSUPPORTED_TYPE warning on the value class itself says the same), or expose " +
         "the underlying value instead"
   } else {

@@ -24,6 +24,9 @@ import kotlin.test.assertTrue
  */
 class Tier1MutableStateFlowValueClassElementTest {
 
+  // An underlying no value-class wire carries, so `Initial` has no C# record struct.
+  private val structless: Tier1StructlessUnderlying = Tier1StructlessValueClassWitness.underlying
+
   private val source: String = """
     package tier1.vcwrite
 
@@ -251,7 +254,7 @@ class Tier1MutableStateFlowValueClassElementTest {
    * this cell used to assert the Kotlin half only, while the C# half spelled the undeclared type.
    */
   @Test
-  fun `a Char, stdlib class or nested value class underlying is refused by name`() {
+  fun `a struct-less, stdlib class or nested value class underlying is refused by name`() {
     val refusing: Tier1Result = Tier1Harness.run(
       """
       package tier1.vcrefused
@@ -260,7 +263,7 @@ class Tier1MutableStateFlowValueClassElementTest {
       import kotlinx.coroutines.flow.MutableStateFlow
 
       @JvmInline
-      value class Initial(val letter: Char)
+      value class Initial(val letter: ${structless.kotlin})
 
       @JvmInline
       value class Stamp(val at: Instant)
@@ -278,7 +281,7 @@ class Tier1MutableStateFlowValueClassElementTest {
       value class Oops(val cause: Throwable)
 
       class Tracker {
-        val initial: MutableStateFlow<Initial> = MutableStateFlow(Initial('a'))
+        val initial: MutableStateFlow<Initial> = MutableStateFlow(Initial(${structless.sample}))
         val stamp: MutableStateFlow<Stamp> = MutableStateFlow(Stamp(Instant.fromEpochSeconds(0)))
         val outer: MutableStateFlow<Outer> = MutableStateFlow(Outer(Inner("a")))
         val crate: MutableStateFlow<Crate<Int>> = MutableStateFlow(Crate(1))
@@ -301,7 +304,7 @@ class Tier1MutableStateFlowValueClassElementTest {
       "expected a Kotlin setter for each box-carried value class element",
     )
     mapOf(
-      "Tracker.initial:" to listOf("`tier1.vcrefused.Initial`", "`kotlin.Char`"),
+      "Tracker.initial:" to listOf("`tier1.vcrefused.Initial`", "`${structless.qualifiedName}`"),
 
       "Tracker.oops:" to listOf("`tier1.vcrefused.Oops`", "`kotlin.Throwable`"),
     ).forEach { (member, named) ->

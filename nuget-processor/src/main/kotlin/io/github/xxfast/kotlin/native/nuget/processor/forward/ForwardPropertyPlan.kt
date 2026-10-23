@@ -77,7 +77,7 @@ internal fun BridgeType.hasValueFanOutInner(): BridgeType? {
     is BridgeType.Primitive, BridgeType.Char, BridgeType.Instant, BridgeType.Duration,
     is BridgeType.Enum -> type
     is BridgeType.ValueClass ->
-      if (type.underlying is BridgeType.Primitive || type.underlying is BridgeType.Enum) type
+      if (type.underlying.isHasValueUnderlying()) type
       else null
 
     BridgeType.Unit,
@@ -240,7 +240,7 @@ internal data class ForwardPropertyPlan(
         nullableInner == BridgeType.Char ||
         nullableInner == BridgeType.Instant || nullableInner == BridgeType.Duration ||
         nullableInner is BridgeType.Enum ||
-        underlying is BridgeType.Primitive || underlying is BridgeType.Enum
+        underlying?.isHasValueUnderlying() == true
     if (getter is ForwardPropertyGetter.LegacyTwoCall) {
       require(isNullableLegacyPrimitive) {
         "Forward property plan $symbol uses LegacyTwoCall for non-nullable primitive $type"

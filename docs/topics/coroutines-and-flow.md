@@ -1305,12 +1305,12 @@ tracker.SpareChipId.Value = null;
 - `default(CatId)` has no `Id`, so writing it, or passing it to `CompareAndSet`, throws
   `ArgumentException` in C# before anything crosses. This applies to a value class over a `String`
   or an object.
-- The underlying can be a `String`, a primitive other than `Char`, an enum, an exported class or
-  object, or (with its own box pair) an `Instant`, `Duration`, `Uuid`, `ByteArray`, collection,
-  plain interface or another value class, so `MutableStateFlow<PostPrint>` reads and writes.
-  A bare `Instant`, `Duration` or `Uuid` element is settable too, on its ticks or text wire. A
-  value class over a `Char` or a `Throwable` has no C# record struct, so its member is skipped by
-  name (`SKIPPED_UNSUPPORTED_TYPE`). A generic value class (`Sticker<Int>`) and one over a nullable
+- The underlying can be a `String`, a primitive, a `Char`, an enum, a sealed type, an exported
+  class or object, or (with its own box pair) an `Instant`, `Duration`, `Uuid`, `ByteArray`,
+  collection, plain interface or another value class, so `MutableStateFlow<PostPrint>` reads and
+  writes. A bare `Instant`, `Duration` or `Uuid` element is settable too, on its ticks or text wire.
+  A value class over a `Throwable` has no C# record struct, so its member is skipped by name
+  (`SKIPPED_UNSUPPORTED_TYPE`). A generic value class (`Sticker<Int>`) and one over a nullable
   underlying (`value class Nick(val name: String?)`) are flow elements too, and `null` stays distinct
   from `Nick(null)`; see
   [A generic value class at an erased position](value-classes.md#a-generic-value-class-at-an-erased-position).

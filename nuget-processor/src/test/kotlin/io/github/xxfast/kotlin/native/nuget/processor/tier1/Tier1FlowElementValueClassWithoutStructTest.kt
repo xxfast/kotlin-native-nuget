@@ -8,8 +8,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * A value class whose underlying no value-class wire carries (`Char`) gets no C# `readonly record
- * struct` at all (`SKIPPED_UNSUPPORTED_TYPE`).
+ * A value class whose underlying no value-class wire carries ([Tier1StructlessValueClassWitness]'s
+ * underlying) gets no C# `readonly record struct` at all (`SKIPPED_UNSUPPORTED_TYPE`).
  * As a `Flow`/`StateFlow`/`MutableStateFlow` ELEMENT it used to be spelled anyway
  * (`KotlinStateFlow<global::Interop.Initial>`), so the consumer's build failed with CS0234 on a
  * type nothing declares. The member is now a named skip on every flow route and owner, decided on
@@ -23,6 +23,9 @@ import kotlin.test.assertTrue
  */
 class Tier1FlowElementValueClassWithoutStructTest {
 
+  // An underlying no value-class wire carries, so `Initial` has no C# record struct.
+  private val structless: Tier1StructlessUnderlying = Tier1StructlessValueClassWitness.underlying
+
   private val source: String = """
     package tier1.flowvc
 
@@ -33,7 +36,7 @@ class Tier1FlowElementValueClassWithoutStructTest {
     import kotlinx.coroutines.flow.emptyFlow
 
     @JvmInline
-    value class Initial(val letter: Char)
+    value class Initial(val letter: ${structless.kotlin})
 
     @JvmInline
     value class Stamp(val at: Instant)
@@ -51,7 +54,7 @@ class Tier1FlowElementValueClassWithoutStructTest {
     value class Nick(val name: String?)
 
     class Tracker {
-      val initial: MutableStateFlow<Initial> = MutableStateFlow(Initial('a'))
+      val initial: MutableStateFlow<Initial> = MutableStateFlow(Initial(${structless.sample}))
       val readInitial: StateFlow<Initial> = initial
       val maybeInitial: StateFlow<Initial?> = MutableStateFlow(null)
       val initials: StateFlow<List<Initial>> = MutableStateFlow(emptyList())
@@ -77,12 +80,12 @@ class Tier1FlowElementValueClassWithoutStructTest {
 
     sealed class Pet {
       class Cat : Pet() {
-        val initial: StateFlow<Initial> = MutableStateFlow(Initial('c'))
+        val initial: StateFlow<Initial> = MutableStateFlow(Initial(${structless.sample}))
       }
     }
 
     object Desk {
-      val initial: StateFlow<Initial> = MutableStateFlow(Initial('d'))
+      val initial: StateFlow<Initial> = MutableStateFlow(Initial(${structless.sample}))
     }
 
     interface Feed {
@@ -183,7 +186,7 @@ class Tier1FlowElementValueClassWithoutStructTest {
     assertContains(
       initial,
       "its value class type `tier1.flowvc.Initial` has no C# record struct, because it wraps " +
-        "`kotlin.Char`, which no value-class wire carries",
+        "`${structless.qualifiedName}`, which no value-class wire carries",
     )
     assertFalse("generic type" in initial, "a value class is not a generic type: $initial")
   }

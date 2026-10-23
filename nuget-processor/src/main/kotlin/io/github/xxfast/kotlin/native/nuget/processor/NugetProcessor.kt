@@ -1283,7 +1283,7 @@ internal fun warnRefusedLegacyRouteMembers(
     if (awaited && element?.isMarkedNullable == true) return
     val reason: String = "a MutableStateFlow element of value class ${refused.qualifiedName} " +
         "over ${refused.underlying} has no write arm (a value class writes as a non-null " +
-        "String, a primitive other than Char, an enum, or an exported class or object), so its " +
+        "String, a primitive, a Char, an enum, or an exported class or object), so its " +
         "`.Value` is not settable from C#"
     val publicName: String = member.csharpMemberName()
     val diagnostic: ForwardDiagnostic = if (property != null) {
@@ -1337,7 +1337,7 @@ internal fun warnRefusedLegacyRouteMembers(
       is MutableStateFlowElement.RefusedValueClass ->
         "a MutableSharedFlow element of value class ${classified.qualifiedName} over " +
             "${classified.underlying} has no write arm (a value class emits as a non-null " +
-            "String, a primitive other than Char, an enum, or an exported class or object)"
+            "String, a primitive, a Char, an enum, or an exported class or object)"
 
       // No kind's nullable form is held back today ([isMutableStateFlowElementWritable] admits
       // every one, nullable enum, `Boolean?` and `Char?` included), so this arm is cold. It stays
@@ -2441,12 +2441,11 @@ internal class NugetProcessor(
           symbol = cls.takeIf { it.containingFile != null },
           declaration = name,
           reason = "value class `$name` wraps `$underlying`, which no value-class wire carries " +
-              "(a value class crosses as a String, a primitive other than Char, an enum, an " +
-              "exported class or sealed type, an `Instant`, a `Duration`, a `Uuid`, a `ByteArray`, " +
-              "a collection, a plain interface or another value class), so no C# record struct " +
+              "(a value class crosses as a String, a primitive, a Char, an enum, an exported " +
+              "class or sealed type, an `Instant`, a `Duration`, a `Uuid`, a `ByteArray`, a " +
+              "collection, a plain interface or another value class), so no C# record struct " +
               "is declared for it",
-          hint = "change the underlying to one of those (a `Char` fits in a `String` or an " +
-              "`Int`), or make the value class internal",
+          hint = "change the underlying to one of those, or make the value class internal",
           owner = null,
         )
       },

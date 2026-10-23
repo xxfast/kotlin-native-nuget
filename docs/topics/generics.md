@@ -317,13 +317,12 @@ instantiation borrows the argument's own live handle and mints nothing on the wa
 [value class](value-classes.md#at-an-erased-generic-position) mints and disposes a box through its
 own box/unbox pair, running `init` at the boundary. A generic one (`Box<Sticker<Int>>`, or `Sticker<T>` over a
 function's own `T`) uses a single pair for every instantiation, see
-[A generic value class at an erased position](value-classes.md#a-generic-value-class-at-an-erased-position). A value class with no such pair (an ineligible sealed
-interface) still compiles at `T` but throws
-`NotSupportedException` at the call, since an open C# generic has no build-time way to refuse it.
-A value class over `Instant`, `Duration`, `Uuid`, `ByteArray`, a collection, a plain interface or
-another value class has a pair too, so `Box<PawPrint>` crosses like `Box<CatId>`. A Kotlin member
-that uses a value class with no C# record struct (over `Char`, a `Throwable`, and so on) at `T` is
-skipped by name instead.
+[A generic value class at an erased position](value-classes.md#a-generic-value-class-at-an-erased-position). A value class over a sealed type or a `Char` has a pair too,
+and so does one over `Instant`, `Duration`, `Uuid`, `ByteArray`, a collection, a plain interface or
+another value class, so `Box<PawPrint>` crosses like `Box<CatId>`. A Kotlin member that uses a value
+class with no C# record struct (over a `Throwable`, and so on) at `T` is skipped by name, and
+`new Box<V>(v)` for such a `V` written in C# throws `NotSupportedException` at the call, since an
+open C# generic has no build-time way to refuse it.
 
 ### An interface at an erased position {id="an-interface-at-an-erased-position"}
 
@@ -494,6 +493,8 @@ These are skipped, named, instead of generating C# that fails to compile:
   [A flow as a type argument](#a-flow-as-a-type-argument).
 - A use-site `out` projection (`Box<out Cat>`), since C# has none for a generic class. A star
   projection binds: `Box<*>` is `Box<object?>`, read at the parameter's bound (see [Any](primitives-and-strings.md#any)).
+  A star-projected generic value class result is a type parameter instead; see
+  [A star-projected result](value-classes.md#a-star-projected-result).
 - An inner class of a generic owner (`Tin<Int>.Latch`). A generic interface (`Shelf<String>`) binds at every position; see
   [A generic interface](interfaces-abstract-sealed.md#implementing-a-generic-interface-in-c).
 - An outer type that is not an exported class (`Pair<Int, Int>`).

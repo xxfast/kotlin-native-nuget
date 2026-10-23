@@ -235,6 +235,16 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
           )
         }
 
+        // ADR-234: a `Char` underlying ships the `Char` a bare `Char` getter does.
+        BridgeType.Char -> {
+          builder.returns(kotlinType("Char"))
+          builder.addCode(
+              valueBody(unboxed, "errorOut", "'\\u0000'"),
+              cOpaquePointerVar,
+              nugetHandles,
+          )
+        }
+
         is BridgeType.ObjectHandle -> {
           builder.returns(cOpaquePointer.copy(nullable = true))
           builder.addCode(
@@ -243,7 +253,6 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
         }
 
         BridgeType.Unit,
-        BridgeType.Char,
         BridgeType.Instant,
         BridgeType.Duration,
         is BridgeType.Throwable,
@@ -366,8 +375,12 @@ private fun FileSpec.Builder.addNullableValueGetter(
           .returns(kotlinType("Int"))
           .addCode(valueBody("$unboxed.ordinal", "errorOut", "0"), cOpaquePointerVar, nugetHandles)
 
+        // ADR-234: a `Char` underlying, the `Char` a bare `Char?` getter's `_value` call returns.
+        BridgeType.Char -> getterBuilder
+          .returns(kotlinType("Char"))
+          .addCode(valueBody(unboxed, "errorOut", "'\\u0000'"), cOpaquePointerVar, nugetHandles)
+
         BridgeType.Unit,
-        BridgeType.Char,
         BridgeType.String,
         BridgeType.Instant,
         BridgeType.Duration,
@@ -649,7 +662,7 @@ private fun inputLowering(type: BridgeType, name: String): String = when (type) 
     // export receives the bare underlying wire (non-null by construction; `set_null` is the other
     // export), so the value is re-wrapped unconditionally.
     is BridgeType.ValueClass ->
-      if (inner.underlying is BridgeType.Primitive || inner.underlying is BridgeType.Enum) {
+      if (inner.underlying.isHasValueUnderlying()) {
         "${inner.qualifiedName}(${valueClassUnderlyingLowering(name, inner.underlying)})"
       } else {
         val lowered: String = valueClassUnderlyingLowering("it", inner.underlying)

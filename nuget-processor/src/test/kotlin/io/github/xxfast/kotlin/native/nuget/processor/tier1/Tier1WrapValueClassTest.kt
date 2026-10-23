@@ -96,10 +96,14 @@ class Tier1WrapValueClassTest {
    * `ERROR_INTERNAL_GENERATOR_FAILURE` ("Forward ABI missing Kotlin export for ..._create"): the
    * planner called the underlying a value and planned `_create`, the Kotlin half called it a
    * reference and never emitted it. Both halves read `ForwardValueClassUnderlying` now, which
-   * refuses both kinds by name, and every member typed with one skips on its own owner.
+   * refuses a struct-less one by name, and every member typed with one skips on its own owner.
+   * ADR-235 made a plain interface a WIRE underlying, so `TagRef` binds; ADR-234 made `Char` a
+   * value underlying, so the cell takes its struct-less underlying from
+   * [Tier1StructlessValueClassWitness].
    */
   @Test
-  fun `a value class over Char or over a plain interface is refused by name, never an abort`() {
+  fun `a struct-less value class is refused by name and one over an interface binds, no abort`() {
+    val structless: Tier1StructlessUnderlying = Tier1StructlessValueClassWitness.underlying
     val result = Tier1Harness.run(
       """
       package tier1.refused
@@ -109,15 +113,15 @@ class Tier1WrapValueClassTest {
       }
 
       @JvmInline
-      value class Initial(val letter: Char)
+      value class Initial(val letter: ${structless.kotlin})
 
       @JvmInline
       value class TagRef(val tagged: Tagged)
 
       class Registrar(val desk: String) {
-        fun initialOf(name: String): Initial = Initial(name.first())
+        fun initialOf(name: String): Initial = Initial(${structless.sample})
         fun tagOf(ref: TagRef): String = ref.tagged.tag
-        val onInitial: (Initial) -> String = { initial -> initial.letter.toString() }
+        val onInitial: (Initial) -> String = { initial -> initial.toString() }
         fun label(): String = desk
       }
       """.trimIndent(),
@@ -131,7 +135,7 @@ class Tier1WrapValueClassTest {
 
     assertContains(cs, "public readonly record struct TagRef(")
     assertContains(cs, "TagOf(")
-    listOf("tier1.refused.Initial" to "kotlin.Char")
+    listOf("tier1.refused.Initial" to structless.qualifiedName)
       .forEach { (valueClass, underlying) ->
         val simple: String = valueClass.substringAfterLast('.')
         assertFalse(cs.contains("record struct $simple"), "expected no record struct for $simple")
