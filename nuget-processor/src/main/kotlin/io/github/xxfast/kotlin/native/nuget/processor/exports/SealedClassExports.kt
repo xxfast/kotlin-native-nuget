@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.getAllPlainProperties
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.KSClassDeclaration
@@ -50,7 +51,7 @@ internal fun FileSpec.Builder.addSealedClassExports(
   // ADR-101 amendment (2026-09-27): no declared-only filter. The catalog lookup is the gate, so an
   // inherited property re-homed by `ForwardPropertyPlanner.sealedBaseProperties` exports here, in
   // lockstep with the C# getter `translateSealedClass` renders off the same plan.
-  sealed.getAllProperties()
+  sealed.getAllPlainProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .forEach { prop ->
       val planned: ForwardPropertyPlan =
@@ -106,7 +107,7 @@ internal fun FileSpec.Builder.addSealedClassExports(
         .build()
     )
 
-    val properties: List<KSPropertyDeclaration> = subclass.getAllProperties()
+    val properties: List<KSPropertyDeclaration> = subclass.getAllPlainProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .toList()
 

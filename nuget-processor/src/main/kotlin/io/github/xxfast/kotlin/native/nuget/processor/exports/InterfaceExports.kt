@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.getAllPlainProperties
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.Visibility
@@ -57,7 +58,7 @@ internal fun FileSpec.Builder.addInterfaceExports(
     addFlowMethodExports(method, receiver, prefix, classifier, callableCatalog, owner = iface)
   }
 
-  iface.getAllProperties()
+  iface.getAllPlainProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     // Interface super-interfaces: every member, own and inherited, since the backing class
     // implements `IDerived` and through it every `IBase`.

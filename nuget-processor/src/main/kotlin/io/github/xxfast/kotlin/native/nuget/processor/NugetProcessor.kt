@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.getAllPlainProperties
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedExtensionReceiver
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.findActualType
@@ -1435,7 +1436,7 @@ internal fun warnRefusedLegacyRouteMembers(
       )
       // ADR-123: a Flow/StateFlow *property* whose element cannot cross. Both halves drop it
       // silently, exactly as they drop a method, so this walk is the only thing that names it.
-      cls.getAllProperties()
+      cls.getAllPlainProperties()
         .filter { property -> property.getVisibility() == Visibility.PUBLIC }
         .forEach { property ->
           val refused: Pair<String, BridgeType.Unsupported?> =
@@ -1446,7 +1447,7 @@ internal fun warnRefusedLegacyRouteMembers(
             ),
           )
         }
-      cls.getAllProperties()
+      cls.getAllPlainProperties()
         .filter { property -> property.getVisibility() == Visibility.PUBLIC }
         .forEach { property ->
           nameRefusedWrites(
@@ -1531,7 +1532,7 @@ internal fun warnRefusedLegacyRouteMembers(
         nameRefusedStoredPairs(armMembers, owner, ownerDeclaration)
         // ADR-124: and the arm's flow *properties*, whose refused element has no
         // `KSFunctionDeclaration` to hang a return diagnostic on. All-properties, ADR-111's rule.
-        subclass.getAllProperties()
+        subclass.getAllPlainProperties()
           .filter { property -> property.getVisibility() == Visibility.PUBLIC }
           .forEach { property ->
             val refused: Pair<String, BridgeType.Unsupported?> =
@@ -1542,7 +1543,7 @@ internal fun warnRefusedLegacyRouteMembers(
               ),
             )
           }
-        subclass.getAllProperties()
+        subclass.getAllPlainProperties()
           .filter { property -> property.getVisibility() == Visibility.PUBLIC }
           .forEach { property ->
             nameRefusedWrites(

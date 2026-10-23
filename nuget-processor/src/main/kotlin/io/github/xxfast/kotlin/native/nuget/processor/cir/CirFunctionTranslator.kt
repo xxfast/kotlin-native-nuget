@@ -109,7 +109,18 @@ internal fun translateSuspendFunction(
   val receiverParameter: CirParameter? = receiver?.cirReceiverParameter(
     freshName("receiver", declared.localScopeNames()), tracker,
   )
-  val params: List<CirParameter> = listOfNotNull(receiverParameter) + declared
+  // ADR-238: a member extension's receiver follows the owner's own (`NapAsync(Loafer receiver)`).
+  val memberReceiver: CirParameter? = func.extensionReceiver?.resolve()
+    ?.takeIf {
+      receiver !is ForwardStaticSuspendReceiver.Parameter &&
+        func.parentDeclaration is KSClassDeclaration
+    }
+    ?.let { type ->
+      val taken: Set<String> = declared.localScopeNames() +
+        listOfNotNull(receiverParameter?.name, "receiver".takeIf { structReceiver != null })
+      legacyReceiverParameter(freshName("receiver", taken), type, classifier, tracker)
+    }
+  val params: List<CirParameter> = listOfNotNull(receiverParameter, memberReceiver) + declared
 
   // ADR-068 (2026-09-27 amendment): the class route's StateFlow bucket, on a top-level function.
   // The Kotlin half is the plain top-level export (the awaited flow is already minted as a handle);

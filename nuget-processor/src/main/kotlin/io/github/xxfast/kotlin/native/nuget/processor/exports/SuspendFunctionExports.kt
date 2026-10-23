@@ -221,21 +221,31 @@ private fun FileSpec.Builder.addStaticSuspendExport(
   val shaped: ForwardStaticSuspendReceiver.Parameter? =
     receiver as? ForwardStaticSuspendReceiver.Parameter
   val declaredNames: List<String> = func.legacyParameterNames()
-  val leading: String? = shaped?.let { freshName("receiver", declaredNames.toSet()) }
+  // ADR-238: so is a member extension's receiver, beside the owner's own slot (an object's
+  // none, an enum's ordinal, a value class's underlying), called inside the owner's scope.
+  val memberType: KSType? = func.extensionReceiver?.resolve()?.expandAliases()
+    ?.takeIf { shaped == null && func.parentDeclaration is KSClassDeclaration }
+  val memberShape: ForwardLegacyParameterShape? =
+    memberType?.let { type -> classifier.legacyParameterShape(type) }
+  val leadingShape: ForwardLegacyParameterShape? = shaped?.shape ?: memberShape
+  val leading: String? = leadingShape?.let {
+    freshName(if (shaped != null) "receiver" else "extensionReceiver", declaredNames.toSet())
+  }
   val slotNames: List<String> = listOfNotNull(leading) + declaredNames
-  val names: ForwardLegacyNames = if (shaped == null) {
+  val names: ForwardLegacyNames = if (leadingShape == null) {
     legacyKotlinNames(func.parameters, paramShapes)
   } else {
-    ForwardLegacyNames(slotNames, listOf(shaped.shape) + paramShapes)
+    ForwardLegacyNames(slotNames, listOf(leadingShape) + paramShapes)
   }
   // ADR-231: a returned flow takes its plain callbacks' keys back to C#, which releases them.
   names.handsCallbacksBack = qualifiedReturn in FLOW_TYPES + STATE_FLOW_TYPES
-  val offset: Int = if (shaped == null) 0 else 1
+  val offset: Int = if (leadingShape == null) 0 else 1
   // ADR-229: the receiver slot, named apart from every parameter and generated slot.
-  val receiverSlot: String = leading ?: freshName(
+  val receiverSlot: String = leading?.takeIf { shaped != null } ?: freshName(
     "receiver",
     declaredNames.toSet() +
-      setOf(names.callback, names.userData, names.obj, names.scope, names.scopeHandle),
+      setOf(names.callback, names.userData, names.obj, names.scope, names.scopeHandle) +
+      listOfNotNull(leading),
   )
   // A handle receiver is read before the launch, as a borrowed handle parameter is (ADR-122).
   val receiverPrelude: String = when (receiver) {
@@ -281,11 +291,24 @@ private fun FileSpec.Builder.addStaticSuspendExport(
     declared == null -> ForwardFlowTrampoline(listOf(receiverVariable), emptySet(), null)
     else -> declared.copy(variables = listOf(receiverVariable) + declared.variables)
   }
-  val call: String = names.legacyInvocation(
-    callee(receiverRead) + func.legacyTypeArguments(),
-    slotNames,
-    from = offset,
-  ) + func.suspendResultUnwrap()
+  val call: String = if (memberShape != null && leading != null) {
+    val member: String = func.simpleName.asString().kotlinIdentifier()
+    val scope: String = callee(receiverRead).removeSuffix(".$member")
+    val extension: String = names.legacyArgument(0, leading.kotlinIdentifier())
+    "$scope.run { " +
+      names.legacyInvocation(
+        "($extension).$member${func.legacyTypeArguments()}",
+        slotNames,
+        from = 1,
+      ) +
+      " }" + func.suspendResultUnwrap()
+  } else {
+    names.legacyInvocation(
+      callee(receiverRead) + func.legacyTypeArguments(),
+      slotNames,
+      from = offset,
+    ) + func.suspendResultUnwrap()
+  }
   val paramPrelude: String = receiverPrelude + names.legacyPrelude(slotNames)
   val boxed: String = legacyBoxedResult(returnShape)
 
@@ -313,13 +336,16 @@ private fun FileSpec.Builder.addStaticSuspendExport(
     ) { receiver.type.toBridgeTypeName(nullable = false) }
     null -> Unit
   }
+  if (memberShape != null && memberType != null && leading != null) {
+    builder.addLegacySlots(leading, 0, memberShape, names) { memberType.legacyScalarTypeName() }
+  }
   builder
     .addLegacySuspendParameters(func, paramShapes, names, offset)
     .addParameter(names.callback, cOpaquePointer)
     .addParameter(names.userData, cOpaquePointer)
     .returns(cOpaquePointer)
     .addCode(body)
-  if ((listOfNotNull(shaped?.shape) + paramShapes).legacyCastsGenericBound()) {
+  if ((listOfNotNull(leadingShape) + paramShapes).legacyCastsGenericBound()) {
     builder.addAnnotation(forwardUncheckedCastSuppression)
   }
 

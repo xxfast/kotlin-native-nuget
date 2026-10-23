@@ -8986,4 +8986,57 @@ public class LiveHandleTests
         await BindleCrossings.MemberExtensionProperties(hand, oreo);
         await AssertNoLeakAsync(() => BindleCrossings.MemberExtensionProperties(hand, oreo), iterations: 20);
     }
+
+    // ADR-238
+    // Member extensions on an object, a companion, an enum and a value class: accessors, `suspend`
+    // and `Flow` routes, the receiver a leading slot. Accounting in `BindleCrossings`. Net zero.
+    [Fact]
+    public async Task MemberExtensions_ObjectOwner_ReturnToBaseline()
+    {
+        using var oreo = new Bindle.Loafer("Oreo");
+        await BindleCrossings.ObjectMemberExtensions(oreo);
+        await AssertNoLeakAsync(() => BindleCrossings.ObjectMemberExtensions(oreo), iterations: 20);
+    }
+
+    [Fact]
+    public async Task MemberExtensions_CompanionOwner_ReturnToBaseline()
+    {
+        using var oreo = new Bindle.Loafer("Oreo");
+        await BindleCrossings.CompanionMemberExtensions(oreo);
+        await AssertNoLeakAsync(() => BindleCrossings.CompanionMemberExtensions(oreo), iterations: 20);
+    }
+
+    [Fact]
+    public async Task MemberExtensions_EnumOwner_ReturnToBaseline()
+    {
+        using var oreo = new Bindle.Loafer("Oreo");
+        await BindleCrossings.EnumMemberExtensions(oreo);
+        await AssertNoLeakAsync(() => BindleCrossings.EnumMemberExtensions(oreo), iterations: 20);
+    }
+
+    [Fact]
+    public async Task MemberExtensions_ValueClassOwner_ReturnToBaseline()
+    {
+        using var oreo = new Bindle.Loafer("Oreo");
+        await BindleCrossings.ValueClassMemberExtensions(oreo);
+        await AssertNoLeakAsync(() => BindleCrossings.ValueClassMemberExtensions(oreo), iterations: 20);
+    }
+
+    [Fact]
+    public async Task MemberExtensions_SealedOwner_ReturnToBaseline()
+    {
+        using var oreo = new Bindle.Loafer("Oreo");
+        using var deep = new Bindle.Slumber.Reverie();
+        await BindleCrossings.SealedMemberExtensions(deep, oreo);
+        await AssertNoLeakAsync(() => BindleCrossings.SealedMemberExtensions(deep, oreo), iterations: 20);
+    }
+
+    [Fact]
+    public void MemberExtensions_InterfaceOwner_BothSides_ReturnToBaseline()
+    {
+        using var choir = new Bindle.Choir();
+        var chorus = new BindleCrossings.CSharpChorus();
+        BindleCrossings.InterfaceMemberExtensions(choir, chorus);
+        AssertNoLeak(() => BindleCrossings.InterfaceMemberExtensions(choir, chorus));
+    }
 }

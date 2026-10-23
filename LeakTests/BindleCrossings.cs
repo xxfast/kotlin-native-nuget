@@ -229,6 +229,66 @@ internal static class BindleCrossings
         using (KotlinFlow<string> stream = hand.Stream(oreo)) await foreach (string _ in stream) { }
     }
 
+    // ADR-238: member extensions on each owner kind, every route the owner carries: a borrowed
+    // receiver each, a job +1/-1 per `suspend` call, a flow wrapper and its collection +1/-1.
+    public static async Task ObjectMemberExtensions(Loafer oreo)
+    {
+        Assert.Equal("Oreo snoozes on the napkin", Napkin.GetSnooze(oreo));
+        Napkin.SetDozeCount(oreo, 2);
+        Assert.Equal(2, Napkin.GetDozeCount(oreo));
+        Assert.StartsWith("Oreo", await Napkin.CurlUpAsync(oreo, 1));
+        using (KotlinFlow<int> purrs = Napkin.Purrs(oreo, 1)) await foreach (int _ in purrs) { }
+        using (KotlinFlow<string> snores = Napkin.Snores(oreo)) await foreach (string _ in snores) { }
+    }
+
+    public static async Task CompanionMemberExtensions(Loafer oreo)
+    {
+        Assert.Equal("Oreo snoozes in the cradle", Cradle.GetSnooze(oreo));
+        Assert.StartsWith("Oreo", await Cradle.CurlUpAsync(oreo, 1));
+        using (KotlinFlow<int> purrs = Cradle.Purrs(oreo, 1)) await foreach (int _ in purrs) { }
+        using (KotlinFlow<string> snores = Cradle.Snores(oreo)) await foreach (string _ in snores) { }
+    }
+
+    public static async Task EnumMemberExtensions(Loafer oreo)
+    {
+        Assert.EndsWith("DEEP", Drowse.Deep.GetSnooze(oreo));
+        Assert.StartsWith("Oreo", await Drowse.Deep.CurlUpAsync(oreo, 1));
+        using (KotlinFlow<int> purrs = Drowse.Deep.Purrs(oreo, 1)) await foreach (int _ in purrs) { }
+        using (KotlinFlow<string> snores = Drowse.Deep.Snores(oreo)) await foreach (string _ in snores) { }
+    }
+
+    public static async Task ValueClassMemberExtensions(Loafer oreo)
+    {
+        var paws = new Paws(4);
+        Assert.Equal("Oreo with 4 paws", paws.GetPawPrint(oreo));
+        Assert.StartsWith("Oreo", await paws.StretchAsync(oreo, 1));
+        using (KotlinFlow<int> kneads = paws.Kneads(oreo, 1)) await foreach (int _ in kneads) { }
+        using (KotlinFlow<int> steps = paws.PawSteps(oreo)) await foreach (int _ in steps) { }
+    }
+
+    public static async Task SealedMemberExtensions(Slumber.Reverie deep, Loafer oreo)
+    {
+        Assert.Equal("Oreo slumbers", deep.GetSnooze(oreo));
+        Assert.Equal("Oreo dreams deeply", deep.GetDream(oreo));
+        using KotlinFlow<string> snores = deep.Snores(oreo);
+        await foreach (string _ in snores) { }
+    }
+
+    internal sealed class CSharpChorus : IChorus
+    {
+        public string GetShout(string receiver) => receiver + "!";
+        public string Echo(string receiver, int times) => string.Concat(Enumerable.Repeat(receiver, times));
+        public void Dispose() { }
+    }
+
+    // Both sides of an interface's member extensions: the Kotlin-backed Choir, and a C# one
+    // crossing as a fresh transfer handle each call that Kotlin's bridge releases.
+    public static void InterfaceMemberExtensions(Choir choir, IChorus chorus)
+    {
+        Assert.Equal("MEOW", choir.GetShout("meow"));
+        Assert.Equal("purr!|purrpurr", Bindles.Sing(chorus, "purr"));
+    }
+
     // Warm-up: the Groomhand mints its coroutine scope on its first `suspend` call
     // (`GetOrCreateScope()`) and holds it until disposed, so it is called once before the baseline.
     public static async Task WarmGroomhand(Groomhand hand) =>

@@ -184,9 +184,26 @@ hand.GetPeekInside(bindle);     // GetPeekInside<T>(Bindle<T> receiver)
 KotlinFlow<string> stream = hand.Stream(mylo); // a Flow typed property is a flow method
 ```
 
-A nullable receiver keeps its `?` (`GetNickOrNone(Loafer? receiver)`). A member extension function
-declared in an `object`, companion, sealed base or arm, interface, enum or value class also takes the
-receiver first (`Hold.InHold(Loafer receiver, int n)`, `mood.InMood(Loafer receiver, int n)`).
+A nullable receiver keeps its `?` (`GetNickOrNone(Loafer? receiver)`).
+
+#### On every owner {id="member-extensions-owners"}
+
+A member extension declared in any other owner binds too, and the receiver stays an argument:
+
+| Owner | Property | Function |
+|---|---|---|
+| `object`, companion | static `Napkin.GetSnooze(loafer)`, `SetDozeCount(loafer, 4)` | static `CurlUpAsync(loafer, 5)`, `Purrs(loafer, 2)` |
+| enum | `Drowse.Deep.GetSnooze(loafer)` | `Drowse.Deep.Purrs(loafer, 7)` |
+| value class | `paws.GetPawPrint(loafer)` | `paws.StretchAsync(loafer, 6)` |
+| sealed base and arm | `deep.GetSnooze(loafer)`, `deep.GetDream(loafer)` | as on a class |
+| interface | `IChorus.GetShout(string receiver)` | `IChorus.Echo(string receiver, int times)` |
+
+A `Flow` typed property is a flow method on each (`Napkin.Snores(loafer)`). On the enum and value
+class `suspend` and `Flow` methods the extension receiver is named `receiver_`, because `receiver`
+is already the owner; calls are positional, so only IntelliSense shows it.
+
+A Kotlin implementer of `IChorus` works, and so does a C# one, the receiver its first argument,
+whether it is a `String` or a class (`string GetHideout(Loafer receiver)` on `IHideaway`).
 
 ### `suspend` and `Flow` extensions {id="suspend-and-flow-extensions"}
 

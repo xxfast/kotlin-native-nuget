@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.getAllPlainProperties
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.Visibility
@@ -27,7 +28,7 @@ internal fun FileSpec.Builder.addObjectExports(
   callableCatalog: ForwardCallablePlanCatalog,
 ) {
   val qualifiedName: String = obj.qualifiedName?.asString() ?: return
-  obj.getAllProperties()
+  obj.getAllPlainProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .forEach { prop ->
       val planned: ForwardPropertyPlan? =

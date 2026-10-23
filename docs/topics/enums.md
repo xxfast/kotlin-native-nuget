@@ -257,6 +257,8 @@ extension property such as `Tail.Oreo.Height`. Each entry keeps its own storage.
   (`fun description()` beside `val description`), or a companion `val` beside any same-named
   member. Rename one.
 
+A member extension declared inside an enum binds as an extension method on the enum with the receiver as an extra argument (`Drowse.Deep.GetSnooze(loafer)`); on the `suspend` and `Flow` forms that extra argument is named `receiver_`. See [Member extensions](extensions.md#member-extensions-owners).
+
 ## C# enums in Kotlin {id="reverse-enum-naming"}
 
 A bound C# `enum` becomes a Kotlin `enum class` whose entries are `SCREAMING_SNAKE_CASE`. An

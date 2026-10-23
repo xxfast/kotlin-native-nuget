@@ -548,7 +548,7 @@ internal fun KSClassDeclaration.carrierlessCompanionDrops(
     }
     .toList()
   // `const val` included: the constants route is keyed to an ordinary class's companion too.
-  val properties: List<ForwardDroppedProperty> = companion.getAllProperties()
+  val properties: List<ForwardDroppedProperty> = companion.getAllPlainProperties()
     .filter { property -> property.getVisibility() == Visibility.PUBLIC }
     .filter { property -> !property.isCompilerOwnedMember(companion) }
     .map { property ->
@@ -1382,7 +1382,7 @@ internal class ForwardCallablePlanner(
         ).withValueClassConstruction(construction)
       }
 
-    val properties: List<ForwardCallableCatalogEntry> = cls.getAllProperties()
+    val properties: List<ForwardCallableCatalogEntry> = cls.getAllPlainProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.simpleName.asString() != underlyingPropName }
       .map { prop ->
@@ -1428,6 +1428,8 @@ internal class ForwardCallablePlanner(
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.simpleName.asString() !in excluded }
       .filter { method -> !method.isCompilerOwnedMember(cls) }
+      // ADR-238: a member extension property's accessors, as the methods Kotlin/JVM lowers to.
+      .plus(cls.forwardMemberExtensionAccessors().asSequence())
       .map { method ->
         val name: String = method.simpleName.asString()
         if (method.parentDeclaration != cls || inherited.declares(method)) {
@@ -1671,7 +1673,7 @@ internal class ForwardCallablePlanner(
     underlyingPropName: String,
     receiver: ForwardReceiver,
     inherited: ForwardSupertypeMembers,
-  ): List<ForwardCallableCatalogEntry> = cls.getAllProperties()
+  ): List<ForwardCallableCatalogEntry> = cls.getAllPlainProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { it.simpleName.asString() != underlyingPropName }
     .map { prop ->
@@ -1749,6 +1751,8 @@ internal class ForwardCallablePlanner(
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.simpleName.asString() !in excluded }
       .filter { method -> !method.isCompilerOwnedMember(cls) }
+      // ADR-238: a member extension property's accessors, as the methods Kotlin/JVM lowers to.
+      .plus(cls.forwardMemberExtensionAccessors().asSequence())
       .map { method ->
         val name: String = method.simpleName.asString()
         // ADR-064 (ROADMAP line 77), amended by ADR-066 and narrowed by ADR-082: the supertype
@@ -1857,6 +1861,8 @@ internal class ForwardCallablePlanner(
       .filter { method -> method.getVisibility() == Visibility.PUBLIC }
       .filter { method -> !method.isCompilerOwnedMember(iface) }
       .toList()
+      // ADR-238: a member extension property's accessors.
+      .plus(iface.forwardMemberExtensionAccessors(flow = false))
     // Interface super-interfaces: every member, own and inherited, is planned under this
     // interface's prefix, because the ADR-040 backing class implements `IDerived` and through it
     // every `IBase`. `translateInterface` narrows the declaration back to the DECLARED placement.
@@ -2211,6 +2217,8 @@ internal class ForwardCallablePlanner(
       // not implement plans here like a declared `abstract fun` does, dispatching through the base.
       .filter { method -> method.isForwardMemberOf(sealed, keptBase) }
       .toList()
+      // ADR-238: a member extension property's accessors.
+      .plus(sealed.forwardMemberExtensionAccessors(flow = false))
     val interfaceBridgeMethods: Set<KSFunctionDeclaration> = findInterfaceBridgePairs(methods)
       .flatMap { pair -> listOf(pair.first, pair.second) }
       .toSet()
@@ -2351,6 +2359,8 @@ internal class ForwardCallablePlanner(
       // type does not carry now binds on the arm.
       .filter { method -> method.isForwardPlannableMemberOf(subclass, superClass = sealed) }
       .toList()
+      // ADR-238: a member extension property's accessors.
+      .plus(subclass.forwardMemberExtensionAccessors(flow = false))
     val interfaceBridgeMethods: Set<KSFunctionDeclaration> = findInterfaceBridgePairs(methods)
       .flatMap { pair -> listOf(pair.first, pair.second) }
       .toSet()
@@ -2846,6 +2856,8 @@ internal class ForwardCallablePlanner(
       // abstract member has no implementation for `hasImplementation()` to admit.
       .filter { member -> member.isForwardPlannableMemberOf(obj, superClass = null) }
       .toList()
+      // ADR-238: a member extension property's accessors, a `Flow` typed one on the flow route.
+      .plus(obj.forwardMemberExtensionAccessors())
 
     fun entryFor(function: KSFunctionDeclaration): ForwardCallableCatalogEntry {
       val name: String = function.simpleName.asString()
@@ -2926,6 +2938,8 @@ internal class ForwardCallablePlanner(
       .filter { member -> !member.isCompilerOwnedMember(enum) }
       .filter { member -> member.simpleName.asString() !in ENUM_SYNTHESIZED_FUNCTIONS }
       .toList()
+      // ADR-238: a member extension property's accessors, a `Flow` typed one on the flow route.
+      .plus(enum.forwardMemberExtensionAccessors())
 
     fun entryFor(function: KSFunctionDeclaration): ForwardCallableCatalogEntry {
       val name: String = function.simpleName.asString()
@@ -3064,6 +3078,8 @@ internal class ForwardCallablePlanner(
       // Issue #235: `Companion.serializer()` never becomes an entry, so it never becomes a skip.
       .filter { member -> !member.isCompilerOwnedMember(companion) }
       .toList()
+      // ADR-238: a member extension property's accessors, a `Flow` typed one on the flow route.
+      .plus(companion.forwardMemberExtensionAccessors())
 
     fun entryFor(function: KSFunctionDeclaration): ForwardCallableCatalogEntry {
       val name: String = function.simpleName.asString()

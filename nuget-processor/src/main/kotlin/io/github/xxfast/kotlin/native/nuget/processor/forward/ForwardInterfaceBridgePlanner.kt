@@ -143,6 +143,18 @@ internal data class ForwardBridgeSlot(
    * `R : Pet`), erased in C#. Empty for every member that declares none.
    */
   val typeParameters: List<String> = emptyList(),
+  /**
+   * ADR-238: a member extension's receiver type as Kotlin spells it (`pkg.Loafer`), its first
+   * parameter, read as `this` in the override; null for an ordinary member.
+   */
+  val extensionReceiver: String? = null,
+  /**
+   * ADR-238: the member extension PROPERTY an accessor slot implements (`nick`), rendered as
+   * `override val pkg.Loafer.nick` rather than a function; null for a function slot.
+   */
+  val extensionProperty: String? = null,
+  /** ADR-238: whether this accessor slot is the extension property's setter. */
+  val extensionSetter: Boolean = false,
 ) {
   /** A getter or a setter slot: forwards to a property, not a member function. */
   val isProperty: Boolean = kind != ForwardBridgeSlotKind.FUNCTION
@@ -330,7 +342,7 @@ internal object ForwardInterfaceBridgePlanner {
         is ForwardBridgeSlotOutcome.Refused -> refusals += outcome.refusal
       }
     }
-    iface.getAllProperties()
+    iface.getAllPlainProperties()
       .filter { property -> property.getVisibility() == Visibility.PUBLIC }
       .filter { property -> !property.isCompilerOwnedMember(iface) }
       .forEach { property -> collect(slotOrRefusal(property, classifier, iface)) { slots += it } }
@@ -341,6 +353,8 @@ internal object ForwardInterfaceBridgePlanner {
     iface.getAllFunctions()
       .filter { function -> function.getVisibility() == Visibility.PUBLIC }
       .filter { function -> !function.isCompilerOwnedMember(iface) }
+      // ADR-238: a member extension property's accessors, a slot each.
+      .plus(iface.forwardMemberExtensionAccessors().asSequence())
       .forEach { function ->
         collect(slotOrRefusal(function, classifier, iface)) { slot ->
           val occurrence: Int = occurrences.merge(slot.name, 1, Int::plus)!!
@@ -506,14 +520,18 @@ internal object ForwardInterfaceBridgePlanner {
     // ADR-233: any arity: each parameter is one more slot argument, on its own wire.
     val substituted: KSFunction? =
       inherited(owner, function)?.let { owned -> function.asMemberOf(owned) }
-    val returnType: KSType =
+    // ADR-238: a member extension property's setter accessor returns Unit.
+    val unitSetter: Boolean = (function as? ForwardMemberExtensionAccessor)?.setter == true
+    val returnType: KSType? =
       (substituted?.returnType ?: function.returnType?.resolve())?.expandAliases()
-      ?: return refuse("has no resolvable result type", "declare its result type")
+    if (returnType == null && !unitSetter) {
+      return refuse("has no resolvable result type", "declare its result type")
+    }
     // ADR-232: a `Flow` result is a FLOW slot; a suspend member returning one awaits the C# task,
     // whose End thunk registers the flow it completed with.
     var hotResult: ForwardBridgeType? = null
     var flowNullable = false
-    val flow: ForwardBridgeType? = if (returnType.isFlowType()) {
+    val flow: ForwardBridgeType? = if (returnType?.isFlowType() == true) {
       when (val outcome: FlowSlotOutcome = flowResult(returnType, classifier, owner)) {
         is FlowSlotOutcome.Element -> {
           flowNullable = outcome.nullable
@@ -533,14 +551,29 @@ internal object ForwardInterfaceBridgePlanner {
     // ADR-239: a returned lambda crosses as a lambda property's getter does, the delegate C#
     // returned minted into a Kotlin lambda through the ADR-236 managed-lambda exports.
     val result: ForwardBridgeType = hotResult ?: flow?.let { flowSlotResult(it, flowNullable) }
-      ?: lambdaSlotType(returnType, classifier)
-      ?: bridgeType(returnType, classifier, owner)
+      ?: returnType?.let { type -> lambdaSlotType(type, classifier) ?: bridgeType(type, classifier, owner) }
+      ?: ForwardBridgeType(ForwardBridgeWire.UNIT, "Unit", "void").takeIf { unitSetter }
       ?: return refuse(
-        "returns `${returnType.kotlinSpelling(keepProjections = true)}`, a type the bridge " +
+        "returns `${returnType?.kotlinSpelling(keepProjections = true)}`, a type the bridge " +
             "cannot carry",
         "return one of $CARRIED_TYPES",
       )
     val parameters: MutableList<ForwardBridgeParameter> = mutableListOf()
+    // ADR-238: a member extension's receiver crosses as its first argument.
+    val extensionType: KSType? =
+      (substituted?.extensionReceiverType ?: function.extensionReceiver?.resolve())?.expandAliases()
+    if (extensionType != null) {
+      parameters += ForwardBridgeParameter(
+        "receiver",
+        bridgeType(extensionType, classifier, owner, parameter = true)
+          ?.takeIf { it.wire != ForwardBridgeWire.UNIT }
+          ?: return refuse(
+            "extends `${extensionType.kotlinSpelling(keepProjections = true)}`, a type the " +
+              "bridge cannot carry",
+            "extend one of $CARRIED_TYPES",
+          ),
+      )
+    }
     function.parameters.forEachIndexed { index, parameter ->
       val parameterName: String = parameter.name?.asString() ?: "arg$index"
       val declared: KSType =
@@ -575,6 +608,10 @@ internal object ForwardInterfaceBridgePlanner {
           val bound: String? = parameter.forwardBoundSpellings().firstOrNull()
           parameter.name.asString() + (bound?.let { ": $it" } ?: "")
         },
+        extensionReceiver = parameters.firstOrNull()?.type?.kotlin
+          ?.takeIf { extensionType != null },
+        extensionProperty = (function as? ForwardMemberExtensionAccessor)?.propertyName,
+        extensionSetter = (function as? ForwardMemberExtensionAccessor)?.setter == true,
       ),
     )
   }

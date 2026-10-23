@@ -76,7 +76,7 @@ internal fun KSClassDeclaration.inheritedOutcomeOn(
       .mapNotNull { it.qualifiedName?.asString() }
       .toSet()
   val kept: Set<String> = keptOwners + "kotlin.Any"
-  val members: List<KSDeclaration> = (getAllFunctions() + getAllProperties())
+  val members: List<KSDeclaration> = (getAllFunctions() + getAllProperties().filterNot { it.isMemberExtension() })
     .filter { member -> member.getVisibility() == Visibility.PUBLIC }
     .filter { member ->
       (member.parentDeclaration as? KSClassDeclaration)?.qualifiedName?.asString() !in kept

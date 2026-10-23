@@ -986,7 +986,7 @@ handle count returns to baseline once a call settles. `LeakTests/LiveHandleTests
 `SuspendBoundInterfaceReceiver_ReturnsToBaseline`,
 `SuspendEveryReceiver_Completion_ReturnsToBaseline`, `SuspendResult_Failure_ReturnsToBaseline`
 (a `Result<T>` failure faulting the task), `FlowResultExtension_EveryReceiver_ReturnsToBaseline` and
-`FlowParameterExtension_GenericAndNullableReceivers_ReturnToBaseline` and, for member extension properties on a class, `MemberExtensionProperties_ReturnToBaseline`.
+`FlowParameterExtension_GenericAndNullableReceivers_ReturnToBaseline`, and, for member extension properties on a class, `MemberExtensionProperties_ReturnToBaseline`. A member extension inside every other owner has a row each: `MemberExtensions_ObjectOwner_ReturnToBaseline`, `MemberExtensions_CompanionOwner_ReturnToBaseline`, `MemberExtensions_EnumOwner_ReturnToBaseline`, `MemberExtensions_ValueClassOwner_ReturnToBaseline`, `MemberExtensions_SealedOwner_ReturnToBaseline` and `MemberExtensions_InterfaceOwner_BothSides_ReturnToBaseline`.
 `LeakTests/CollectabilityTests.cs` holds a `WeakReference` to the call's state in
 `SuspendInterfaceReceiver_IsCollectedOnceTheTaskCompletes`,
 `SuspendBoundInterfaceReceiver_IsCollectedOnceTheTaskCompletes` and
