@@ -62,10 +62,38 @@ class Loafer(override val name: String) : Dozer, Preener {
 }
 
 /** An enum with no members of its own, so its `DrowseExtensions` is only this file's. */
-enum class Drowse { CATNAP, DEEP }
+enum class Drowse {
+  CATNAP,
+  DEEP;
+
+  /** Member extensions on an enum: `drowse.GetSnooze(loafer)`, after the enum value. */
+  val Loafer.snooze: String get() = "$name ${name.lowercase()}s on ${this@Drowse.name}"
+
+  /** A `Flow` typed one: `drowse.Snores(loafer)`. */
+  val Loafer.snores: Flow<String> get() = flowOf(this@Drowse.name, name)
+
+  suspend fun Loafer.curlUp(minutes: Int): String {
+    delay(1.milliseconds)
+    return "$name curls up for $minutes on ${this@Drowse.name}"
+  }
+
+  fun Loafer.purrs(count: Int): Flow<Int> = flowOf(ordinal, count)
+}
 
 /** A value class over a primitive: how many paws are tucked in. */
-value class Paws(val count: Int)
+value class Paws(val count: Int) {
+  /** Member extensions on a value class: instance methods on the struct, the receiver first. */
+  val Loafer.pawPrint: String get() = "$name with $count paws"
+
+  val Loafer.pawSteps: Flow<Int> get() = flowOf(count, name.length)
+
+  suspend fun Loafer.stretch(minutes: Int): String {
+    delay(1.milliseconds)
+    return "$name stretches $count paws for $minutes"
+  }
+
+  fun Loafer.kneads(times: Int): Flow<Int> = flowOf(count * times)
+}
 
 /** A value class over a string: the tag on Oreo's bindle. */
 value class BindleTag(val id: String)
@@ -395,6 +423,91 @@ fun <T> Bindle<T>.relay(events: Flow<T>): Flow<T> = flow {
 fun Loafer?.hears(events: Flow<Int>): String = if (this == null) "nobody" else "$name listens"
 
 // ---- member extensions -------------------------------------------------------------------------
+
+/** Member extensions on an object: `Napkin.GetSnooze(loafer)`. */
+object Napkin {
+  private val dozes: MutableMap<String, Int> = mutableMapOf()
+
+  val Loafer.snooze: String get() = "$name snoozes on the napkin"
+
+  var Loafer.dozeCount: Int
+    get() = dozes[name] ?: 0
+    set(value) {
+      dozes[name] = value
+    }
+
+  val Loafer.snores: Flow<String> get() = flowOf("napkin", name)
+
+  suspend fun Loafer.curlUp(minutes: Int): String {
+    delay(1.milliseconds)
+    return "$name curls up on the napkin for $minutes"
+  }
+
+  fun Loafer.purrs(count: Int): Flow<Int> = flowOf(count, count + 1)
+}
+
+/** Member extensions on a companion: `Cradle.GetSnooze(loafer)`. */
+class Cradle {
+  companion object {
+    val Loafer.snooze: String get() = "$name snoozes in the cradle"
+
+    val Loafer.snores: Flow<String> get() = flowOf("cradle", name)
+
+    suspend fun Loafer.curlUp(minutes: Int): String {
+      delay(1.milliseconds)
+      return "$name curls up in the cradle for $minutes"
+    }
+
+    fun Loafer.purrs(count: Int): Flow<Int> = flowOf(count * 2)
+  }
+}
+
+/** Member extension properties on a sealed base and on its arm. */
+sealed class Slumber {
+  val Loafer.snooze: String get() = "$name slumbers"
+
+  val Loafer.snores: Flow<String> get() = flowOf("slumber", name)
+
+  class Reverie : Slumber() {
+    val Loafer.dream: String get() = "$name dreams deeply"
+  }
+}
+
+/** Member extensions on an interface, slots a C# implementation fills too. */
+interface Chorus {
+  val String.shout: String
+
+  fun String.echo(times: Int): String
+}
+
+/** The Kotlin-backed [Chorus]. */
+class Choir : Chorus {
+  override val String.shout: String get() = uppercase()
+
+  override fun String.echo(times: Int): String = repeat(times)
+}
+
+/** Reads a [Chorus] from Kotlin, whichever side implements it. */
+fun sing(chorus: Chorus, line: String): String = with(chorus) { line.shout + "|" + line.echo(2) }
+
+/** Member extensions over a class receiver on an interface, slots a C# implementation fills too. */
+interface Hideaway {
+  val Loafer.hideout: String
+
+  fun Loafer.peek(times: Int): String
+}
+
+/** The Kotlin-backed [Hideaway]. */
+class Cubby : Hideaway {
+  override val Loafer.hideout: String get() = "$name hides in the cubby"
+
+  override fun Loafer.peek(times: Int): String = "$name peeks".repeat(times)
+}
+
+/** Reads a [Hideaway] from Kotlin, whichever side implements it. */
+fun scout(hideaway: Hideaway, loafer: Loafer): String =
+  with(hideaway) { loafer.hideout + "|" + loafer.peek(2) }
+
 
 /** A class whose members are extensions: `groomhand.Brush(loafer, 3)` in C#. */
 class Groomhand(val name: String) {

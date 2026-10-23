@@ -618,6 +618,8 @@ fun Temperament.escalate(): Temperament = when (mood) {
 Temperament next = temperament.Escalate();
 ```
 
+A member extension declared inside a value class binds as an instance method on the struct that takes the receiver first (`paws.GetPawPrint(loafer)`, `await paws.StretchAsync(loafer, 6)`). See [Member extensions](extensions.md#member-extensions-owners).
+
 ## Inherited members
 
 A member whose signature comes from a supertype -- inherited, forwarded through interface

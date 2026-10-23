@@ -648,6 +648,97 @@ public class EveryReceiverExtensionTests
         Assert.Equal(["Oreo", "Mylo"], await Drain(stream));
     }
 
+    // ---- member extensions on every owner kind -----------------------------------------------
+
+    [Fact]
+    public async Task Napkin_ObjectMemberExtensions_AreStaticMethodsTakingTheReceiver()
+    {
+        using var mylo = new Loafer("Mylo");
+        Assert.Equal("Mylo snoozes on the napkin", Napkin.GetSnooze(mylo));
+        Napkin.SetDozeCount(mylo, 4);
+        Assert.Equal(4, Napkin.GetDozeCount(mylo));
+        Assert.Equal("Mylo curls up on the napkin for 5", await Napkin.CurlUpAsync(mylo, 5));
+        using (KotlinFlow<int> purrs = Napkin.Purrs(mylo, 2)) Assert.Equal([2, 3], await Drain(purrs));
+        using (KotlinFlow<string> snores = Napkin.Snores(mylo)) Assert.Equal(["napkin", "Mylo"], await Drain(snores));
+    }
+
+    [Fact]
+    public async Task Cradle_CompanionMemberExtensions_AreStaticMethodsOnTheOwner()
+    {
+        using var oreo = new Loafer("Oreo");
+        Assert.Equal("Oreo snoozes in the cradle", Cradle.GetSnooze(oreo));
+        Assert.Equal("Oreo curls up in the cradle for 3", await Cradle.CurlUpAsync(oreo, 3));
+        using (KotlinFlow<int> purrs = Cradle.Purrs(oreo, 4)) Assert.Equal([8], await Drain(purrs));
+        using (KotlinFlow<string> snores = Cradle.Snores(oreo)) Assert.Equal(["cradle", "Oreo"], await Drain(snores));
+    }
+
+    [Fact]
+    public async Task Drowse_EnumMemberExtensions_TakeTheReceiverAfterTheEnumValue()
+    {
+        using var mylo = new Loafer("Mylo");
+        Assert.Equal("Mylo mylos on DEEP", Drowse.Deep.GetSnooze(mylo));
+        Assert.Equal("Mylo curls up for 2 on CATNAP", await Drowse.Catnap.CurlUpAsync(mylo, 2));
+        using (KotlinFlow<int> purrs = Drowse.Deep.Purrs(mylo, 7)) Assert.Equal([1, 7], await Drain(purrs));
+        using (KotlinFlow<string> snores = Drowse.Catnap.Snores(mylo)) Assert.Equal(["CATNAP", "Mylo"], await Drain(snores));
+    }
+
+    [Fact]
+    public async Task Paws_ValueClassMemberExtensions_AreInstanceMethodsOnTheStruct()
+    {
+        using var oreo = new Loafer("Oreo");
+        var paws = new Paws(4);
+        Assert.Equal("Oreo with 4 paws", paws.GetPawPrint(oreo));
+        Assert.Equal("Oreo stretches 4 paws for 6", await paws.StretchAsync(oreo, 6));
+        using (KotlinFlow<int> kneads = paws.Kneads(oreo, 3)) Assert.Equal([12], await Drain(kneads));
+        using (KotlinFlow<int> steps = paws.PawSteps(oreo)) Assert.Equal([4, 4], await Drain(steps));
+    }
+
+    [Fact]
+    public async Task Slumber_SealedMemberExtensionProperties_AreAccessorMethods()
+    {
+        using var mylo = new Loafer("Mylo");
+        using var deep = new Slumber.Reverie();
+        Assert.Equal("Mylo slumbers", deep.GetSnooze(mylo));
+        Assert.Equal("Mylo dreams deeply", deep.GetDream(mylo));
+        using KotlinFlow<string> snores = deep.Snores(mylo);
+        Assert.Equal(["slumber", "Mylo"], await Drain(snores));
+    }
+
+    private sealed class CSharpChorus : IChorus
+    {
+        public string GetShout(string receiver) => receiver + "!";
+        public string Echo(string receiver, int times) => string.Concat(Enumerable.Repeat(receiver, times));
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void Chorus_InterfaceMemberExtensions_BindOnBothSides()
+    {
+        using var choir = new Choir();
+        Assert.Equal("MEOW", choir.GetShout("meow"));
+        Assert.Equal("MEOW|meowmeow", Bindles.Sing(choir, "meow"));
+        Assert.Equal("purr!|purrpurr", Bindles.Sing(new CSharpChorus(), "purr"));
+    }
+
+    // ADR-233: a bridge slot carries a class handle, so a member extension over a class receiver
+    // is a slot a C# implementation fills, the receiver its first argument.
+    private sealed class CSharpHideaway : IHideaway
+    {
+        public string GetHideout(Loafer receiver) => receiver.Name + " hides under the sofa";
+        public string Peek(Loafer receiver, int times) => string.Concat(Enumerable.Repeat(receiver.Name, times));
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void Hideaway_ClassReceiverMemberExtensions_BindOnBothSides()
+    {
+        using var mylo = new Loafer("Mylo");
+        using var cubby = new Cubby();
+        Assert.Equal("Mylo hides in the cubby", cubby.GetHideout(mylo));
+        Assert.Equal("Mylo hides in the cubby|Mylo peeksMylo peeks", Bindles.Scout(cubby, mylo));
+        Assert.Equal("Mylo hides under the sofa|MyloMylo", Bindles.Scout(new CSharpHideaway(), mylo));
+    }
+
     [Fact]
     public async Task Groomhand_BrushLaterAsync_SuspendMemberExtension()
     {

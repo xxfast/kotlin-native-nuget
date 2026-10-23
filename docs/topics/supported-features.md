@@ -84,6 +84,7 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | star-projected extension receiver (`Bindle<*>`, `List<*>`) | → | `IsPacked<TBindle>(this Bindle<TBindle>)` | A synthesized type parameter named after the class; a projection stays refused at every other position. | [Extensions](extensions.md) |
 | member extension (`class G { fun Cat.brush() }`) | → | instance method `g.Brush(cat)` | The receiver is the first parameter, named `receiver`; C# cannot declare an extension in a non-static class. | [Extensions](extensions.md) |
 | member extension property (`class G { val Cat.nick }`) | → | accessors `g.GetNick(cat)`, `SetNick(cat, v)` | The receiver is the first parameter; a `Flow` typed one is a flow method `Stream(cat)`. | [Extensions](extensions.md) |
+| member extension in an `object`, companion, enum, value class, sealed type or interface | → | static, `this`-enum or instance method taking the receiver first | Property or function, `suspend` and `Flow` included; the enum and value class async forms name it `receiver_`. | [Extensions](extensions.md) |
 
 ## Generics
 

@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.getAllPlainProperties
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMemberExtensionAccessors
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isMemberExtension
 import io.github.xxfast.kotlin.native.nuget.processor.freshName
@@ -1598,13 +1599,13 @@ internal fun translateClass(
     .firstOrNull { it.isCompanionObject }
 
   val companionMembers: List<CirMember> = if (companion != null) {
-    val companionConsts: List<CirMember> = companion.getAllProperties()
+    val companionConsts: List<CirMember> = companion.getAllPlainProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.modifiers.contains(Modifier.CONST) }
       .mapNotNull { translateConstProperty(it, logger) }
       .toList()
 
-    val companionProperties: List<CirMember> = companion.getAllProperties()
+    val companionProperties: List<CirMember> = companion.getAllPlainProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { !it.modifiers.contains(Modifier.CONST) }
       .flatMap { prop ->
@@ -1844,7 +1845,7 @@ private fun KSClassDeclaration.backingInheritedOverrides(
     }
 
   val properties: MutableMap<KSClassDeclaration, MutableList<CirProperty>> = linkedMapOf()
-  cls.getAllProperties()
+  cls.getAllPlainProperties()
     .filter { property -> property.getVisibility() == Visibility.PUBLIC }
     .filter { property -> property.isAbstract() && !property.isDeclaredBy(cls) }
     .filter { property -> propertyPlan(cls, property.simpleName.asString()) == null }
@@ -2425,10 +2426,17 @@ internal fun flowMembers(
     // ADR-238: a class member extension's receiver leads, lowered as a parameter
     // (`hand.Ticks(loafer)`), as on the class suspend route.
     val memberReceiver: CirParameter? = method.extensionReceiver?.resolve()
-      ?.takeIf { !staticFlow }
+      ?.takeIf { method.parentDeclaration is KSClassDeclaration }
       ?.let { receiver ->
         legacyReceiverParameter(
-          freshName("receiver", declaredParams.localScopeNames()), receiver, classifier, tracker,
+          // Named apart from an enum member's own `this` receiver too.
+          freshName(
+            "receiver",
+            declaredParams.localScopeNames() + listOfNotNull(extensionReceiver?.name) +
+              // and from a value class's underlying, the extern's leading `receiver` slot.
+              listOfNotNull("receiver".takeIf { staticReceiver != null }),
+          ),
+          receiver, classifier, tracker,
         )
       }
     val methodParams: List<CirParameter> =
@@ -3329,7 +3337,7 @@ internal fun translateSealedClass(
   // `Int?`) cannot spell at all (CS1715, then CS0534 for the member it could not declare).
   // ADR-101 amendment (2026-09-27): no declared-only filter here. The catalog lookup is the gate,
   // so an inherited property is rendered exactly when the property planner re-homed it.
-  val baseProperties: List<CirProperty> = cls.getAllProperties()
+  val baseProperties: List<CirProperty> = cls.getAllPlainProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .mapNotNull { prop ->
       val planned: ForwardPropertyPlan? =
@@ -3469,7 +3477,7 @@ internal fun translateSealedClass(
       )
 
       val subQualifiedName: String? = subclass.qualifiedName?.asString()
-      val properties: List<CirProperty> = subclass.getAllProperties()
+      val properties: List<CirProperty> = subclass.getAllPlainProperties()
         .filter { it.getVisibility() == Visibility.PUBLIC }
         .mapNotNull { prop ->
           val propName: String = prop.simpleName.asString()
@@ -4122,7 +4130,7 @@ internal fun translateObject(
   // ROADMAP Phase 4: a `const val` on an object renders as a C# `const`, exactly as a companion's
   // does. Without this an object declaring nothing but consts rendered a completely empty static
   // class.
-  val consts: List<CirMember> = obj.getAllProperties()
+  val consts: List<CirMember> = obj.getAllPlainProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { it.modifiers.contains(Modifier.CONST) }
     .mapNotNull { prop ->
@@ -4137,7 +4145,7 @@ internal fun translateObject(
   // `@CName` half reads (`addObjectExports`). `CirObject.methods` is a `List<CirMember>`, so the
   // `CirDllImport` + `CirProperty` nodes `staticProperty` returns need no CIR model change: the
   // renderer, the ABI contract and the legacy-route scan already read them from this list.
-  val properties: List<CirMember> = obj.getAllProperties()
+  val properties: List<CirMember> = obj.getAllPlainProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { !it.modifiers.contains(Modifier.CONST) }
     .flatMap { prop ->
@@ -4579,7 +4587,7 @@ internal fun translateInterface(
     iface.interfaceMethodSymbols().associate { (symbol, method) ->
       symbol to hierarchy.placement(method)
     }
-  val propertyPlacements: Map<String, ForwardInterfaceMemberPlacement> = iface.getAllProperties()
+  val propertyPlacements: Map<String, ForwardInterfaceMemberPlacement> = iface.getAllPlainProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .associate { prop -> "$qualified.${prop.simpleName.asString()}" to hierarchy.placement(prop) }
   emitCovariantOverrideSkips(interfaceName, iface, hierarchy, logger)
@@ -4638,7 +4646,7 @@ internal fun translateInterface(
     plannedMethods + typeParameterMethods(iface, typeParamNames, plannedMethods)
 
   val declarations: Map<String, KSDeclaration> = iface.interfaceMethodSymbols().toMap() +
-      iface.getAllProperties().associateBy { prop -> "$qualified.${prop.simpleName.asString()}" }
+      iface.getAllPlainProperties().associateBy { prop -> "$qualified.${prop.simpleName.asString()}" }
   emitInterfaceNameCollisions(interfaceName, iface, propertyPlans, methodPlans, declarations, logger)
   // Interface super-interfaces: the same CS0102-family guard across the base list. A declared
   // method named like an INHERITED property (or the reverse) hides it, CS0108, which the
@@ -4750,7 +4758,7 @@ private fun emitCovariantOverrideSkips(
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { hierarchy.placement(it) == ForwardInterfaceMemberPlacement.COVARIANT_OVERRIDE }
     .toList()
-  val properties: List<KSDeclaration> = iface.getAllProperties()
+  val properties: List<KSDeclaration> = iface.getAllPlainProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { hierarchy.placement(it) == ForwardInterfaceMemberPlacement.COVARIANT_OVERRIDE }
     .toList()
@@ -4798,7 +4806,7 @@ private fun typeParameterProperties(
   if (typeParamNames.isEmpty()) return emptyList()
   val plannedNames: Set<String> = planned.map { it.name }.toSet()
 
-  return iface.getAllProperties()
+  return iface.getAllPlainProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { prop -> iface.declaresLexically(prop) }
     .mapNotNull { prop ->
@@ -5029,7 +5037,7 @@ internal fun translateInterfaceBackingClass(
   val prefix: String = iface.nativePrefix(symbols)
   val ifaceQualified: String = iface.qualifiedName?.asString() ?: name
 
-  val properties: List<CirProperty> = iface.getAllProperties()
+  val properties: List<CirProperty> = iface.getAllPlainProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { property -> !property.isCompilerOwnedMember(iface) }
     .mapNotNull { prop ->

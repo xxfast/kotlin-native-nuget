@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.getAllPlainProperties
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMemberExtensionAccessors
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isMemberExtension
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinIdentifier
@@ -625,7 +626,7 @@ internal fun FileSpec.Builder.addCompanionExports(
     addForwardKotlinPlanExport(plan)
   }
 
-  companion.getAllProperties()
+  companion.getAllPlainProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { !it.modifiers.contains(Modifier.CONST) }
     .forEach { prop ->

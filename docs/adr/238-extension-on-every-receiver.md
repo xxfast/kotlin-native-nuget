@@ -216,3 +216,48 @@ source** means the rule is in the generator but no fixture row exercises it.
   (`if (has) X else null.loudly()`), and the member extension lost its receiver. The rows above
   exercise both, but no test targets either alone.
 - `scripts/verify.sh`, including NativeAOT, passed on the final tree.
+
+## Amendment (2026-10-23): member extensions on every owner
+
+Section 5 bound a member extension on a class. The same shape declared inside any other owner used
+to generate Kotlin that did not compile, with no diagnostic. It now binds on every owner, and the
+receiver is always an argument, never a C# `this`, except where the owner is itself a C# extension
+class.
+
+| Owner | Extension property | Extension function (sync, `suspend`, `Flow`) |
+|---|---|---|
+| `object`, companion | static `GetSnooze(Loafer receiver)`, `SetDozeCount(...)` | static `CurlUpAsync(Loafer receiver, int minutes)`, `Purrs(Loafer receiver, int count)` |
+| enum | `GetSnooze(this Drowse drowse, Loafer receiver)` | `CurlUpAsync(this Drowse receiver, Loafer receiver_, ...)`, `Purrs(this Drowse receiver, Loafer receiver_, ...)` |
+| value class | `paws.GetPawPrint(Loafer receiver)` | `paws.StretchAsync(Loafer receiver_, ...)`, `paws.Kneads(Loafer receiver_, ...)` |
+| sealed base and arm | instance `GetSnooze`, `GetDream` | already bound |
+| interface | `IChorus.GetShout(string receiver)` | `Echo(string receiver, int times)` |
+
+A `Flow` typed extension property is a flow method on every owner (`Snores(Loafer receiver)`).
+Every owner's member walk drops its member extension properties and adds accessor functions in
+their place, and an extension function inside an `object`, companion, enum or value class carries the
+receiver as an extra leading parameter on both the `suspend` and `Flow` routes.
+
+**Naming.** On the enum and value class `suspend` and `Flow` routes `receiver` is already the owner
+slot, so the extension receiver is named `receiver_` (C# would reject two parameters named
+`receiver`, CS0100). Calls are positional, so the name only shows in IntelliSense.
+
+**Interface.** The accessors and functions are declared on the generated `IChorus`. A Kotlin
+implementer (`Choir`) works, and so does a C# implementer, the receiver its first argument: a
+`String` (`IChorus`) or a class handle (`IHideaway` over `Loafer`), since ADR-233 made the slot wire
+the plan wire. Rows `Chorus_InterfaceMemberExtensions_BindOnBothSides` and
+`Hideaway_ClassReceiverMemberExtensions_BindOnBothSides`.
+
+Consequences:
+
+- A member extension property is a pair of methods on every owner, so none reads as a C# property.
+- The enum and value class `receiver_` name is the one place a receiver parameter is not named
+  `receiver`.
+
+Evidence: `Tier1MemberExtensionOwnersTest` (eight cells, the generated Kotlin and C# both compile);
+six rows in `EveryReceiverExtensionTests.cs` against `Napkin`, `Cradle`, `Drowse`, `Paws`,
+`Slumber` and `Choir`/`IChorus` in `Bindles.kt`; leak rows
+`MemberExtensions_ObjectOwner_ReturnToBaseline`, `MemberExtensions_CompanionOwner_ReturnToBaseline`,
+`MemberExtensions_EnumOwner_ReturnToBaseline`, `MemberExtensions_ValueClassOwner_ReturnToBaseline`,
+`MemberExtensions_SealedOwner_ReturnToBaseline` and
+`MemberExtensions_InterfaceOwner_BothSides_ReturnToBaseline`. The owner table is verified by those
+rows; the `receiver_` name is read from the generated signatures.

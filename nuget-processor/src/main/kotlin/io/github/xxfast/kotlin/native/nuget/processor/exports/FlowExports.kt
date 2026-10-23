@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMemberExtensionAccessors
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardMemberExtensionAccessor
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isMemberExtension
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticFlowGetter
@@ -119,7 +120,7 @@ internal fun KSFunctionDeclaration.returnsForwardFlow(): Boolean =
  */
 internal fun KSClassDeclaration.forwardArmFlowProperties(
   classifier: ForwardBridgeTypeClassifier,
-): List<KSPropertyDeclaration> = getAllProperties()
+): List<KSPropertyDeclaration> = getAllProperties().filterNot { it.isMemberExtension() }
   .filter { it.getVisibility() == Visibility.PUBLIC }
   .filter { prop -> prop.type.resolve().expandAliases().isForwardFlowType() }
   // Issue #121: a marked declaration must reach neither artifact, legacy route or not.
@@ -156,6 +157,8 @@ internal fun KSClassDeclaration.forwardArmFlowMethods(
   // ADR-175: an override of a Flow member the sealed base projects stays on the base.
   .filter { method -> !forwardArmMemberProjectedByBase(method, classifier) }
   .toList()
+  // ADR-238: a `Flow` typed member extension property, as the flow method it lowers to.
+  .plus(forwardMemberExtensionAccessors(flow = true))
 
 /**
  * ADR-071 (2026-09-11): whether this function's return is a `MutableStateFlow<T>` the bridge holds
@@ -455,12 +458,16 @@ internal fun FileSpec.Builder.addFlowMethodExports(
   // ADR-238: a class member extension's receiver is the leading slot of one shared name set, as
   // on the class suspend route; a static owner's receiver crosses on its own slot instead.
   val extensionType: KSType? =
-    method.extensionReceiver?.resolve()?.expandAliases()?.takeIf { static == null }
+    method.extensionReceiver?.resolve()?.expandAliases()
+      ?.takeIf { method.parentDeclaration is KSClassDeclaration }
   val extensionShape: ForwardLegacyParameterShape? =
     extensionType?.let { type -> classifier.legacyParameterShape(type) }
   val declaredNames: List<String> = method.legacyParameterNames()
   val extensionSlot: String? =
-    extensionShape?.let { freshName("receiver", declaredNames.toSet() + "handle") }
+    extensionShape?.let {
+      val base: String = if (static == null) "receiver" else "extensionReceiver"
+      freshName(base, declaredNames.toSet() + "handle")
+    }
   val slotNames: List<String> = listOfNotNull(extensionSlot) + declaredNames
   val offset: Int = if (extensionShape == null) 0 else 1
   val names: ForwardLegacyNames = if (extensionShape == null) {
@@ -499,11 +506,12 @@ internal fun FileSpec.Builder.addFlowMethodExports(
       // A member extension property is read, not called.
       val accessor: ForwardMemberExtensionAccessor? = method as? ForwardMemberExtensionAccessor
       if (accessor != null) {
-        "${names.obj}.run { ($extension).${accessor.propertyName.kotlinIdentifier()} }"
+        val property: String = accessor.propertyName.kotlinIdentifier()
+        "${callee.removeSuffix(".")}.run { ($extension).$property }"
       } else {
         val member: String = "$called${method.legacyTypeArguments()}"
         val call: String = names.legacyInvocation("($extension).$member", slotNames, from = 1)
-        "${names.obj}.run { $call }"
+        "${callee.removeSuffix(".")}.run { $call }"
       }
     }
     else -> names.legacyInvocation(

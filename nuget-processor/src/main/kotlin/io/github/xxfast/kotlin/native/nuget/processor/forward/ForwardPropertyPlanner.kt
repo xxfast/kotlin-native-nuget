@@ -353,7 +353,7 @@ internal class ForwardPropertyPlanner(
     val owner: String = sealed.qualifiedName?.asString() ?: return emptyList()
     val prefix: String = sealed.nativePrefix(symbols)
     val keptBase: KSClassDeclaration? = sealed.forwardSuperClass(classifier.exportedObjectHandles)
-    return sealed.getAllProperties()
+    return sealed.getAllPlainProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { prop -> !prop.isCompilerOwnedMember(sealed) }
       .filter { prop -> prop.isForwardMemberOf(sealed, keptBase) }
@@ -397,7 +397,7 @@ internal class ForwardPropertyPlanner(
     // own. Those belong to `{Enum}Extensions` (ADR-006) and are already planned there; planning
     // them again under the arm's prefix would export each of them twice, plus `name` and `ordinal`.
     if (subclass.isEnumArm()) return enumArmValueProperty(sealed, subclass, prefix, owner)
-    return subclass.getAllProperties()
+    return subclass.getAllPlainProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { prop -> !prop.isCompilerOwnedMember(subclass) }
       .filter { prop -> prop.isForwardPlannableMemberOf(subclass, superClass = sealed) }
@@ -540,7 +540,7 @@ internal class ForwardPropertyPlanner(
         ).distinctBy { it.qualifiedName?.asString() }
     return implemented
       .filter { iface ->
-        val member: KSPropertyDeclaration = iface.getAllProperties()
+        val member: KSPropertyDeclaration = iface.getAllPlainProperties()
           .firstOrNull { it.simpleName.asString() == name } ?: return@filter false
         val placement: ForwardInterfaceMemberPlacement =
           ForwardInterfaceHierarchy(iface, exported).placement(member)
@@ -568,7 +568,7 @@ internal class ForwardPropertyPlanner(
     val prefix: String = iface.nativePrefix(symbols)
     val hierarchy = ForwardInterfaceHierarchy(iface, classifier.exportedObjectHandles)
     return inOwner(iface.forwardDiagnosticOwner()) {
-      iface.getAllProperties()
+      iface.getAllPlainProperties()
         .filter { it.getVisibility() == Visibility.PUBLIC }
         .filter { prop -> !prop.isCompilerOwnedMember(iface) }
         .filter { prop -> if (inherited) true else prop.parentDeclaration == iface }
@@ -617,7 +617,7 @@ internal class ForwardPropertyPlanner(
       .firstOrNull { it.isCompanionObject } ?: return emptyList()
     val owner: String = cls.qualifiedName?.asString() ?: return emptyList()
     val prefix: String = cls.nativePrefix(symbols)
-    return companion.getAllProperties()
+    return companion.getAllPlainProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { prop -> !prop.isCompilerOwnedMember(companion) }
       .filter { !it.modifiers.contains(Modifier.CONST) }
@@ -654,7 +654,7 @@ internal class ForwardPropertyPlanner(
   private fun objectProperties(obj: KSClassDeclaration): List<ForwardPropertyPlan> {
     val owner: String = obj.qualifiedName?.asString() ?: return emptyList()
     val prefix: String = obj.nativePrefix(symbols)
-    return obj.getAllProperties()
+    return obj.getAllPlainProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { prop -> !prop.isCompilerOwnedMember(obj) }
       .filter { !it.modifiers.contains(Modifier.CONST) }
@@ -691,7 +691,7 @@ internal class ForwardPropertyPlanner(
     val type: BridgeType = classifier.classify(enum.asStarProjectedType())
     if (type !is BridgeType.Enum) return emptyList()
     val prefix: String = enum.nativePrefix(symbols)
-    return enum.getAllProperties()
+    return enum.getAllPlainProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { prop -> prop.simpleName.asString() !in ENUM_OWN_MEMBERS }
       .filter { prop -> !prop.isCompilerOwnedMember(enum) }

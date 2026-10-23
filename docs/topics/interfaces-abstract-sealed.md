@@ -917,6 +917,8 @@ nested C# interface, `Outer.IListener`, with its return-position wrapper nested 
 A nested interface under a generic class or an `enum class` is skipped, and any member typed with
 it is skipped too, each named on a build warning rather than silently dropped.
 
+A member extension declared in an interface (`val String.shout: String`, `fun String.echo(times: Int): String`) is declared on the generated C# interface with the receiver as its first argument (`GetShout(string receiver)`). A Kotlin or C# class can implement it, over a class receiver too (`GetHideout(Loafer receiver)`). A member extension in a sealed base or arm binds as an instance method. See [Member extensions](extensions.md#member-extensions-owners).
+
 ## Abstract classes
 
 `abstract class` becomes a C# `abstract class`. Every subclass shares one inherited `_handle`

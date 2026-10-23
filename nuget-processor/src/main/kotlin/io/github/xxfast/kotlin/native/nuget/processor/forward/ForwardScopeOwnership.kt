@@ -122,7 +122,7 @@ internal fun KSClassDeclaration.forwardClassFlowMethods(
 internal fun KSClassDeclaration.forwardClassFlowProperties(
   classifier: ForwardBridgeTypeClassifier,
   superClass: KSClassDeclaration?,
-): List<KSPropertyDeclaration> = getAllProperties()
+): List<KSPropertyDeclaration> = getAllProperties().filterNot { it.isMemberExtension() }
   // ADR-174: the generic-owner guard its two siblings above always had. The C# property half
   // refuses a generic owner (`CirClassTranslator`'s flow-property branch), so without it `Crate<T>`
   // owned a scope for a StateFlow property it never projected (ADR-159's rule, broken).

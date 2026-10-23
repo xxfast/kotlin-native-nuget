@@ -159,7 +159,15 @@ internal fun StringBuilder.appendSlotOverrides(slots: List<ForwardBridgeSlot>) {
     .filter { slot -> slot.kind == ForwardBridgeSlotKind.SETTER }
     .map { slot -> slot.name }
     .toSet()
-  slots.forEach { slot -> appendSlotOverride(slot, mutable = slot.name in setters) }
+  // ADR-238: a member extension property whose setter accessor has a slot is a `var`.
+  val extensionSetters: Set<String> = slots
+    .filter { slot -> slot.extensionSetter }
+    .mapNotNull { slot -> slot.extensionProperty }
+    .toSet()
+  slots.forEach { slot ->
+    val mutable: Boolean = slot.name in setters || slot.extensionProperty in extensionSetters
+    appendSlotOverride(slot, mutable)
+  }
 }
 
 /**
@@ -169,6 +177,12 @@ internal fun StringBuilder.appendSlotOverrides(slots: List<ForwardBridgeSlot>) {
  */
 private fun StringBuilder.appendSlotOverride(slot: ForwardBridgeSlot, mutable: Boolean) {
   val call: String = invocation(slot)
+  // ADR-238: a member extension, rendered with its receiver; its first argument is `this`.
+  val receiverType: String? = slot.extensionReceiver
+  if (receiverType != null) {
+    appendExtensionSlotOverride(slot, receiverType, call, mutable)
+    return
+  }
   when (slot.kind) {
     ForwardBridgeSlotKind.GETTER -> {
       val keyword: String = if (mutable) "var" else "val"
@@ -292,6 +306,75 @@ private fun StringBuilder.appendFlowRead(slot: ForwardBridgeSlot, call: String, 
   val flow: String = flowSourceExpression(slot.name, slot.flowSource(), slots, holderBuilt = true)
   val cast: String = if (slot.element?.typeParameter == true) " as ${slot.result.kotlin}" else ""
   appendLine("${indent}return ($flow)$cast")
+}
+
+/**
+ * ADR-238: a member extension slot's `override`: a function
+ * (`override fun pkg.Loafer.brush(n: Int)`) or, for an accessor, the extension property
+ * (`override var pkg.Loafer.mood: Int`) whose getter and setter forward to their slots. The slot's
+ * first argument, `receiver`, is the `this` there. ADR-232: a `suspend` or `Flow` one awaits or
+ * reads exactly as a member does.
+ */
+private fun StringBuilder.appendExtensionSlotOverride(
+  slot: ForwardBridgeSlot,
+  receiverType: String,
+  call: String,
+  mutable: Boolean,
+) {
+  val property: String? = slot.extensionProperty
+  when {
+    property == null -> {
+      val params: String = slot.parameters.drop(1)
+        .joinToString(", ") { "${it.name.kotlinIdentifier()}: ${it.type.kotlin}" }
+      val modifier: String = if (slot.async == ForwardBridgeAsync.SUSPEND) "suspend " else ""
+      // ADR-237: a member's own type parameters are restated; C# sees them erased.
+      val typeParameters: String =
+        if (slot.typeParameters.isEmpty()) "" else slot.typeParameters.joinToString(", ", "<", "> ")
+      val name: String = slot.name.kotlinIdentifier()
+      appendLine(
+        "    override ${modifier}fun $typeParameters$receiverType.$name($params): " +
+          "${slot.result.kotlin} {",
+      )
+      appendLine("      val receiver = this")
+      when (slot.async) {
+        ForwardBridgeAsync.SYNC -> {
+          appendArgumentRefs(slot, "      ")
+          appendResultMarshalling(slot, call, "      ")
+        }
+
+        ForwardBridgeAsync.SUSPEND -> appendSuspendCall(slot, "      ")
+        ForwardBridgeAsync.FLOW -> {
+          appendArgumentRefs(slot, "      ")
+          appendFlowRead(slot, call, "      ")
+        }
+      }
+      appendLine("    }")
+    }
+
+    slot.extensionSetter -> {
+      appendLine("      set(value) {")
+      appendLine("        val receiver = this")
+      appendArgumentRefs(slot, "        ")
+      appendResultMarshalling(slot, call, "        ")
+      appendLine("      }")
+    }
+
+    else -> {
+      val keyword: String = if (mutable) "var" else "val"
+      appendLine(
+        "    override $keyword $receiverType.${property.kotlinIdentifier()}: ${slot.result.kotlin}",
+      )
+      appendLine("      get() {")
+      appendLine("        val receiver = this")
+      appendArgumentRefs(slot, "        ")
+      if (slot.async == ForwardBridgeAsync.FLOW) {
+        appendFlowRead(slot, call, "        ")
+      } else {
+        appendResultMarshalling(slot, call, "        ")
+      }
+      appendLine("      }")
+    }
+  }
 }
 
 /** The `argNRef` handle each [ForwardBridgeWire.OBJECT] argument of [slot] crosses as. */

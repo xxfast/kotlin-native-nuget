@@ -177,6 +177,8 @@ default: `Cuckoo.Calls()` for `companion object { fun calls(): Flow<String> }`, 
 `Hourglass.Level` for a `StateFlow` in `companion object Sand`. See
 [Coroutines and Flow](coroutines-and-flow.md#flow-static-owners).
 
+A member extension declared inside an `object` or a companion (`val Loafer.snooze`, `suspend fun Loafer.curlUp(minutes: Int)`) binds as a static method that takes the receiver first, for example `Napkin.GetSnooze(loafer)` and `await Napkin.CurlUpAsync(loafer, 5)`. See [Member extensions](extensions.md#member-extensions-owners).
+
 ## Method overloads {id="method-overloads"}
 
 Two or more same-named members on an `object` or a `companion object` generate one natural C#

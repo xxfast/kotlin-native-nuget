@@ -99,6 +99,8 @@ internal class ForwardInterfaceHierarchy(
   }
 
   fun placement(member: KSFunctionDeclaration): ForwardInterfaceMemberPlacement {
+    // ADR-238: a member extension property's accessor is placed where the property is.
+    if (member is ForwardMemberExtensionAccessor) return placement(member.property)
     val diamond: Boolean = declaringKeptSupers(member) >= 2
     if (!isDeclaredHere(member)) {
       return if (diamond) ForwardInterfaceMemberPlacement.DIAMOND_OVERRIDE
@@ -276,6 +278,8 @@ internal fun KSClassDeclaration.interfaceMethodSymbols():
   return getAllFunctions()
     .filter { method -> method.getVisibility() == Visibility.PUBLIC }
     .filter { method -> !method.isCompilerOwnedMember(this) }
+    // ADR-238: a member extension property's accessors, numbered as the planner numbers them.
+    .plus(forwardMemberExtensionAccessors(flow = false).asSequence())
     .map { method ->
       val name: String = method.simpleName.asString()
       val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
