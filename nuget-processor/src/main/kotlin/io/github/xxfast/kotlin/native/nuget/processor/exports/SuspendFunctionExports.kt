@@ -785,7 +785,7 @@ private fun FileSpec.Builder.addAwaitedStateFlowCollectionExports(
   val type: TypeName = ClassName("kotlinx.coroutines.flow", "StateFlow").parameterizedBy(
     element.toBridgeTypeName(),
   )
-  val nullable: Boolean = wire != null && element.isMarkedNullable
+  val nullable: Boolean = element.isMarkedNullable
   val boxed: String = itemBoxExpr(elementNullable = nullable, collection = collection, wire = wire)
 
   addFunction(handleKeyedStateFlowValueExport(prefix, ownedBy(method), type, boxed, nullable))

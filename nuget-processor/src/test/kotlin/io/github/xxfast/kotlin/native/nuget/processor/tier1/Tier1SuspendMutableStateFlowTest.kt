@@ -12,8 +12,9 @@ import kotlin.test.assertTrue
  * generated flow-handle-keyed `_set_value` sibling, the same shape the held function-return route
  * emits, never a runtime export.
  *
- * `suspend fun (): MutableStateFlow<T?>` and the top-level route stay read-only
- * (`KotlinStateFlow<T>`). The end-to-end half lives in `SuspendStateFlowTests.cs` and the
+ * `suspend fun (): MutableStateFlow<T?>` is settable too, through the held route's nullable arms;
+ * a nullable member (`MutableStateFlow<T>?`) stays read-only (`KotlinStateFlow<T>?`). The
+ * end-to-end half lives in `SuspendStateFlowTests.cs` and the
  * ownership half in `LeakTests/LiveHandleTests.cs`.
  */
 class Tier1SuspendMutableStateFlowTest {
@@ -82,12 +83,9 @@ class Tier1SuspendMutableStateFlowTest {
       "Native_AwaitToyAsyncSetValue(flowHandle, v._handle, out IntPtr error);",
     )
 
-    // A nullable element keeps S1's read-only spelling; its write side stays deferred.
-    assertContains(csharp, "public Task<KotlinStateFlow<string?>> AwaitTagAsync(")
-    assertFalse(
-      kotlin.contains("jar_awaitTag_set_value"),
-      "expected no setter for a suspend MutableStateFlow<T?>; generated=$kotlin",
-    )
+    // A nullable element writes through the held route's nullable string slot.
+    assertContains(csharp, "public Task<KotlinMutableStateFlow<string?>> AwaitTagAsync(")
+    assertContains(kotlin, "jar_awaitTag_set_value")
     // So does a nullable member: S1's `KotlinStateFlow<T>?`, read-only.
     assertContains(csharp, "public Task<KotlinStateFlow<int>?> AwaitSpareJarAsync(")
     assertFalse(

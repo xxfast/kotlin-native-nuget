@@ -965,6 +965,19 @@ and, for the held `MutableStateFlow` and `MutableSharedFlow` holders, `StaticFlo
 source in `StaticFlow_CollectedToCompletion_TheFlowAndTokenAreCollected` and
 `StaticFlow_CancelledByTheToken_TheFlowAndTokenAreCollected`.
 
+A `MutableStateFlow` or `MutableSharedFlow` of a nullable `List`, `Set` or `Map`
+([details](coroutines-and-flow.md#mutable-nullable-collection-element)) mints the handle for a write
+and releases it after the call; `null` mints nothing. Each `.Value` read, replay-cache read and
+emission is a collection copied out, so no handle outlives it. `LeakTests/LiveHandleTests.cs`'s
+`NullableCollectionFlows_SettableHolders_ReturnToBaseline` writes, reads, emits and awaits through a
+class, an `object` and the top level, and returns to baseline.
+
+A [flow property on an enum](coroutines-and-flow.md#flow-static-owners) follows the static-owner
+rules above: a cold one holds nothing, a held `Mutable*` one is yours to dispose.
+`EnumFlowProperties_EveryKind_ReturnToBaseline` pins every kind, plain and hot. The row needs
+`using static TestLibrary.Purrclock.TailExtensions;`, because a C# 14 extension property is not
+reached through a namespace alias.
+
 A top-level extension on any receiver ([Extensions](extensions.md#supported-receivers)) holds no owner state, so the
 handle count returns to baseline once a call settles. `LeakTests/LiveHandleTests.cs` pins it:
 `GenericExtension_Unpack_ReturnsToBaseline`, `GenericExtensionProperty_Lid_ReturnsToBaseline`,

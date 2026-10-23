@@ -102,12 +102,12 @@ class Tier1MutableStateFlowReadOnlyElementTest {
   }
 
   /**
-   * An awaited `MutableStateFlow` of a collection or `ByteArray` is refused whole on the suspend
-   * route (awaiting it to a read-only holder would drop the settable `.Value`), so it carries
-   * that one return diagnostic and no setter line claiming a holder exists.
+   * An awaited `MutableStateFlow` of a collection or `ByteArray` awaits a settable holder, and a
+   * nullable collection element binds settable too, null crossing as a null handle. None of them
+   * is named.
    */
   @Test
-  fun `a member refused whole is named once, with no setter line`() {
+  fun `awaited and nullable collection holders bind settable, unnamed`() {
     val awaited: Tier1Result = Tier1Harness.run(
       """
       package tier1.readonly
@@ -132,13 +132,12 @@ class Tier1MutableStateFlowReadOnlyElementTest {
         "expected no diagnostic for $member; got: ${awaited.kspWarnings}",
       )
     }
-    // A nullable collection element is refused whole on the Flow route: the property is absent,
-    // so its one diagnostic is that refusal, never a setter line about a read-only holder.
-    assertFalse(cs.contains(" MaybeNaps"), "expected no MaybeNaps property")
-    val named: List<String> =
-      awaited.kspWarnings.filter { it.contains("[nuget:") && it.contains("Journal.maybeNaps:") }
-    assertEquals(1, named.size, "expected one diagnostic for maybeNaps; got: $named")
-    assertContains(named.single(), ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name)
+    // A nullable collection element binds settable: null crosses as a null handle.
+    assertContains(cs, "public KotlinMutableStateFlow<IReadOnlyList<string>?> MaybeNaps")
+    assertTrue(
+      awaited.kspWarnings.none { it.contains("[nuget:") && it.contains("Journal.maybeNaps:") },
+      "expected no diagnostic for maybeNaps; got: ${awaited.kspWarnings}",
+    )
   }
 
   /**
@@ -184,20 +183,19 @@ class Tier1MutableStateFlowReadOnlyElementTest {
       " KotlinMutableStateFlow<IReadOnlyList<int>> Naps { get; }",
       " KotlinMutableStateFlow<byte[]> Photo { get; }",
       " KotlinStateFlow<int>? MaybeDial();",
-      " Task<KotlinStateFlow<int?>> AwaitMaybeAsync(",
+      " Task<KotlinMutableStateFlow<int?>> AwaitMaybeAsync(",
     ).forEach { signature ->
       assertContains(cs, signature, message = "expected `$signature` on IFeed")
     }
     mapOf(
       "maybeDial" to "a nullable MutableStateFlow method return has no write arm",
-      "awaitMaybe" to "an awaited MutableStateFlow of a nullable element has no write arm",
     ).forEach { (member, reason) ->
       val named: List<String> =
         owned.kspWarnings.filter { it.contains("[nuget:") && it.contains(" Feed.$member:") }
       assertEquals(1, named.size, "expected one diagnostic for Feed.$member; got: $named")
       assertContains(named.single(), reason)
     }
-    listOf("level", "naps", "photo").forEach { member ->
+    listOf("level", "naps", "photo", "awaitMaybe").forEach { member ->
       assertTrue(
         owned.kspWarnings.none { it.contains("[nuget:") && it.contains(" Feed.$member:") },
         "expected no diagnostic for Feed.$member; kspWarnings=${owned.kspWarnings}",
@@ -287,7 +285,7 @@ class Tier1MutableStateFlowReadOnlyElementTest {
     val cs: String = routes.generatedCSharp.withoutDocComments()
     listOf(
       "public KotlinStateFlow<int>? MaybeDial()",
-      "public Task<KotlinStateFlow<int?>> AwaitMaybeAsync(",
+      "public Task<KotlinMutableStateFlow<int?>> AwaitMaybeAsync(",
       "public Task<KotlinStateFlow<int>?> AwaitMemberAsync(",
       // ADR-230: the top-level route writes an awaited MutableStateFlow too.
       "public static Task<KotlinMutableStateFlow<int>> TopAwaitAsync(",
@@ -298,7 +296,6 @@ class Tier1MutableStateFlowReadOnlyElementTest {
     }
     mapOf(
       "Journal.maybeDial:" to "a nullable MutableStateFlow method return has no write arm",
-      "Journal.awaitMaybe:" to "an awaited MutableStateFlow of a nullable element has no write arm",
       "Journal.awaitMember:" to "an awaited nullable MutableStateFlow has no write arm",
     ).forEach { (member, route) ->
       val named: List<String> =
@@ -308,7 +305,12 @@ class Tier1MutableStateFlowReadOnlyElementTest {
       assertContains(named.single(), "setter is not generated because $route")
       assertContains(named.single(), "read-only KotlinStateFlow")
     }
-    listOf("Journal.dial:", "Journal.awaitDial:", "topAwait:").forEach { member ->
+    listOf(
+      "Journal.dial:",
+      "Journal.awaitDial:",
+      "Journal.awaitMaybe:",
+      "topAwait:",
+    ).forEach { member ->
       assertTrue(
         routes.kspWarnings.none { it.contains("[nuget:") && it.contains(" $member") },
         "expected no diagnostic for $member kspWarnings=${routes.kspWarnings}",

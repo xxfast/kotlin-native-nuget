@@ -820,7 +820,7 @@ element-typed `${prefix}_${cname}_set_value(flowHandle, value, errorOut)` emitte
 needed, and no `NugetRuntimeAbi1` change or new contract hash follows. The awaited holder passes a
 third write lambda before its `ownedHandle`, so `Dispose()` still frees the flow.
 
-Still read-only on purpose: `suspend fun (): MutableStateFlow<T?>`,
+Still read-only on purpose (`suspend fun (): MutableStateFlow<T?>` is settable since the 2026-10-23 amendment):
 `suspend fun (): MutableStateFlow<T>?` (the nullable-suspend-return guard) and the top-level
 suspend route. (`Boolean?`, `Char?` and nullable enum elements were held back on the other routes
 when this shipped; see the 2026-10-10 amendment at the end of this file.)
@@ -916,7 +916,7 @@ The classifier gains a fourth writable arm, `ValueClass`, beside `Scalar`, `Enum
   `_compare_and_set` exports regenerate with their imports.
 - **Nullable `V?`.** Settable on the property and held routes. A `String` or handle underlying
   carries the null in its own slot; a primitive or enum underlying uses the has-value pair. The
-  awaited route's nullable element stays read-only for every element kind, as before.
+  awaited route's nullable element stayed read-only for every element kind here (settable since the 2026-10-23 amendment).
 - **Admitted underlyings:** a non-null `String`, a primitive other than `Char`, an enum, an exported
   class or `object`. **Declined, named:** `Char`, a nullable underlying, a nested or generic value
   class, and `kotlin.*` classes (`Instant`, `Uuid`, `Throwable`), which the ordinary classifier maps
@@ -1047,7 +1047,7 @@ classifier (`isMutableStateFlowElementWritable`).
 - **Out-of-range ordinal.** A nullable enum write of an ordinal that names no entry (`(Mood)99`)
   throws `KotlinException` on the setter and on the `CompareAndSet` update slot, and does not land,
   as for a non-null enum.
-- **Awaited route.** Unchanged: every nullable element stays read-only on a class
+- **Awaited route.** Unchanged here (settable since the 2026-10-23 amendment): every nullable element stayed read-only on a class
   `suspend fun (): MutableStateFlow<T?>`, now named (below).
 - **Gate.** `isMutableStateFlowElementWritable` admits every writable kind's nullable form. Its
   per-kind `when` stays as the one place a kind could be held back again, and the SharedFlow
@@ -1072,7 +1072,7 @@ holder's setter" instead. Both flows build the sentence in one function,
 
 Four read-only routes are named the same way ("its returned holder's setter is not generated
 because ..."): a nullable `MutableStateFlow` method return (the held route has no null arm), an
-awaited `MutableStateFlow` of a nullable element, an awaited nullable `MutableStateFlow`, and a
+awaited `MutableStateFlow` of a nullable element (settable since the 2026-10-23 amendment), an awaited nullable `MutableStateFlow`, and a
 top-level `suspend` function's `MutableStateFlow` (the awaited write is keyed on a class member).
 
 A refusal fires only for a member that survives read-only. One the Flow or suspend route refuses
@@ -1115,3 +1115,16 @@ with `ArgumentException`. Verified by `SettableHolders_OfNarrowTypesAndWireValue
 
 [ADR-234](234-value-class-underlying-widenings.md) gives a value class over `Char` a record struct,
 so a `Flow`, `StateFlow` or `MutableStateFlow` over one binds, and the latter is settable.
+
+## Amendment 2026-10-23: an awaited `MutableStateFlow<T?>` is settable
+
+A class `suspend fun (): MutableStateFlow<T?>` awaits to a settable `KotlinMutableStateFlow<T?>` for
+every element kind, collection elements included, closing the deferral in the 2026-10-09
+"`suspend fun` returning `MutableStateFlow<T>`" and 2026-10-10 nullable-element amendments above.
+The awaited write and `CompareAndSet` reuse the held route's flow-keyed exports, and `null` is a
+write of its own. The `awaitsSettableMutableStateFlow` gate and the `SKIPPED_UNSUPPORTED_INPUT`
+sentence that named the read-only case are gone. A nullable holder (`suspend fun ():
+MutableStateFlow<T>?`) stays read-only, as before. A nullable `List`, `Set` or `Map` element is
+covered by [ADR-230](230-flow-on-static-owners.md)'s 2026-10-23 amendment. Verified by
+`Tier1SuspendMutableStateFlowTest`, `SuspendFlowTests.NullableCollectionElement_YieldsNull` and
+`NullableCollectionFlowTests` (`AwaitSocksAsync`, `AwaitPhotoAsync`).

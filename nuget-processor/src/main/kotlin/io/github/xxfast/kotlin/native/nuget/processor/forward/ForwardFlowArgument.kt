@@ -142,7 +142,8 @@ internal fun ForwardBridgeTypeClassifier.flowArgument(
   val elementInterface: BridgeType.Interface? = legacyFlowElementInterface(element)
   val elementCsharpType: String = when (shape) {
     is ForwardLegacyFlowElementShape.Refused -> return refused
-    is ForwardLegacyFlowElementShape.Marshalled -> shape.type.forwardPublicCsharpType()
+    is ForwardLegacyFlowElementShape.Marshalled ->
+      legacyFlowElementCollectionCsharpType(shape.type, shape.nullable)
     is ForwardLegacyFlowElementShape.Bytes -> legacyBytesCsharpType(nullable)
     is ForwardLegacyFlowElementShape.Envelope -> legacyEnvelopeCsharpType(nullable)
     is ForwardLegacyFlowElementShape.Wire -> shape.declaredCsharpType()
@@ -156,7 +157,7 @@ internal fun ForwardBridgeTypeClassifier.flowArgument(
   val wire: ForwardLegacyFlowElementShape.Wire? = shape as? ForwardLegacyFlowElementShape.Wire
   val read: String? = when {
     wire != null -> wire.legacyWireReadArgument()
-    collection != null -> legacyFlowElementReadArgument(collection)
+    collection != null -> legacyFlowElementReadArgument(collection, nullable)
     bytes -> legacyBytesElementReadArgument(nullable)
     envelope -> legacyEnvelopeElementReadArgument(nullable)
     elementInterface != null -> legacyInterfaceElementReadArgument(elementInterface, nullable)

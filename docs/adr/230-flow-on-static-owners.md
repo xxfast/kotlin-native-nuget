@@ -124,3 +124,35 @@ value class (`Sticker<T>`, the phantom `Decal<T>`). Its `Flow` and `StateFlow` m
 properties bind on this route, over the class's own `T` or with the struct as the element, and a
 `SharedFlow` property reads its replay cache. A `T : Enum<T>` receiver is read through the ADR-198
 trampoline.
+
+## Amendment 2026-10-23: nullable collection elements, and enum properties proved end to end
+
+**Nullable collection elements.** A `MutableStateFlow`, `MutableSharedFlow` or plain `Flow` whose
+element is a nullable `List`, `Set` or `Map` (`MutableStateFlow<List<Int>?>`,
+`MutableSharedFlow<Set<String>?>`, `Flow<Map<String, Int>?>`) binds on a class, an `object`, the top
+level, a held return and an awaited return. The member gets `Value` get and set, `CompareAndSet`,
+`EmitAsync`, `TryEmit` and `ReplayCache`. `null` crosses as a null handle, as a nullable `ByteArray`
+already did, a projected component (`List<Posture>?`) stays projected behind the null guard, and C#
+checks `IntPtr.Zero`, so C# and Kotlin both tell `null` from an empty collection. The refusal was
+`legacyFlowElementShape` never unwrapping `Nullable` over a collection; `ForwardLegacyFlowElementShape.Marshalled`
+gained a `nullable` flag. A `StateFlow<List<Enum>>?` member skipped the collection
+projection (`stateFlowNullableBox`) and now projects it. The two diagnostic hints that read
+"non-nullable" now read "List/Set/Map, nullable or not". An awaited `MutableStateFlow<T?>` is
+settable ([ADR-071](071-mutable-stateflow-mapping.md) 2026-10-23 amendment).
+
+**Enum properties.** The enum body's flow property route was generated before this amendment; this
+adds the proof. A flow property on an enum (a body `val`, a constructor `val`, an `abstract val`
+overridden in each entry's body) of every flow kind, plain and hot, read-only and held, is an
+extension property on `{Enum}Extensions` (`Tail.Oreo.Height`). Each entry keeps its own storage and
+a held holder is settable. A C# 14 extension property is not reachable through a namespace alias,
+so a call site imports the namespace or `using static`s the extensions class. The setter of a `var`
+flow property on an enum stays a named `SKIPPED_UNSUPPORTED_INPUT`, as on an `object`, a companion and
+a value class: ADR-233's setter export reads a handle receiver, and the static route has no setter.
+
+**Verification.** Fixtures `purrclock/SockDrawers.kt`, `purrclock/Tails.kt` and
+`issue127/Issue127Sample.kt`. `IntegrationTests/NullableCollectionFlowTests.cs`,
+`EnumFlowPropertyTests.cs`, `Issue127Tests.cs` (cell 7) and
+`SuspendFlowTests.NullableCollectionElement_YieldsNull`. Leak rows
+`NullableCollectionFlows_SettableHolders_ReturnToBaseline` and
+`EnumFlowProperties_EveryKind_ReturnToBaseline` (which `using static`s `TailExtensions`). Tier 1:
+`Tier1MutableFlowNullableCollectionElementTest`, `Tier1EnumFlowPropertyTest`.

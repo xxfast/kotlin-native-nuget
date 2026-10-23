@@ -1,7 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
 import io.github.xxfast.kotlin.native.nuget.processor.NUGET_RUNTIME_EXPORTS
-import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -172,23 +171,22 @@ class Tier1TopLevelSuspendStateFlowTest {
   }
 
   /**
-   * What stays refused on this bucket after the nullable element is admitted: a nullable
-   * COLLECTION element has no handle-keyed reader through the runtime pair, so it is still named.
+   * A nullable COLLECTION element reads through its own handle-keyed `_value`/`_collect` pair, a
+   * null current value as a null handle, guarded before `ReadList` touches it.
    */
   @Test
-  fun `a top-level suspend StateFlow of a nullable collection element is still refused by name`() {
+  fun `a top-level suspend StateFlow of a nullable collection reads through its own pair`() {
     val result: Tier1Result = nullableResult
 
-    assertFalse(
-      result.generatedCSharp.contains("WatchRosterAsync"),
-      "expected no C# for the refused member; generatedCSharp=${result.generatedCSharp}",
+    assertContains(
+      result.generatedCSharp,
+      "public static Task<KotlinStateFlow<IReadOnlyList<int>?>> WatchRosterAsync(",
     )
+    assertContains(result.generated, "_watchRoster_value\")")
+    assertContains(result.generatedCSharp, "h == IntPtr.Zero ? null : NugetMarshal.ReadList<int>(")
     assertTrue(
-      result.kspWarnings.any {
-        it.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN.name}]") &&
-            it.contains("watchRoster")
-      },
-      "expected a SKIPPED_UNSUPPORTED_RETURN naming watchRoster; kspWarnings=${result.kspWarnings}",
+      result.kspWarnings.none { it.contains("[nuget:") && it.contains("watchRoster") },
+      "expected no diagnostic for watchRoster; kspWarnings=${result.kspWarnings}",
     )
   }
 

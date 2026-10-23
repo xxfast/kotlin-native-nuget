@@ -241,11 +241,16 @@ MoodExtensions.LastSeen = Mood.Grumpy;
 
 An enum with only functions still gets its `{Enum}Extensions` class.
 
+A `Flow`, `StateFlow`, `SharedFlow`, `MutableStateFlow` or `MutableSharedFlow` property (in the
+constructor, in the body, or an `abstract val` each entry overrides) binds the same way, as an
+extension property such as `Tail.Oreo.Height`. Each entry keeps its own storage. See
+[Flow on an enum](coroutines-and-flow.md#flow-static-owners).
+
 ### What is not bound
 
-- A `suspend`, generic, or `Flow`-returning enum member function, and a lambda-returning one, is
-  skipped with a named diagnostic. Expose it as a top-level function taking the enum as a receiver
-  or parameter instead.
+- A generic or lambda-returning enum member function is skipped with a named diagnostic. Expose it
+  as a top-level function taking the enum as a receiver or parameter instead. A `suspend` or
+  `Flow` member binds; see [Coroutines and Flow](coroutines-and-flow.md#suspend-static-owners).
 - A companion `const val` is skipped (`SKIPPED_UNSUPPORTED_PROPERTY`). Use a top-level `const val`.
 - Two declarations that spell the same C# signature in `{Enum}Extensions` fail generation with
   `ERROR_CSHARP_SIGNATURE_COLLISION`: a member function beside a same-named member property

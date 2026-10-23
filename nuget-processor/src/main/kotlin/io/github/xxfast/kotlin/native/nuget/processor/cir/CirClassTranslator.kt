@@ -189,6 +189,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyEnvelopeCsha
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyEnvelopeRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyEnvelopeElementReadArgument
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementEnvelope
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollectionCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementReadArgument
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElement
@@ -2027,7 +2028,8 @@ internal fun flowProperty(
   flowElementWire?.trackWire(tracker)
   val flowElementType: String? = when {
     flowElementWire != null -> flowElementWire.declaredCsharpType()
-    flowElementCollection != null -> flowElementCollection.forwardPublicCsharpType()
+    flowElementCollection != null ->
+      legacyFlowElementCollectionCsharpType(flowElementCollection, isNullableElement)
     flowElementBytes -> legacyBytesCsharpType(isNullableElement)
     flowElementEnvelope -> legacyEnvelopeCsharpType(isNullableElement)
     flowElementInterface != null ->
@@ -2041,7 +2043,7 @@ internal fun flowProperty(
   }
   val flowElementRead: String? = flowElementWire?.legacyWireReadArgument()
     ?: flowElementCollection
-    ?.let { collection -> legacyFlowElementReadArgument(collection) }
+    ?.let { collection -> legacyFlowElementReadArgument(collection, isNullableElement) }
     ?: flowElementInterface
       ?.let { iface -> legacyInterfaceElementReadArgument(iface, isNullableElement) }
     ?: legacyBytesElementReadArgument(isNullableElement).takeIf { flowElementBytes }
@@ -2390,7 +2392,7 @@ internal fun flowMembers(
       classifier.legacyFlowElementWire(returnType)
     flowElementWire?.trackWire(tracker)
     val flowCsElementType: String = flowElementWire?.declaredCsharpType()
-      ?: flowElementCollection?.forwardPublicCsharpType()
+      ?: flowElementCollection?.let { legacyFlowElementCollectionCsharpType(it, isNullableElement) }
       ?: legacyBytesCsharpType(isNullableElement).takeIf { flowElementBytes }
       ?: legacyEnvelopeCsharpType(isNullableElement).takeIf { flowElementEnvelope }
       ?: flowElementInterface?.let { it.csharpType + if (isNullableElement) "?" else "" }
@@ -2407,7 +2409,7 @@ internal fun flowMembers(
     ) listOf(flowCsElementType.removeSuffix("?")) else emptyList()
     val flowElementRead: String? = flowElementWire?.legacyWireReadArgument()
       ?: flowElementCollection
-      ?.let { collection -> legacyFlowElementReadArgument(collection) }
+      ?.let { collection -> legacyFlowElementReadArgument(collection, isNullableElement) }
       ?: flowElementInterface
         ?.let { iface -> legacyInterfaceElementReadArgument(iface, isNullableElement) }
       ?: legacyBytesElementReadArgument(isNullableElement).takeIf { flowElementBytes }
@@ -3170,14 +3172,14 @@ internal fun suspendStateFlowElement(
     val wire = classifier.legacyFlowElementWire(returnType)
     if (tracker != null) wire?.trackWire(tracker)
     val cs = wire?.declaredCsharpType()
-      ?: collection?.forwardPublicCsharpType()
+      ?: collection?.let { legacyFlowElementCollectionCsharpType(it, nullable) }
       ?: legacyBytesCsharpType(nullable).takeIf { bytes }
       ?: legacyEnvelopeCsharpType(nullable).takeIf { envelope }
       ?: iface?.let { it.csharpType + if (nullable) "?" else "" }
       ?: classifier.legacyGenericElement(element, nullable)
       ?: qualifiedElementCsType(element, context, nullable)
     val read = wire?.legacyWireReadArgument()
-      ?: collection?.let { legacyFlowElementReadArgument(it) }
+      ?: collection?.let { legacyFlowElementReadArgument(it, nullable) }
       ?: iface?.let { legacyInterfaceElementReadArgument(it, nullable) }
       ?: legacyBytesElementReadArgument(nullable).takeIf { bytes }
       ?: legacyEnvelopeElementReadArgument(nullable).takeIf { envelope }
@@ -6466,10 +6468,12 @@ private fun awaitedStateFlowCollectionElement(
   val bytes: Boolean = classifier.legacyFlowElementShape(element) is ForwardLegacyFlowElementShape.Bytes
   if (bytes && holder in MUTABLE_STATE_FLOW_TYPES) {
     tracker?.needsBytes = true
+    val nullable: Boolean = element?.isMarkedNullable == true
     return SuspendStateFlowElement(
-      asyncReturnType = "KotlinStateFlow<byte[]>" + if (memberNullable) "?" else "",
-      elementType = "byte[]",
-      read = legacyBytesElementReadArgument(nullable = false),
+      asyncReturnType = "KotlinStateFlow<${legacyBytesCsharpType(nullable)}>" +
+        if (memberNullable) "?" else "",
+      elementType = legacyBytesCsharpType(nullable),
+      read = legacyBytesElementReadArgument(nullable),
       perMember = true,
     )
   }
@@ -6488,11 +6492,12 @@ private fun awaitedStateFlowCollectionElement(
   val collection: BridgeType.Collection =
     classifier.legacyFlowElementCollection(returnType) ?: return null
   tracker?.trackCollection(collection)
+  val nullable: Boolean = element?.isMarkedNullable == true
+  val elementType: String = legacyFlowElementCollectionCsharpType(collection, nullable)
   return SuspendStateFlowElement(
-    asyncReturnType = "KotlinStateFlow<${collection.forwardPublicCsharpType()}>" +
-      if (memberNullable) "?" else "",
-    elementType = collection.forwardPublicCsharpType(),
-    read = legacyFlowElementReadArgument(collection),
+    asyncReturnType = "KotlinStateFlow<$elementType>" + if (memberNullable) "?" else "",
+    elementType = elementType,
+    read = legacyFlowElementReadArgument(collection, nullable),
     collection = collection,
   )
 }

@@ -923,7 +923,7 @@ internal fun warnRefusedLegacyRouteMembers(
     // `Pair<String, Int>` does.
     reason = "a suspend member can return, and a Flow or StateFlow element can be, a " +
         "List/Set/Map, but not the generic type $refused",
-    hint = "return a non-nullable List/Set/Map, or a non-generic type",
+    hint = "return a List/Set/Map, nullable or not, or a non-generic type",
     owner = owner,
     member = member.simpleName.asString(),
   )
@@ -946,7 +946,7 @@ internal fun warnRefusedLegacyRouteMembers(
     declaration = declaration,
     reason = "a Flow or StateFlow element can be a List/Set/Map, but not the generic type " +
         refused.first,
-    hint = "make the element a non-nullable List/Set/Map, or a non-generic type",
+    hint = "make the element a List/Set/Map, nullable or not, or a non-generic type",
     owner = owner,
     member = property.simpleName.asString(),
   )
@@ -1181,7 +1181,7 @@ internal fun warnRefusedLegacyRouteMembers(
   }
 
   // ADR-071: the ROUTES a declared `MutableStateFlow` return is read-only on whatever its element
-  // is: a nullable member on a method, a nullable element or member on the awaited route, and a
+  // is: a nullable member on a method, a nullable member on the awaited route, and a
   // top-level `suspend fun`. Each used to bind `KotlinStateFlow<T>` in silence, and each is named
   // now, with the route in the reason. Only for a member that survives read-only: one the route
   // refuses whole (a refused parameter or return) carries that refusal's own diagnostic.
@@ -1193,15 +1193,11 @@ internal fun warnRefusedLegacyRouteMembers(
     val function: KSFunctionDeclaration = member as? KSFunctionDeclaration ?: return
     val type: KSType = function.returnType?.resolve()?.expandAliases() ?: return
     if (type.declaration.qualifiedName?.asString() !in MUTABLE_STATE_FLOW_TYPES) return
-    val element: KSType? = type.arguments.firstOrNull()?.type?.resolve()?.expandAliases()
     val awaited: Boolean = Modifier.SUSPEND in function.modifiers
     // ADR-230: the top-level and static suspend routes write an awaited MutableStateFlow too, so
     // they share the class route's arms.
     val route: String = when {
       awaited && type.isMarkedNullable -> "an awaited nullable MutableStateFlow has no write arm"
-      awaited && element?.isMarkedNullable == true ->
-        "an awaited MutableStateFlow of a nullable element has no write arm"
-
       !awaited && type.isMarkedNullable ->
         "a nullable MutableStateFlow method return has no write arm (the held route has no " +
             "null arm)"

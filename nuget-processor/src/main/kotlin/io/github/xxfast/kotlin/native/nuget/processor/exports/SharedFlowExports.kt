@@ -59,6 +59,8 @@ private fun replayItemExpr(
   wire != null -> wire.legacyWireBox("value")
   envelope && elementNullable -> "if (value != null) buildError(value, ::nugetMappedType) else null"
   envelope -> "buildError(value, ::nugetMappedType)"
+  collection != null && elementNullable ->
+    "if (value != null) ${collectionResultProjection("value", collection)} else null"
   elementNullable -> "value"
   collection != null -> collectionResultProjection("value", collection)
   else -> "value"

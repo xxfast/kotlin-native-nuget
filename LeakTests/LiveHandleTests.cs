@@ -59,6 +59,8 @@ using Feedingtime = TestLibrary.Feedingtime;
 using Catsitter = TestLibrary.Catsitter;
 using Cattery = TestLibrary.Cattery;
 using Hoards = TestLibrary.Hoard;
+// The enum extension properties on `TailExtensions`, without importing the whole namespace.
+using static TestLibrary.Purrclock.TailExtensions;
 using Furcoat = TestLibrary.Furcoat;
 using Pawpost = TestLibrary.Pawpost;
 using TestLibrary.Pawpost;
@@ -6873,6 +6875,101 @@ public class LiveHandleTests
             await Task.Yield();
             yield return item;
         }
+    }
+
+    // A settable `MutableStateFlow`/`MutableSharedFlow` of a nullable collection or `ByteArray` on
+    // a class, an `object` and the top level, and the held and awaited holders over the same
+    // storage. Each holder read is +1 and its `using` -1; each non-null C# write mints the
+    // container or bytes handle for the call and releases it in the `finally`, a null write mints
+    // nothing; each non-null read is a handle the read consumes, a null read is no handle at all;
+    // the awaited holders' suspend jobs are +1/-1. Net zero.
+    [Fact]
+    public async Task NullableCollectionFlows_SettableHolders_ReturnToBaseline()
+    {
+        using var drawer = new Purrclock.SockDrawer();
+        // The drawer mints its coroutine scope on its first emit (`GetOrCreateScope()`) and holds it
+        // until disposed, so it is warmed before the baseline.
+        using (KotlinMutableSharedFlow<IReadOnlySet<string>?> warm = drawer.Labels) await warm.EmitAsync(null);
+        await AssertNoLeakAsync(async () =>
+        {
+            using (KotlinMutableStateFlow<IReadOnlyList<int>?> socks = drawer.Socks)
+            {
+                socks.Value = new List<int> { 1, 2 };
+                Assert.Equal(2, socks.Value!.Count);
+                socks.Value = null;
+                Assert.Null(socks.Value);
+                Assert.True(socks.CompareAndSet(null, new List<int> { 3 }));
+            }
+            using (KotlinMutableStateFlow<byte[]?> photo = drawer.Photo)
+            {
+                photo.Value = new byte[] { 1 };
+                Assert.Single(photo.Value!);
+                photo.Value = null;
+            }
+            using (KotlinMutableSharedFlow<IReadOnlySet<string>?> labels = drawer.Labels)
+            {
+                await labels.EmitAsync(new HashSet<string> { "Oreo" });
+                Assert.True(labels.TryEmit(null));
+                Assert.Null(Assert.Single(labels.ReplayCache));
+            }
+            using (KotlinMutableStateFlow<IReadOnlyList<Purrclock.Posture>?> sleepers = drawer.Sleepers)
+            {
+                sleepers.Value = new List<Purrclock.Posture> { Purrclock.Posture.Loaf };
+                Assert.Single(sleepers.Value!);
+                sleepers.Value = null;
+            }
+            using (KotlinMutableStateFlow<IReadOnlyList<int>?> jar = drawer.SockJar()) jar.Value = null;
+            using (KotlinMutableStateFlow<IReadOnlyList<int>?> awaited = await drawer.AwaitSocksAsync())
+            {
+                awaited.Value = new List<int> { 4 };
+                awaited.Value = null;
+            }
+            using (KotlinMutableStateFlow<byte[]?> awaitedPhoto = await drawer.AwaitPhotoAsync())
+            {
+                awaitedPhoto.Value = new byte[] { 2 };
+                awaitedPhoto.Value = null;
+            }
+            using (KotlinMutableStateFlow<IReadOnlyList<int>?> laundry = Purrclock.Laundry.Socks)
+            {
+                laundry.Value = new List<int> { 5 };
+                laundry.Value = null;
+            }
+            using (KotlinMutableSharedFlow<IReadOnlySet<string>?> tags = Purrclock.Laundry.Labels)
+            {
+                await tags.EmitAsync(new HashSet<string> { "Mylo" });
+                Assert.Single(tags.ReplayCache);
+            }
+            using (KotlinMutableStateFlow<IReadOnlyList<int>?> loose = Purrclock.SockDrawers.LooseSocks)
+            {
+                loose.Value = new List<int> { 6 };
+                loose.Value = null;
+            }
+            using (KotlinMutableSharedFlow<IReadOnlySet<string>?> looseTags = Purrclock.SockDrawers.LooseLabels)
+            {
+                Assert.True(looseTags.TryEmit(new HashSet<string> { "Oreo" }));
+                Assert.Single(looseTags.ReplayCache);
+            }
+        }, iterations: 200);
+    }
+
+    // ADR-230
+    // Flow family properties declared on an enum: each held `MutableStateFlow`/`MutableSharedFlow`
+    // read is a fresh holder over that entry's own flow, +1 and its `using` -1; a cold `Flow` holds
+    // no handle until enumerated, and each enumeration's job and items are released by the
+    // enumerator; a read-only `StateFlow`/`SharedFlow` holder is +1/-1. Net zero.
+    [Fact]
+    public async Task EnumFlowProperties_EveryKind_ReturnToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using (KotlinMutableStateFlow<int> height = Purrclock.Tail.Oreo.Height) height.Value = 3;
+            using (KotlinMutableStateFlow<int> swishes = Purrclock.Tail.Mylo.Swishes) swishes.Value = 2;
+            using (KotlinMutableSharedFlow<string> twitches = Purrclock.Tail.Mylo.Twitches) twitches.TryEmit("thump");
+            using (KotlinStateFlow<int> level = Purrclock.Tail.Oreo.Level) Assert.Equal(3, level.Value);
+            using (KotlinSharedFlow<string> echoes = Purrclock.Tail.Mylo.Echoes) Assert.Single(echoes.ReplayCache);
+            using (KotlinFlow<string> mood = Purrclock.Tail.Mylo.Mood) Assert.Equal(2, (await DrainFlow(mood)).Count);
+            using (KotlinFlow<int> wags = Purrclock.Tail.Oreo.Wags) Assert.Equal(2, (await DrainFlow(wags)).Count);
+        }, iterations: 200);
     }
 
     private static async Task<List<T>> DrainFlow<T>(IAsyncEnumerable<T> flow)

@@ -173,11 +173,11 @@ A `T` whose bound needs ADR-198's trampoline is bound inside `Sticker<T>` too; s
 
 | Shape | Outcome | Why |
 |---|---|---|
-| `fun <T> f(): Sticker<T>?` | "nested in `Sticker<T>?`" | `null` and `Sticker(null)` would both be the null pointer; same open question as the pre-existing `Nullable(ObjectHandle)` underlying refusal |
-| `List<Sticker<T>>` (own `T`) | "nested in" | ADR-212's element box plus this ADR's re-wrap; budget only |
-| `Box<Sticker<Int>>`, lambda payload/result, flow element, awaited `suspend` result or value-class parameter on a `suspend` member | named skip | no per-instantiation ADR-171 box pair |
+| `fun <T> f(): Sticker<T>?` | bound by [ADR-226](226-generic-value-class-nullable-and-collections.md) | over an unconstrained `T` it crosses as the ADR-228 box handle so `null` and `Sticker(null)` stay distinct; over a `T : Any` it rides the null pointer |
+| `List<Sticker<T>>` (own `T`) | bound by [ADR-226](226-generic-value-class-nullable-and-collections.md) | the element projects to its underlying and re-wraps in Kotlin |
+| `Box<Sticker<Int>>`, lambda payload/result, flow element, awaited `suspend` result or value-class parameter on a `suspend` member | bound by [ADR-228](228-generic-value-class-erased-positions.md) | one box/unbox pair per generic value class serves every instantiation; [ADR-240](240-async-routes-carry-wire-underlyings.md) carries the `suspend` and `Flow` routes |
 | own members and secondary constructors of a generic value class | bound by ADR-225 | see the 2026-10-22 amendment below |
-| underlying `List<T>` or any non-bare, non-phantom shape | unchanged `REFUSED` | pre-existing |
+| underlying `List<T>` or any non-bare, non-phantom shape | unchanged `REFUSED` for a generic value class; a non-generic value class over a collection, `Instant`, `Duration`, `Uuid`, `ByteArray` or interface binds by [ADR-235](235-value-class-wire-underlyings.md) | pre-existing |
 
 ## Consequences
 
@@ -185,13 +185,13 @@ A `T` whose bound needs ADR-198's trampoline is bound inside `Sticker<T>` too; s
   generic value class, which failed to compile its generated Kotlin before, now builds.
 - Tier 1 flips: `Tier1GenericInstanceMemberPositionTest` (the `Crate<T>` cell: `held`, `spare`,
   `fetch`, `stow`, `maybeFetch`, `maybeStow`, `listed`, `topCrate`, `topFetch`, `topStow` bind;
-  `boxed`, `later`, `laterWith` and the flows stay skipped), `Tier1ValueClassNullableResultTest`
+  `boxed`, `later`, `laterWith` and the flows stayed skipped here; ADR-228 binds them), `Tier1ValueClassNullableResultTest`
   (`vcgeneric`: struct declared, `maybe`/`label` named, `box()` binds), `Tier1NestedTypesTest`
   (`Basket.Wrap<T>` declared), and the flow-element reason text in
   `Tier1MutableStateFlowGenericElementTest` and `Tier1MutableStateFlowValueClassElementTest`.
-- The diagnostics `GENERIC` hint keeps its final sentence ("... and a `T` inside a generic
+- The diagnostics `GENERIC` hint kept its final sentence here (ADR-226 and ADR-228 later bound each shape it names) ("... and a `T` inside a generic
   value class under `?`, inside a `List`, `Set` or `Map`, or at an erased position").
-- Deferred, each a ROADMAP line citing this ADR: `V<T>?` or `List<V<T>>` with an own `T`; erased
+- Deferred here, each a ROADMAP line citing this ADR (since bound by ADR-226 and ADR-228): `V<T>?` or `List<V<T>>` with an own `T`; erased
   positions (a per-instantiation box pair). Own members and secondary constructors were deferred here and bind under ADR-225.
 
 ### Corrections to the draft, from execution
@@ -265,3 +265,13 @@ a synthesized method type parameter.
 [ADR-234](234-value-class-underlying-widenings.md) binds `Sticker<Char>` (a `Char` underlying is a
 value underlying) and a star- or `out`-projected result as a caller-supplied method type parameter,
 as ADR-226 did for a parameter.
+
+## Amendment 2026-10-23: the named-skips table is historical
+
+Every skip in the "Named skips" table except a generic value class over a `List<T>` or other non-bare
+underlying has since been bound: `Sticker<T>?` and `List<Sticker<T>>` by
+[ADR-226](226-generic-value-class-nullable-and-collections.md), the erased positions by
+[ADR-228](228-generic-value-class-erased-positions.md) with the `suspend` and `Flow` routes carried
+by [ADR-240](240-async-routes-carry-wire-underlyings.md), and a non-generic value class over a
+collection or another wire underlying by [ADR-235](235-value-class-wire-underlyings.md). The table
+above shows each row's outcome now; the Decision prose is left as written.
