@@ -99,9 +99,16 @@ class Tier1GenericValueClassTest {
       "expected the [Sticker] link to fall back to <c>",
     )
     assertFalse(
-      Regex("""@CName\("[^"]*_(sticker|decal)_(create|box|unbox)"""").containsMatchIn(result.generated),
-      "expected no _create or box pair for a generic value class",
+      Regex("""@CName\("[^"]*_(sticker|decal)_create"""").containsMatchIn(result.generated),
+      "expected no _create for a generic value class",
     )
+    // ADR-237: an own-`T` underlying rides an `object` box pair; a phantom one has none and crosses
+    // an `object` position as an opaque `KotlinObject`.
+    assertTrue(Regex("""@CName\("[^"]*_sticker_box"\)""").containsMatchIn(result.generated))
+    assertTrue(Regex("""@CName\("[^"]*_sticker_unbox"\)""").containsMatchIn(result.generated))
+    assertFalse(Regex("""@CName\("[^"]*_decal_(box|unbox)"""").containsMatchIn(result.generated))
+    assertContains(code, "public readonly record struct Sticker<T>(T Value) : INugetGenericValue")
+    assertContains(code, "internal static class StickerNative")
   }
 
   @Test

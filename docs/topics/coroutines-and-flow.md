@@ -606,7 +606,7 @@ await timer.RingAsync(3); // "ding1,ding2,ding3"
   `Uuid`, a value class, a member's own `T`, and a nullable of each, so `suspend (Char) -> String` and
   `suspend (List<String>) -> Int` bind. A `Throwable` result binds as `Task<Exception>` (`suspend (Int) -> Throwable` is
   `Func<int, CancellationToken, Task<Exception>>`), unless it is declared narrower than
-  `RuntimeException`. A lambda of four or more parameters or a `Pair`, `IntArray` or `Any` payload is
+  `RuntimeException`. A lambda of four or more parameters or a `Pair` or `IntArray` payload is
   refused by name, and the member is then not generated.
   A plain `(T) -> R` lambda on a `suspend fun` binds separately; see
   [A plain lambda on a `suspend` or `Flow` member](#plain-lambda-on-suspend-member). A

@@ -604,6 +604,20 @@ rows 20a to 20g return to baseline:
 `LeakTests/CollectabilityTests.cs` `CSharpSitter_ReleasedAfterKotlinGc` asserts Kotlin's garbage
 collection releases such an implementation once Kotlin drops its bridge.
 
+A Kotlin `Any` crossing as `object?` mints a Kotlin box for each C# value that goes in, and a
+wrapper or `KotlinObject` for each handle-backed value that comes out. `LeakTests/LiveHandleTests.cs`
+rows 6d2 and 21a to 21c return to baseline:
+
+- Row 6d2, `ErasedTypeParameterInterface_Argument_ReturnsToBaseline`: a C# implementation of an
+  interface whose member has its own `<R>`, erased to `object?`, released with the call.
+- Row 21a, `AnyWire_HandleBackedValues_ReturnToBaseline`: an exported class wrapper passed in and
+  read back, a C#-implemented interface object, a list holding a handle, a class owner's `var` and
+  member, a Kotlin-backed interface, and a star-projected generic class result.
+- Row 21b, `AnyWire_StarProjectedFlows_ReturnToBaseline`: a `Flow<*>` whose elements are handles,
+  read from Kotlin and handed from C# to Kotlin.
+- Row 21c, `AnyWire_GenericValueClass_ReturnsToBaseline`: a generic value class on the `Any` wire in
+  both directions, and a Kotlin-made one around a handle.
+
 An exception thrown from Kotlin allocates one error handle per call, and the
 [exception mapping](exceptions.md#catching-a-specific-exception-type) reads a mapped type from it
 for the exception and each cause. `LeakTests/LiveHandleTests.cs`'s

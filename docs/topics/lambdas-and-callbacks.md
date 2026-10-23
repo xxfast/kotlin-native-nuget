@@ -304,12 +304,17 @@ crosses in its usual C# spelling:
 | `Instant` / `Duration` / `Uuid` | `DateTimeOffset` / `TimeSpan` / `Guid` |
 | a bound C# interface such as `IFeedable` | the interface itself, the same object you implemented |
 | a member's or class's own `T` | `T`, see [below](#a-type-parameter-in-the-lambda) |
+| `Any` | `object`, see [Any](primitives-and-strings.md#any) |
 | `Throwable` | `Exception`, see [Throwable values](exceptions.md#throwable-values) |
 | any of these, nullable | the same type with `?` |
 
 A nullable payload arrives as `null`, and a callback that returns `null` for a nullable result
 reaches Kotlin as `null`, never as a crash. A collection is copied at the crossing, as at any
 method boundary. A `Throwable` result of a `suspend` lambda is a `Task<Exception>`, and a `Throwable?` payload arrives as `Exception?`. A result declared narrower than `RuntimeException` (such as `IllegalStateException`) is refused, because C# hands Kotlin a `NugetManagedException`.
+
+`Any` is not among the refused payloads: a per-call `(Any) -> Unit` parameter is `Action<object>`,
+a stored `add`/`remove` pair and a `suspend` lambda take it as `object` too, and the payload is read
+as its runtime C# value (see [Any](primitives-and-strings.md#any)).
 
 ```kotlin
 fun lineup(pick: (String) -> List<String>): String = "$judge called ${pick(judge).joinToString()}"
@@ -339,7 +344,7 @@ These shapes are refused by name (a build-time skip, not broken generated code):
 
 - A lambda of four or more parameters. `(Int, Int, Int, Int) -> Int` takes 4 parameters, and a lambda
   crosses with at most 3 on every callback route. Group the rest into a class, or split the lambda.
-- A `Pair`, `IntArray` or `Any` payload. Pass a class that holds the values instead.
+- A `Pair` or `IntArray` payload. Pass a class that holds the values instead.
 - A lambda type nested inside a `List`/`Set`/`Map`.
 
 A lambda parameter on a constructor, a data class's `copy()`, an enum-arm box constructor, or a
@@ -554,7 +559,7 @@ A generic sealed arm that carries the arm's `T` binds the same way; see
 listener is a Kotlin interface (an [interface subscription](#c-implementing-a-kotlin-interface-as-a-parameter))
 binds on a generic owner as well.
 
-A shape the vocabulary refuses (four or more parameters, or a `Pair`, `IntArray` or `Any` payload)
+A shape the vocabulary refuses (four or more parameters, or a `Pair` or `IntArray` payload)
 declines the pair, both halves together and named, since a subscription that could not be made
 should not have a matching unsubscribe either.
 

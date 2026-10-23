@@ -376,9 +376,38 @@ classes (generic ones too), interfaces, collections, value classes, nullable pri
 `Char`, `Instant`, `Duration`, `Uuid`, `ByteArray`, lambdas, [`suspend` and `Flow` members](#implementing-async-members-in-c),
 and a `Throwable`, `Exception` or `RuntimeException` as a `System.Exception` (see
 [Throwable values](exceptions.md#throwable-values)). See [every member shape](#implementing-every-member-shape)
-below. A member with its own type parameter (`fun <R> map(...)`) has **no bridge at all**: the build
-warns once with `SKIPPED_UNIMPLEMENTABLE_INTERFACE`, naming the member and how to fix it, and
-passing an implementation of it throws `NotSupportedException` the first time it crosses.
+below.
+
+A member with its own type parameter (`fun <R> pounce(...)`) is declared with `R` erased to
+`object?`, and Kotlin calls your implementation at `R = Any?`:
+
+```kotlin
+class Mouse(val name: String) { fun squeak(): String = "$name squeaks" }
+
+interface Pouncer {
+  fun <R> pounce(f: (String) -> R): R
+}
+
+fun pouncing(pouncer: Pouncer): String = pouncer.pounce { Mouse(it) }.squeak()
+```
+
+```C#
+internal sealed class Ambush(string name) : IPouncer
+{
+    public object? Pounce(Func<string, object?> f) => f(name);
+    public void Dispose() { }
+}
+
+Assert.Equal("Oreo squeaks", Hoarding.Pouncing(new Ambush("Oreo")));
+```
+
+On a generic interface the interface's own `T` stays typed: `interface Sniffer<T> { fun <R> sniff(f: (T)
+-> R): R }` is `object? Sniff(Func<T, object?> f)` on `ISniffer<T>`. A Kotlin class implementing it
+(`Nose<T>`) keeps `R Sniff<R>(Func<T, R> f)` on the class, so only a value held as `ISniffer<T>`
+returns `object?`. A parameter that is `reified`, has more than one bound, or has a bound naming
+another type parameter has no single erased type: such an interface still has **no bridge**, the build
+warns once with `SKIPPED_UNIMPLEMENTABLE_INTERFACE`, naming the member, and passing an
+implementation of it throws `NotSupportedException` the first time it crosses.
 
 A `var` works both ways: Kotlin's write lands on your C# property, and a later read sees it.
 
@@ -611,8 +640,8 @@ and pass it inside a collection or a `Box<IKeepsake<short>>`.
 A constrained interface restates its bound: `interface Perch<T : Furry>` is
 `IPerch<T> where T : IFurry`. A stdlib bound such as `Comparable<T>` drops to `where T : notnull`
 with `INFO_DROPPED_BOUND`. An interface member with its own type parameter (`fun <R> map(...)`) is
-left off `IKeepsake<T>`, and the interface cannot be implemented in C#: its outputs still bind, and
-each input position that would hand it a C# implementation is skipped with a named warning.
+declared on `IKeepsake<T>` with `R` erased to `object?`, and Kotlin calls your implementation at
+`R = Any?` (see [Implementing a Kotlin interface in C#](#implementing-a-kotlin-interface-in-c)).
 
 A generic interface's `suspend` and `Flow` members bind too: `interface Heirloom<T>` declares
 `Task<T> PolishAsync(...)` and `KotlinFlow<T> Glints()` on `IHeirloom<T>`, which is
@@ -1844,10 +1873,11 @@ A consumer cannot convert between instantiations: an `Outcome.Err<KotlinNothing>
 `Outcome<int>`. This is C# invariance, the same rule that stops a `List<string>` becoming a
 `List<object>`. Build the `Err<int>` instead.
 
+A star projection (`Outcome<*>`) reads at its bound, so a parameter of that type is `Outcome<object>`.
+
 These are skipped with a named `SKIPPED_SEALED_POSITION` warning. The member is absent and the rest
 of its owner still binds:
 
-- A use-site projection (`Outcome<*>`): C# has no projection of a generic class.
 - An argument the bridge cannot read through an erased slot (`Outcome<List<Int>>`, a lambda or a
   `Flow` as the argument).
 - `Nothing` under a constraint the marker fails: `Blanket.Folded` is `Blanket<Nothing>` where C#
@@ -1936,9 +1966,10 @@ A `var` flow property on a generic arm has a setter; see
 
 ## Limitations {id="limitations"}
 
-- A C#-implemented interface with a member that has its own type parameter (`fun <R> map(...)`)
-  has no bridge: passing an implementation throws `NotSupportedException` the first time. The
-  build names the member on one `SKIPPED_UNIMPLEMENTABLE_INTERFACE` warning per interface.
+- A C#-implemented interface with a member whose own type parameter is `reified`, has several bounds or
+  is bounded by another type parameter has no bridge: passing an implementation throws
+  `NotSupportedException` the first time. The build names the member on one
+  `SKIPPED_UNIMPLEMENTABLE_INTERFACE` warning per interface.
 - A C#-implemented object's bridge is released on Kotlin's next garbage-collection round, not
   deterministically; there is no `IDisposable`-style prompt release for it.
 - An interface member whose own return type is another interface or a class handle (chained
@@ -1961,8 +1992,8 @@ A `var` flow property on a generic arm has a setter; see
   obtain the arm from a factory or from the base's `FromHandle` discriminator instead. A
   `class`-kind arm with bridgeable constructor parameters exports a real public constructor
   instead; see [Sealed classes and interfaces](#sealed-classes-and-interfaces).
-- A generic sealed hierarchy skips a few uses, named: a use-site projection (`Outcome<*>`), an
-  argument the bridge cannot read, `Nothing` under a constraint, and an arm parameter the base never
+- A generic sealed hierarchy skips a few uses, named: an argument the bridge cannot read,
+  `Nothing` under a constraint, and an arm parameter the base never
   sees. See [A generic sealed hierarchy](#generic-sealed-hierarchy).
 - A generic method on an arm or a sealed base binds as a C# generic method; see
   [Generic methods on a class](generics.md#generic-methods). A `suspend` lambda parameter binds on

@@ -28,6 +28,7 @@ string result = Mappings.String(); // "Kotlin/Native!"
 | `kotlin.time.Duration` | `System.TimeSpan` |
 | `kotlin.uuid.Uuid` | `System.Guid` |
 | `ByteArray` | `byte[]` |
+| `Any` / `Any?` | `object` / `object?`, see [Any](#any) |
 
 These mappings describe Kotlin APIs exported to C#. For consuming a C# library from Kotlin,
 see [Types that cross the wire](bridgeable-subset.md#types-that-cross-the-wire); nullable value types and the
@@ -195,6 +196,66 @@ result, and as a `List` element or a `Map` value (`List<ByteArray>` is `IReadOnl
 [Collections](collections.md)). It is not supported as a `Set` element or a `Map` key, since arrays
 compare by identity and every crossing copies, so a lookup could never succeed, nor as another array
 type (`IntArray`, `Array<T>`), nor as an extension receiver.
+
+## Any {id="any"}
+
+`Any` and `Any?` are `object?` wherever they appear: a parameter, result, property, `List` or `Map`
+element, lambda payload or result, or `Flow` element. A Kotlin value reaches C# as its runtime C#
+value, so test it with `is` or a pattern. A C# object reaches Kotlin as the matching Kotlin value.
+
+```kotlin
+class Mouse(val name: String)
+enum class Fur { TUXEDO, CARAMEL }
+value class Paw(val size: Int)
+
+fun stash(value: Any): Any = value
+fun stashOrNull(value: Any?): Any? = value
+fun fetch(kind: String): Any? = when (kind) {
+  "int" -> 5
+  "string" -> "Oreo"
+  "mouse" -> Mouse("Mylo")
+  "fur" -> Fur.CARAMEL
+  "paw" -> Paw(4)
+  "list" -> listOf(1, "Mylo", null)
+  // ...
+  else -> null
+}
+```
+
+```C#
+// stash(value: Any): Any is object Stash(object value); stashOrNull keeps the ?
+Assert.Equal(5, Assert.IsType<int>(Hoarding.Stash(5)));
+Assert.Equal(3, Assert.IsType<Paw>(Hoarding.Stash(new Paw(3))).Size);
+Assert.Null(Hoarding.StashOrNull(null));
+
+using Mouse mouse = Assert.IsType<Mouse>(Hoarding.Fetch("mouse"));
+Assert.Equal(Fur.Caramel, Assert.IsType<Fur>(Hoarding.Fetch("fur")));
+var list = Assert.IsAssignableFrom<IReadOnlyList<object?>>(Hoarding.Fetch("list")); // 1, "Mylo", null
+```
+
+| Kotlin value | C# value |
+|---|---|
+| `Int`, `Long`, `Double`, `Boolean` and the other primitives | the boxed primitive |
+| `String` | `string` |
+| an exported class | its wrapper, which you dispose (`Mouse` above) |
+| a value class, an enum | the struct, the C# enum |
+| a `List`, `Set` or `Map` | `IReadOnlyList<object?>`, `IReadOnlySet<object?>`, `IReadOnlyDictionary<object, object?>` |
+| an object a C# class implemented | the same C# object you handed over |
+| a generic value class (`Bow<T>`) | its struct closed over `object?`, see [Value classes](value-classes.md#at-an-any-position) |
+| any other Kotlin object | a `KotlinObject` that you dispose; passing it back hands Kotlin the same object |
+
+Going the other way, a list or dictionary you pass becomes a Kotlin `List` or `Map` with each
+element converted the same way, and a C# object Kotlin has no type for stays opaque inside Kotlin
+and comes back as the same instance.
+
+A wrapper you receive as `object?` is yours to dispose, as at any other result position, and a
+wrapper you pass in is only borrowed for the call. A generic value class comes back closed over
+`object?` (`Bow<object?>`) whatever it was constructed as, so match on that.
+
+A star projection reads at the parameter's bound, or `object?` when it has none: `Box<*>` is
+`Box<object?>`, `Flow<*>` is `KotlinFlow<object?>`, and a generic sealed `Outcome<*>` is
+`Outcome<object>`. `Any` also stands in for a member's own type parameter on an interface a C# class
+implements, see [Implementing a Kotlin interface in C#](interfaces-abstract-sealed.md#implementing-a-kotlin-interface-in-c).
 
 ## C# names {id="c-names"}
 

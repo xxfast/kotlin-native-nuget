@@ -25,15 +25,16 @@ internal data class Tier1CSharpBuild(val exitCode: Int, val log: String) {
 internal object Tier1CSharpCompile {
 
   /**
-   * Builds [result]'s generated C# with [consumerSource] beside it, defining [defines]. Set
-   * [allowUnsafe] for routes whose output uses `unsafe` (Flow), as the packaged `.csproj` and
-   * `nugetCompileInterop` both do.
+   * Builds [result]'s generated C# with [consumerSource] beside it, defining [defines].
+   * [allowUnsafe] defaults on, as the packaged `.csproj` and `nugetCompileInterop` both always
+   * build with it: the `object` wire (ADR-237) in `NugetMarshal` takes an unmanaged function
+   * pointer in every module.
    */
   fun compile(
     result: Tier1Result,
     consumerSource: String,
     defines: String = "",
-    allowUnsafe: Boolean = false,
+    allowUnsafe: Boolean = true,
   ): Tier1CSharpBuild {
     val root: File = generateSequence(File(System.getProperty("user.dir")).canonicalFile) {
       it.parentFile
@@ -96,7 +97,7 @@ internal object Tier1CSharpCompile {
     result: Tier1Result,
     consumerSource: String,
     defines: String = "",
-    allowUnsafe: Boolean = false,
+    allowUnsafe: Boolean = true,
   ) {
     val build: Tier1CSharpBuild = compile(result, consumerSource, defines, allowUnsafe)
     assertTrue(

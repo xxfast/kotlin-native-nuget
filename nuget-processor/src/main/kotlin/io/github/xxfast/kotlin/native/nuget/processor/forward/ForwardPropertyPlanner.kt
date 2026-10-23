@@ -1543,7 +1543,11 @@ internal class ForwardPropertyPlanner(
     // ADR-236: a lambda property plans when C# can name every type argument (issue #111).
     is BridgeType.ReturnedLambda -> type.unnameableTypeArgument() == null
 
-    BridgeType.Unit, BridgeType.Char, BridgeType.String, BridgeType.Instant, BridgeType.Duration,
+    // A `Unit` property carries no value and C# has no `void` property, so it reaches no
+    // owner, the same refusal a C# implementation of an interface declaring one meets.
+    BridgeType.Unit -> false
+
+    BridgeType.Char, BridgeType.String, BridgeType.Instant, BridgeType.Duration,
     is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,
     is BridgeType.Interface -> true
 

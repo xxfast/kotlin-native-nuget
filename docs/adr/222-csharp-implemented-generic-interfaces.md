@@ -325,3 +325,14 @@ longer the whole vocabulary: a class handle, a generic class handle such as `Cra
 a collection, a nullable and the other plan types cross a slot too, and a slot declared by a
 generic super-interface is typed with the substituted argument
 ([ADR-233](233-interface-slot-vocabulary.md)).
+
+## Amendment (2026-10-23): a member's own type parameter is erased, not refused
+
+Every statement above that a member's own type parameter (`fun <R> map(...)`) is "a genuine
+impossibility" or "impossible, not deferred" no longer holds, and neither does the sentence that skips
+a position when the interface's bridge cannot plan for a member's own `<R>`. The member is declared on the interface with each `R` erased to `object?` (the
+single bound when there is one), `object? Map(Func<T, object?> f)`, and Kotlin calls the C#
+implementation at `R = Any?`. The impossibility held for a C# call that must name `R`; erasing `R` on
+both halves removes the need to. A `reified` parameter, a parameter with more than one bound and a
+bound that mentions another type parameter are still refused
+([ADR-237](237-kotlin-any-as-object.md)).

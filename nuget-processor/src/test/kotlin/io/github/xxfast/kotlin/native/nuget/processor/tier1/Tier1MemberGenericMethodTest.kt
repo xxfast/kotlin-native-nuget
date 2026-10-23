@@ -419,7 +419,6 @@ class Tier1MemberGenericMethodTest {
       // ADR-216: `kotlin.Array` is no exported generic class, so it keeps the GENERIC text.
       "tier1.membergeneric.Depot.sort" to "(here, its type parameter is nested in `Array<T>`)",
       "tier1.membergeneric.Crate.shadow" to "(here, its type parameter `T` shadows its owner's)",
-      "tier1.membergeneric.Kennel.structural" to "(here, it is declared on an interface)",
       "tier1.membergeneric.Weather.echo" to "(here, it is declared on an enum class)",
       "tier1.membergeneric.Tag.echo" to "(here, it is declared on a value class)",
       "tier1.membergeneric.extended" to "(here, it is an extension function)",
@@ -444,8 +443,13 @@ class Tier1MemberGenericMethodTest {
       "expected the ADR-217 Rank binding",
     )
     assertContains(result.generated, ".rank<T>(")
+    // ADR-237: an interface member's own `T` is erased to `object?` on the C# interface.
+    assertTrue(
+      declarations.any { line -> "object? Structural(object? item)" in line },
+      "expected the erased Structural binding; got: ${declarations.filter { "Structural(" in it }}",
+    )
     listOf(
-      "Kind", "Conjure", "Narrow", "Sort", "Shadow", "Structural",
+      "Kind", "Conjure", "Narrow", "Sort", "Shadow",
       "Extended",
     )
       .forEach { member ->

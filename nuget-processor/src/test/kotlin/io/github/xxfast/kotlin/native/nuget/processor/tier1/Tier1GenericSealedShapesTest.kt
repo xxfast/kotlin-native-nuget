@@ -136,7 +136,6 @@ class Tier1GenericSealedShapesTest {
   @Test
   fun `each use site C# cannot spell is a named sealed-position skip`() {
     val skips: Map<String, String> = mapOf(
-      "Desk.any" to "C# has no projection of a generic class",
       "Desk.batch" to "the erased wire cannot read its type argument",
       "Desk.empty" to "`KotlinNothing` does not satisfy `where T :",
     )

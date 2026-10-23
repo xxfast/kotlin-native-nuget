@@ -251,10 +251,7 @@ class Tier1CallbackArityAgreementTest {
    */
   private fun csharpThunkArities(generated: String): Set<Int> =
     generated.split("(delegate* unmanaged[Cdecl]<").drop(1)
-      .filterNot { chunk ->
-        val name: String = chunk.substringAfter(">)&").substringBefore("Thunk")
-        name.startsWith("NugetFlowOn") || name == "NugetAsyncCallback"
-      }
+      .filterNot { chunk -> chunk.isRuntimeInvokedThunk() }
       .map { chunk -> parameterCount(chunk.substringBefore(">)&")) - 1 }
       .toSet()
 
@@ -272,14 +269,22 @@ class Tier1CallbackArityAgreementTest {
    */
   private fun csharpThunkTails(generated: String): Set<String> =
     generated.split("(delegate* unmanaged[Cdecl]<").drop(1)
-      .filterNot { chunk ->
-        val name: String = chunk.substringAfter(">)&").substringBefore("Thunk")
-        name.startsWith("NugetFlowOn") || name == "NugetAsyncCallback"
-      }
+      .filterNot { chunk -> chunk.isRuntimeInvokedThunk() }
       .map { chunk ->
         chunk.substringBefore(">)&").split(",").map(String::trim).dropLast(1).last()
       }
       .toSet()
+
+  /**
+   * A thunk whose caller is `nuget-runtime`, not generated Kotlin: the async and Flow families, and
+   * ADR-237's `FreeManaged`, which a `NugetManagedObject` cleaner calls with the bare token and
+   * which fail-fasts rather than writing an error slot.
+   */
+  private fun String.isRuntimeInvokedThunk(): Boolean {
+    val name: String = substringAfter(">)&").substringBefore("Thunk")
+    return name.startsWith("NugetFlowOn") || name == "NugetAsyncCallback" ||
+      name.startsWith("FreeManaged")
+  }
 
   private fun parameterCount(list: String): Int =
     list.split(",").map(String::trim).count(String::isNotEmpty)

@@ -188,6 +188,9 @@ interface Tracker {
   val mood: StateFlow<Int>?
 
   suspend fun level(): StateFlow<Int>
+
+  /** ADR-237: a star-projected flow, its elements crossing on the `Any` wire. */
+  fun anything(): Flow<*>
 }
 
 /** Every element of every cold flow, in one string. */
@@ -212,6 +215,16 @@ suspend fun maybes(tracker: Tracker): String =
 
 /** A suspend member returning a hot flow, awaited and then read. */
 suspend fun levelling(tracker: Tracker): Int = tracker.level().first()
+
+/** Every element of the C# star-projected flow, with its Kotlin type. */
+suspend fun anythings(tracker: Tracker): String =
+  tracker.anything().toList().joinToString { element ->
+    when (element) {
+      null -> "null"
+      is Kitten -> "Kitten ${element.name}"
+      else -> "${element::class.simpleName} $element"
+    }
+  }
 
 /**
  * ADR-233: a generic interface in no position, only a supertype. [Hamper] inherits its property,

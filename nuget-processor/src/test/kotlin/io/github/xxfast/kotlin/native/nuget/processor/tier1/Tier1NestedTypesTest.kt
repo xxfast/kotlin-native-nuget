@@ -809,8 +809,12 @@ class Tier1NestedTypesTest {
     // spelled through the holder, which is the name a consumer's `typeof(...)` produces.
     assertContains(result.generatedCSharp, "[typeof(global::Interop.Tin.Lid)]")
     assertContains(result.generatedCSharp, "[typeof(global::Interop.Tin.Shelf.Hinge)]")
-    // An open generic wrapper registers nothing (ADR-147), on the holder as anywhere else.
-    assertFalse(result.generatedCSharp.contains("typeof(global::Interop.Tin.Latch"))
+    // An open generic wrapper registers no open spelling (ADR-147), on the holder as anywhere else;
+    // ADR-237 registers it at `object?` only, the instantiation the `object` read materialises.
+    assertFalse(
+      result.generatedCSharp.contains("typeof(global::Interop.Tin.Latch<T"),
+      result.generatedCSharp.lines().filter { "Tin.Latch" in it }.joinToString(" | "),
+    )
   }
 
   /**

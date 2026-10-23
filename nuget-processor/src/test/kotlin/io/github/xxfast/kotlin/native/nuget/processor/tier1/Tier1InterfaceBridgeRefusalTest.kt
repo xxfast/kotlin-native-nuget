@@ -61,15 +61,25 @@ class Tier1InterfaceBridgeRefusalTest {
     assertTrue(result.kspWarnings.none { it.contains(code) }, "${result.kspWarnings}")
   }
 
+  /** ADR-237: a member's own type parameter is erased to `object?`, so the interface bridges. */
   @Test
-  fun `a generic member names the interface unimplementable`() {
-    val (_, warning) = refusal(
-      "refusegeneric",
-      "interface Pet { fun <T> pick(item: T): T }",
+  fun `a generic member plans the bridge, erased to object`() {
+    val result: Tier1Result = Tier1Harness.run(
+      """
+      package tier1.refusegeneric
+
+      interface Pet { fun <T> pick(item: T): T }
+
+      class Holder {
+        fun take(pet: Pet) = Unit
+      }
+      """.trimIndent(),
     )
 
-    assertTrue("`fun pick`" in warning, warning)
-    assertTrue("type parameter" in warning, warning)
+    assertTrue(result.compiledClean, "compileErrors=${result.compileErrors}")
+    assertTrue(result.generated.contains("pet_bridge_create"), result.generated)
+    assertTrue(result.kspWarnings.none { it.contains(code) }, "${result.kspWarnings}")
+    assertContains(result.generatedCSharp, "object? Pick(object? item);")
   }
 
   /** Every disqualifying member is named in the one line, not just the first. */
@@ -84,19 +94,23 @@ class Tier1InterfaceBridgeRefusalTest {
         val tags: List<String>
         suspend fun fetch(id: Int): String
         fun <T> pick(item: T): T
-        fun <R> choose(item: R): R
+        val reading: Unit
+        val hum: Unit
         fun walk(a: Int, b: Int, c: Int)
       }
       """.trimIndent(),
     )
 
-    for (member in listOf("fun pick", "fun choose")) {
+    for (member in listOf("val reading", "val hum")) {
       assertTrue("`$member" in warning, "expected $member named; got: $warning")
     }
     // ADR-084 amendment (2026-10-22): a `var` bridges through a setter slot, so it is not named.
     // ADR-232: nor is a `suspend` member, which bridges through an awaited Begin and End pair.
     // ADR-233: nor a collection slot, nor a member of any arity.
-    for (member in listOf("val name", "var mood", "suspend fun fetch", "val tags", "fun walk")) {
+    // ADR-237: nor a member with its own `T`.
+    val bridgeable: List<String> =
+      listOf("val name", "var mood", "suspend fun fetch", "val tags", "fun walk", "fun pick")
+    for (member in bridgeable) {
       assertFalse("`$member" in warning, "a bridgeable member is not named; got: $warning")
     }
   }

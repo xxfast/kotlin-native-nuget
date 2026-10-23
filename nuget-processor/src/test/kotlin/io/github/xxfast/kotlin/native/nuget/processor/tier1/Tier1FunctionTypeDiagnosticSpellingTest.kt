@@ -259,7 +259,8 @@ class Tier1FunctionTypeDiagnosticSpellingTest {
     )
     // Every projection the raw `KSType` printed is still printed.
     assertContains(diagnostic(type, "crateConsumer"), "`Crate<in Int>` is a use-site projection")
-    assertContains(diagnostic(type, "crateStar"), "`Crate<*>` is a use-site projection")
+    // ADR-237: `Crate<*>` reads at its bound, `Crate<object?>`, so it binds and is not named.
+    assertTrue(result.kspWarnings.none { "crateStar" in it }, "crateStar binds")
   }
 
   @Test

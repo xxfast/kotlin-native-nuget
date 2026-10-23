@@ -120,7 +120,6 @@ class Tier1GenericReturnTypeArgumentTest {
     "crateOfNullableList" to "List<Int>?",
     "crateOfMap" to "Map<String, Int>",
     "crateOfLambda" to "(Int) -> Int",
-    "crateOfAny" to "Any",
     "crateOfBytes" to "ByteArray",
     "duoOfIntList" to "List<Int>",
     "crateOfListWithParam" to "List<Int>",
@@ -201,6 +200,12 @@ class Tier1GenericReturnTypeArgumentTest {
       )
       assertRefusedArgument(result, function, typeArgument)
     }
+    // ADR-237: `Crate<Any>` is `Crate<object>`, read on the `object` wire.
+    assertTrue(
+      result.generatedCSharp
+        .contains("public static global::Interop.Catcam.Crate<object> CrateOfAny()"),
+      "expected CrateOfAny to bind at object",
+    )
   }
 
   /** `Pair` is not declared in C#: refused as the unmapped stdlib type it is, named. */

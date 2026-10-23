@@ -34,6 +34,20 @@ private fun StringBuilder.dropTrailingBlankLine() {
 }
 
 internal fun StringBuilder.renderValueClass(cls: CirValueClass) {
+  // ADR-237: a generic struct cannot declare an extern (CS7042), so its box pair's imports move
+  // to a sibling `{Name}Native`, the move `renderClass` makes for a generic class.
+  if (cls.typeParameters.isNotEmpty() && cls.boxing != null) {
+    val carrier: String = "${cls.name}Native"
+    val body: String = buildString { renderReferenceValueClass(cls) }
+    val hoisted: HoistedDllImports = hoistDllImports(body, carrier)
+    appendLine("    internal static class $carrier")
+    appendLine("    {")
+    hoisted.imports.forEach { import -> append(import) }
+    appendLine("    }")
+    appendLine()
+    append(hoisted.body)
+    return
+  }
   if (cls.underlyingIsReference) {
     renderReferenceValueClass(cls)
     return
@@ -79,7 +93,11 @@ private fun StringBuilder.renderReferenceValueClass(cls: CirValueClass) {
   renderDoc(cls.recordHeaderDoc(), generated = cls.remarks)
   val typeParameters: String =
     if (cls.typeParameters.isEmpty()) "" else cls.typeParameters.joinToString(", ", "<", ">")
-  val header: String = "${cls.name}$typeParameters(${cls.underlyingType} ${cls.underlyingName})"
+  // ADR-237: `NugetMarshal.Wrap<T>` and `WrapAny` reach a generic struct's box through this.
+  val generic: String =
+    if (cls.typeParameters.isNotEmpty() && cls.boxing != null) " : INugetGenericValue" else ""
+  val header: String =
+    "${cls.name}$typeParameters(${cls.underlyingType} ${cls.underlyingName})$generic"
   appendLine("    public readonly record struct $header")
   appendLine("    {")
 
@@ -163,6 +181,10 @@ private fun StringBuilder.renderValueClassCreateChecked(
  */
 private fun StringBuilder.renderValueClassBoxing(cls: CirValueClass) {
   val boxing: CirValueClassBoxing = cls.boxing ?: return
+  if (cls.typeParameters.isNotEmpty()) {
+    renderGenericValueClassBoxing(cls, boxing)
+    return
+  }
   val wire: String = boxing.unboxImport.returnType
   renderDllImport(boxing.boxImport)
   renderDllImport(boxing.unboxImport)
@@ -252,3 +274,65 @@ private fun StringBuilder.renderValueClassMembers(cls: CirValueClass) {
  * are statement lines at method-body indentation, rendered as a block.
  */
 private fun String.isValueClassBlockBody(): Boolean = '\n' in this
+
+/**
+ * ADR-237: a generic value class's one box/unbox pair, shared by every instantiation because
+ * Kotlin boxes them all as one runtime class. The underlying crosses as an `object` box of the own
+ * type parameter: `NugetMarshal.Wrap<T>` on the way in, `FromHandle<T>` on the way out, so
+ * `Bow<object?>` reads its underlying through `ReadAny`. `NugetMarshal.Wrap<T>` and `WrapAny` reach
+ * [INugetGenericValue] before the `Boxers` lookup, which keys one closed type only.
+ */
+private fun StringBuilder.renderGenericValueClassBoxing(
+  cls: CirValueClass,
+  boxing: CirValueClassBoxing,
+) {
+  val self: String = "${cls.name}${cls.typeParameters.joinToString(", ", "<", ">")}"
+  val own: String = requireNotNull(boxing.ownUnderlying) {
+    "generic value class ${cls.name} has no own underlying"
+  }
+  renderDllImport(boxing.boxImport)
+  renderDllImport(boxing.unboxImport)
+  appendLine("        IntPtr INugetGenericValue.NugetBox() => NugetBox(this);")
+  appendLine()
+  appendLine("        internal static IntPtr NugetBox($self ${boxing.boxParameter})")
+  appendLine("        {")
+  appendLine("            IntPtr inner = NugetMarshal.Wrap<$own>(${boxing.boxParameter}.${cls.underlyingName}, out bool owned);")
+  appendLine("            try")
+  appendLine("            {")
+  appendLine("                IntPtr boxed = ${boxing.boxImport.name}(inner, out IntPtr error);")
+  appendLine("                if (error != IntPtr.Zero)")
+  appendLine("                {")
+  appendLine("                    throw NugetErrorNative.BuildException(error);")
+  appendLine("                }")
+  appendLine("                NugetErrorNative.ClearManagedFault();")
+  appendLine("                return boxed;")
+  appendLine("            }")
+  appendLine("            finally")
+  appendLine("            {")
+  appendLine("                if (owned && inner != IntPtr.Zero) NugetMarshal.Dispose(inner);")
+  appendLine("            }")
+  appendLine("        }")
+  appendLine()
+  appendLine("        internal static $self NugetUnbox(IntPtr boxed)")
+  appendLine("            => NugetUnbox(new NugetKotlinHandle(boxed));")
+  appendLine()
+  appendLine("        internal static $self NugetUnbox(NugetKotlinHandle boxed)")
+  appendLine("        {")
+  appendLine("            IntPtr nativeResult;")
+  appendLine("            try")
+  appendLine("            {")
+  appendLine("                nativeResult = ${boxing.unboxImport.name}(boxed.DangerousGetHandle(), out IntPtr error);")
+  appendLine("                if (error != IntPtr.Zero)")
+  appendLine("                {")
+  appendLine("                    throw NugetErrorNative.BuildException(error);")
+  appendLine("                }")
+  appendLine("                NugetErrorNative.ClearManagedFault();")
+  appendLine("            }")
+  appendLine("            finally")
+  appendLine("            {")
+  appendLine("                boxed.Dispose();")
+  appendLine("            }")
+  appendLine("            return new $self(NugetMarshal.FromHandle<$own>(nativeResult));")
+  appendLine("        }")
+  appendLine()
+}

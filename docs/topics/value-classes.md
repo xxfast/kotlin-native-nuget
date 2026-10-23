@@ -260,6 +260,35 @@ open C# generic with no build-time gate of its own, so `new Box<V>(v)` written i
 such a `V` still compiles and throws `NotSupportedException` at the call, as it does for an
 unsupported `T` of any other kind.
 
+## At an `Any` position {id="at-an-any-position"}
+
+A value class crosses an `Any` position ([Any](primitives-and-strings.md#any)) as its own struct. A
+generic one does too, and comes back closed over `object?` whatever it was constructed as:
+
+```kotlin
+value class Bow<T>(val ribbon: T) {
+  init { require(ribbon != "torn") { "Mylo tore this bow" } }
+}
+
+fun tie(ribbon: String): Any = Bow(ribbon)
+fun kind(value: Any?): String { /* names the Kotlin type that arrived: "Bow String red" for Bow("red") */ }
+```
+
+```C#
+Assert.Equal("red", Assert.IsType<Bow<object?>>(Hoarding.Tie("red")).Ribbon);
+Assert.Equal("Bow String red", Hoarding.Kind(new Bow<string>("red")));   // a Bow<string> goes in
+Assert.IsNotType<Bow<string>>(Hoarding.Tie("red"));                       // a Bow<object?> comes out
+
+ArgumentException ex = Assert.ThrowsAny<ArgumentException>(() => Hoarding.Kind(new Bow<string>("torn")));
+```
+
+`init` runs in Kotlin each time a C# value crosses in, and a failure is an `ArgumentException`.
+
+A generic value class whose underlying does not mention its own `T` (the phantom `Decal<T>(val
+serial: Long)`) is the exception: it crosses an `Any` position as a `KotlinObject` you dispose, and
+passing that back hands Kotlin the same value. That holds too for one whose underlying is not
+public, or whose bound mentions another type parameter.
+
 ## As an extension receiver
 
 A value class also works as the receiver of an extension function or extension property. The
