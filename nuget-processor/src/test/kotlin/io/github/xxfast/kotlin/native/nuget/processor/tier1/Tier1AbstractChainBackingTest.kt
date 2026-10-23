@@ -339,11 +339,14 @@ class Tier1AbstractChainBackingTest {
     val crate: String = cs.substringAfter("public abstract class Crate<T>")
       .substringBefore("public class Box")
     assertContains(crate, "public abstract void OnPet(Action<string> block);")
-    // Every subclass's plan refuses the lambda return, so the owner must not promise it (CS0534).
-    assertFalse(Regex("""\bOnTreat\(""").containsMatchIn(crate), "Crate<T> declares no OnTreat")
+    // ADR-239: every subclass's plan binds the lambda return, so the owner declares it.
     assertTrue(
-      pets.kspWarnings.any { "SKIPPED_UNSUPPORTED_RETURN" in it && "Crate.onTreat" in it },
-      "the refusal is named on Crate; kspWarnings=${pets.kspWarnings}",
+      Regex("""\bFunc<string, string> OnTreat\(\)""").containsMatchIn(crate),
+      "Crate<T> declares OnTreat; got: $crate",
+    )
+    assertTrue(
+      pets.kspWarnings.none { "Crate.onTreat" in it },
+      "a bound member is named nowhere; kspWarnings=${pets.kspWarnings}",
     )
     // ADR-215 / ADR-219: the generic base projects its Flow and suspend members over the erased
     // receiver, and the subclass inherits both (the export dispatches to Box's override).

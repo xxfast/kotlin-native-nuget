@@ -75,9 +75,6 @@ class Tier1UnroutedPositionsTest {
     // row 2: a Flow binds at a class-method RETURN (pinned routed below) but not at a parameter.
     // (a `Flow<Int>` PARAMETER binds since ADR-210, here and on every owner below: asserted in
     // `the Flow parameters bind off the plan`.)
-    // row 10: the mirror image of the routed lambda parameter — no route returns a lambda from a
-    // class method.
-    returns("tier1.unrouted.Depot.callbackReturnOnClass"),
     // row 21a/21b: an unrouted generic *type* ([generic]) at either position on a class. An
     // exported generic class (`Box<Int>`) binds there since ADR-208, so the cells take a generic
     // reference the bridge still defers from the witness.
@@ -97,7 +94,7 @@ class Tier1UnroutedPositionsTest {
     // no longer one of them: it is on the ADR-062 plan since ADR-160, which is keyed to the
     // position rather than to the owner kind.
     // ADR-230: `flowReturnOnObject` binds on the static flow route now; see the test below.
-    returns("tier1.unrouted.DepotRegistry.callbackReturnOnObject"),
+    // ADR-239: `callbackReturnOnObject` binds as a BCL delegate on every owner now.
     returns("tier1.unrouted.DepotRegistry.genericReturnOnObject"),
     input("tier1.unrouted.DepotRegistry.genericParamOnObject"),
 
@@ -349,13 +346,11 @@ class Tier1UnroutedPositionsTest {
     // Public C# names of the silent cells, per owner. The trailing `(` also catches the private
     // `Native_*` DllImport, which is exactly the stronger absence claim: no half of the member.
     listOf(
-      "CallbackReturnOnClass(",
       "GenericReturnOnClass(",
       "GenericParamOnClass(",
       "FlowElementOnClass(",
       "CallbackElementOnClass(",
       "GenericElementOnClass(",
-      "CallbackReturnOnObject(",
       "GenericReturnOnObject(",
       "GenericParamOnObject(",
       "GenericReturnOnInterface(",
@@ -511,10 +506,10 @@ class Tier1UnroutedPositionsTest {
 
     assertTrue(
       result.generatedCSharp.contains(
-        "public static KotlinFunc<string, string> CallbackReturnOnTopLevel()"
+        "public static Func<string, string> CallbackReturnOnTopLevel()"
       ),
-      "the top-level lambda-return route exists (and is the exact mirror of the class-method " +
-          "lambda return that does not); generatedCSharp=${result.generatedCSharp.take(2000)}",
+      "the top-level lambda-return route exists (ADR-239: a BCL delegate on every owner); " +
+          "generatedCSharp=${result.generatedCSharp.take(2000)}",
     )
     assertFalse(
       result.kspWarnings.any { it.contains("tier1.unrouted.callbackReturnOnTopLevel") },
@@ -688,11 +683,9 @@ class Tier1UnroutedPositionsTest {
     // binds it on ordinary owners, not on a value class.
     structural("tier1.residuals.Tag.tagPick"),
     input("tier1.residuals.Tag.tagFeed"),
-    returns("tier1.residuals.Tag.tagTicker"),
     input("tier1.residuals.Tag.tagOn"),
     // (c) class companion members (already named before this cell existed; coverage only). Its
     // `fun <T> denPick` binds since ADR-197, asserted in the control test.
-    returns("tier1.residuals.Den.Companion.denTicker"),
     // (d) interface companion members, a function, a `val` and a `const val`.
     structural("tier1.residuals.Keeper.Companion.summon"),
     property("tier1.residuals.Keeper.Companion.all"),
@@ -777,8 +770,8 @@ class Tier1UnroutedPositionsTest {
     val declarations: List<String> = result.csharpDeclarations()
 
     listOf(
-      "Tally", "TagPick", "TagFeed", "TagTicker",
-      "TagOn", "DenTicker", "Summon", "TagBlank", "Hire",
+      "Tally", "TagPick", "TagFeed",
+      "TagOn", "Summon", "TagBlank", "Hire",
       "HireCook",
     ).forEach { member ->
       val leaks: List<String> = declarations.filter { line ->

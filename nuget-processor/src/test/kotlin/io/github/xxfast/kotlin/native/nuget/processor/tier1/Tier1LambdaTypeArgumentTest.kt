@@ -107,8 +107,8 @@ class Tier1LambdaTypeArgumentTest {
   private val qualifiedPick: String =
     "KotlinFunc<global::Interop.Catcam.Lens.CamId, global::Interop.Catcam.Lens.Snapshot>"
 
-  // ADR-236: a lambda PROPERTY spells the BCL delegate; a lambda-returning function keeps
-  // KotlinFunc.
+  // ADR-236 / ADR-239: a lambda PROPERTY and a lambda-returning function both spell the BCL
+  // delegate; the wrapper survives only inside a generic type argument.
   private val qualifiedPickProperty: String = qualifiedPick.removePrefix("Kotlin")
 
   private fun run(): Tier1Result = Tier1Harness.run(
@@ -140,7 +140,7 @@ class Tier1LambdaTypeArgumentTest {
     }
 
     assertTrue(
-      result.generatedCSharp.contains("public static $qualifiedPick CamPicker()"),
+      result.generatedCSharp.contains("public static $qualifiedPickProperty CamPicker()"),
       "expected the top-level lambda-returning function to qualify its type arguments too; " +
           "got: ${result.generatedCSharp.lines().filter { it.contains("CamPicker") }}",
     )

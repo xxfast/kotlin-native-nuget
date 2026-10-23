@@ -46,8 +46,7 @@ class Tier1CallbackNullGuardTest {
       // Legacy per-call route, nullable Kotlin spelling.
       fun onMaybePounce(pouncer: ((Int) -> Unit)?) { pouncer?.invoke(1) }
 
-      // Legacy per-call route, NON-null Kotlin spelling: a payload the plan's callback lowering
-      // declines (a `Char` payload), so the member stays on the hand-written route.
+      // A `Char` payload, once kept on the hand-written route; on the plan since ADR-239.
       fun eachLetter(chooser: (Char) -> Unit) { chooser('c') }
     }
 
@@ -131,10 +130,10 @@ class Tier1CallbackNullGuardTest {
     assertGuardFirst(cs, "AddWatcher", "listener", owner = "Running")
     assertGuardFirst(cs, "AddMaybeWatcher", "listener", owner = "Running")
 
-    // Legacy per-call route: nullable spelling, and the non-null spelling test-library no longer
-    // reaches (its every non-null per-call lambda plans).
+    // Legacy per-call route: the nullable spelling. (ADR-239 plans every non-null per-call lambda,
+    // a `Char` payload included.)
     assertGuardFirst(cs, "OnMaybePounce", "pouncer", owner = null)
-    assertGuardFirst(cs, "EachLetter", "chooser", owner = null)
+    assertGuardFirst(cs, "EachLetter", "chooser", owner = null, registers = "chooserNative")
 
     // ADR-062 plan route: class member (the guard also precedes the list handle mint),
     // sealed arm, top-level, extension.

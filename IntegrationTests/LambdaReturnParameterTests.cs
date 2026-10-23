@@ -5,7 +5,7 @@ namespace IntegrationTests;
 
 /// <summary>
 /// ROADMAP line 51, ADR-160 amendment: a top-level Kotlin function that takes ordinary value
-/// parameters and returns a lambda binds in C# as a callable <c>KotlinFunc&lt;...&gt;</c>, for every
+/// parameters and returns a lambda binds in C# as a BCL <c>Func&lt;...&gt;</c> (ADR-239), for every
 /// parameter mechanism an ordinary top-level function already accepts: an interface (including a
 /// C#-implemented one the returned lambda keeps alive), an exported class, a collection, an enum,
 /// and a nullable primitive whose null has to survive the crossing.
@@ -33,7 +33,7 @@ public class LambdaReturnParameterTests
     public void PetSupplier_IsSpelledWithTheInterface()
     {
         var method = typeof(PetRelayKt).GetMethod("PetSupplier")!;
-        Assert.Equal(typeof(KotlinFunc<IPet>), method.ReturnType);
+        Assert.Equal(typeof(Func<IPet>), method.ReturnType);
         Assert.Equal(typeof(IPet), Assert.Single(method.GetParameters()).ParameterType);
     }
 
@@ -42,7 +42,7 @@ public class LambdaReturnParameterTests
     public void PetSupplier_CSharpImplementedPet_ComesBackAsTheSameDog()
     {
         using IPet rex = new Dog("Rex");
-        using KotlinFunc<IPet> supplier = PetRelayKt.PetSupplier(rex);
+        Func<IPet> supplier = PetRelayKt.PetSupplier(rex);
         Assert.Same(rex, supplier.Invoke());
         Assert.Same(rex, supplier.Invoke());
     }
@@ -53,7 +53,7 @@ public class LambdaReturnParameterTests
     public void PetSupplier_CSharpImplementedPet_SurvivesAGcAfterTheCall()
     {
         using IPet rex = new Dog("Rex");
-        using KotlinFunc<IPet> supplier = PetRelayKt.PetSupplier(rex);
+        Func<IPet> supplier = PetRelayKt.PetSupplier(rex);
         GC.Collect();
         GC.WaitForPendingFinalizers();
         NugetMarshal.GcCollect();
@@ -68,7 +68,7 @@ public class LambdaReturnParameterTests
     public void PetSupplier_KotlinBackedStray_ComesBackAsAPet()
     {
         using IPet stray = PetKt.StrayPet();
-        using KotlinFunc<IPet> supplier = PetRelayKt.PetSupplier(stray);
+        Func<IPet> supplier = PetRelayKt.PetSupplier(stray);
         using IPet back = supplier.Invoke();
         Assert.Equal("Whiskers the Stray", back.Name);
         Assert.Equal(3, back.Legs);
@@ -80,10 +80,10 @@ public class LambdaReturnParameterTests
     [Fact]
     public void CatSupplier_HandsBackOreo()
     {
-        Assert.Equal(typeof(KotlinFunc<Cat>), typeof(PetRelayKt).GetMethod("CatSupplier")!.ReturnType);
+        Assert.Equal(typeof(Func<Cat>), typeof(PetRelayKt).GetMethod("CatSupplier")!.ReturnType);
 
         using Cat oreo = new Cat("Oreo", 9);
-        using KotlinFunc<Cat> supplier = PetRelayKt.CatSupplier(oreo);
+        Func<Cat> supplier = PetRelayKt.CatSupplier(oreo);
         using Cat first = supplier.Invoke();
         using Cat second = supplier.Invoke();
         Assert.Equal("Oreo", first.Name);
@@ -96,7 +96,7 @@ public class LambdaReturnParameterTests
     public void CatSupplier_HoldsTheSameKotlinCat()
     {
         using Cat oreo = new Cat("Oreo", 9);
-        using KotlinFunc<Cat> supplier = PetRelayKt.CatSupplier(oreo);
+        Func<Cat> supplier = PetRelayKt.CatSupplier(oreo);
         oreo.Owner = "Isuru";
         using Cat back = supplier.Invoke();
         Assert.Equal("Isuru", back.Owner);
@@ -108,17 +108,17 @@ public class LambdaReturnParameterTests
     public void ListSupplier_SumsMylosTreats()
     {
         var method = typeof(PetRelayKt).GetMethod("ListSupplier")!;
-        Assert.Equal(typeof(KotlinFunc<int>), method.ReturnType);
+        Assert.Equal(typeof(Func<int>), method.ReturnType);
         Assert.Equal(typeof(IReadOnlyList<int>), Assert.Single(method.GetParameters()).ParameterType);
 
-        using KotlinFunc<int> supplier = PetRelayKt.ListSupplier(new List<int> { 3, 4, 5 });
+        Func<int> supplier = PetRelayKt.ListSupplier(new List<int> { 3, 4, 5 });
         Assert.Equal(12, supplier.Invoke());
     }
 
     [Fact]
     public void ListSupplier_EmptyBowl_IsZero()
     {
-        using KotlinFunc<int> supplier = PetRelayKt.ListSupplier(new List<int>());
+        Func<int> supplier = PetRelayKt.ListSupplier(new List<int>());
         Assert.Equal(0, supplier.Invoke());
     }
 
@@ -128,11 +128,11 @@ public class LambdaReturnParameterTests
     public void MoodSupplier_CarriesTheMoodIntoTheLambda()
     {
         var method = typeof(PetRelayKt).GetMethod("MoodSupplier")!;
-        Assert.Equal(typeof(KotlinFunc<int>), method.ReturnType);
+        Assert.Equal(typeof(Func<int>), method.ReturnType);
         Assert.Equal(typeof(Mood), Assert.Single(method.GetParameters()).ParameterType);
 
-        using KotlinFunc<int> happy = PetRelayKt.MoodSupplier(Mood.Happy);
-        using KotlinFunc<int> grumpy = PetRelayKt.MoodSupplier(Mood.Grumpy);
+        Func<int> happy = PetRelayKt.MoodSupplier(Mood.Happy);
+        Func<int> grumpy = PetRelayKt.MoodSupplier(Mood.Grumpy);
         Assert.Equal((int)Mood.Happy, happy.Invoke());
         Assert.Equal((int)Mood.Grumpy, grumpy.Invoke());
     }
@@ -143,7 +143,7 @@ public class LambdaReturnParameterTests
     public void NullableSupplier_DeclaresANullableInt()
     {
         var method = typeof(PetRelayKt).GetMethod("NullableSupplier")!;
-        Assert.Equal(typeof(KotlinFunc<int>), method.ReturnType);
+        Assert.Equal(typeof(Func<int>), method.ReturnType);
         Assert.Equal(typeof(int?), Assert.Single(method.GetParameters()).ParameterType);
     }
 
@@ -151,14 +151,14 @@ public class LambdaReturnParameterTests
     [Fact]
     public void NullableSupplier_Null_CrossesAsNull()
     {
-        using KotlinFunc<int> supplier = PetRelayKt.NullableSupplier(null);
+        Func<int> supplier = PetRelayKt.NullableSupplier(null);
         Assert.Equal(-1, supplier.Invoke());
     }
 
     [Fact]
     public void NullableSupplier_Value_CrossesAsTheValue()
     {
-        using KotlinFunc<int> supplier = PetRelayKt.NullableSupplier(5);
+        Func<int> supplier = PetRelayKt.NullableSupplier(5);
         Assert.Equal(5, supplier.Invoke());
     }
 
@@ -166,7 +166,7 @@ public class LambdaReturnParameterTests
     [Fact]
     public void NullableSupplier_Zero_IsNotNull()
     {
-        using KotlinFunc<int> supplier = PetRelayKt.NullableSupplier(0);
+        Func<int> supplier = PetRelayKt.NullableSupplier(0);
         Assert.Equal(0, supplier.Invoke());
     }
 
@@ -176,9 +176,9 @@ public class LambdaReturnParameterTests
     [Fact]
     public void Adder_AddsTheCapturedTreats()
     {
-        Assert.Equal(typeof(KotlinFunc<int, int>), typeof(PetRelayKt).GetMethod("Adder")!.ReturnType);
+        Assert.Equal(typeof(Func<int, int>), typeof(PetRelayKt).GetMethod("Adder")!.ReturnType);
 
-        using KotlinFunc<int, int> twoMore = PetRelayKt.Adder(2);
+        Func<int, int> twoMore = PetRelayKt.Adder(2);
         Assert.Equal(5, twoMore.Invoke(3));
         Assert.Equal(2, twoMore.Invoke(0));
     }
@@ -192,7 +192,7 @@ public class LambdaReturnParameterTests
         Assert.Throws<KotlinArgumentException>(() => PetRelayKt.PickyPetSupplier(grumpy));
 
         using IPet rex = new Dog("Rex");
-        using KotlinFunc<IPet> supplier = PetRelayKt.PickyPetSupplier(rex);
+        Func<IPet> supplier = PetRelayKt.PickyPetSupplier(rex);
         Assert.Same(rex, supplier.Invoke());
     }
 
@@ -201,9 +201,9 @@ public class LambdaReturnParameterTests
     [Fact]
     public void PetRelay_And_Greeter_StillBind()
     {
-        Assert.Equal(typeof(KotlinFunc<IPet, IPet>), typeof(PetRelayKt).GetMethod("PetRelay")!.ReturnType);
+        Assert.Equal(typeof(Func<IPet, IPet>), typeof(PetRelayKt).GetMethod("PetRelay")!.ReturnType);
 
-        using KotlinFunc<string, string> greet = Mappings.Greeter("Hello");
+        Func<string, string> greet = Mappings.Greeter("Hello");
         Assert.Equal("Hello, Mylo!", greet.Invoke("Mylo"));
     }
 }

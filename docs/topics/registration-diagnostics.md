@@ -507,13 +507,14 @@ argument is `IntPtr.Zero`, mints nothing, and the dispose skips it. `LeakTests/L
 row 9r (`LegacyRoute_NullableCollectionParameter_ReturnsToBaseline`) covers null and non-null
 arguments on a `suspend` and a `Flow` member.
 
-A [top-level function returning a lambda](lambdas-and-callbacks.md#a-top-level-function-that-returns-a-lambda)
-adds one owned handle, the returned `KotlinFunc`, which `Dispose` releases. A parameter the lambda
-captures is not released when the call returns: a C#-implemented interface stays pinned until the
-`KotlinFunc` is disposed and Kotlin's cleaner runs, so a lambda you never dispose keeps it alive until the GC finalizes the `KotlinFunc`.
-Rows 6j to 6n of `LeakTests/LiveHandleTests.cs` cover a captured C#-implemented pet, a captured
-Kotlin `Cat`, value-only parameters, Kotlin throwing before it makes the lambda, and a throwing
-`IPet` factory on the returned lambda, and all return to baseline.
+A [function returning a lambda](lambdas-and-callbacks.md#a-top-level-function-that-returns-a-lambda)
+adds one handle, owned by the returned delegate, which the GC releases when it collects the delegate;
+there is nothing to `Dispose`. A parameter the lambda captures is not released when the call returns:
+a C#-implemented interface stays pinned until the delegate is collected and Kotlin's cleaner runs, so
+a delegate you keep keeps it alive. The `LambdaReturn_*` rows of `LeakTests/LiveHandleTests.cs`
+cover a captured C#-implemented pet, a captured Kotlin `Cat`, value-only parameters, Kotlin throwing
+before it makes the lambda, and a throwing `IPet` factory on the returned lambda, and all return to
+baseline.
 
 A Kotlin interface handed to a per-call lambda parameter adds one handle per invocation, released
 when the callback disposes the payload. `LeakTests/LiveHandleTests.cs` row 13-iface,
@@ -650,6 +651,42 @@ asserts it is collected: `SuspendPlainLambda_AfterCompletion_ItsDelegateIsCollec
 `FlowPlainLambda_*` rows for completion, fault, cancellation, early `break` and a flow disposed
 without enumerating; and `SuspendReturningFlowPlainLambda_*` for a disposed flow, a flow disposed
 uncollected, a fault, a cancellation or a `null` flow, and a static owner.
+
+### A returned lambda and the widened callback vocabulary
+
+A lambda a function [returns](lambdas-and-callbacks.md#a-top-level-function-that-returns-a-lambda) is a
+delegate whose target releases a Kotlin lambda handle when it is collected. A delegate a C#
+implementation returns is minted into a Kotlin lambda that Kotlin drops after the call, and its
+cleaner frees the delegate's key. A widened [payload or result](lambdas-and-callbacks.md#callback-vocabulary)
+mints one box that the reading side consumes, and a bound C# interface crosses as a `GCHandle` that
+the receiving side takes.
+
+The owner that awaits a `suspend` delegate a C# implementation returned creates its coroutine scope
+handle on the first `suspend` call and releases it on `Dispose`, so the live count rises by two at the
+first crossing and stays flat after it.
+
+| Test | Pins |
+|---|---|
+| `ReturnedLambda_EveryOwner_ReturnsToBaseline` | a returned lambda on every owner, plus a C# implementation of a Kotlin interface returning delegates |
+| `ReturnedLambda_SuspendResults_ReturnsToBaseline` | `suspend` returned lambdas |
+| `ReturnedAsyncDelegate_FromACSharpImplementation_IsFlatAfterTheOwnerScope` | Kotlin awaiting an async delegate a C# member returned: +2 at the first call (the owner and its scope handle), flat after, back to baseline on `Dispose` |
+| `SealedArmDelegate_SetCallClearAndReturn_ReturnsToBaseline` | a lambda property written, read and cleared on a sealed arm |
+| `ListenerDelegate_KotlinObjectStoresAndClearsIt_ReturnsToBaseline` | a delegate a Kotlin `object` stores and clears itself |
+| `StoredListenerWithAResult_SubscribeAndDispose_ReturnsToBaseline` | a stored pair whose listener returns an enum |
+| `WidenedCallbackPayloadsAndResults_ReturnToBaseline` | `Char`, nullable, collection and `ByteArray` payloads and results, and generic-owner pairs |
+| `WidenedSuspendPayloadsAndGenericPairs_ReturnToBaseline` | widened `suspend` payloads, a nullable `suspend` lambda, and pairs on a generic sealed arm and a generic owner |
+| `ThrowableCallbacks_ReturnToBaseline` | a `Throwable` as a `suspend` lambda result, a nullable `Throwable?` payload and a returned `suspend` lambda's result |
+| `BoundInterfaceCallbacks_ReturnToBaseline` | a bound C# interface as a plain and a `suspend` payload and result |
+| `BoundInterfaceErasedPositions_ReturnToBaseline` | a bound C# interface in a stored pair, a returned lambda and a lambda property |
+
+Collectability, in `LeakTests/CollectabilityTests.cs`: `StoredListenerWithAResult_Disposed_IsCollected`,
+`BoundInterfaceStoredListener_Disposed_IsCollected`,
+`ReturnedDelegate_FromACSharpImplementation_IsCollectedOnceKotlinDropsIt`,
+`ReturnedAsyncDelegate_FromACSharpImplementation_IsCollectedOnceKotlinDropsIt`,
+`SealedArmDelegate_ClearedByCSharp_IsCollected`, `SealedArmDelegate_ClearedByKotlin_IsCollected`,
+`ListenerDelegate_KotlinObjectClearsIt_IsCollected` and
+`ListenerInterfaceDelegate_RemovedListener_IsCollected` prove a replaced, cleared or removed delegate
+is collected.
 
 ### A lambda-typed property
 
@@ -800,8 +837,8 @@ then the holder while a never-ending collection is parked.
 | 16c | `AbandonedWrapperTypedFlowItem_AfterDisposeAsync_IsReleasedByTheGc` | a wrapper-typed `Flow` item abandoned after `DisposeAsync` |
 | 16d | `UndisposedSealedArm_IsReleasedByTheGc` | a sealed arm |
 | 16e | `UndisposedInterfaceTypedReturn_IsReleasedByTheGc` | an interface-typed return |
-| 16f | `UndisposedKotlinFuncAndAction_IsReleasedByTheGc` | `KotlinFunc` and `KotlinAction` |
-| 16g | `UndisposedKotlinSuspendFunc_IsReleasedByTheGc` | `KotlinSuspendFunc` |
+| 16f | `UndisposedKotlinFuncAndAction_IsReleasedByTheGc` | a returned `Func` and `Action` delegate |
+| 16g | `UndisposedKotlinSuspendFunc_IsReleasedByTheGc` | a `suspend` lambda property delegate |
 | 16h | `UndisposedKotlinStateFlow_IsReleasedByTheGc` | `KotlinStateFlow` |
 | 16i | `DiscardedSubscription_KeepsDeliveringAfterTheGc_AndIsReleasedWithItsOwner` | a discarded `AddX` subscription keeps delivering and is released with its owner |
 | 16j | `UndisposedWrapperWithASuspendScope_IsReleasedByTheGc` | a wrapper that owns a suspend scope |

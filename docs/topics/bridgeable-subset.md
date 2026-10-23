@@ -206,6 +206,12 @@ Assert.Same(goat, farm.Resident());
 This works even for a consumer that never directly depends on the package `IFeedable` came from:
 your library's own package metadata declares it as a transitive dependency.
 
+A bound interface is also a lambda payload or result, on a plain or `suspend` lambda parameter, a
+stored `add`/`remove` pair, a returned lambda and a lambda property. `fun inspect(look: (IFeedable) -> Int)`
+is `Inspect(Func<IFeedable, int>)`, and the lambda receives the same object you implemented in C#; a
+result your lambda returns is the one Kotlin reads. See
+[Lambdas and callbacks](lambdas-and-callbacks.md#callback-vocabulary).
+
 Supported today: a non-nullable bound interface at an ordinary parameter or a method/top-level
 function return. Not supported, each named on a build warning instead of silently skipped:
 

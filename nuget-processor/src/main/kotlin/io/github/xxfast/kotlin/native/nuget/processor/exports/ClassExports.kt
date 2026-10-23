@@ -3,6 +3,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.exports
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinIdentifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMemberGenericRefusal
 import io.github.xxfast.kotlin.native.nuget.processor.forward.takesGenericFlowRoute
+import io.github.xxfast.kotlin.native.nuget.processor.forward.takesGenericStoredRoute
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.KSClassDeclaration
@@ -21,7 +22,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticK
 import io.github.xxfast.kotlin.native.nuget.processor.forward.LegacyRefusedInterfaceBridgePair
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinSpelling
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardTypeParametersInScope
-import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedStoredCallbackPair
 import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
@@ -155,6 +155,10 @@ internal fun KSFunctionDeclaration.hasPlannedCallbackParameter(
  *    routes carry today.
  *  - a lambda RESULT outside `Unit`, the primitives and `String`: the per-call route reads every
  *    other result back as a `String` box on both halves, so `() -> Cat` did not compile.
+ *
+ * ADR-239: none of this applies to a lambda the plan's [BridgeType.Callback] classifies. That one
+ * binds on the plan (a per-call member) or on the stored-callback route over the same
+ * classification (an `add`/`remove` pair), with the whole erased result vocabulary.
  */
 internal fun KSFunctionDeclaration.refusedLegacyLambdaShape(
   classifier: ForwardBridgeTypeClassifier,
@@ -168,6 +172,12 @@ internal fun KSFunctionDeclaration.refusedLegacyLambdaShape(
     val asyncType: BridgeType? = (async as? ForwardLegacyParameterShape.Async)?.type
     val boundAsync: Boolean = asyncType is BridgeType.Callback
     if (boundAsync) return@firstNotNullOfOrNull null
+    // ADR-239: a lambda the plan's callback carries (every result in the erased vocabulary) is
+    // bound there, or by the stored-callback route over the same classification, so it is never
+    // refused here. Naming it anyway made a bound member also read as skipped (`recruitNow`).
+    // A `T` component included: the plan reads it boxed, and the stored route never spells it.
+    val callback: BridgeType? = classifier.classify(param.type.resolve())
+    if (callback is BridgeType.Callback) return@firstNotNullOfOrNull null
     val paramName: String = param.name?.asString() ?: "_"
     // Every argument, the last of which is the lambda's RETURN type: both positions are refused,
     // and they are dropped by separate lines of the route's own selector, so neither is redundant.
@@ -250,12 +260,14 @@ internal fun KSFunctionDeclaration.refusedLegacyLambdaShape(
             "ordinary, `suspend` or Flow-returning member), but $spelled returns " +
             "`${result.kotlinSpelling()}` from a member that lambda route does not carry",
         hint = "take the lambda as a per-call parameter the member does not store, or return " +
-            "`Unit`, a primitive or a `String` from it",
+            "a concrete type from it",
       )
     }
     LegacyRefusedInterfaceBridgePair(
       kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
-      reason = "a callback can return `Unit`, a primitive or a `String`, but $spelled returns " +
+      reason = "a callback can return `Unit`, a primitive, `Char`, a `String`, an enum, " +
+          "`Instant`, `Duration`, `Uuid`, a class, interface or value class, or a `List`, `Set` " +
+          "or `Map` of those, each nullable or not, but $spelled returns " +
           "`${result.kotlinSpelling()}`",
       hint = "return one of those from the lambda; hand anything else back through a method on " +
           "the class instead",
@@ -356,6 +368,7 @@ internal fun KSClassDeclaration.forwardClassLegacyMembers(
   val allRegularMethods: List<KSFunctionDeclaration> = memberMethods.filter { method ->
     cls.forwardTypeParametersInScope().isEmpty() ||
       method.takesGenericFlowRoute(cls) ||
+      method.takesGenericStoredRoute(cls, legacyPairMembers) ||
       !method.isForwardLegacyRoute(classifier, legacyPairMembers)
   }
 
@@ -396,9 +409,6 @@ internal fun KSClassDeclaration.forwardClassLegacyMembers(
 
   val storedCallbackPairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
     detectedStoredPairs
-      // ADR-037 amendment: a listener with a non-`Unit` result is refused after detection, so both
-      // halves stay claimed by the pair and neither falls to the per-call route.
-      .filter { (addMethod, _) -> legacyRefusedStoredCallbackPair(addMethod) == null }
       // ADR-115 / issue #121: a marked half takes its partner with it, as on a sealed arm.
       // `warnRefusedLegacyRouteMembers` names both halves.
       .filter { (addMethod, removeMethod) ->
@@ -518,14 +528,19 @@ internal fun FileSpec.Builder.addClassExports(
 
   val legacy: ForwardClassLegacyMembers = cls.forwardClassLegacyMembers(classifier, superClass)
   val flowMethods: List<KSFunctionDeclaration> = legacy.flowMethods
+  // ADR-239: a generic owner's listener pairs read the erased receiver, as its lambda pairs do.
+  val erasedReceiver: String? = cls.forwardOwnerTypeName()
+  val pairReceiver: String = erasedReceiver ?: qualifiedName
   legacy.storedCallbackPairs.forEach { (addMethod, removeMethod) ->
-    addStoredCallbackExports(addMethod, removeMethod, qualifiedName, prefix)
+    addStoredCallbackExports(
+      addMethod, removeMethod, pairReceiver, prefix, erasedOwner = erasedReceiver != null,
+    )
   }
   legacy.perCallLambdaMethods.forEach { method ->
     addLambdaParamMethodExport(method, qualifiedName, prefix)
   }
   legacy.interfaceBridgePairs.forEach { (addMethod, removeMethod) ->
-    addInterfaceBridgeExports(addMethod, removeMethod, qualifiedName, prefix, classifier)
+    addInterfaceBridgeExports(addMethod, removeMethod, pairReceiver, prefix, classifier)
   }
 
   // ADR-090: member plans come off the catalog, not from a per-declaration plan lookup. Overload

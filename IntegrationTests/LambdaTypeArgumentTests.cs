@@ -112,7 +112,7 @@ public class LambdaTypeArgumentTests
     {
         // The static route (CirFunctionTranslator.kt:134), which no class-property fix touches.
         using var id = new CamId("mylo-couch");
-        using KotlinFunc<CamId, Snapshot> picker = CatCamRoutes.CamPicker();
+        Func<CamId, Snapshot> picker = CatCamRoutes.CamPicker();
 
         using Snapshot snapshot = picker.Invoke(id);
 

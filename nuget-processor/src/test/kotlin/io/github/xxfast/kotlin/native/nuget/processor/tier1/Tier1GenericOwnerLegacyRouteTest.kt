@@ -71,33 +71,26 @@ class Tier1GenericOwnerLegacyRouteTest {
   }
 
   @Test
-  fun `every legacy-route member of a generic owner is named exactly once`() {
+  fun `the callback members of a generic owner bind and the refused async one is named once`() {
     val result = Tier1Harness.run(source, libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore))
 
     assertTrue(result.compiledClean, "expected compilable Kotlin; got: ${result.compileErrors}")
     val crate: String = result.generatedCSharp.typeBody("public class Crate<T>")
-    val declarations: List<String> = crate.lines()
-      .filter { line -> line.trimStart().startsWith("public ") }
-    listOf("EachChar(", "AddBell(", "RemoveBell(")
-      .forEach { member ->
-        assertFalse(
-          declarations.any { line -> member in line },
-          "expected no `$member` declared on Crate<T>; got:\n$crate",
-        )
-      }
-    listOf("eachChar", "addBell", "removeBell").forEach { member ->
-      val named: List<String> = result.kspWarnings.filter { warning -> "Crate.$member:" in warning }
-      assertEquals(1, named.size, "expected `$member` named once; got: ${result.kspWarnings}")
-      assertTrue(
-        "generic class" in named.single(),
-        "expected the generic-owner reason for `$member`; got: $named",
+    // ADR-239: a `Char` and a `List` payload ride the plan's boxed wire, and a stored pair binds
+    // over the erased receiver on the managed-listener route.
+    listOf(
+      "public void EachChar(Action<char> cb)", "public IDisposable AddBell(Action<int> listener)",
+      "OnBatch(Action<IReadOnlyList<int>> cb)",
+    ).forEach { member ->
+      assertTrue(member in crate, "expected `$member` on Crate<T>; got:\n$crate")
+    }
+    listOf("eachChar", "addBell", "removeBell", "onBatch").forEach { member ->
+      assertFalse(
+        result.kspWarnings.any { warning -> "Crate.$member:" in warning },
+        "a member that binds must not be reported; got: ${result.kspWarnings}",
       )
     }
-    // The walk-named refusal keeps its own reason and stays single.
-    val onBatch: List<String> = result.kspWarnings.filter { warning -> "Crate.onBatch:" in warning }
-    assertEquals(1, onBatch.size, "expected `onBatch` named exactly once; got: $onBatch")
-    assertTrue("List<Int>" in onBatch.single(), "expected the payload refusal; got: $onBatch")
-    // So does an async member's refused parameter (ADR-114), named by the legacy-route walk.
+    // An async member's refused parameter (ADR-114) is named by the legacy-route walk.
     val pack: List<String> = result.kspWarnings.filter { warning -> "Crate.pack:" in warning }
     assertEquals(1, pack.size, "expected `pack` named exactly once; got: $pack")
     assertTrue(
@@ -107,12 +100,12 @@ class Tier1GenericOwnerLegacyRouteTest {
   }
 
   /**
-   * The subscription (ADR-039) pair is a legacy route too. Its Kotlin half used to escape the
-   * generic-owner refusal (no lambda, no async return) and emitted `asStableRef<Crate>()`, which
-   * does not compile.
+   * The subscription (ADR-039) pair on a generic owner. Its Kotlin half once emitted
+   * `asStableRef<Crate>()`, which does not compile, so it was refused; ADR-239 binds it over the
+   * erased receiver (`asStableRef<Crate<Any?>>()`), as the owner's lambda pairs.
    */
   @Test
-  fun `a subscription pair on a generic owner is refused on both halves and named`() {
+  fun `a subscription pair on a generic owner binds over the erased receiver`() {
     val result = Tier1Harness.run(
       """
       package tier1.genericsubscription
@@ -127,16 +120,14 @@ class Tier1GenericOwnerLegacyRouteTest {
     )
 
     assertTrue(result.compiledClean, "expected compilable Kotlin; got: ${result.compileErrors}")
-    assertFalse("crate_addPurr" in result.generated, "expected no Kotlin export for addPurr")
+    assertTrue("asStableRef<tier1.genericsubscription.Crate<Any?>>()" in result.generated)
     val crate: String = result.generatedCSharp.typeBody("public class Crate<T>")
-    assertFalse(
-      crate.lines().any { line -> line.trimStart().startsWith("public ") && "AddPurr(" in line },
-      "expected no AddPurr on Crate<T>; got:\n$crate",
+    assertTrue("public IDisposable AddPurr(" in crate, "expected AddPurr on Crate<T>; got:\n$crate")
+    assertTrue("nameof(Crate<T>)" in crate, "the disposed check names the generic owner")
+    assertTrue(
+      result.kspWarnings.none { warning -> "Crate." in warning },
+      "a pair that binds must not be reported; got: ${result.kspWarnings}",
     )
-    listOf("addPurr", "removePurr").forEach { member ->
-      val named: List<String> = result.kspWarnings.filter { warning -> "Crate.$member:" in warning }
-      assertEquals(1, named.size, "expected `$member` named once; got: ${result.kspWarnings}")
-    }
   }
 
   /** The body of a top-level (4-space) C# type, from its header to its own closing brace. */

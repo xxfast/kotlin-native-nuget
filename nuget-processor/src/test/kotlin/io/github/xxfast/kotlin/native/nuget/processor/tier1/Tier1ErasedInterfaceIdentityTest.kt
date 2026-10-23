@@ -44,10 +44,10 @@ class Tier1ErasedInterfaceIdentityTest {
     val relay: String = cs.lines().first { line -> "SqueakerRelay()" in line && "public" in line }
     assertTrue(
       Regex(
-        """KotlinFunc<(global::[\w.]+\.)?ISqueaker, """ +
+        """Func<(global::[\w.]+\.)?ISqueaker, """ +
           """(global::[\w.]+\.)?ISqueaker> SqueakerRelay\(\)""",
       ).containsMatchIn(relay),
-      "expected KotlinFunc<ISqueaker, ISqueaker>; got: $relay",
+      "expected Func<ISqueaker, ISqueaker>; got: $relay",
     )
     assertFalse(
       Regex("""[<.\s]Squeaker[,>]""").containsMatchIn(relay),

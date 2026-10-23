@@ -22,7 +22,6 @@ import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
-import io.github.xxfast.kotlin.native.nuget.processor.exports.carriesTypeParameterLambda
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmInterfaceBridgePairs
@@ -502,14 +501,6 @@ internal fun ForwardCallableCatalogEntry.nameUnroutedPosition(
 
 /** The [ForwardPlanSkipReason.COMPANION_NO_CARRIER] detail that selects the interface sentence. */
 internal const val COMPANION_OWNER_INTERFACE: String = "interface"
-
-/**
- * ADR-199: the [ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE] detail of a callback member a
- * generic sealed ARM drops. The arm's receiver is spelled, so the generic class's sentence ("cannot
- * spell a generic receiver") would be false of it: what stops the member is the lambda's erased
- * payload, and this detail selects the sentence that says so.
- */
-internal const val GENERIC_ARM_ERASED_LAMBDA: String = "ERASED_LAMBDA_PAYLOAD"
 
 /** What [carrierlessCompanionDrops] names: the companion's functions and its properties. */
 internal class ForwardCarrierlessCompanion(
@@ -1501,7 +1492,8 @@ internal class ForwardCallablePlanner(
             parameters = method.parameters.map { parameter ->
               parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
             },
-            result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
+            result = method.returnType?.resolve()?.let(classifier::classifyResult)
+              ?: BridgeType.Unit,
             origin = ForwardCallableOrigin.VALUE_CLASS,
             target = owner,
             includeError = false,
@@ -1603,7 +1595,7 @@ internal class ForwardCallablePlanner(
           parameters = method.parameters.map { parameter ->
             parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
           },
-          result = resultType?.let(classifier::classify) ?: BridgeType.Unit,
+          result = resultType?.let(classifier::classifyResult) ?: BridgeType.Unit,
           origin = ForwardCallableOrigin.CLASS,
           // The symbol carries the overload suffix; the Kotlin call site must not.
           member = name,
@@ -1727,7 +1719,7 @@ internal class ForwardCallablePlanner(
         parameters = method.parameters.map { parameter ->
           parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
         },
-        result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
+        result = method.returnType?.resolve()?.let(classifier::classifyResult) ?: BridgeType.Unit,
         origin = ForwardCallableOrigin.CLASS,
         ownerType = ownerType,
         // The symbol carries the overload suffix; the Kotlin call site must not.
@@ -1828,7 +1820,7 @@ internal class ForwardCallablePlanner(
       toList().any { half -> half.optInMarker(markers) != null }
     val namedPairMembers: Set<KSFunctionDeclaration> = buildSet {
       storedPairs
-        .filter { pair -> legacyRefusedStoredCallbackPair(pair.first) != null || pair.isMarked() }
+        .filter { pair -> pair.isMarked() }
         .forEach { pair -> addAll(pair.toList()) }
       bridgePairs
         .filter { pair ->
@@ -1856,6 +1848,9 @@ internal class ForwardCallablePlanner(
       if (method.takesGenericFlowRoute(cls)) return@map entry
       // ADR-219: and a suspend member, over the same receiver on the suspend route.
       if (method.takesGenericSuspendRoute(cls)) return@map entry
+      // ADR-239: and a stored or subscription pair half, over the same receiver.
+      val pairHalf: Boolean = (storedPairs + bridgePairs).any { pair -> method in pair.toList() }
+      if (cls.carriesGenericFlowRoute() && pairHalf) return@map entry
       entry.copy(
         reason = ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE,
         detail = entry.reason.name,
@@ -1942,7 +1937,7 @@ internal class ForwardCallablePlanner(
           parameters = method.parameters.map { parameter ->
             parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
           },
-          result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
+          result = method.returnType?.resolve()?.let(classifier::classifyResult) ?: BridgeType.Unit,
           origin = ForwardCallableOrigin.CLASS,
           // ADR-199: a generic base reads its receiver erased, as ADR-147's class route does.
           ownerType = sealed.forwardGenericOwner(),
@@ -2086,7 +2081,7 @@ internal class ForwardCallablePlanner(
           parameters = method.parameters.map { parameter ->
             parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
           },
-          result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
+          result = method.returnType?.resolve()?.let(classifier::classifyResult) ?: BridgeType.Unit,
           origin = ForwardCallableOrigin.CLASS,
           // ADR-199: a generic arm reads its receiver erased, as ADR-147's class route does.
           ownerType = subclass.forwardGenericOwner(),
@@ -2160,16 +2155,13 @@ internal class ForwardCallablePlanner(
   /**
    * ADR-199: the arm twin of [nameGenericOwnerLegacyRoutes]. An arm with a Kotlin type parameter
    * in scope (`Hot<T>`; not `Bare : Plate<Nothing>`, generic in C# only) keeps its Flow and
-   * callback routes, which read the erased receiver, so only two deferrals are drops there:
-   *  - a `suspend` member, an `abstract` one and an override of the base's included: the suspend
-   *    route refuses a generic owner (`forwardSuspendRouteMethods`, ADR-147), and the generic base
-   *    projects nothing the arm could inherit;
-   *  - a callback member whose lambda carries a type parameter ([carriesTypeParameterLambda]).
-   * Each is relabelled [ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE], the name a generic
-   * class's member takes, unless `warnRefusedLegacyRouteMembers` already names it with its own
-   * refusal or an exported interface carries it (ADR-174). The suspend member keeps that class's
-   * sentence, which is true of it; the callback member takes [GENERIC_ARM_ERASED_LAMBDA], because
-   * its receiver IS spelled here and the lambda's erased payload is what stops it.
+   * callback routes, which read the erased receiver, so one deferral is a drop there: a `suspend`
+   * member, an `abstract` one and an override of the base's included, which the suspend route
+   * refuses on a generic owner (`forwardSuspendRouteMethods`, ADR-147) and the generic base
+   * projects nothing for. It is relabelled [ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE],
+   * the name a generic class's member takes, unless `warnRefusedLegacyRouteMembers` already names
+   * it with its own refusal or an exported interface carries it (ADR-174). ADR-239: a callback
+   * member whose lambda carries the arm's `T` is no longer one (ADR-199 dropped it); it binds.
    */
   private fun List<ForwardCallableCatalogEntry>.nameGenericArmLegacyDrops(
     arm: KSClassDeclaration,
@@ -2194,13 +2186,9 @@ internal class ForwardCallablePlanner(
       val deferredSuspend: Boolean = isSuspend &&
           (entry.reason == ForwardPlanSkipReason.SUSPEND ||
               entry.reason == ForwardPlanSkipReason.ABSTRACT)
-      val deferredCallback: Boolean = entry.reason == ForwardPlanSkipReason.CALLBACK_PROTOCOL &&
-          method.carriesTypeParameterLambda()
-      val droppedAs: String = when {
-        deferredSuspend -> ForwardPlanSkipReason.SUSPEND.name
-        deferredCallback -> GENERIC_ARM_ERASED_LAMBDA
-        else -> return@map entry
-      }
+      // ADR-239: a callback member whose lambda carries the arm's `T` binds now (planned, or a
+      // stored pair on the managed-listener route), so only the suspend drop is left.
+      if (!deferredSuspend) return@map entry
       val namedByWalk: Boolean = if (isSuspend) {
         classifier.legacyRefusedParameter(method.parameters) != null ||
             classifier.legacyRefusedReturn(method) != null
@@ -2210,7 +2198,7 @@ internal class ForwardCallablePlanner(
       if (namedByWalk) return@map entry
       entry.copy(
         reason = ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE,
-        detail = droppedAs,
+        detail = ForwardPlanSkipReason.SUSPEND.name,
       )
     }
   }
@@ -2651,7 +2639,7 @@ internal class ForwardCallablePlanner(
         parameters = function.parameters.map { parameter ->
           parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
         },
-        result = function.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
+        result = function.returnType?.resolve()?.let(classifier::classifyResult) ?: BridgeType.Unit,
         origin = ForwardCallableOrigin.ENUM_MEMBER,
         target = owner,
         member = name,
@@ -2822,18 +2810,9 @@ internal class ForwardCallablePlanner(
       return ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = function)
     }
     val returnType: KSType? = function.returnType?.resolve()
-    // ADR-160 amendment: a lambda handed OUT is planned at a top-level function's result only (an
-    // object or companion member returning one keeps its named CALLBACK_PROTOCOL skip), whatever
-    // the function's parameters are. Asked before `classify`, which is position-agnostic and
-    // would answer a parameter-position `Callback` or a `lambda` protocol.
-    val result: BridgeType = returnType
-      ?.let { type ->
-        val returnedLambda: BridgeType.ReturnedLambda? =
-          if (origin != ForwardCallableOrigin.TOP_LEVEL) null
-          else classifier.returnedLambdaOrNull(type)
-        returnedLambda ?: classifier.classify(type)
-      }
-      ?: BridgeType.Unit
+    // ADR-239: a lambda handed OUT is planned at every static owner's result, as at every other
+    // owner's ([ForwardBridgeTypeClassifier.classifyResult]).
+    val result: BridgeType = returnType?.let(classifier::classifyResult) ?: BridgeType.Unit
     val parameters: List<Pair<String, BridgeType>> = function.parameters
       .map { parameter ->
         parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
@@ -3004,7 +2983,7 @@ internal class ForwardCallablePlanner(
       parameters = function.parameters.map { parameter ->
         parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
       },
-      result = function.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
+      result = function.returnType?.resolve()?.let(classifier::classifyResult) ?: BridgeType.Unit,
       origin = ForwardCallableOrigin.EXTENSION,
       member = functionName,
       node = function,
@@ -4336,6 +4315,10 @@ internal class ForwardCallablePlanner(
     // ADR-147: `T?` out is the null pointer, then the handle.
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.TypeParameter ->
       handleResultShape(BridgeType.Nullable(type))
+    // ADR-239: a nullable returned lambda is the null pointer, then the lambda handle.
+    is BridgeType.ReturnedLambda ->
+      if (type.unnameableTypeArgument() != null) null
+      else handleResultShape(BridgeType.Nullable(type))
     // ADR-061 (2026-09-16 amendment): the nullable ObjectHandle shape above, verbatim. The
     // collection handle is a StableRef on the same POINTER slot, so a null pointer already means
     // Kotlin null and no has-value channel is needed. The component gate is the non-nullable
@@ -4609,7 +4592,6 @@ internal class ForwardCallablePlanner(
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
     is BridgeType.FlowSource,
-    is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
     is BridgeType.Unsupported,
@@ -6028,6 +6010,9 @@ internal fun BridgeType.sealedTypeDetail(): String? {
  *  (ADR-208) an UNSUPPORTED one into the generic class and its use-site refusal. */
 internal const val GENERIC_REFUSAL_SEPARATOR: String = ": "
 
+/** Prefixes an UNSUPPORTED detail that is a whole arity-refusal sentence. */
+internal const val ARITY_REFUSAL_MARKER: String = "arity-refusal|"
+
 
 internal fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
   BridgeType.Unit, is BridgeType.Primitive -> null
@@ -6228,7 +6213,9 @@ internal fun BridgeType.unsupportedTypeDetail(): String? =
   (unwrapNullable() as? BridgeType.Unsupported)?.let { unsupported ->
     // ADR-208: a generic class refused at its use site carries the reason after the name, the
     // ADR-199 SEALED_POSITION detail's shape.
-    if (unsupported.isGenericRefusal) {
+    if (unsupported.isArityRefusal) {
+      "$ARITY_REFUSAL_MARKER${unsupported.reason}"
+    } else if (unsupported.isGenericRefusal) {
       "${unsupported.rendered}$GENERIC_REFUSAL_SEPARATOR${unsupported.reason}"
     } else {
       unsupported.rendered

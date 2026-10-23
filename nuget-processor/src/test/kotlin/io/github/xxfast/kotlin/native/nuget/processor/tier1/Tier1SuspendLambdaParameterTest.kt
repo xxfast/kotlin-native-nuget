@@ -49,7 +49,8 @@ class Tier1SuspendLambdaParameterTest {
       suspend fun judge(rate: suspend (Mood, TreatChef, Boolean) -> Boolean): Boolean =
         rate(Mood.CALM, this, true)
 
-      // Refused, each by name: a nullable lambda, a result type no End thunk casts, arity four.
+      // Refused by name: arity four. (`maybe`, a nullable lambda, and `initial`, a `Char` result,
+      // bind since ADR-239.)
       suspend fun maybe(prepare: (suspend (Int) -> String)?): Int = if (prepare == null) 0 else 1
       suspend fun initial(pick: suspend (Int) -> Char): Int = 0
       suspend fun crowd(pick: suspend (Int, Int, Int, Int) -> Int): Int = 0
@@ -494,16 +495,23 @@ class Tier1SuspendLambdaParameterTest {
   fun `the shapes outside the v1 set stay refused by name`() {
     val result: Tier1Result = run()
 
-    listOf("maybe", "initial", "crowd").forEach { member ->
+    listOf("crowd").forEach { member ->
       assertEquals(
         1,
         result.kspWarnings.count { warning -> warning.contains("TreatChef.$member:") },
         "$member is refused and must be named once; kspWarnings=${result.kspWarnings}",
       )
     }
-    listOf("MaybeAsync(", "InitialAsync(", "CrowdAsync(").forEach { member ->
+    listOf("CrowdAsync(").forEach { member ->
       assertFalse(result.generatedCSharp.contains(member), "$member must not be declared")
     }
+    // ADR-239: a `Char` result is in the erased vocabulary, and a nullable suspend lambda binds
+    // with its `null` as a zero key, so `initial` and `maybe` bind.
+    assertTrue(result.generatedCSharp.contains("MaybeAsync("), "MaybeAsync binds")
+    assertTrue(result.kspWarnings.none { it.contains("TreatChef.maybe:") }, "${result.kspWarnings}")
+    assertTrue(result.generatedCSharp.contains("InitialAsync("), "InitialAsync binds")
+    val warnings: List<String> = result.kspWarnings
+    assertTrue(warnings.none { it.contains("TreatChef.initial:") }, "$warnings")
   }
 
   @Test

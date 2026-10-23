@@ -44,12 +44,12 @@ class Tier1NullableLambdaTypeArgumentTest {
     )
 
     val cs: String = result.generatedCSharp
-    assertTrue("KotlinAction<string?> Recorder()" in cs, "a nullable reference payload; cs=$cs")
-    assertTrue("KotlinFunc<int?, string> Describer()" in cs, "a nullable VALUE payload; cs=$cs")
-    assertTrue("KotlinFunc<string, string?> Finder()" in cs, "a nullable RESULT; cs=$cs")
+    assertTrue("Action<string?> Recorder()" in cs, "a nullable reference payload; cs=$cs")
+    assertTrue("Func<int?, string> Describer()" in cs, "a nullable VALUE payload; cs=$cs")
+    assertTrue("Func<string, string?> Finder()" in cs, "a nullable RESULT; cs=$cs")
     // The control: a non-null lambda keeps the exact shipped spelling, so this is a nullability
     // read and not a blanket `?`.
-    assertTrue("KotlinAction<string> Plain()" in cs, "a non-null payload is unchanged; cs=$cs")
+    assertTrue("Action<string> Plain()" in cs, "a non-null payload is unchanged; cs=$cs")
   }
 
   @Test

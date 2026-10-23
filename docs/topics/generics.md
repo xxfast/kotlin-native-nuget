@@ -352,7 +352,7 @@ inherent to erasure. The same identity rule applies to a lambda argument
 `T` is admitted at a parameter, a return, a constructor parameter, or a property (getter and setter), optionally
 nullable, and as the element of a `List`, `Set` or `Map` at those positions (`List<T>` binds as
 `IReadOnlyList<T>`; see [A type parameter as an element](#a-type-parameter-as-an-element)). It is refused, named,
-everywhere else: a stored-callback member, and `T` nested inside another generic type. A `T` in a lambda
+everywhere else: `T` nested inside another generic type. A `T` in a lambda
 ([non-suspend](#a-type-parameter-in-a-lambda) or [`suspend`](coroutines-and-flow.md#flow-and-suspend-lambda-type-parameter))
 and in a `Flow` parameter binds. A
 type parameter declared on an `interface` rather than a `class` is unaffected by this and keeps
@@ -738,7 +738,7 @@ fun <T> echoer(): (T) -> T = { item -> item }   // top level
 void Each<T>(IReadOnlyList<T> items, Action<T> action)
 T Map<T>(T value, Func<T, T> transform)
 string Rename<T>(T pet, Func<T, T> pick) where T : IFurry
-KotlinFunc<T, T> Echoer<T>()
+Func<T, T> Echoer<T>()
 ```
 
 ```C#
@@ -758,8 +758,10 @@ wrapper you hold. A `T?` payload, or a `T` that is `null`, arrives as `null`. A 
 spelling](#an-enum-bound) (`T : Enum<T>`) works in both directions.
 
 A `suspend` lambda or a `Flow` parameter over `T` [binds too](coroutines-and-flow.md#flow-and-suspend-lambda-type-parameter).
-Still a named skip: a stored callback or listener pair over `T` (`addTaste(listener: (T) -> Unit)`). A generic sealed arm's per-call lambda
-member binds like the class's.
+A stored callback or listener pair over `T` binds too, on a generic class and on a generic sealed arm
+(`addShake(listener: (T) -> Unit)` is `IDisposable AddShake(Action<T> listener)` on `Shaker<T>`; see
+[Stored callbacks](lambdas-and-callbacks.md#c-kotlin-stored-callbacks)). A generic sealed arm's lambda
+members bind like the class's.
 
 ### A type parameter inside a generic class or a Result {id="a-type-parameter-inside-a-generic-class"}
 
@@ -854,10 +856,8 @@ C#, so the type argument you choose decides whether `null` can be held.
 A generic class binds its ordinary members, including a member that takes a lambda
 (`box.Measure(n => n * 10)`). Its `Flow`, `StateFlow` and `MutableStateFlow` members bind too, as `KotlinFlow<T>` and its
 siblings (see [A `Flow` with a type parameter](coroutines-and-flow.md#flow-type-parameter)), and so do its
-`suspend` members (see [`suspend` members of a generic class](coroutines-and-flow.md#suspend-generic-owner)). It does
-not bind stored callback or listener pairs, or lambda members with a `Char` payload. Each is skipped with a
-named `SKIPPED_UNSUPPORTED_COMBINATION` diagnostic; move it onto a non-generic class that wraps the
-generic one.
+`suspend` members (see [`suspend` members of a generic class](coroutines-and-flow.md#suspend-generic-owner)), and
+its lambda members, stored callback pairs and interface listener pairs, a `Char` payload included.
 
 A type nested inside a generic class is declared on a non-generic static class beside it:
 `Box<T> { class Lid }` gives `Box<int>` and a separate `Box.Lid`, never `Box<int>.Lid`. See

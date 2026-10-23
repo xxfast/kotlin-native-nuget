@@ -135,10 +135,10 @@ class Tier1FunctionTypeDiagnosticSpellingTest {
     val line: String =
       diagnostic(ForwardDiagnosticKind.SKIPPED_UNIMPLEMENTABLE_INTERFACE, "tier1.spelling.Pet")
 
-    listOf(
-      "`fun handsOut` returns `suspend (Int) -> String`,",
-      "`fun handsOutNullable` returns `(suspend (Int) -> String)?`,",
-    ).forEach { expected -> assertContains(line, expected) }
+    // ADR-239: a lambda RESULT is a bridge slot on every owner, so the refusal names none of them.
+    listOf("`fun handsOut` ", "`fun handsOutNullable` ").forEach { member ->
+      assertFalse(member in line, line)
+    }
     // ADR-236: a lambda-typed property is a bridge slot now, so the refusal names none of them.
     assertFalse("`val held" in line, line)
   }
@@ -152,8 +152,8 @@ class Tier1FunctionTypeDiagnosticSpellingTest {
     listOf(
       "`fun plain` takes `prepare: (Int) -> String`,",
       "`fun plainNullable` takes `prepare: ((Int) -> String)?`,",
-      "`fun handsOutPlain` returns `(Int) -> String`,",
     ).forEach { expected -> assertContains(line, expected) }
+    assertFalse("`fun handsOutPlain` " in line, line)
   }
 
   /** `KSType.kotlinSpelling()`, read by the refused legacy suspend route. */
@@ -161,11 +161,10 @@ class Tier1FunctionTypeDiagnosticSpellingTest {
   fun `a refused suspend member names its suspend lambda parameter as the source spells it`() {
     val input: ForwardDiagnosticKind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT
 
-    assertContains(
-      diagnostic(input, "Chef.maybe"),
-      "but not prepare: (suspend (Int) -> String)?. ",
-    )
-    assertContains(diagnostic(input, "Chef.initial"), "but not pick: suspend (Int) -> Char. ")
+    // ADR-239: a nullable suspend lambda binds, so `maybe` is named nowhere.
+    assertTrue(result.kspWarnings.none { "Chef.maybe: " in it }, result.kspWarnings.toString())
+    // ADR-239: a `Char` result binds, so `initial` is named nowhere.
+    assertTrue(result.kspWarnings.none { "Chef.initial: " in it }, result.kspWarnings.toString())
     // The spelling does not stop at the arity the route binds.
     assertContains(
       diagnostic(input, "Chef.crowd"),
@@ -185,15 +184,9 @@ class Tier1FunctionTypeDiagnosticSpellingTest {
   fun `a refused return names a suspend lambda as the source spells it`() {
     val returned: ForwardDiagnosticKind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN
 
-    val nullable: String = diagnostic(returned, "Chef.makeNullable")
-    assertContains(
-      nullable,
-      "its nullable return type `(suspend (Int) -> String)?` has no supported wire",
-    )
-    assertContains(
-      nullable,
-      "the nullable return type `(suspend (Int) -> String)?` has no wire at a return",
-    )
+    // ADR-239: a nullable `suspend` lambda return binds, so `makeNullable` is named nowhere.
+    val warnings: List<String> = result.kspWarnings
+    assertTrue(warnings.none { "Chef.makeNullable: " in it }, warnings.toString())
     assertContains(
       diagnostic(returned, "Chef.pairOut"),
       "its nullable return type `Pair<Int, suspend (Int) -> String>?` has no supported wire",

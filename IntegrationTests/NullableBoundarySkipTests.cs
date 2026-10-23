@@ -41,30 +41,51 @@ public class NullableBoundarySkipTests
     }
 
     /// <summary>
-    /// Part A2, per-call callback route: a nullable payload or a nullable lambda return is declined.
-    /// Each of the four is its own line of the selector, so each is its own assertion: the value and
-    /// handle payloads abort the Kotlin compile of generated code today, the reference payload
-    /// compiles and kills the host on a real null, and the nullable lambda RETURN compiles and
-    /// NPEs at a generated <c>!!</c>.
+    /// Per-call callback route: a nullable VALUE, REFERENCE and HANDLE payload. Each once
+    /// aborted the generated Kotlin or killed the host on a real null; ADR-239 binds each as a box
+    /// Kotlin retains (none for null) and C# reads with <c>NugetMarshal.FromHandle&lt;T&gt;</c>, so a
+    /// null arrives as null.
     /// </summary>
     [Fact]
-    public void NullableLambdaPayload_OnThePerCallRoute_HasNoCsharpMember()
+    public void NullableLambdaPayload_OnThePerCallRoute_CrossesNull()
     {
-        Assert.Null(typeof(ClawStrip).GetMethod("EachTumble"));
-        Assert.Null(typeof(ClawStrip).GetMethod("EachStrip"));
-        Assert.Null(typeof(ClawStrip).GetMethod("EachNeighbour"));
-        Assert.Null(typeof(ClawStrip).GetMethod("AskWeave"));
+        using var strip = new ClawStrip("Oreo");
+        var seen = new List<string>();
+
+        strip.EachTumble(n => seen.Add(n?.ToString() ?? "no tumble"));
+        strip.EachStrip(s => seen.Add(s ?? "no strip"));
+        strip.EachNeighbour(c => seen.Add(c?.ToString() ?? "no neighbour"));
+
+        Assert.Equal(new[] { "no tumble", "no strip", "no neighbour" }, seen);
     }
 
     /// <summary>
-    /// Part A2, stored callback route: the add/remove PAIR goes together. A skip applied to one half
-    /// only would leave a subscription that can never be cancelled, or a cancel for a subscription
-    /// that cannot be made, so both names are asserted in one cell.
+    /// ADR-239: a nullable lambda RETURN binds on the per-call route, and a C# callback's null
+    /// reaches Kotlin as null rather than tripping a <c>!!</c>.
     /// </summary>
     [Fact]
-    public void NullableLambdaPayload_OnTheStoredRoute_DropsBothHalvesOfThePair()
+    public void NullableLambdaResult_OnThePerCallRoute_CrossesNull()
     {
-        Assert.Null(typeof(ClawStrip).GetMethod("AddRinger"));
+        using var strip = new ClawStrip("Oreo");
+
+        Assert.Null(strip.AskWeave(_ => null));
+        Assert.Equal("weave 1", strip.AskWeave(n => $"weave {n}"));
+    }
+
+    /// <summary>
+    /// Stored callback route: a nullable payload once failed both halves of the pair in
+    /// generated Kotlin. ADR-239 binds the pair on the managed-listener route: subscribing and
+    /// disposing works, and the remove half is internal to the subscription.
+    /// </summary>
+    [Fact]
+    public void NullableLambdaPayload_OnTheStoredRoute_BindsThePair()
+    {
+        using var strip = new ClawStrip("Oreo");
+
+        using (IDisposable ringer = strip.AddRinger(_ => { }))
+        {
+            Assert.NotNull(ringer);
+        }
         Assert.Null(typeof(ClawStrip).GetMethod("RemoveRinger"));
     }
 }

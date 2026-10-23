@@ -52,7 +52,7 @@ public class NullableLambdaArgumentTests
     [Fact]
     public void NullReferenceArgument_ReachesTheKotlinLambdaAsNull()
     {
-        using KotlinAction<string?> record = Recorder.SignIn();
+        Action<string?> record = Recorder.SignIn();
 
         record.Invoke(null);
 
@@ -67,7 +67,7 @@ public class NullableLambdaArgumentTests
     [Fact]
     public void NonNullReferenceArgument_StillCrossesAfterTheNullFix()
     {
-        using KotlinAction<string?> record = Recorder.SignIn();
+        Action<string?> record = Recorder.SignIn();
 
         record.Invoke("Oreo");
 
@@ -84,7 +84,7 @@ public class NullableLambdaArgumentTests
     [Fact]
     public void NullableValueArgument_CrossesBothWays()
     {
-        using KotlinFunc<int?, string> describe = Recorder.Describer();
+        Func<int?, string> describe = Recorder.Describer();
 
         Assert.Equal("no naps recorded", describe.Invoke(null));
         Assert.Equal("napped 9 times", describe.Invoke(9));
@@ -97,7 +97,7 @@ public class NullableLambdaArgumentTests
     [Fact]
     public void NullLambdaResult_ComesBackAsNull()
     {
-        using KotlinFunc<string, string?> find = Recorder.Finder();
+        Func<string, string?> find = Recorder.Finder();
 
         Assert.Equal("Oreo", find.Invoke("Oreo"));
         Assert.Null(find.Invoke("Mylo"));

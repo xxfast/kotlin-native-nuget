@@ -44,22 +44,22 @@ public class ErasedInterfaceIdentityTests
         public void Dispose() { }
     }
 
-    // --- Lambda route: KotlinFunc<IPet, IPet> ---
+    // --- Lambda route: Func<IPet, IPet> (ADR-239) ---
 
     [Fact]
     public void Lambda_PetRelay_IsSpelledWithTheInterface()
     {
         // The explicit type pins the ADR-173 respell: `KotlinFunc<Pet, Pet>` named the ADR-040
         // backing wrapper, which a consumer's own `Dog` can never be.
-        using KotlinFunc<IPet, IPet> relay = PetRelayKt.PetRelay();
-        Assert.Equal(typeof(KotlinFunc<IPet, IPet>), typeof(PetRelayKt).GetMethod("PetRelay")!.ReturnType);
+        Func<IPet, IPet> relay = PetRelayKt.PetRelay();
+        Assert.Equal(typeof(Func<IPet, IPet>), typeof(PetRelayKt).GetMethod("PetRelay")!.ReturnType);
     }
 
     [Fact]
     public void Lambda_CSharpDog_ReturnsTheSameInstance()
     {
         using IPet rex = new Dog("Rex");
-        using KotlinFunc<IPet, IPet> relay = PetRelayKt.PetRelay();
+        Func<IPet, IPet> relay = PetRelayKt.PetRelay();
         Assert.Same(rex, relay.Invoke(rex));
     }
 
@@ -67,7 +67,7 @@ public class ErasedInterfaceIdentityTests
     public void Lambda_KotlinBackedOreo_MaterialisesAsIPet()
     {
         using var oreo = new Cat("Oreo", 9);
-        using KotlinFunc<IPet, IPet> relay = PetRelayKt.PetRelay();
+        Func<IPet, IPet> relay = PetRelayKt.PetRelay();
         using IPet relayed = relay.Invoke(oreo);
         Assert.NotNull(relayed);
         Assert.Equal("Oreo", relayed.Name);
@@ -145,7 +145,7 @@ public class ErasedInterfaceIdentityTests
     public void ErasedOnlyInterface_SqueakerRelay_IsSpelledWithTheInterface()
     {
         Assert.Equal(
-            typeof(KotlinFunc<ISqueaker, ISqueaker>),
+            typeof(Func<ISqueaker, ISqueaker>),
             typeof(PetRelayKt).GetMethod("SqueakerRelay")!.ReturnType);
     }
 
@@ -153,7 +153,7 @@ public class ErasedInterfaceIdentityTests
     public void ErasedOnlyInterface_CSharpSqueaker_ReturnsTheSameInstance()
     {
         using ISqueaker mouse = new SqueakyMouse();
-        using KotlinFunc<ISqueaker, ISqueaker> relay = PetRelayKt.SqueakerRelay();
+        Func<ISqueaker, ISqueaker> relay = PetRelayKt.SqueakerRelay();
         ISqueaker back = relay.Invoke(mouse);
         Assert.Same(mouse, back);
         Assert.Equal("eek", back.Squeak);

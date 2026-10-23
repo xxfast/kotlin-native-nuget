@@ -1,14 +1,14 @@
 # Lambdas and callbacks
 
 A lambda crosses the bridge in one of three shapes, depending on who owns it and how long it
-lives: a Kotlin lambda exposed to C# as a disposable handle, a C# lambda Kotlin invokes once per
+lives: a Kotlin lambda exposed to C# as a plain .NET delegate, a C# lambda Kotlin invokes once per
 call and does not keep, or a C# lambda Kotlin stores as an observer until you dispose it. A fourth
 shape lets a C# class implement a Kotlin interface and register it as such an observer.
 
 ## Kotlin → C#: lambda properties and returns {id="kotlin-c-lambda-properties-and-returns"}
 
-A lambda-typed property binds as a plain .NET delegate property, on every owner and whether it is a
-`val` or a `var`:
+A lambda-typed property, and a function that returns a lambda, bind as a plain .NET delegate, on
+every owner. A property is a `val` or a `var`:
 
 | Kotlin | C# |
 |---|---|
@@ -17,8 +17,9 @@ A lambda-typed property binds as a plain .NET delegate property, on every owner 
 | `suspend (A) -> R` | `Func<A, CancellationToken, Task<R>>` |
 | `suspend (A) -> Unit` | `Func<A, CancellationToken, Task>` |
 
-A nullable lambda is the same type with `?`. There is nothing to dispose: the delegate you read
-calls the Kotlin lambda, and the bridge frees its native handle when the delegate is collected.
+A nullable lambda is the same type with `?`. There is nothing to dispose: the delegate you read or
+receive calls the Kotlin lambda, and the bridge frees its native handle when the delegate is
+collected.
 
 ```kotlin
 val onMeow: () -> String = { "Meow! My name is $name" }
@@ -70,7 +71,7 @@ string s = await onSprint(4, CancellationToken.None); // "Oreo sprinted 4 laps"
 
 ### Which owners bind {id="which-lambda-properties-bind"}
 
-Every owner binds, each in the spelling its other members use:
+Every owner binds, each in the spelling its other members use. A [returned lambda](#a-top-level-function-that-returns-a-lambda) binds on the same owners:
 
 | Kotlin owner | C# |
 |---|---|
@@ -103,88 +104,110 @@ the `Tote` instances you read are wrappers you dispose as usual (see
 
 An exception a Kotlin getter throws surfaces as a `KotlinException` on the read, on a sealed arm too.
 
-### Migrating from `KotlinFunc` properties {id="migrating-from-kotlinfunc-properties"}
+### Lambdas a function returns {id="a-top-level-function-that-returns-a-lambda"}
 
-Lambda properties used to be `KotlinFunc<..>`, `KotlinAction<..>` and `KotlinSuspendFunc<..>`
-handles, read-only and non-null. If you upgrade, expect these compile errors:
-
-| Before | After |
-|---|---|
-| `using var f = obj.OnPet;` | `var f = obj.OnPet;` (a delegate is not `IDisposable`) |
-| `KotlinFunc<A, R>` / `KotlinAction<A>` | `Func<A, R>` / `Action<A>` |
-| `await f.InvokeAsync(a)` | `await f.Invoke(a, token)`; pass `CancellationToken.None` if you have none |
-| `typeof(KotlinFunc<A, R>)` on the property type, by reflection | `typeof(Func<A, R>)` |
-
-A `var` lambda property now has a setter and a nullable one binds, where both were skipped before.
-The reason the property type is a delegate rather than a wrapper with an implicit conversion: C# never
-applies a user-defined conversion to a lambda literal (CS1660), so `obj.OnLap = i => ...` would not
-compile against a wrapper type.
-
-A function that *returns* a lambda still returns the `KotlinFunc` family, below.
-
-### Lambdas a function returns
-
-`Invoke` on a returned `KotlinFunc` accepts and returns `string`, any narrow or wide primitive (including `char`), any
-exported object, a [value class](value-classes.md#at-an-erased-generic-position), or a nullable
-spelling of any of those (`string?`, `int?`, `char?`, and so on): a lambda's type argument carries
-`?` when the Kotlin declaration is nullable at that position, and `null` reaches the Kotlin lambda,
-or comes back from it, exactly as written. A value class payload or result crosses boxed, not by
-its underlying, so its own `init` still validates; a value class with no crossing at this position
-(a nullable underlying or an ineligible sealed interface) is refused by name instead, and so is
-one with no C# record struct (see [Value classes](value-classes.md)).
-
-An exported **interface** type argument (`KotlinFunc<IPet, IPet>`) is spelled with the interface
-itself, never the ADR-040 backing wrapper, and passing your own C# implementation to `Invoke`
-returns that same instance; a Kotlin-backed value still materializes through the interface, see
-[An interface at an erased position](generics.md#an-interface-at-an-erased-position). If you
-explicitly named the old wrapper type (`KotlinFunc<Pet, Pet>`) before, that no longer compiles;
-`var` and passing the result straight on are unaffected.
+A function or member that returns a lambda binds as the same delegate, on every owner a property
+binds on: a class, `object`, companion, top-level function, enum, value class, generic class, sealed
+base and arm, extension, and a Kotlin interface. The returned lambda keeps whatever it captured, and
+you call it later.
 
 ```kotlin
-fun signIn(): (String?) -> Unit = { seen = it }
-fun describer(): (Int?) -> String = { if (it == null) "none" else "n=$it" }
-```
+class Tassel(val colour: String) {
+  fun cheer(): (String) -> String = { who -> "$colour tassel for $who" }
+  fun chant(): suspend (String) -> String = { who -> /* ... */ "$colour chant for $who" }
+  fun maybeCheer(loud: Boolean): ((String) -> String)? = if (loud) { who -> "$colour roar for $who" } else null
+}
 
-```C#
-using KotlinAction<string?> record = Recorder.SignIn();
-record.Invoke(null);
-
-using KotlinFunc<int?, string> describe = Recorder.Describer();
-string result = describe.Invoke(null); // "none"
-```
-
-### A top-level function that returns a lambda {id="a-top-level-function-that-returns-a-lambda"}
-
-A top-level function may return a lambda and take ordinary parameters alongside it: an interface,
-an exported class, an enum, a nullable, or a collection. The returned lambda captures them, and you
-call it later.
-
-```kotlin
-fun petSupplier(pet: Pet): () -> Pet = { pet }
+object Bleachers { fun cheer(): (String) -> String = { who -> "the bleachers cheer $who" } }
 fun adder(n: Int): (Int) -> Int = { it + n }
 ```
 
 ```C#
-public static KotlinFunc<IPet> PetSupplier(IPet pet)
+using var tassel = new Tassel("red");
+Func<string, string> cheer = tassel.Cheer();
+Func<string, CancellationToken, Task<string>> chant = tassel.Chant();
+Func<string, string>? loud = tassel.MaybeCheer(true); // null when Kotlin returned null
+
+string s = Bleachers.Cheer().Invoke("Oreo");           // static on an object
+string t = await chant.Invoke("Mylo", CancellationToken.None);
+Func<int, int> twoMore = PetRelayKt.Adder(2);
+```
+
+Nothing to dispose: the delegate calls the Kotlin lambda, and the bridge frees its native handle when
+the delegate is collected. An extension binds as an extension method (`tassel.Encore()`,
+`"ha".Refrain()`), and an enum body member as an extension on the enum
+(`Formation.Pyramid.Call()`).
+
+A returned lambda's payloads and results are the [callback vocabulary](#callback-vocabulary). A value
+class crosses boxed, not by its underlying, so its own `init` still validates; one with no crossing at
+this position is refused by name, and so is one with no C# record struct (see
+[Value classes](value-classes.md)). An exported interface type argument (`Func<IPet, IPet>`) is
+spelled with the interface itself, never the ADR-040 backing wrapper, and passing your own C#
+implementation to the delegate returns that same instance; a Kotlin-backed value still materializes
+through the interface, see
+[An interface at an erased position](generics.md#an-interface-at-an-erased-position).
+
+Other parameters beside the returned lambda can be an interface, an exported class, an enum, a
+nullable, or a collection. The lambda captures them: a C#-implemented interface you pass stays alive
+for as long as the lambda does, so it remains valid after the call returns, and a `null` for a
+nullable parameter reaches Kotlin as `null`.
+
+```C#
+IPet rex = new Dog("Rex"); // your own C# implementation of IPet
+Func<IPet> supplier = PetRelayKt.PetSupplier(rex);
+IPet same = supplier(); // the same instance as rex
+```
+
+A C# class implementing a Kotlin interface can return a delegate from a member, and Kotlin calls it,
+`suspend` and nullable ones included:
+
+```kotlin
+interface Chanter {
+  fun cheer(): (String) -> String
+  fun chant(): suspend (String) -> String
+  fun maybeCheer(loud: Boolean): ((String) -> String)?
+}
+fun rally(chanter: Chanter, who: String): String = chanter.cheer()(who)
 ```
 
 ```C#
-using IPet rex = new Dog("Rex"); // your own C# implementation of IPet
-using KotlinFunc<IPet> supplier = PetRelayKt.PetSupplier(rex);
-IPet same = supplier.Invoke(); // the same instance as rex
+private sealed class Pompom(string shaker) : IChanter
+{
+    public Func<string, string> Cheer() => who => $"{shaker} shakes for {who}";
+    public Func<string, CancellationToken, Task<string>> Chant() => async (who, token) =>
+    {
+        await Task.Delay(1, token);
+        return $"{shaker} chants for {who}";
+    };
+    public Func<string, string>? MaybeCheer(bool loud) => loud ? who => $"{shaker} roars for {who}" : null;
+    public void Dispose() { }
+}
 
-using KotlinFunc<int, int> twoMore = PetRelayKt.Adder(2);
-int five = twoMore.Invoke(3);
+CheersquadSample.Rally(new Pompom("Oreo"), "Mylo"); // "Oreo shakes for Mylo"
 ```
 
-Dispose the returned `KotlinFunc`; unlike a lambda property, a returned lambda is a handle you own. A C#-implemented interface you
-pass stays alive for as long as the lambda does, so `rex` above remains valid after the call
-returns; a `null` for a nullable parameter reaches Kotlin as `null`.
+### Migrating from `KotlinFunc` {id="migrating-from-kotlinfunc-properties"}
 
-The lambda's type arguments follow the rules above. One Kotlin cannot have C# spell, such as
-`() -> List<Int>`, skips the function with a named `SKIPPED_UNSUPPORTED_RETURN`. A `suspend` lambda
-return (`suspend () -> Int`) and a lambda returned from a class, object or companion member are named
-skips too; expose a lambda property on the class instead.
+Lambda properties and returned lambdas used to be `KotlinFunc<..>`, `KotlinAction<..>` and
+`KotlinSuspendFunc<..>` handles. A property was read-only and non-null; a return bound only on a
+top-level function, and a lambda returned from a member of a class, `object` or companion was
+skipped. If you upgrade, expect these compile errors:
+
+| Before | After |
+|---|---|
+| `using var f = obj.OnPet;` or `using KotlinFunc<int, int> f = Decks.Adder(2);` | `var f = ...;` (a delegate is not `IDisposable`) |
+| `KotlinFunc<A, R>` / `KotlinAction<A>` | `Func<A, R>` / `Action<A>` |
+| `KotlinSuspendFunc<A, R>` / `KotlinSuspendAction<A>` | `Func<A, CancellationToken, Task<R>>` / `Func<A, CancellationToken, Task>` |
+| `await f.InvokeAsync(a)` | `await f.Invoke(a, token)`; pass `CancellationToken.None` if you have none |
+| `typeof(KotlinFunc<A, R>)` on the property or return type, by reflection | `typeof(Func<A, R>)` |
+
+A `var` lambda property now has a setter and a nullable one binds, where both were skipped before.
+A lambda returned from a member of a class, `object`, companion, enum, interface, sealed type, generic
+class or extension now binds too.
+
+Why a delegate rather than a wrapper with an implicit conversion: C# never applies a user-defined
+conversion to a lambda literal (CS1660), so `obj.OnLap = i => ...` would not compile against a
+wrapper type.
 
 ### A lambda's type arguments across a namespace boundary {id="type-arguments-across-a-namespace-boundary"}
 
@@ -263,41 +286,75 @@ The same route binds a method declared on a sealed arm (see
 [Lambda parameters on a sealed arm](interfaces-abstract-sealed.md#sealed-lambda-generated-c)), a
 top-level function, or an extension function.
 
-A few shapes are not supported and are refused by name (a build-time skip, not broken generated
-code): `Char` as either the lambda's payload or its own return; a payload that is a Kotlin builtin
-non-scalar (`List`, `Set`, `Map`, `Any`, `Pair`, an array, `Duration`, or anything else under
-`kotlin`/`kotlinx` outside a primitive, `String`, `Char` or a `Throwable`, which binds as an unthrown
-`Exception`, see [Throwable values](exceptions.md#throwable-values)); a lambda's *own* return
-outside `Unit`, a primitive, `String`, an exported class or a `Throwable`, `Exception` or
-`RuntimeException` (an enum, `Char`, or one of those same builtins); a lambda type nested inside a `List`/`Set`/`Map`; a class or object member
-that returns a lambda rather than taking one (a [top-level function](#a-top-level-function-that-returns-a-lambda) can; expose a
-[lambda property](#kotlin-c-lambda-properties-and-returns) on the class instead); and a lambda parameter
-on a constructor, a data class's `copy()`, an enum-arm box constructor, or a value-class member,
-since none of those can keep the callback registered past the single call that creates them.
-A [`suspend` lambda parameter](coroutines-and-flow.md#suspend-lambda-parameter) is a different
-shape with its own rules: it is not per-call, it binds on a constructor and on a method that stores
-it, and Kotlin owns its lifetime.
+### The callback vocabulary {id="callback-vocabulary"}
+
+A payload or result of a callback is the same set on every lambda route: a per-call or `suspend`
+lambda parameter, a stored `add`/`remove` pair, a returned lambda and a lambda property. It
+crosses in its usual C# spelling:
+
+| Kotlin | C# |
+|---|---|
+| primitive, unsigned primitive, `String`, `Char` | the same-named C# type |
+| enum, exported class or interface, [value class](value-classes.md) | the generated type |
+| `List<T>` / `Set<T>` / `Map<K, V>` | `IReadOnlyList<T>` / `IReadOnlySet<T>` / `IReadOnlyDictionary<K, V>` |
+| `ByteArray` | `byte[]` |
+| `Instant` / `Duration` / `Uuid` | `DateTimeOffset` / `TimeSpan` / `Guid` |
+| a bound C# interface such as `IFeedable` | the interface itself, the same object you implemented |
+| a member's or class's own `T` | `T`, see [below](#a-type-parameter-in-the-lambda) |
+| `Throwable` | `Exception`, see [Throwable values](exceptions.md#throwable-values) |
+| any of these, nullable | the same type with `?` |
+
+A nullable payload arrives as `null`, and a callback that returns `null` for a nullable result
+reaches Kotlin as `null`, never as a crash. A collection is copied at the crossing, as at any
+method boundary. A `Throwable` result of a `suspend` lambda is a `Task<Exception>`, and a `Throwable?` payload arrives as `Exception?`. A result declared narrower than `RuntimeException` (such as `IllegalStateException`) is refused, because C# hands Kotlin a `NugetManagedException`.
 
 ```kotlin
-fun onBatch(cb: (List<Int>) -> Unit) = cb(listOf(1))
-fun pickMood(cb: () -> Mood) { cb() }
+fun lineup(pick: (String) -> List<String>): String = "$judge called ${pick(judge).joinToString()}"
+fun scores(describe: (Int?) -> String): String = "${describe(null)} then ${describe(7)}"
+fun askWeave(onAsk: (Int) -> String?): String? = onAsk(1)
 ```
 
-```
-[nuget:SKIPPED_UNSUPPORTED_INPUT] Skipping Walker.onBatch: a callback parameter can carry a
-primitive/String/Char, a class handle or an enum, but not `cb: (List<Int>) -> Unit`, whose payload
-`List<Int>` is a Kotlin builtin with no crossing on a callback
-    at Walker.kt:<line>
-
-[nuget:SKIPPED_UNSUPPORTED_RETURN] Skipping Walker.pickMood: a callback can return `Unit`, a
-primitive or a `String`, but `cb: () -> Mood` returns `Mood`
-    at Walker.kt:<line>
+```C#
+using var card = new Scorecard("Mylo");
+card.Lineup(who => new[] { who, "Oreo" });                // "Mylo called Mylo, Oreo"
+card.Scores(n => n?.ToString() ?? "none");                // "none then 7"
+using var strip = new ClawStrip("Oreo");
+strip.AskWeave(_ => null);                                // null reaches Kotlin as null
 ```
 
-Neither member is generated on either half, Kotlin included, so nothing calls a delegate that
-doesn't exist on the C# side. Pass the collection one element at a time, or wrap it in an exported
-class and pass that; hand an enum result back through a method on the class instead of a
-lambda return.
+A bound C# interface payload is a live `IFeedable` of your own, not a wrapper:
+
+```C#
+using var pen = new Pen();
+pen.Adopt(goat); // your own IFeedable
+IFeedable? seen = null;
+pen.Inspect(feedable => { seen = feedable; return feedable.Legs; });
+// seen is goat, the same object
+```
+
+These shapes are refused by name (a build-time skip, not broken generated code):
+
+- A lambda of four or more parameters. `(Int, Int, Int, Int) -> Int` takes 4 parameters, and a lambda
+  crosses with at most 3 on every callback route. Group the rest into a class, or split the lambda.
+- A `Pair`, `IntArray` or `Any` payload. Pass a class that holds the values instead.
+- A lambda type nested inside a `List`/`Set`/`Map`.
+
+A lambda parameter on a constructor, a data class's `copy()`, an enum-arm box constructor, or a
+value-class member is also unbound, since none of those can keep the callback registered past the
+single call that creates them. A [`suspend` lambda parameter](coroutines-and-flow.md#suspend-lambda-parameter)
+is a different shape with its own rules: it is not per-call, it binds on a constructor and on a method
+that stores it, and Kotlin owns its lifetime.
+
+```kotlin
+class Crowd {
+  fun group(pick: (Int, Int, Int, Int) -> Int): Int = pick(1, 2, 3, 4)
+}
+```
+
+The build warns, naming `Crowd.group`: `(Int, Int, Int, Int) -> Int` takes 4 parameters, and a lambda
+crosses with at most 3 on every callback route. Group the rest into a class, or split the lambda. The
+member is generated on neither half, Kotlin included, so nothing calls a delegate that doesn't exist
+on the C# side.
 
 ### A nullable lambda parameter {id="a-nullable-lambda-parameter"}
 
@@ -315,17 +372,16 @@ metronome.OnMaybeTick(tick => ticks.Add(tick)); // works
 metronome.OnMaybeTick(null!);                   // throws ArgumentNullException, same as a non-nullable listener
 ```
 
-A parameter whose *payload* is nullable (`listener: (Int?) -> Unit`) or whose lambda *returns* a
-nullable value has no generated member at all: it is a named skip, because the payload cannot cross
-this route today. Change the lambda's own type to carry the "no listener" case instead, as above,
-or wrap the payload in a non-nullable type before it crosses. The same skip applies on a sealed arm
-and to both halves of a stored-callback `add`/`remove` pair, which go together.
+A nullable `suspend` lambda parameter is the exception: it binds as a nullable `Func<..>?`, and
+`null` reaches Kotlin as `null`. See [A `suspend` lambda as a parameter](coroutines-and-flow.md#suspend-lambda-parameter).
+A nullable *payload* (`listener: (Int?) -> Unit`) or *result* binds as in the
+[vocabulary](#callback-vocabulary) above, on a sealed arm and on a stored `add`/`remove` pair too.
 
 ### A type parameter in the lambda {id="a-type-parameter-in-the-lambda"}
 
 A generic member can name its own `T` (or its class's) as a lambda's payload or result. It binds
 as a generic method taking an ordinary delegate, and a top-level `fun <T>` can return a lambda over
-`T` as a `KotlinFunc<T, T>`:
+`T` as a `Func<T, T>`:
 
 ```kotlin
 fun <T> each(items: List<T>, action: (T) -> Unit)
@@ -336,7 +392,7 @@ fun <T> echoer(): (T) -> T   // top level
 ```C#
 dealer.Each(new[] { "Oreo", "Mylo" }, name => seen.Add(name));
 using Tabby same = dealer.Map(oreo, cat => cat);
-using KotlinFunc<int, int> echo = Decks.Echoer<int>();
+Func<int, int> echo = Decks.Echoer<int>();
 ```
 
 A wrapper `T` follows [the ownership rules below](#ownership-of-a-callback-payload) as a payload.
@@ -350,7 +406,7 @@ parameter](coroutines-and-flow.md#flow-and-suspend-lambda-type-parameter). A pla
 ## A plain lambda on a `suspend` or `Flow` member {id="plain-lambda-on-suspend-or-flow-member"}
 
 A plain lambda parameter on a `suspend` member, or on a member that returns a `Flow`, binds as a
-delegate on every owner those members bind on, with the same payloads as above:
+delegate on every owner those members bind on:
 
 ```kotlin
 suspend fun run(steps: Int, onStep: (Int) -> Unit): Int { /* ... */ }
@@ -444,7 +500,9 @@ Assert.Equal("listener", ex.ParamName);
 
 cat.Dispose();
 Assert.Throws<ObjectDisposedException>(() => cat.AddMoodListener(mood => { }));
-``` `Dispose()` does not wait for an invocation already in flight on another thread: a call
+```
+
+`Dispose()` does not wait for an invocation already in flight on another thread: a call
 that lands after `Dispose()` is dropped silently for a `void` listener, without running your code
 or crashing. A handle-passed payload (an exported object) it carried is released for you; there is
 nothing to dispose. A per-call lambda kept past the single call that supplied it and invoked later
@@ -454,24 +512,48 @@ is a different case, see
 The same pattern also binds a pair declared on a sealed arm; see
 [Stored-callback and interface-bridge pairs on a sealed arm](interfaces-abstract-sealed.md#sealed-callback-pair-generated-c).
 
-A stored callback whose payload is nullable (`listener: (Mood?) -> Unit`), or a Kotlin builtin
-non-scalar (`List`, `Map`, `Set`, `Any`, `Pair`, an array, `Duration`), has no generated member:
-both the `add` and `remove` half are declined together, since a subscription that could not be made
-should not have a matching unsubscribe either. A listener must also return `Unit`: Kotlin calls it
-back as a bare `Action`, so a listener returning anything else drops both halves the same way,
-named `SKIPPED_UNSUPPORTED_RETURN`:
+A stored listener takes the same [callback vocabulary](#callback-vocabulary) as a per-call lambda,
+and it can return a value: Kotlin reads the result of each call, so `addJudge(pick: (String) ->
+Spirit)` binds as `AddJudge(Func<string, Spirit>)`. Payloads include collections, nullables and the
+rest of the vocabulary, and `add`/`remove` still go together.
 
 ```kotlin
-fun addCounter(listener: () -> Int) {}
-fun removeCounter(listener: () -> Int) {}
+fun addJudge(pick: (String) -> Spirit) { judges.add(pick) }
+fun removeJudge(pick: (String) -> Spirit) { judges.remove(pick) }
+fun addWatcher(listener: (List<String>) -> Unit) { watchers.add(listener) }
+fun removeWatcher(listener: (List<String>) -> Unit) { watchers.remove(listener) }
 ```
 
+```C#
+using IDisposable judge = card.AddJudge(_ => Spirit.Hyped);   // card.Verdicts() == "HYPED"
+using IDisposable watcher = card.AddWatcher(names => seen.AddRange(names));
 ```
-[nuget:SKIPPED_UNSUPPORTED_RETURN] Skipping Walker.addCounter: the `addCounter` / `removeCounter`
-stored-callback pair is not bound: its listener `listener: () -> Int` returns `Int`, and a stored
-listener is called back as an `Action`, which returns nothing
-    at Walker.kt:<line>
+
+The pair binds on a generic owner too, typed by the closed `T`:
+
+```kotlin
+class Shaker<T>(val item: T) {
+  fun addShake(listener: (T) -> Unit) { /* ... */ }
+  fun removeShake(listener: (T) -> Unit) { /* ... */ }
+  fun addCounter(listener: () -> Int) { /* ... */ }
+  fun removeCounter(listener: () -> Int) { /* ... */ }
+}
 ```
+
+```C#
+using var shaker = new Shaker<string>("pompom");
+using IDisposable shake = shaker.AddShake(item => shaken.Add(item)); // Action<string>
+using IDisposable counter = shaker.AddCounter(() => 4);              // Func<int>
+```
+
+A generic sealed arm that carries the arm's `T` binds the same way; see
+[Members of a generic arm](interfaces-abstract-sealed.md#generic-sealed-arm-members). A pair whose
+listener is a Kotlin interface (an [interface subscription](#c-implementing-a-kotlin-interface-as-a-parameter))
+binds on a generic owner as well.
+
+A shape the vocabulary refuses (four or more parameters, or a `Pair`, `IntArray` or `Any` payload)
+declines the pair, both halves together and named, since a subscription that could not be made
+should not have a matching unsubscribe either.
 
 A `Boolean` listener binds like any other primitive, over the same handle wire every other scalar
 listener uses:

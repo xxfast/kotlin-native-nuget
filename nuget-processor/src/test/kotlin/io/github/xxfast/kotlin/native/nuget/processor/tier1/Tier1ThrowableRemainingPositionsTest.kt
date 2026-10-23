@@ -188,13 +188,15 @@ class Tier1ThrowableRemainingPositionsTest {
     // The listener route: subscribed, and its delegate reads the envelope.
     assertContains(cs, "AddMishapListener(")
     assertContains(cs, "global::System.Exception arg0 = NugetErrorNative.BuildException(arg0Ptr);")
-    for (member in listOf("strictRecover", "onMaybe")) {
+    // ADR-239: a `Throwable?` payload binds, its envelope or no handle for `null`.
+    assertContains(cs, "OnMaybe(Action<global::System.Exception?> handler)")
+    for (member in listOf("strictRecover")) {
       assertTrue(
         result.kspWarnings.any { it.contains("SKIPPED_") && it.contains("MishapLog.$member") },
         "expected a named skip for $member; kspWarnings=${result.kspWarnings}",
       )
     }
-    for (member in listOf(" StrictRecover(", " OnMaybe(")) {
+    for (member in listOf(" StrictRecover(")) {
       assertFalse(
         Regex("""public [^\n]*${Regex.escape(member)}""").containsMatchIn(cs),
         "expected $member to be absent; generated=$cs",

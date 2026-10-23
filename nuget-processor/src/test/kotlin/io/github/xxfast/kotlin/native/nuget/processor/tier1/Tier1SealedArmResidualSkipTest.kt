@@ -39,9 +39,7 @@ class Tier1SealedArmResidualSkipTest {
         // (ADR-212 routes a collection).
         fun <T> sort(values: Array<T>): Int = values.size
 
-        // The suspend-lambda residual: SUSPEND_CALLBACK_PROTOCOL from the parameter.
-        // A `Char` result: ADR-210 binds a suspend lambda parameter on an arm for a Unit, primitive
-        // or String result, so this is the shape the arm still drops.
+        // The former suspend-lambda residual: a `Char` result binds since ADR-239.
         fun later(block: suspend (Int) -> Char): Int = item.length
 
         // The control: an ordinary member on the same arm keeps binding.
@@ -74,14 +72,14 @@ class Tier1SealedArmResidualSkipTest {
   fun `the residual members are absent from both halves while the control binds`() {
     val result = run()
 
-    val leakedKotlin: List<String> = listOf("errand_fetch_sort", "errand_fetch_later")
+    val leakedKotlin: List<String> = listOf("errand_fetch_sort")
       .filter { name -> Regex("@CName\\(\"[^\"]*__${name}\"\\)").containsMatchIn(result.generated) }
     assertTrue(leakedKotlin.isEmpty(), "expected no Kotlin export; got: $leakedKotlin")
 
     val declarations: List<String> = result.generatedCSharp.lines()
       .map(String::trim)
       .filterNot { line -> line.startsWith("//") }
-    val leakedCSharp: List<String> = listOf("Sort", "Later").filter { member ->
+    val leakedCSharp: List<String> = listOf("Sort").filter { member ->
       declarations.any { line -> Regex("\\b$member\\s*[<(]").containsMatchIn(line) }
     }
     assertTrue(leakedCSharp.isEmpty(), "expected no C# member; got: $leakedCSharp")
@@ -128,12 +126,25 @@ class Tier1SealedArmResidualSkipTest {
     )
   }
 
+  /** ADR-239: a `Char` callback result is in the erased vocabulary, so `later` binds on the arm. */
   @Test
-  fun `the suspend lambda parameter is named once with a hint that binds`() {
-    assertNamedOnce(
-      member = "Errand.Fetch.later",
-      detail = ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL,
-      hint = "take or return a plain (non-suspend) lambda instead",
+  fun `the suspend lambda parameter with a Char result binds on the arm`() {
+    val result = run()
+
+    assertTrue(
+      Regex("@CName\\(\"[^\"]*__errand_fetch_later\"\\)").containsMatchIn(result.generated),
+      "expected the arm's Kotlin export",
+    )
+    assertTrue(
+      result.generatedCSharp.contains(
+        "public int Later(Func<int, global::System.Threading.CancellationToken, " +
+            "global::System.Threading.Tasks.Task<char>> block)",
+      ),
+      "got: ${result.generatedCSharp.lines().filter { it.contains("Later") }}",
+    )
+    assertTrue(
+      result.kspWarnings.none { warning -> warning.contains("Errand.Fetch.later") },
+      "a member that binds must not be named as a skip; got: ${result.kspWarnings}",
     )
   }
 

@@ -151,13 +151,13 @@ class Tier1UnitLambdaPropertyTest {
 
   /** The top-level function arm (`CirFunctionTranslator.kt:158`), a return position. */
   @Test
-  fun `a function returning a Unit lambda renders KotlinAction`() {
+  fun `a function returning a Unit lambda renders Action`() {
     val result = run()
 
     val ticker: List<String> = result.generatedCSharp.lines().filter { it.contains("Ticker()") }
     assertTrue(ticker.isNotEmpty(), "expected a Ticker() function; got none")
     assertTrue(
-      ticker.any { it.contains("KotlinAction") },
+      ticker.any { it.contains("public static Action Ticker()") },
       "expected the lambda-returning function to narrow Unit; got: $ticker",
     )
   }

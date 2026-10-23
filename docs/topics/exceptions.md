@@ -344,9 +344,9 @@ names it:
 - a `StateFlow<Throwable>` returned from a `suspend` function, and any `MutableStateFlow<Throwable>`;
   expose a read-only `StateFlow` property or method instead
 - a `Throwable` extension receiver and a value class over `Throwable`
-- a `(Throwable?) -> Unit` lambda, a lambda result narrower than `RuntimeException`, a stored
-  lambda, a lambda property and a returned lambda, which follow the
-  [lambda rules](lambdas-and-callbacks.md) rather than anything specific to `Throwable`
+- a lambda result narrower than `RuntimeException`, on a plain, `suspend`, stored, property or
+  returned lambda, which follows the [lambda rules](lambdas-and-callbacks.md#callback-vocabulary)
+  (a `(Throwable?) -> Unit` lambda and a `suspend` lambda returning `Throwable` bind)
 
 ## Result return values
 

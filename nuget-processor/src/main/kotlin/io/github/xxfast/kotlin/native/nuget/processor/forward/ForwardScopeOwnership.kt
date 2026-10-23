@@ -486,3 +486,14 @@ internal fun KSFunctionDeclaration.takesGenericSuspendRoute(cls: KSClassDeclarat
 /** ADR-219: whether [cls] projects this member over its erased receiver, on either legacy route. */
 private fun KSFunctionDeclaration.takesGenericRoute(cls: KSClassDeclaration): Boolean =
   takesGenericFlowRoute(cls) || takesGenericSuspendRoute(cls)
+
+/**
+ * ADR-239: whether [cls], a generic owner, binds this `add`/`remove` half over its erased receiver
+ * (`asStableRef<Crate<Any?>>()`), as the Flow and `suspend` routes already do: a stored lambda pair
+ * on the managed-listener route, which never spells the listener's `T`, or an ADR-039 subscription
+ * pair, whose listener is an interface. [legacyPairMembers] is `forwardLegacyPairMembers`.
+ */
+internal fun KSFunctionDeclaration.takesGenericStoredRoute(
+  cls: KSClassDeclaration,
+  legacyPairMembers: Set<KSFunctionDeclaration>,
+): Boolean = cls.carriesGenericFlowRoute() && this in legacyPairMembers

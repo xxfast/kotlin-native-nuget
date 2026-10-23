@@ -304,7 +304,7 @@ public class SuspendFlowTests
     public async Task LateAcquisitionAfterOwnerDisposal_DoesNotCreateAReplacementScope()
     {
         var cafe = new SuspendFlowCafe();
-        using var release = SuspendFlowSample.CafeAcquisitionRelease(cafe);
+        Action release = SuspendFlowSample.CafeAcquisitionRelease(cafe);
         var pending = cafe.StubbornAsync();
         await WaitFor(() => cafe.AcquisitionStarted);
         cafe.Dispose();

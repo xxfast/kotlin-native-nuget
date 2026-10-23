@@ -213,7 +213,7 @@ public class WrapValueClassTests
     [Fact]
     public void WrapValueClass_LambdaPayload_TopLevelFunctionReturn_Invokes()
     {
-        using KotlinFunc<ChartId, string> picker = ChartCourierSample.ChartPicker();
+        Func<ChartId, string> picker = ChartCourierSample.ChartPicker();
 
         Assert.Equal("picked CH-MYLO-2", picker.Invoke(new ChartId("CH-MYLO-2")));
     }

@@ -48,7 +48,7 @@ internal object ForwardCirPropertyProjection {
    * declaration can be projected from the *same* call the implementing class's property goes
    * through. A second spelling of the same plan is what CS0738 is made of.
    */
-  fun publicType(plan: ForwardPropertyPlan): String = plan.type.forwardPropertyCsharpType()
+  fun publicType(plan: ForwardPropertyPlan): String = plan.type.forwardPublicCsharpType()
 
   fun staticProperty(plan: ForwardPropertyPlan, libraryName: String): List<CirMember> {
     // ROADMAP Phase 4: an `object`'s own property is the third static position, projected by this
@@ -118,7 +118,7 @@ internal object ForwardCirPropertyProjection {
     val property = CirExtensionProperty(
       receiverType = publicReceiver,
       name = plan.publicName,
-      type = plan.type.forwardPropertyCsharpType(),
+      type = plan.type.forwardPublicCsharpType(),
       getter = getterBody(plan, receiverArgument, receiverStep, receiverCleanup),
       setter = plan.setter?.let {
         setterBody(plan, receiverArgument, receiverStep, receiverCleanup)
@@ -157,7 +157,7 @@ internal object ForwardCirPropertyProjection {
     val getter = CirMethod(
       doc = plan.doc?.toCirDoc(),
       name = plan.publicName,
-      returnType = plan.type.forwardPropertyCsharpType(),
+      returnType = plan.type.forwardPublicCsharpType(),
       nativeReturnType = plan.getter.calls().first().result.csharpWireType(),
       parameters = listOf(CirParameter(receiverName, publicReceiver)),
       body = getterBody(plan, receiverArgument),
@@ -171,7 +171,7 @@ internal object ForwardCirPropertyProjection {
         returnType = "void",
         parameters = listOf(
           CirParameter(receiverName, publicReceiver),
-          CirParameter("value", plan.type.forwardPropertyCsharpType()),
+          CirParameter("value", plan.type.forwardPublicCsharpType()),
         ),
         body = setterBody(plan, receiverArgument),
         isStatic = true,
@@ -193,7 +193,7 @@ internal object ForwardCirPropertyProjection {
     val directGetter: ForwardNativeCall = plan.getter.calls().first()
     return CirProperty(
       name = plan.publicName,
-      type = plan.type.forwardPropertyCsharpType(),
+      type = plan.type.forwardPublicCsharpType(),
       nativeReturnType = directGetter.result.csharpWireType(),
       nativeSetterType = if (plan.setter != null) setterNativeType(plan.type) else directGetter.result.csharpWireType(),
       nativeName = plan.kotlinName.asCSymbol(),
