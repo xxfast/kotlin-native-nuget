@@ -149,6 +149,10 @@ internal class ForwardBridgeTypeClassifier(
     // expanded side alone is sufficient; the unexpanded read is kept as a belt-and-braces OR.
     val isNullable: Boolean = type.isMarkedNullable || expanded.isMarkedNullable
     if (!isNullable) return classified
+    // ADR-237: an erased interface member `R` with a nullable bound is already `object?`.
+    if (classified is BridgeType.Nullable && (classified.type as? BridgeType.TypeParameter)?.nullableFromBound != true) {
+      return classified
+    }
     // ADR-147 amendment: a nullable-bounded `T` is already wrapped; a `T?` use site keeps the
     // wrap and drops the bare-`T` C# spelling rather than wrapping twice.
     val boundNullable: BridgeType.TypeParameter? =
@@ -174,6 +178,16 @@ internal class ForwardBridgeTypeClassifier(
       // over the erased receiver a generic class's do.
       val onGenericClass: Boolean = owner is KSClassDeclaration &&
           (owner.classKind == ClassKind.CLASS || owner.isPlannableGenericInterface())
+      // ADR-237: an interface member's own `R` is erased to its one bound, or `Any?` (`object?`).
+      if (owner is KSFunctionDeclaration && owner.isErasedInterfaceMember()) {
+        val refusal: String? = owner.forwardErasedMemberRefusal()
+        if (refusal != null) return BridgeType.Unsupported(declaration.simpleName.asString(), refusal)
+        val bound: KSType? = declaration.bounds.map { it.resolve() }
+          .firstOrNull { bound -> bound.declaration.qualifiedName?.asString() != "kotlin.Any" }
+        val erased: BridgeType =
+          if (bound == null) BridgeType.TypeParameter.ANY else classifyNonNullable(bound.expandAliases())
+        return if (declaration.hasNullableBound()) BridgeType.Nullable(erased) else erased
+      }
       // ADR-197: a member function's own `T` crosses on the same boxed wire. The planner decides
       // which member shapes route (`forwardMemberGenericRefusal`); this only spells the kind.
       if (owner is KSFunctionDeclaration && owner.isForwardGenericMemberOwner()) {
@@ -271,6 +285,8 @@ internal class ForwardBridgeTypeClassifier(
       )
     }
 
+    // ADR-237: `kotlin.Any` is C# `object`, crossing on the box wire of an unconstrained `T`.
+    if (qualifiedName == "kotlin.Any") return BridgeType.TypeParameter.ANY
     knownScalarType(qualifiedName)?.let { return it }
     if (qualifiedName == "kotlin.Char") return BridgeType.Char
     if (qualifiedName == "kotlin.String") return BridgeType.String
@@ -723,7 +739,16 @@ internal class ForwardBridgeTypeClassifier(
     }
 
     val arguments: List<KSTypeArgument> = type.arguments
-    if (arguments.any { it.variance != Variance.INVARIANT || it.type == null }) {
+    // ADR-237: a star projection reads at its parameter's bound, `Any?` (C# `object?`) when it has
+    // none, so `Satchel<*>` is `Satchel<object?>`. A use-site `in` or `out` projection is refused.
+    val stars: Set<Int> = arguments.indices.filter { index ->
+      arguments[index].variance == Variance.STAR
+    }.toSet()
+    if (
+      arguments.withIndex().any { (index, argument) ->
+        index !in stars && (argument.variance != Variance.INVARIANT || argument.type == null)
+      }
+    ) {
       return refused(
         "`${type.kotlinSpelling(keepProjections = true)}` is a use-site projection, and C# has " +
             "no projection of a generic class",
@@ -733,7 +758,12 @@ internal class ForwardBridgeTypeClassifier(
     val own: Map<String, KSType> = declaration.typeParameters
       .zip(arguments)
       .associate { (parameter, argument) ->
-        parameter.name.asString() to checkNotNull(argument.type).resolve()
+        val resolved: KSType = if (argument.variance == Variance.STAR) {
+          parameter.bounds.firstOrNull()?.resolve() ?: return refused("`${parameter.name.asString()}` has no bound to read `*` at")
+        } else {
+          checkNotNull(argument.type).resolve()
+        }
+        parameter.name.asString() to resolved
       }
     val slots: List<Pair<KSType, KSTypeParameter>> = if (shape == null) {
       declaration.typeParameters.map { parameter ->
@@ -1243,8 +1273,13 @@ internal class ForwardBridgeTypeClassifier(
     if (type.isMarkedNullable || expanded.isMarkedNullable) return null
     val qualifiedName: String = expanded.declaration.qualifiedName?.asString() ?: return null
     if (qualifiedName !in PLAIN_FLOW_TYPES) return null
-    val argument: KSType = expanded.arguments.singleOrNull()?.type?.resolve() ?: return null
-    val element: BridgeType = classify(argument)
+    val projection: KSTypeArgument = expanded.arguments.singleOrNull() ?: return null
+    // ADR-237: a star-projected element is a Kotlin `Any?`, C# `object?`.
+    val element: BridgeType = if (projection.variance == Variance.STAR) {
+      BridgeType.Nullable(BridgeType.TypeParameter.ANY)
+    } else {
+      classify(projection.type?.resolve() ?: return null)
+    }
     // ADR-215 lane C: a `T` element is read as an owned box (`CurrentBoxed()`).
     val readable: Boolean =
       element == BridgeType.String || element is BridgeType.Primitive || element.isAsyncBoxed()

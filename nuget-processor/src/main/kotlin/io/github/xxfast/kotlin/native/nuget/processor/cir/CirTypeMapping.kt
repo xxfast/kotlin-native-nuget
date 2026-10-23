@@ -946,7 +946,9 @@ private fun KSTypeArgument.boundArgumentCsName(
  * empty [NugetContext.rootNamespace] (nothing to qualify with) yields a bare name.
  */
 internal fun qualifiedElementCsType(type: KSType?, context: NugetContext): String {
-  val declaration: KSDeclaration = type?.expandAliases()?.declaration ?: return "Any"
+  // ADR-237: a star projection (`Flow<*>`) is `object?`, and `kotlin.Any` is `object`.
+  val declaration: KSDeclaration = type?.expandAliases()?.declaration ?: return "object?"
+  if (declaration.qualifiedName?.asString() == "kotlin.Any") return "object"
   val simpleName: String = declaration.simpleName.asString()
   KOTLIN_TO_CSHARP_PARAM[simpleName]?.let { return it }
   val classDeclaration: KSClassDeclaration = declaration as? KSClassDeclaration ?: return simpleName

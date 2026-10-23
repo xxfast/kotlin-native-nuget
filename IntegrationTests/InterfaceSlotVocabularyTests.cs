@@ -203,6 +203,9 @@ public class InterfaceSlotVocabularyTests
 
         public KotlinFlow<string>? Maybe() => Empty ? null : KotlinFlow<string>.From(Each("tuna"));
 
+        public KotlinFlow<object?> Anything() =>
+            KotlinFlow<object?>.From(Each<object?>(5, "Oreo", null, new Kitten("Mylo"), global::TestLibrary.Catsitter.Coat.Caramel));
+
         public KotlinMutableStateFlow<int> MoodFlow { get; } = KotlinMutableStateFlow<int>.Create(7);
 
         public KotlinStateFlow<int>? Mood => Empty ? null : MoodFlow;
@@ -285,6 +288,16 @@ public class InterfaceSlotVocabularyTests
         lookout.MoodFlow.Value = 9;
 
         Assert.Equal(9, await Sitters.LevellingAsync(lookout));
+    }
+
+    [Fact]
+    public async Task Anythings_StarProjectedFlowFromCSharp_EachElementArrivesAsItsKotlinType()
+    {
+        using var lookout = new Lookout();
+
+        Assert.Equal(
+            "Int 5, String Oreo, null, Kitten Mylo, Coat CARAMEL",
+            await Sitters.AnythingsAsync(lookout));
     }
 
     // -----------------------------------------------------------------------------------------

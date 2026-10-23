@@ -128,28 +128,46 @@ public class InterfaceParameterTests
         Assert.Equal(1, ((HouseSitter)sitter).Visits);
     }
 
-    // --- (d) interface whose bridge plans to null: managed throw, not a dead host ---
+    // --- (d) ADR-237: a member with its own `R` is erased to `object`, so the interface bridges ---
 
     private sealed class ClawMarks : IScratchLog
     {
         public int Scratches { get; set; } = 7;
 
+        public object? Tally(object? entry) => entry;
+
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void ErasedTypeParameterInterface_CSharpImplementation_CrossesToKotlin()
+    {
+        // `fun <R> tally` used to keep this interface from planning a bridge (a managed throw). Its
+        // `R` is erased to `object?` now, so the C# implementation crosses and Kotlin reads it.
+        var log = new ClawMarks();
+
+        Assert.Equal(7, CatteryDesk.CountScratches(log));
+    }
+
+    // --- (d2) interface whose bridge plans to null: managed throw, not a dead host ---
+
+    private sealed class SnappedGauge : IClawGauge
+    {
         public void Dispose() { }
     }
 
     [Fact]
     public void UnbridgeableInterface_CSharpImplementation_ThrowsNotSupported()
     {
-        // A member with its own type parameter (`fun <R> tally`) has no slot, so this interface plans to null
-        // whatever the reachability walk does. The contract is the managed throw that
-        // `NugetBridge.HandleFor` already raises, surviving the `finally` instead of being
-        // overwritten by `NugetMarshal.Dispose(IntPtr.Zero)`.
-        var log = new ClawMarks();
+        // A `Unit` property has no slot, so this interface plans to null whatever the reachability
+        // walk does. The contract is the managed throw that `NugetBridge.HandleFor` raises,
+        // surviving the `finally` instead of being overwritten by `NugetMarshal.Dispose(IntPtr.Zero)`.
+        var gauge = new SnappedGauge();
 
         NotSupportedException ex =
-            Assert.Throws<NotSupportedException>(() => CatteryDesk.CountScratches(log));
+            Assert.Throws<NotSupportedException>(() => CatteryDesk.GaugeClaws(gauge));
 
-        Assert.Contains("ClawMarks", ex.Message);
+        Assert.Contains("SnappedGauge", ex.Message);
     }
 
     // --- (e) ADR-084 amendment: a `var` writes through its `<name>Set` slot ---

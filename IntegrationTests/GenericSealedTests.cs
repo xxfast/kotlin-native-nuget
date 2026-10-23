@@ -430,10 +430,18 @@ public class GenericSealedTests
         Assert.Equal("hiss", OutcomeDesk.Hear(hiss));
     }
 
+    [Fact]
+    public void StarProjectedSealedParameter_ReadsAtObject()
+    {
+        // ADR-237: `Outcome<*>` reads at its bound, `Any`, so it is `Outcome<object>`.
+        using var ok = new Outcome.Ok<object>("Mylo");
+
+        Assert.Equal("outcome", OutcomeDesk.AnyLabel(ok));
+    }
+
     // --- Named skips ------------------------------------------------------------------------
 
     [Theory]
-    [InlineData("AnyLabel")] // Outcome<*>: C# has no projection of a generic class
     [InlineData("Batch")] // Outcome<List<Int>>: the erased wire cannot read the argument
     [InlineData("Folded")] // Blanket.Folded<KotlinNothing>: the marker fails where T : IDozer
     public void NamedSkip_LeavesTheRestOfTheOwnerBound(string skipped)

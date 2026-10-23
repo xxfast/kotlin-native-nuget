@@ -75,6 +75,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInheritedOutcome
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceHierarchy
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isErasedInterfaceMember
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceBridgePlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInterfacePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedInterface
@@ -1050,6 +1051,8 @@ internal fun ForwardCallablePlanCatalog.withMethodTypeParameterConstraints(
     val owner: String = function.parentDeclaration?.simpleName?.asString()?.let { "$it." }.orEmpty()
     val spelled: List<ForwardMethodTypeParameter> =
       declared.zip(function.typeParameters) { parameter, typeParameter ->
+        // ADR-237: an erased parameter declares no C# constraint.
+        if (parameter.erased) return@zip parameter
         parameter.copy(
           constraints = typeParameter.cirConstraints(
             context, logger, function,
@@ -1757,6 +1760,9 @@ internal fun translateClass(
   val interfaceForwards: CirInterfaceAsyncMembers = interfaceAsyncForwards(
     cls, libraryName, classifier, tracker, callableCatalog, context, expects,
   )
+  // ADR-237: explicit implementations of the interface members whose own `R` is erased.
+  val erasedForwards: List<CirMethod> =
+    interfaceErasedForwards(cls, classifier, tracker, callableCatalog, context)
 
   // The wrapper overrides an abstract `DisposeAsync`: this class's own when it owns the scope,
   // or an abstract (or sealed) owner's above it that nothing in between implemented.
@@ -1787,6 +1793,7 @@ internal fun translateClass(
   }
 
   return CirClass(
+    kotlinName = cls.qualifiedName?.asString(),
     name = name,
     // ADR-147: empty for an ordinary class; `Crate<T>` fills it and renders as the carrier.
     typeParameters = cls.cirTypeParameters(logger, context),
@@ -1808,7 +1815,8 @@ internal fun translateClass(
     isAbstract = isAbstract,
     isOpen = isOpen,
     companionMembers =
-      companionMembers + asyncMembers + flowRouteMembers + interfaceForwards.members,
+      companionMembers + asyncMembers + flowRouteMembers + interfaceForwards.members +
+        erasedForwards,
     // ADR-159: derived from what PROJECTED, in one place, for the whole kept chain. The raw
     // `getAllFunctions()` scan this replaces read inherited members (so a subclass of an async
     // base rendered a second `DisposeAsync`, CS0108) and refused ones (so a class whose only
@@ -3188,6 +3196,7 @@ private fun enumArmSubclass(
       ForwardCirPlanProjection.constructor(plan)
     }
   return CirSealedSubclass(
+    kotlinName = arm.qualifiedName?.asString(),
     doc = arm.forwardKdoc(expects)?.toCirDoc(),
     name = arm.enumArmName(),
     nativePrefix = subPrefix,
@@ -3670,6 +3679,7 @@ internal fun translateSealedClass(
       }
 
       CirSealedSubclass(
+        kotlinName = subclass.qualifiedName?.asString(),
         doc = subclass.forwardKdoc(expects)?.toCirDoc(),
         name = subName,
         nativePrefix = subPrefix,
@@ -5017,6 +5027,10 @@ internal fun translateInterfaceBackingClass(
     tracker.trackPlan(plan)
     ForwardCirPlanProjection.classMethod(plan, prefix, isOverride = false)
   }
+  // ADR-237: an erased member's extern is hoisted into the carrier its implementers' explicit
+  // forwards call.
+  val erased: Boolean = callableCatalog.classMethods(ifaceQualified)
+    .any { plan -> plan.publicSignature.typeParameters.any { it.erased } }
 
   // ADR-110 amendment (ROADMAP line 32): the wrapper mirrors `I$name`, whose own guard
   // (ADR-113 Decision E) runs over a different catalog; checked here too so the backing class never
@@ -5069,7 +5083,7 @@ internal fun translateInterfaceBackingClass(
     },
     companionMembers = async?.members.orEmpty(),
     nativeCarrier = interfaceNativeCarrier(iface)
-      .takeIf { ownsScope || typeParameters.isNotEmpty() },
+      .takeIf { ownsScope || typeParameters.isNotEmpty() || erased },
     // ADR-159 (ROADMAP:49), ADR-174 ruling 5: derived from what this wrapper projects. It has no
     // base chain, so it is its own scope owner whenever it projects a scope-using member.
     hasSuspendMethods = ownsScope,
@@ -5215,6 +5229,7 @@ internal fun translateEnum(
     propertyMembers + functionMembers + companionProperties + companionFunctions
 
   return CirEnum(
+    kotlinName = enum.qualifiedName?.asString(),
     name = name,
     libraryName = libraryName,
     // ADR-133: the chain, so a nested `Owner.Kind` exports `owner_kind_get_*` and cannot collide
@@ -5268,6 +5283,7 @@ internal fun translateValueClass(
       qualifiedElementCsType(underlyingResolved, context, underlyingResolved.isMarkedNullable)
     }
     return CirValueClass(
+      kotlinName = cls.qualifiedName?.asString(),
       name = name,
       libraryName = libraryName,
       nativePrefix = prefix,
@@ -5395,6 +5411,7 @@ internal fun translateValueClass(
   val csUnderlyingType: String = qualifiedElementCsType(underlyingResolved, context)
 
   return CirValueClass(
+    kotlinName = cls.qualifiedName?.asString(),
     name = name,
     libraryName = libraryName,
     nativePrefix = prefix,
@@ -6312,4 +6329,87 @@ private fun genericBridgeMint(
     ForwardInterfaceBridgePlanner.plan(iface, classifier, context.symbols) ?: return null
   val arguments: String = iface.typeParameters.joinToString(", ", "<", ">") { it.name.asString() }
   return "${plan.stateClassName}$arguments"
+}
+
+/**
+ * ADR-237: an implementer's explicit implementations of every interface member whose own type
+ * parameters are erased (`object? ISniffer<T>.Sniff(Func<T, object?> f)`). The class's own member
+ * keeps its type parameters (ADR-197), so it never matches the erased signature `I<Name>`
+ * declares. Each forward calls the interface's import through the backing wrapper's carrier
+ * (`SnifferNative`) with this instance's `_handle`, the ADR-174 shape. An interface a base class
+ * already implements is forwarded there, and inherited.
+ */
+internal fun interfaceErasedForwards(
+  cls: KSClassDeclaration,
+  classifier: ForwardBridgeTypeClassifier,
+  tracker: CollectionHelperTracker,
+  callableCatalog: ForwardCallablePlanCatalog,
+  context: NugetContext,
+): List<CirMethod> {
+  val inherited: Set<String?> = cls.superTypes
+    .mapNotNull { reference -> reference.resolve().declaration as? KSClassDeclaration }
+    .filter { base -> base.classKind == ClassKind.CLASS }
+    .flatMap { base -> base.getAllSuperTypes().map { it.declaration.qualifiedName?.asString() } }
+    .toSet()
+  return cls.getAllSuperTypes()
+    .filter { type -> (type.declaration as? KSClassDeclaration)?.classKind == ClassKind.INTERFACE }
+    .distinctBy { type -> type.declaration.qualifiedName?.asString() }
+    .filter { type -> type.declaration.qualifiedName?.asString() !in inherited }
+    .flatMap { type ->
+      val iface: KSClassDeclaration = type.declaration as KSClassDeclaration
+      val qualified: String = iface.qualifiedName?.asString() ?: return@flatMap emptyList()
+      val hierarchy = ForwardInterfaceHierarchy(iface, classifier.exportedObjectHandles)
+      val declared: Set<String> = iface.getAllFunctions()
+        .filter { method -> method.isErasedInterfaceMember() }
+        .filter { method -> hierarchy.placement(method) in DECLARING_PLACEMENTS }
+        .map { method -> method.simpleName.asString() }
+        .toSet()
+      val plans: List<ForwardCallablePlan> = callableCatalog.classMethods(qualified).filter { plan ->
+        plan.publicSignature.typeParameters.any { it.erased } &&
+          (plan.invocation.member ?: plan.invocation.symbol.substringAfterLast('.')) in declared
+      }
+      if (plans.isEmpty()) return@flatMap emptyList()
+      val spelling: String = forwardSuperInterfaceSpelling(type, classifier, from = cls)
+        ?: return@flatMap emptyList()
+      val qualifier: String = spelling.substringBefore('<').substringBeforeLast('.', "")
+        .let { if (it.isEmpty()) "" else "$it." }
+      val carrier: String = "$qualifier${interfaceNativeCarrier(iface)}"
+      // The interface plan spells its own `T`; the implementer names its argument for it.
+      val arguments: Map<String, String> = iface.typeParameters.zip(type.arguments)
+        .associate { (parameter, argument) ->
+          val resolved: KSType? = argument.type?.resolve()
+          val spelled: String = when (val declaration = resolved?.declaration) {
+            null -> "object?"
+            is KSTypeParameter -> declaration.simpleName.asString()
+            else -> classifier.classify(resolved).forwardPublicCsharpType()
+          }
+          parameter.name.asString() to spelled
+        }
+      val prefix: String = iface.nativePrefix(context.symbols)
+      plans.map { plan ->
+        tracker.trackPlan(plan)
+        ForwardCirPlanProjection.classMethod(plan, prefix, isOverride = false, externCarrier = carrier)
+          .copy(explicitInterface = spelling)
+          .substituting(arguments)
+      }
+    }
+    .toList()
+}
+
+private val TYPE_TOKEN = Regex("(?<![A-Za-z0-9_.])([A-Z][A-Za-z0-9_]*)(?![A-Za-z0-9_])")
+
+/** ADR-237: [this] forward with the interface's type parameters replaced by the implementer's. */
+private fun CirMethod.substituting(arguments: Map<String, String>): CirMethod {
+  val renamed: Map<String, String> = arguments.filter { (name, spelled) -> name != spelled }
+  if (renamed.isEmpty()) return this
+  fun String.substituted(): String = TYPE_TOKEN.replace(this) { match ->
+    renamed[match.value] ?: match.value
+  }
+  return copy(
+    returnType = returnType.substituted(),
+    parameters = parameters.map { parameter ->
+      parameter.copy(type = parameter.type.substituted())
+    },
+    body = body.substituted(),
+  )
 }

@@ -144,10 +144,9 @@ public class UnroutedPositionsTests
     [Fact]
     public void InterfaceDefaultsAtUnroutedPositionsAreAbsent()
     {
-        AssertAllAbsent(
-            typeof(IManifest),
-            PublicInstance,
-            "StructuralOnInterface");
+        // ADR-237: the interface's own `<T>` is erased to `object?` on `IManifest`; the class keeps
+        // no public member of that name (it implements the erased one explicitly).
+        Assert.NotNull(typeof(IManifest).GetMethod("StructuralOnInterface"));
         AssertAllAbsent(
             typeof(ManifestDesk),
             PublicInstance,
@@ -173,6 +172,7 @@ public class UnroutedPositionsTests
         int seen = 0;
         manifest.CallbackParamOnInterface(value => seen = value);
         Assert.Equal(1, seen);
+        Assert.Equal(5, Assert.IsType<int>(manifest.StructuralOnInterface(5)));
 
         var items = new List<int>();
         await foreach (int value in manifest.FlowReturnOnInterface()) items.Add(value);

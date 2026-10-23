@@ -329,3 +329,43 @@ private fun KSType.isProtocolCarrier(): Boolean {
       qualifiedName in SUSPEND_LAMBDA_TYPES || qualifiedName in FLOW_TYPES ||
       qualifiedName in STATE_FLOW_TYPES
 }
+
+/**
+ * ADR-237: whether this is an interface member declaring its own type parameters (`fun <R>
+ * sniff(f: (T) -> R): R`). C# cannot hand a C# implementation a type argument through a bridge
+ * slot, so each one is erased on both halves: `object?` (or its one bound) in C#, and the explicit
+ * type argument `Any?` (or the bound) at the Kotlin call.
+ */
+internal fun KSFunctionDeclaration.isErasedInterfaceMember(): Boolean =
+  extensionReceiver == null && typeParameters.isNotEmpty() &&
+    (parentDeclaration as? KSClassDeclaration)?.classKind == ClassKind.INTERFACE
+
+/**
+ * ADR-237: why this interface member's own type parameters cannot be erased, or null when they
+ * can. Erasure needs one type every instantiation is: the parameter's single bound, or `Any?`.
+ */
+internal fun KSFunctionDeclaration.forwardErasedMemberRefusal(): String? {
+  typeParameters.forEach { parameter ->
+    val name: String = parameter.simpleName.asString()
+    if (parameter.isReified) return "its type parameter `$name` is reified"
+    if (parameter.forwardBoundSpellings().size > 1) {
+      return "its type parameter `$name` has more than one bound, which no single erased type spells"
+    }
+    if (parameter.bounds.any { bound -> bound.resolve().mentionsTypeParameter() }) {
+      return "its type parameter `$name` is bounded by a type parameter, which has no erased type"
+    }
+  }
+  return null
+}
+
+/** ADR-237: [isErasedInterfaceMember]'s parameters, each named at the Kotlin call and erased in C#. */
+internal fun KSFunctionDeclaration.forwardErasedTypeParameters(): List<ForwardMethodTypeParameter> =
+  typeParameters.map { parameter ->
+    val nullable: String = if (parameter.hasNullableBound()) "?" else ""
+    ForwardMethodTypeParameter(
+      name = parameter.simpleName.asString(),
+      kotlinName = parameter.simpleName.asString(),
+      kotlinTypeArgument = (parameter.forwardBoundSpellings().firstOrNull() ?: "Any") + nullable,
+      erased = true,
+    )
+  }

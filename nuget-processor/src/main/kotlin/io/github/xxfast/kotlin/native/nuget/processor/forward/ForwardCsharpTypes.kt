@@ -147,7 +147,7 @@ internal fun BridgeType.isPubliclySpellable(
 
   is BridgeType.Nullable -> type.isPubliclySpellable(typeParametersInScope)
   is BridgeType.ReturnedLambda -> unnameableTypeArgument() == null
-  is BridgeType.TypeParameter -> name in typeParametersInScope
+  is BridgeType.TypeParameter -> isAny || name in typeParametersInScope
 
   is BridgeType.BoundInterface,
   is BridgeType.SpecializedProtocol,

@@ -53,6 +53,7 @@ using Suspendgeneric = TestLibrary.Suspendgeneric;
 using Feedingtime = TestLibrary.Feedingtime;
 using Catsitter = TestLibrary.Catsitter;
 using Cattery = TestLibrary.Cattery;
+using Hoards = TestLibrary.Hoard;
 
 namespace LeakTests;
 
@@ -6858,6 +6859,8 @@ public class LiveHandleTests
         public KotlinFlow<Catsitter.Whisker> Whiskers() => KotlinFlow<Catsitter.Whisker>.From(Each(new Catsitter.Whisker(2)));
         public KotlinFlow<string> Feed { get; set; } = KotlinFlow<string>.From(Each("kibble"));
         public KotlinFlow<string>? Maybe() => KotlinFlow<string>.From(Each("tuna"));
+        public KotlinFlow<object?> Anything() =>
+            KotlinFlow<object?>.From(Each<object?>(new Catsitter.Kitten("Mylo"), 5, null));
         public KotlinMutableStateFlow<int> MoodFlow { get; } = KotlinMutableStateFlow<int>.Create(7);
         public KotlinStateFlow<int>? Mood => MoodFlow;
         public Task<KotlinStateFlow<int>> LevelAsync(CancellationToken cancellationToken = default) =>
@@ -7060,5 +7063,119 @@ public class LiveHandleTests
             Assert.Equal("3 -> 7", await Cattery.Catteries.RetraceAsync(new LeakPorch(), 7));
             Assert.Equal("Oreo at 3am", await Cattery.Catteries.InspectAsync(new LeakFurball()));
         });
+    }
+
+    // ADR-237: a C# catnip toy, so an `object` crossing into Kotlin carries a C#-implemented
+    // interface through its bridge and comes back as the same object.
+    internal sealed class LeakCatnip : Hoards.ICatnip
+    {
+        public string Sniff() => "Oreo catnip";
+        public void Dispose() { }
+    }
+
+    // ADR-237: a C# cache whose `Any` slots echo, and a sniffer and pouncer with the member-level
+    // `R` erased to `object`.
+    internal sealed class LeakCache : Hoards.ICache
+    {
+        public object Favourite_ = "Mylo";
+        public object? Hide(object? value) => value;
+        public object Favourite() => Favourite_;
+        public void Dispose() { }
+    }
+
+    internal sealed class LeakSniffer : Hoards.ISniffer<string>
+    {
+        public string Item => "Mylo";
+        public object? Sniff(Func<string, object?> f) => f(Item);
+        public void Dispose() { }
+    }
+
+    internal sealed class LeakPouncer : Hoards.IPouncer
+    {
+        public object? Pounce(Func<string, object?> f) => f("Oreo");
+        public void Dispose() { }
+    }
+
+    // Row 21a. ADR-237: every handle-backed value on the `Any` wire, in both directions. An
+    // exported class wrapper passed in (borrowed) and minted out (owned), a C#-implemented
+    // interface's bridge, a list holding a handle, a class owner's `var` and member, a
+    // Kotlin-backed interface, and a star-projected generic class result. A handle the wire minted
+    // for an `object` and never released is a positive delta.
+    [Fact]
+    public void AnyWire_HandleBackedValues_ReturnToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using (var mouse = new Hoards.Mouse("Oreo"))
+            {
+                Assert.Equal("Mouse Oreo", Hoards.Hoarding.Kind(mouse));
+                using var back = Assert.IsType<Hoards.Mouse>(Hoards.Hoarding.Stash(mouse));
+            }
+
+            using (var minted = Assert.IsType<Hoards.Mouse>(Hoards.Hoarding.Fetch("mouse")))
+                Assert.Equal("Mylo squeaks", minted.Squeak());
+
+            var catnip = new LeakCatnip();
+            Assert.Same(catnip, Hoards.Hoarding.StashOrNull(catnip));
+            Assert.Equal("Catnip Oreo catnip", Hoards.Hoarding.Kind(catnip));
+
+            var listed = Assert.IsAssignableFrom<IReadOnlyList<object?>>(Hoards.Hoarding.Fetch("list"));
+            Assert.Equal(3, listed.Count);
+
+            using (var hoard = new Hoards.Hoard(new Hoards.Mouse("Mylo")))
+            {
+                (hoard.Last as IDisposable)?.Dispose();
+                hoard.Last = catnip;
+                Assert.Same(catnip, hoard.Keep(catnip));
+                Assert.Single(hoard.All());
+                using Hoards.Satchel<object?> bag = hoard.Bag;
+                Assert.Same(catnip, bag.Item);
+            }
+
+            using (Hoards.ILoot thief = Hoards.Hoarding.Thief())
+                Assert.IsAssignableFrom<IReadOnlyList<object?>>(thief.Grab(catnip));
+
+            using (Hoards.Satchel<object?> satchel = Hoards.Hoarding.Rummage())
+            using (var item = Assert.IsType<Hoards.Mouse>(satchel.Item))
+                Assert.Equal("Oreo squeaks", item.Squeak());
+
+            var cache = new LeakCache { Favourite_ = catnip };
+            Assert.Equal("Catnip Oreo catnip", Hoards.Hoarding.Hiding(cache, catnip));
+            Assert.Same(catnip, Hoards.Hoarding.Favourite(cache));
+            Assert.Equal("5 MYLO", Hoards.Hoarding.Sniffing(new LeakSniffer()));
+            Assert.Equal("Oreo squeaks", Hoards.Hoarding.Pouncing(new LeakPouncer()));
+        });
+    }
+
+    // Row 21b. ADR-237: star-projected flows whose elements are handles, read from Kotlin to C#
+    // and handed from C# to Kotlin. Each element's wrapper, and each flow, is released.
+    [Fact]
+    public async Task AnyWire_StarProjectedFlows_ReturnToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using (var hoard = new Hoards.Hoard(null))
+            using (KotlinFlow<object?> spoils = hoard.Spoils())
+            {
+                await foreach (object? item in spoils) (item as IDisposable)?.Dispose();
+            }
+
+            using (Hoards.ILoot thief = Hoards.Hoarding.Thief())
+            using (KotlinFlow<object?> everything = thief.Everything())
+            {
+                await foreach (object? _ in everything) { }
+            }
+
+            Assert.Equal("Mouse Mylo", await Hoards.Hoarding.SiftAsync(OneMouse()));
+
+            using var lookout = new LeakLookout();
+            Assert.Equal("Kitten Mylo, Int 5, null", await Catsitter.Sitters.AnythingsAsync(lookout));
+        });
+    }
+
+    private static async IAsyncEnumerable<object?> OneMouse()
+    {
+        await Task.Yield();
+        yield return new Hoards.Mouse("Mylo");
     }
 }

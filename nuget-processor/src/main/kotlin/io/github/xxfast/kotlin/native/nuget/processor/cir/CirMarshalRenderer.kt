@@ -162,14 +162,7 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
     // the sealed renderer already emits for it rather than through `new`.
     // ADR-171: a value class is a record struct with no handle constructor; its `NugetUnbox` reads
     // the boxed Kotlin value back and disposes the handle.
-    val construct: String = when {
-      entry.constructExpression != null -> entry.constructExpression
-      entry.viaFromHandle -> "global::${entry.constructTypeName}.FromHandle(handle)"
-      entry.viaNugetUnbox -> "global::${entry.constructTypeName}.NugetUnbox(handle)"
-      entry.viaEnumOrdinal -> "(global::${entry.constructTypeName})UnwrapEnumOrdinal(handle)"
-      else -> "new global::${entry.constructTypeName}(handle, out _)"
-    }
-    appendLine("            [typeof(global::${entry.qualifiedTypeName})] = static handle => $construct,")
+    appendLine("            [typeof(global::${entry.qualifiedTypeName})] = static handle => ${entry.construct()},")
   }
   appendLine("        };")
   appendLine()
@@ -198,6 +191,7 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine()
   helper.enumBoxers.forEach { boxer -> renderDllImport(boxer.boxImport) }
   helper.flowArgumentImports.forEach { import -> renderDllImport(import) }
+  renderAnyWire(helper)
   appendLine("        internal static T Materialize<T>(IntPtr handle)")
   appendLine("        {")
   // ADR-171: `T = V?` is `Nullable<V>`, which never equals the `typeof(V)` key.
@@ -236,6 +230,8 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("        public static T FromHandle<T>(IntPtr handle)")
   appendLine("        {")
   appendLine("            if (handle == IntPtr.Zero) return default!;")
+  // ADR-237: `T = object` is a Kotlin `Any`, read by the box's runtime kind.
+  appendLine("            if (typeof(T) == typeof(object)) return (T)ReadAny(handle)!;")
   appendLine("            // ADR-067: a nullable VALUE element (e.g. StateFlow<int?>) instantiates T as")
   appendLine("            // Nullable<int>; typeof(T) never equals typeof(int) for that T, so the plain")
   appendLine("            // per-primitive dispatch below would fall through to the Activator branch and")
@@ -417,6 +413,8 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   // a T of `int?` would miss every branch and fall into the reflective _handle fallback.
   appendLine("            owned = false;")
   appendLine("            if (value == null) return IntPtr.Zero;")
+  // ADR-237: `T = object` is a Kotlin `Any`, written by the value's runtime type.
+  appendLine("            if (typeof(T) == typeof(object)) return WrapAny(value, out owned);")
   appendLine("            var type = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);")
   // ADR-099: a nested collection component arrives already boxed -- its handle IS the box, minted
   // by this call site's own projection, so this factory owns it.
@@ -768,6 +766,7 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("            TryResolveCSharp<object>(handle, out original);")
   appendLine("    }")
   appendLine()
+  renderKotlinObject()
   if (helper.includesFactorySlot) {
     // ADR-199: one slot per closed type, set by the static constructor of a generic sealed base
     // or arm. No reflection, so it holds under trimming and NativeAOT as `Factories` does.

@@ -1060,11 +1060,18 @@ internal fun translate(
       includesBridge = bridgePlans.isNotEmpty(),
       // ADR-094: the walk happens here, before the helpers are prepended, because `namespaces`
       // already pairs every wrapper declaration with the namespace that names it.
-      factories = factoryEntries(namespaces) +
+      factories = (
+        factoryEntries(namespaces) +
           classifier.closedInstantiations.map { (type, construct) ->
             CirFactoryEntry(type, constructExpression = construct)
           } +
-          flowArguments.map { flow -> flow.factory },
+          flowArguments.map { flow -> flow.factory })
+        // ADR-237: a closed instantiation a position names (`Satchel<object?>`) is also the one an
+        // `object` read constructs; one key per type, keeping the Kotlin name either carries.
+        .groupBy { entry -> entry.qualifiedTypeName }
+        .map { (_, entries) ->
+          entries.first().copy(kotlinName = entries.firstNotNullOfOrNull { it.kotlinName })
+        },
       includesFactorySlot = namespaces.any { namespace ->
         // ADR-216 amendment: a generic class fills a slot too.
         namespace.declarations.any { declaration -> declaration.fillsFactorySlot() }
@@ -1367,7 +1374,7 @@ private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry
       if (isAbstract && backingName != null && typeParameters.isEmpty()) {
         listOf(CirFactoryEntry("$path.$name", constructTypeName = "$path.$name.$backingName"))
       } else if (!isAbstract && typeParameters.isEmpty()) {
-        listOf(CirFactoryEntry("$path.$name")) +
+        listOf(CirFactoryEntry("$path.$name", kotlinName = kotlinName)) +
             // ADR-173: an ADR-040 backing wrapper also registers under its interface, so an
             // erased read at `T = IPet` (a Kotlin-backed pet the token probe missed) constructs
             // the backing class. ADR-176: the backing wrapper of a nested interface is declared
@@ -1377,6 +1384,17 @@ private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry
                 CirFactoryEntry("$path.$iface", constructTypeName = "$path.$name")
               },
             )
+      } else if (!isAbstract && kotlinName != null && typeParameters.all { it.bounds.isEmpty() }) {
+        // ADR-237: a generic class read through `object` is the instantiation at `object?`, the
+        // only spelling an erased Kotlin handle has. A bounded parameter has no such argument.
+        val type: String = "$path.$name<${typeParameters.joinToString { "object?" }}>"
+        listOf(
+          CirFactoryEntry(
+            type,
+            kotlinName = kotlinName,
+            constructExpression = "new global::$type(handle, out _)",
+          ),
+        )
       } else {
         emptyList()
       }
@@ -1387,7 +1405,7 @@ private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry
       (subclasses.filter { it.typeParameters.isEmpty() && !it.isIntermediate }
         .map { arm ->
           val name: String = if (arm.isNested) "$name.${arm.name}" else arm.name
-          CirFactoryEntry("$path.$name")
+          CirFactoryEntry("$path.$name", kotlinName = arm.kotlinName)
         })
     } else {
       listOf(CirFactoryEntry("$path.$name", viaFromHandle = true)) +
@@ -1400,12 +1418,13 @@ private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry
             val backing: String? = subclass.backingName
             CirFactoryEntry(
               "$path.$name",
+              kotlinName = subclass.kotlinName.takeIf { backing == null },
               constructTypeName = if (backing != null) "$path.$name.$backing" else "$path.$name",
             )
           }
     }
 
-    is CirEnum -> listOf(CirFactoryEntry("$path.$name", viaEnumOrdinal = true))
+    is CirEnum -> listOf(CirFactoryEntry("$path.$name", kotlinName = kotlinName, viaEnumOrdinal = true))
 
     // ADR-204: a sealed interface over its declared arms reconstructs through its own `FromHandle`.
     is CirInterface -> listOfNotNull(
@@ -1432,7 +1451,11 @@ private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry
 
   return namespaces
     .flatMap { namespace -> namespace.declarations.flatMap { it.walk(namespace.name) } }
-    .plus(valueClassNames(namespaces).map { name -> CirFactoryEntry(name, viaNugetUnbox = true) })
+    .plus(
+      valueClasses(namespaces).map { (name, kotlinName) ->
+        CirFactoryEntry(name, kotlinName = kotlinName, viaNugetUnbox = true)
+      },
+    )
     // A duplicate key is an ArgumentException at type-initialization time, i.e. the first marshal
     // call of the consumer's process, so collapse rather than trust the walk to be unique.
     .distinctBy { it.qualifiedTypeName }
@@ -1444,9 +1467,16 @@ private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry
  * nested one is spelled through its enclosing declarations, the name a consumer's `typeof(...)`
  * produces; a sealed arm's scope follows its `isNested` placement, as in [factoryEntries].
  */
-private fun valueClassNames(namespaces: List<CirNamespace>): List<String> {
-  fun CirDeclaration.walk(path: String): List<String> = when (this) {
-    is CirValueClass -> if (boxing != null) listOf("$path.$name") else emptyList()
+private fun valueClassNames(namespaces: List<CirNamespace>): List<String> =
+  valueClasses(namespaces).map { (name, _) -> name }.distinct()
+
+/**
+ * [valueClassNames], each paired with the value class's Kotlin qualified name (ADR-237), the key
+ * `NugetMarshal.KotlinTypes` reads a boxed value class back under.
+ */
+private fun valueClasses(namespaces: List<CirNamespace>): List<Pair<String, String?>> {
+  fun CirDeclaration.walk(path: String): List<Pair<String, String?>> = when (this) {
+    is CirValueClass -> if (boxing != null) listOf("$path.$name" to kotlinName) else emptyList()
     is CirClass -> nestedDeclarations.flatMap { it.walk("$path.$name") }
     is CirInterface -> nestedDeclarations.flatMap { it.walk("$path.$name") }
     is CirObject -> nestedDeclarations.flatMap { it.walk("$path.$name") }

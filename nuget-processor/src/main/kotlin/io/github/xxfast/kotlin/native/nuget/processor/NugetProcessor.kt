@@ -141,6 +141,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.unwrapNullable
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardReachabilityBucket
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isArmOfIneligibleSealedInterface
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isErasedInterfaceMember
+import io.github.xxfast.kotlin.native.nuget.processor.forward.mentionsAny
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedInterfaceOverDeclaredArms
 import io.github.xxfast.kotlin.native.nuget.processor.forward.declaredArmsIneligibility
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedInterface
@@ -2709,6 +2711,27 @@ internal class NugetProcessor(
       genericInstancePositionTypes().forEach { type ->
         erasedInterfaceArguments(type, lambdas = false).forEach(::add)
       }
+      // ADR-237: a module carrying `Any` anywhere can be handed a C# implementation of any of its
+      // interfaces through it, so each one needs its bridge and `NugetBridge` arm.
+      val carriesAny: Boolean = ordinaryCatalog.plans.any { plan ->
+        plan.publicSignature.result.mentionsAny() ||
+          plan.publicSignature.parameters.any { it.type.mentionsAny() }
+      } || ordinaryCatalog.propertyPlans.any { plan -> plan.type.mentionsAny() } ||
+        legacyPositionTypes().any { type -> type?.mentionsAnyType() == true }
+      if (carriesAny) {
+        interfaces.filter { iface -> iface.typeParameters.isEmpty() && !iface.isSealedInterface() }
+          .mapNotNull { iface -> iface.qualifiedName?.asString() }
+          .forEach(::add)
+      }
+      // ADR-237: an interface declaring a member whose own `R` is erased, implemented by an exported
+      // class: that class forwards the erased member through the interface's dispatch export.
+      classes.forEach { cls ->
+        cls.getAllSuperTypes()
+          .mapNotNull { type -> type.declaration as? KSClassDeclaration }
+          .filter { iface -> iface.getDeclaredFunctions().any { it.isErasedInterfaceMember() } }
+          .mapNotNull { iface -> iface.qualifiedName?.asString() }
+          .forEach(::add)
+      }
     }
     // ADR-174 amendment: an async member inherited through a reachable `IDerived` is declared on
     // its super's `IBase`, as the sync route places it, so that super must carry it, i.e. be
@@ -4024,3 +4047,10 @@ internal class NugetProcessor(
  */
 private fun KSFunctionDeclaration.isPlannedTopLevelFunction(): Boolean =
   typeParameters.isEmpty() || !isReifiedWithUnspellableBound()
+
+/** ADR-237: whether this type is `kotlin.Any` or a star projection, at any depth. */
+private fun KSType.mentionsAnyType(): Boolean =
+  declaration.qualifiedName?.asString() == "kotlin.Any" || arguments.any { argument ->
+    argument.variance == com.google.devtools.ksp.symbol.Variance.STAR ||
+      argument.type?.resolve()?.mentionsAnyType() == true
+  }

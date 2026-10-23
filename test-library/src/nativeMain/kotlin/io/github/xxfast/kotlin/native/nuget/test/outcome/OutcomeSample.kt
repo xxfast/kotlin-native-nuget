@@ -245,7 +245,7 @@ object OutcomeDesk {
     Reply.Hiss -> "hiss"
   }
 
-  /** Named skip: a use-site projection has no C# spelling. */
+  /** ADR-237: a star projection reads at its bound, `Outcome<object>` in C#. */
   fun anyLabel(outcome: Outcome<*>): String = outcome.label()
 
   /** Named skip: the erased wire cannot read a `List<Int>` argument. */

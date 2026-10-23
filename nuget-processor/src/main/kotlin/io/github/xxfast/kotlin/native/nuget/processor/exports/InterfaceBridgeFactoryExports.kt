@@ -133,7 +133,7 @@ internal fun FileSpec.Builder.addInterfaceBridgeFactoryExport(plan: ForwardBridg
         .build()
     )
 
-  if (plan.isGeneric) {
+  if (plan.isGeneric || plan.slots.any { slot -> slot.typeParameters.isNotEmpty() }) {
     builder.addAnnotation(
       AnnotationSpec.builder(ClassName("kotlin", "Suppress")).addMember("%S", "UNCHECKED_CAST").build(),
     )
@@ -199,8 +199,11 @@ private fun StringBuilder.appendSlotOverride(slot: ForwardBridgeSlot, mutable: B
       val params: String =
         slot.parameters.joinToString(", ") { "${it.name.kotlinIdentifier()}: ${it.type.kotlin}" }
       val modifier: String = if (slot.async == ForwardBridgeAsync.SUSPEND) "suspend " else ""
+      // ADR-237: a member's own type parameters are restated; C# sees them erased.
+      val typeParameters: String =
+        if (slot.typeParameters.isEmpty()) "" else slot.typeParameters.joinToString(", ", "<", "> ")
       appendLine(
-        "    override ${modifier}fun ${slot.name.kotlinIdentifier()}($params): ${slot.result.kotlin} {",
+        "    override ${modifier}fun $typeParameters${slot.name.kotlinIdentifier()}($params): ${slot.result.kotlin} {",
       )
       when (slot.async) {
         ForwardBridgeAsync.SYNC -> {
@@ -381,7 +384,7 @@ private fun StringBuilder.appendResultMarshalling(
       val box: BridgeType? = slot.result.boxed
       if (box != null) {
         if (box is BridgeType.Nullable) {
-          appendLine("${indent}val ref = $call ?: return null")
+          appendLine("${indent}val ref = $call ?: return null${nullCast(slot.result.kotlin)}")
         } else {
           appendLine("${indent}val ref = $call!!")
         }
@@ -492,3 +495,9 @@ private fun BridgeType.mentionsTicks(): Boolean =
   this == BridgeType.Instant || this == BridgeType.Duration ||
     (this is BridgeType.Nullable && type.mentionsTicks()) ||
     (this is BridgeType.Collection && listOfNotNull(element, key, value).any { it.mentionsTicks() })
+
+/**
+ * ADR-237: ` as R` when a null result must be cast to a member's own type parameter, which `null`
+ * is not assignable to; empty for a nullable type, which takes `null` as is.
+ */
+private fun nullCast(kotlin: String): String = if (kotlin.endsWith("?")) "" else " as $kotlin"

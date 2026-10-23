@@ -468,6 +468,8 @@ internal object ForwardCirPlanProjection {
     nativePrefix: String,
     isOverride: Boolean,
     isVirtual: Boolean = false,
+    // ADR-237: the carrier (`SnifferNative`) an explicit forward calls the interface's extern on.
+    externCarrier: String? = null,
   ): CirMethod {
     val nativeCall: ForwardNativeCall = plan.singleNativeImport()
     val receiver: ForwardAbiParameter = nativeCall.parameters.firstOrNull()
@@ -490,9 +492,10 @@ internal object ForwardCirPlanProjection {
     // the *numbered* name, or two overloads that happen to share a wire shape (an `Int` and an
     // enum parameter both cross as `int`) would declare the same extern twice (CS0111). Unsuffixed
     // members render exactly as before.
-    val externName: String =
+    val externName: String = (
       "Native_" + plan.invocation.symbol.substringAfterLast('.').asCSymbol()
         .replaceFirstChar { it.uppercase() }
+      ).let { name -> if (externCarrier == null) name else "$externCarrier.$name" }
     val result: CirResultProjection = plan.resultProjection(
       nativeName = externName,
       parameters = plan.publicSignature.parameters,
@@ -738,7 +741,10 @@ internal object ForwardCirPlanProjection {
    * override as `Nullable<T>` (CS0115, CS0453).
    */
   private fun ForwardCallablePlan.cirTypeParameters(isOverride: Boolean): List<CirTypeParameter> =
-    publicSignature.typeParameters.map { parameter ->
+    publicSignature.typeParameters
+      // ADR-237: an erased interface member parameter has no C# declaration.
+      .filterNot { parameter -> parameter.erased }
+      .map { parameter ->
       val constraints: List<String> = when {
         !isOverride -> parameter.constraints
         spellsNullable(parameter.name) -> listOf("default")
