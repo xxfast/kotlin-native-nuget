@@ -81,9 +81,9 @@ class Tier1StaticSuspendTest {
     assertContains(result.generatedCSharp, "public static Task<KotlinFlow<int>> TicksAsync(")
   }
 
-  /** A receiver the route has no slot for (a `List`) keeps the extension's named skip. */
+  /** ADR-238: a collection receiver crosses as a leading collection parameter does. */
   @Test
-  fun `a suspend extension on a collection receiver stays named`() {
+  fun `a suspend extension on a collection receiver binds on the parameter wire`() {
     val result: Tier1Result = Tier1Harness.run(
       """
       package tier1.staticsuspendreceiver
@@ -93,8 +93,11 @@ class Tier1StaticSuspendTest {
       libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
     )
 
-    val named: List<String> = result.kspWarnings.filter { "total" in it }
-    assertTrue(named.size == 1, "total must be named once; kspWarnings=${result.kspWarnings}")
-    assertContains(named.single(), "as an extension on any other receiver")
+    assertTrue(result.compiledClean, "compileErrors=${result.compileErrors}")
+    assertTrue(result.kspWarnings.none { "total" in it }, "kspWarnings=${result.kspWarnings}")
+    assertContains(
+      result.generatedCSharp,
+      "public static Task<int> TotalAsync(this IReadOnlyList<int> receiver",
+    )
   }
 }

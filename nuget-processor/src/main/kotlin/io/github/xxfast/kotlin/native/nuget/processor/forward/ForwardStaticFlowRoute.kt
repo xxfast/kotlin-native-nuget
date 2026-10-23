@@ -45,6 +45,17 @@ internal sealed interface ForwardStaticFlowOwner {
     val receiver: ForwardStaticSuspendReceiver.Enum,
   ) : ForwardStaticFlowOwner
 
+  /**
+   * ADR-238: an extension (`fun Depot.ticks(): Flow<Int>`): a C# extension on
+   * `{Receiver}Extensions`, the receiver crossing as the leading slot, as ADR-229's suspend
+   * extension's does.
+   */
+  data class Extension(
+    override val stem: String,
+    val receiver: ForwardStaticSuspendReceiver,
+    val receiverType: KSType,
+  ) : ForwardStaticFlowOwner
+
   /** A value class's member: the receiver is the underlying's wire, rewrapped in Kotlin. */
   data class ValueClass(
     override val stem: String,

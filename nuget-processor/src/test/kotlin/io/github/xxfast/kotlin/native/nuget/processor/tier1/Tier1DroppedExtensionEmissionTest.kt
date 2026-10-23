@@ -30,7 +30,8 @@ class Tier1DroppedExtensionEmissionTest {
    */
   @Test
   fun `receiver group with only dropped members emits no empty extensions class`() {
-    val generic: Tier1GenericCandidate = Tier1UnwrappableWitness.unroutedGeneric
+    // ADR-238: a receiver is an input, where ADR-222 binds a generic interface.
+    val generic: Tier1GenericCandidate = Tier1UnwrappableWitness.unroutedGenericInput
     val result = Tier1Harness.run(
       """
       package tier1.emptyext
@@ -48,12 +49,13 @@ class Tier1DroppedExtensionEmissionTest {
       "expected no broken source for ${generic.kotlin}.label; got: ${result.compileErrors}",
     )
     assertTrue(
-      result.kspWarnings.any { it.contains("${generic.simpleName}.label") },
+      result.kspWarnings.any { it.contains("${generic.receiverName}.label") },
       "expected the receiver to stay refused; kspWarnings=${result.kspWarnings}",
     )
     assertFalse(
-      result.generatedCSharp.contains("${generic.simpleName}Extensions"),
-      "expected no empty ${generic.simpleName}Extensions class in the generated C#; " +
+      result.generatedCSharp.contains("${generic.receiverName.replace(".", "")}Extensions"),
+      "expected no empty ${generic.receiverName.replace(".", "")}Extensions class in the " +
+          "generated C#; " +
           "generatedCSharp=${result.generatedCSharp}",
     )
   }
@@ -110,7 +112,8 @@ class Tier1DroppedExtensionEmissionTest {
    */
   @Test
   fun `dropped extension property leaves no dead import in the generated Kotlin`() {
-    val generic: Tier1GenericCandidate = Tier1UnwrappableWitness.unroutedGeneric
+    // ADR-238: a receiver is an input, where ADR-222 binds a generic interface.
+    val generic: Tier1GenericCandidate = Tier1UnwrappableWitness.unroutedGenericInput
     val result = Tier1Harness.run(
       """
       package tier1.deadimport
@@ -128,7 +131,7 @@ class Tier1DroppedExtensionEmissionTest {
       "expected no broken source for ${generic.kotlin}.label; got: ${result.compileErrors}",
     )
     assertTrue(
-      result.kspWarnings.any { it.contains("${generic.simpleName}.label") },
+      result.kspWarnings.any { it.contains("${generic.receiverName}.label") },
       "expected the receiver to stay refused; kspWarnings=${result.kspWarnings}",
     )
     assertFalse(

@@ -44,8 +44,13 @@ class Tier1BoundInterfacePositionTest {
     }
     """.trimIndent()
 
+  /**
+   * ADR-238: a nullable bound interface parameter binds, the null riding the null pointer. Kotlin
+   * reads a present one through `nugetIFeedableValue`, which a Tier 1 fixture does not have, so
+   * the generated Kotlin is pinned here and the call is proven by the `BowlsOrNone` rows.
+   */
   @Test
-  fun `a nullable bound interface parameter fires SKIPPED_BOUND_TYPE_POSITION and is omitted`() {
+  fun `a nullable bound interface parameter binds on the null pointer`() {
     val result = Tier1Harness.run(
       sources = mapOf(
         "Bound.kt" to boundStub,
@@ -63,19 +68,18 @@ class Tier1BoundInterfacePositionTest {
     )
 
     assertTrue(
-      result.compiledClean,
-      "expected no broken source for adopt; got: ${result.compileErrors}",
+      result.kspWarnings.none { "adopt" in it },
+      "expected `IFeedable?` to bind; kspWarnings=${result.kspWarnings}",
     )
     assertTrue(
-      "export_farm_adopt" !in result.generated,
-      "expected the nullable bound-interface parameter to be entirely absent; " +
-          "generated=${result.generated}",
+      "feedable?.let { bound.menagerie.nugetIFeedableValue(it) }" in result.generated,
+      "expected the null-pointer read; generated=${result.generated}",
     )
     assertTrue(
-      result.kspWarnings.any {
-        it.contains(ForwardDiagnosticKind.SKIPPED_BOUND_TYPE_POSITION.name)
-      },
-      "expected SKIPPED_BOUND_TYPE_POSITION for `IFeedable?`; kspWarnings=${result.kspWarnings}",
+      "feedable != null ? GCHandle.ToIntPtr(GCHandle.Alloc(feedable)) : IntPtr.Zero" in
+        result.generatedCSharp,
+      "expected the transfer handle only for a present value; " +
+        "generatedCSharp=${result.generatedCSharp}",
     )
   }
 

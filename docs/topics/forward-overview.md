@@ -334,7 +334,7 @@ in the author's own Kotlin: pin the plugin's supported KSP version, or declare t
 The legacy routes above (`Flow`/`StateFlow` and a lambda; a generic class instantiation was a third
 until [it moved onto the plan](generics.md#returning-an-instantiated-generic-class)) each bind at a
 handful of specific `(owner, position)` pairs, a class-method return or parameter, a top-level
-function return, and nowhere else: an `object`, an interface default, an extension, a secondary
+function return, and nowhere else: an `object`, an interface default, a secondary
 constructor, a collection element, or the same reason at the *other* position on a class method,
 used to vanish from both the Kotlin and C# output with no diagnostic at all. Since
 [ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s
@@ -343,9 +343,9 @@ used to vanish from both the Kotlin and C# output with no diagnostic at all. Sin
 ```
 [nuget:SKIPPED_UNSUPPORTED_RETURN] Skipping DepotRegistry.flowReturnOnObject: a Flow/StateFlow
     binds at a class-method return and a property, and a `Flow<T>` of a primitive or String at a
-    parameter, but not at this position. return the Flow from a method on an ordinary class (or
-    expose it as a property), or take a `Flow<T>` of a primitive or String as a parameter; no
-    object, interface, extension or constructor route carries a returned one
+    parameter, but not at this position. return the Flow from a class, object, companion, interface
+    or top-level function, an extension, or a property, or take a `Flow<T>` as a parameter; no Flow
+    route reaches this position
     at UnroutedPositionsSample.kt:68
 ```
 
@@ -356,7 +356,7 @@ A callable's own type parameter is one of these positions too, and skips
 `SKIPPED_UNSUPPORTED_COMBINATION` naming the structural mismatch rather than the position. A class,
 `object`, companion or sealed-class member declared `fun <T> f(value: T): T` binds (see
 [Generic methods on a class](generics.md#generic-methods)); the skip is left for a generic method
-on an interface, enum, value class or extension, and for a signature the route cannot carry, such
+on an interface, enum or value class (an extension binds, see [Extensions](extensions.md#generic-receivers)), and for a signature the route cannot carry, such
 as a `T` nested in a collection. The warning names which shape was refused.
 
 A top-level `fun f(): Flow<T>` is a named skip and no member, the same as every other position
@@ -373,13 +373,11 @@ for the full admitted set; a receiver outside it warns and the property is dropp
 the receiver rather than the property's own (usually fine) type:
 
 ```
-[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping tier1.skipreceiver.Box.label: its extension receiver
-    type generic declaration tier1.skipreceiver.Box is not a supported extension-property receiver.
-    declare the property on a class, interface, nullable class, nullable interface, String,
-    nullable String, primitive, nullable primitive, Char, nullable Char, enum, nullable enum, Uuid,
-    nullable Uuid, Instant, nullable Instant, Duration, nullable Duration, collection, bound C#
-    interface, value class, or nullable value class receiver, or expose a top-level getter function
-    instead
+[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping tier1.skipreceiver.Tin.Latch.label: its extension receiver
+    type generic declaration tier1.skipreceiver.Tin.Latch is not a supported extension-property receiver.
+    declare the property on a class, interface, generic class, type parameter, String, primitive,
+    Char, enum, value class, collection, ByteArray, Uuid, Instant, Duration or bound C# interface
+    receiver, each nullable or not, or expose a top-level getter function instead
     at <file>:<line>
 ```
 

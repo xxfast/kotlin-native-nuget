@@ -900,13 +900,14 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
 
       // The ADR-064 audit amendment: one sentence for every owner the route skips, so it lists
       // each of them. ADR-229: the static owners bind on the top-level route now, and their `Flow`
-      // results too (ADR-230), so what is left is an extension on another receiver (ADR-232: an
-      // interface nothing returns binds too, for a C# implementation).
+      // results too (ADR-230). ADR-238: an extension binds on every receiver a parameter of that
+      // type binds as, and ADR-232: an interface nothing returns binds too, for a C#
+      // implementation, so what is left is a generic interface nothing returns or takes.
       ForwardPlanSkipReason.SUSPEND.name ->
         "a `suspend` function binds at the top level, on a class or sealed type, an object, a " +
-          "companion, an enum or a value class, as an extension on a class, String, primitive " +
-          "or enum receiver, and on an interface, but not as an extension on any other " +
-          "receiver"
+          "companion, an enum or a value class, as an extension on any receiver a parameter " +
+          "of that type binds as, and on an interface, but not on a generic interface nothing " +
+          "returns or takes"
 
       // ADR-197: a member's own type parameter binds too now, on the owners and at the positions
       // the boxed wire reaches, so the sentence names those rather than "top-level only".
@@ -917,8 +918,9 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
       ForwardPlanSkipReason.GENERIC.name ->
         "an exported generic class binds at every position, and a function's own type " +
             "parameter binds on a top-level function, including a `suspend` one, and on a " +
-            "class, object, companion or sealed-class member, and on a `suspend` enum, " +
-            "value-class or extension member: as a bare `T` or `T?`, inside a " +
+            "class, object, companion or sealed-class member, on a `suspend` enum or " +
+            "value-class member, and on an extension, sync or `suspend`: as a bare `T` or `T?`, " +
+            "inside a " +
             "`List`, `Set` or `Map`, inside an exported generic class or a `Result` payload, " +
             "and inside a lambda or `Flow`, as does a generic interface (ADR-224); an inner " +
             "class of a generic owner does not bind, nor does a type parameter at this position"
@@ -1393,9 +1395,9 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
     HOT_FLOW_INPUT_DETAIL -> HOT_FLOW_INPUT_HINT
 
     ForwardPlanSkipReason.FLOW_PROTOCOL.name ->
-      "return the Flow from a method on an ordinary class (or expose it as a property), or " +
-          "take a `Flow<T>` as a parameter; no object, interface, " +
-          "extension or constructor route carries a returned one"
+      "return the Flow from a class, object, companion, interface or top-level function, an " +
+          "extension, or a property, or take a `Flow<T>` as a parameter; no Flow route reaches " +
+          "this position"
 
     ForwardPlanSkipReason.CALLBACK_PROTOCOL.name ->
       "take the lambda as a parameter of an ordinary class method (a per-call one, or an " +

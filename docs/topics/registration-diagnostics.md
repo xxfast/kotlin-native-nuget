@@ -965,6 +965,20 @@ and, for the held `MutableStateFlow` and `MutableSharedFlow` holders, `StaticFlo
 source in `StaticFlow_CollectedToCompletion_TheFlowAndTokenAreCollected` and
 `StaticFlow_CancelledByTheToken_TheFlowAndTokenAreCollected`.
 
+A top-level extension on any receiver ([Extensions](extensions.md#supported-receivers)) holds no owner state, so the
+handle count returns to baseline once a call settles. `LeakTests/LiveHandleTests.cs` pins it:
+`GenericExtension_Unpack_ReturnsToBaseline`, `GenericExtensionProperty_Lid_ReturnsToBaseline`,
+`SyncExtension_HandleMintingReceivers_ReturnToBaseline`,
+`SuspendCollectionReceiver_TotalAsync_ReturnsToBaseline`,
+`SuspendBoundInterfaceReceiver_ReturnsToBaseline`,
+`SuspendEveryReceiver_Completion_ReturnsToBaseline`, `SuspendResult_Failure_ReturnsToBaseline`
+(a `Result<T>` failure faulting the task), `FlowResultExtension_EveryReceiver_ReturnsToBaseline` and
+`FlowParameterExtension_GenericAndNullableReceivers_ReturnToBaseline` and, for member extension properties on a class, `MemberExtensionProperties_ReturnToBaseline`.
+`LeakTests/CollectabilityTests.cs` holds a `WeakReference` to the call's state in
+`SuspendInterfaceReceiver_IsCollectedOnceTheTaskCompletes`,
+`SuspendBoundInterfaceReceiver_IsCollectedOnceTheTaskCompletes` and
+`SuspendCollectionReceiver_IsCollectedOnceTheTaskCompletes`.
+
 <seealso>
     <category ref="related">
         <a href="reverse-overview.md">Consuming C# in Kotlin</a>

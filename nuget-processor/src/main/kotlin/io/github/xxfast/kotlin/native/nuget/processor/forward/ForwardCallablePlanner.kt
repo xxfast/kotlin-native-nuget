@@ -9,6 +9,7 @@ import com.google.devtools.ksp.getConstructors
 import com.google.devtools.ksp.isConstructor
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
+import io.github.xxfast.kotlin.native.nuget.processor.cir.extensionHomeDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.Origin
@@ -704,8 +705,11 @@ internal data class ForwardCallablePlanCatalog(
     )
     val matches: List<ForwardPropertyPlan> = propertyPlans.filter { plan ->
       val receiver: ForwardPropertyReceiver.Value? = plan.receiver as? ForwardPropertyReceiver.Value
+      // ADR-238: an unbounded bare `T` is nullable by its bound, not by a `?` at the use site.
+      val inner: BridgeType? = (receiver?.type as? BridgeType.Nullable)?.type
+      val fromBound: Boolean = inner is BridgeType.TypeParameter && inner.nullableFromBound
       plan.position == ForwardPropertyPosition.EXTENSION && plan.symbol in symbols &&
-          (receiver?.type is BridgeType.Nullable) == nullable
+          (receiver?.type is BridgeType.Nullable && !fromBound) == nullable
     }
     require(matches.size <= 1) {
       "Forward property catalog has duplicate extension plans for ${symbols.first()}; two " +
@@ -1447,9 +1451,8 @@ internal class ForwardCallablePlanner(
           publicName = method.csharpMemberName(),
           exportName = "${prefix}_$name$suffix",
           receiver = receiver,
-          parameters = method.parameters.map { parameter ->
-            parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
-          },
+          // ADR-238: a member extension's receiver leads its parameters.
+          parameters = method.bridgeParameters(),
           result = method.returnType?.resolve()?.let(classifier::classifyResult)
               ?: BridgeType.Unit,
           origin = ForwardCallableOrigin.VALUE_CLASS_MEMBER,
@@ -1459,6 +1462,7 @@ internal class ForwardCallablePlanner(
           node = method,
           doc = method.forwardKdoc(expects).forParameters(method.parameters),
         ).withMethodTypeParameters(method).withValueClassConstruction(receiverConstruction)
+          .asMemberExtension(method)
       }
       // ADR-225: a suspend member binds on the ADR-229 static suspend route, the receiver the own
       // `T` box (or a phantom's plain underlying), rewrapped through the same constructor spelling.
@@ -1770,17 +1774,17 @@ internal class ForwardCallablePlanner(
         }
         if (structuralReason != null) {
           ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = method)
-        } else if (method.typeParameters.isNotEmpty()) {
+        } else if (method.typeParameters.isNotEmpty() || method.isMemberExtension()) {
           // ADR-225: a member's own `T` rides ADR-197's boxed wire on the ordinary route, which
           // the shipped no-error-slot value-class emitter has no result arm for.
+          // ADR-238: so does a member extension, its receiver leading the parameters.
           planOrSkip(
             symbol = symbol,
             publicName = method.csharpMemberName(),
             exportName = "${prefix}_$name$suffix",
             receiver = memberReceiver,
-            parameters = method.parameters.map { parameter ->
-              parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
-            },
+            // ADR-238: a member extension's receiver leads its parameters.
+            parameters = method.bridgeParameters(),
             result = method.returnType?.resolve()?.let(classifier::classifyResult)
                 ?: BridgeType.Unit,
             origin = ForwardCallableOrigin.VALUE_CLASS_MEMBER,
@@ -1789,6 +1793,7 @@ internal class ForwardCallablePlanner(
             node = method,
             doc = method.forwardKdoc(expects).forParameters(method.parameters),
           ).withMethodTypeParameters(method).withValueClassConstruction(owner)
+            .asMemberExtension(method)
         } else {
           planOrSkip(
             symbol = symbol,
@@ -1899,9 +1904,8 @@ internal class ForwardCallablePlanner(
           publicName = method.csharpMemberName(),
           exportName = "${prefix}_$name$suffix",
           receiver = ForwardReceiver.Handle(receiverType),
-          parameters = method.parameters.map { parameter ->
-            parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
-          },
+          // ADR-238: a member extension's receiver leads its parameters.
+          parameters = method.bridgeParameters(),
           result = resultType?.let(classifier::classifyResult) ?: BridgeType.Unit,
           origin = ForwardCallableOrigin.CLASS,
           // ADR-224: a generic interface reads its receiver erased, as a generic class does.
@@ -1913,9 +1917,10 @@ internal class ForwardCallablePlanner(
           // avoid synthesizing overloads every implementer would owe; one widened signature is
           // what `memberDefaultFlags` already gives every implementer through the root. Read
           // through it here too, so an `actual interface` member widens from its `expect`.
-          defaults = declaredDefaults(method.parameters, memberDefaultFlags(method)),
+          defaults = declaredDefaults(method.parameters, memberDefaultFlags(method))
+            .withLeading(method.memberExtensionParameter()?.first),
           doc = method.forwardKdoc(expects).forParameters(method.parameters),
-        ).withMethodTypeParameters(method)
+        ).withMethodTypeParameters(method).asMemberExtension(method)
       }
     }.nameUnroutedPositions { skipped ->
       // ADR-064 amendment (2026-09-13): the interface DECLARATION is where a default member's
@@ -1968,6 +1973,8 @@ internal class ForwardCallablePlanner(
       // interface and must carry the member (`ForwardClassMembership.kt`).
       .filter { method -> method.isForwardPlannableMemberOf(cls, superClass) }
       .toList()
+      // ADR-238: and a member extension property's accessors, as the methods Kotlin/JVM lowers to.
+      .plus(cls.forwardMemberExtensionAccessors(flow = false))
     val interfaceBridgeMethods: Set<KSFunctionDeclaration> = findInterfaceBridgePairs(methods)
       .flatMap { pair -> listOf(pair.first, pair.second) }
       .toSet()
@@ -2020,12 +2027,14 @@ internal class ForwardCallablePlanner(
         method.hasNullableLegacyFlowReturn() -> ForwardPlanSkipReason.FLOW_PROTOCOL
         else -> null
       }
+      // ADR-238: a member extension's receiver leads its parameters (`hand.Brush(loafer, 3)`).
+      val extension: Pair<String, BridgeType>? = method.memberExtensionParameter()
       fun plan(): ForwardCallableCatalogEntry = planOrSkip(
         symbol = symbol,
         publicName = method.csharpMemberName(),
         exportName = "${prefix}_$name$suffix",
         receiver = ForwardReceiver.Handle(receiverType),
-        parameters = method.parameters.map { parameter ->
+        parameters = listOfNotNull(extension) + method.parameters.map { parameter ->
           parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
         },
         result = method.returnType?.resolve()?.let(classifier::classifyResult) ?: BridgeType.Unit,
@@ -2036,10 +2045,11 @@ internal class ForwardCallablePlanner(
         isOverride = isOverride,
         isVirtual = isVirtual,
         node = method,
-        defaults = declaredDefaults(method.parameters, memberDefaultFlags(method)),
+        defaults = declaredDefaults(method.parameters, memberDefaultFlags(method))
+          .withLeading(extension?.first),
         doc = method.forwardKdoc(expects).forParameters(method.parameters),
         isAbstract = isAbstract,
-      ).withMethodTypeParameters(method)
+      ).withMethodTypeParameters(method).asMemberExtension(extension != null, method)
       // An abstract member of an owner with no wrapper (a generic one) is declared `abstract` in
       // C# with no export, by `CirClassTranslator`'s abstract walk, and every Kotlin subclass's
       // plan overrides it. The declaration must not promise what those plans refuse (a lambda
@@ -2243,9 +2253,8 @@ internal class ForwardCallablePlanner(
           publicName = method.csharpMemberName(),
           exportName = "${prefix}_$name$suffix",
           receiver = ForwardReceiver.Handle(receiverType),
-          parameters = method.parameters.map { parameter ->
-            parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
-          },
+          // ADR-238: a member extension's receiver leads its parameters.
+          parameters = method.bridgeParameters(),
           result = method.returnType?.resolve()?.let(classifier::classifyResult) ?: BridgeType.Unit,
           origin = ForwardCallableOrigin.CLASS,
           // ADR-199: a generic base reads its receiver erased, as ADR-147's class route does.
@@ -2255,9 +2264,10 @@ internal class ForwardCallablePlanner(
           isVirtual = isVirtual,
           node = method,
           // ADR-164: the base is the carrier of the widened signature every overriding arm shares.
-          defaults = declaredDefaults(method.parameters, memberDefaultFlags(method)),
+          defaults = declaredDefaults(method.parameters, memberDefaultFlags(method))
+            .withLeading(method.memberExtensionParameter()?.first),
           doc = method.forwardKdoc(expects).forParameters(method.parameters),
-        ).withMethodTypeParameters(method)
+        ).withMethodTypeParameters(method).asMemberExtension(method)
       }
     }
 
@@ -2387,9 +2397,8 @@ internal class ForwardCallablePlanner(
           publicName = method.csharpMemberName(),
           exportName = "${prefix}_$name$suffix",
           receiver = ForwardReceiver.Handle(receiverType),
-          parameters = method.parameters.map { parameter ->
-            parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
-          },
+          // ADR-238: a member extension's receiver leads its parameters.
+          parameters = method.bridgeParameters(),
           result = method.returnType?.resolve()?.let(classifier::classifyResult) ?: BridgeType.Unit,
           origin = ForwardCallableOrigin.CLASS,
           // ADR-199: a generic arm reads its receiver erased, as ADR-147's class route does.
@@ -2401,10 +2410,11 @@ internal class ForwardCallablePlanner(
           node = method,
           // ADR-164: the flags come through the override chain, as `classEntries` reads them, so an
           // arm overriding a base member renders the base's widened signature.
-          defaults = declaredDefaults(method.parameters, memberDefaultFlags(method)),
+          defaults = declaredDefaults(method.parameters, memberDefaultFlags(method))
+            .withLeading(method.memberExtensionParameter()?.first),
           doc = method.forwardKdoc(expects).forParameters(method.parameters),
           isAbstract = isAbstract,
-        ).withMethodTypeParameters(method)
+        ).withMethodTypeParameters(method).asMemberExtension(method)
       }
     }
 
@@ -2945,17 +2955,17 @@ internal class ForwardCallablePlanner(
         publicName = function.csharpMemberName(),
         exportName = "${prefix}_${toCName(name)}$suffix",
         receiver = ForwardReceiver.Value(type),
-        parameters = function.parameters.map { parameter ->
-          parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
-        },
+        // ADR-238: a member extension's receiver leads its parameters.
+        parameters = function.bridgeParameters(),
         result = function.returnType?.resolve()?.let(classifier::classifyResult) ?: BridgeType.Unit,
         origin = ForwardCallableOrigin.ENUM_MEMBER,
         target = owner,
         member = name,
         node = function,
-        defaults = declaredDefaults(function.parameters, memberDefaultFlags(function)),
+        defaults = declaredDefaults(function.parameters, memberDefaultFlags(function))
+          .withLeading(function.memberExtensionParameter()?.first),
         doc = function.forwardKdoc(expects).forParameters(function.parameters),
-      )
+      ).asMemberExtension(function)
     }
     // ADR-230: a `Flow` family return binds on the static flow route, by ordinal.
     return members.map { member ->
@@ -3122,11 +3132,14 @@ internal class ForwardCallablePlanner(
     // ADR-239: a lambda handed OUT is planned at every static owner's result, as at every other
     // owner's ([ForwardBridgeTypeClassifier.classifyResult]).
     val result: BridgeType = returnType?.let(classifier::classifyResult) ?: BridgeType.Unit
-    val parameters: List<Pair<String, BridgeType>> = function.parameters
+    // ADR-238: an object's or a companion's member extension takes its receiver first.
+    val extension: Pair<String, BridgeType>? = function.memberExtensionParameter()
+    val parameters: List<Pair<String, BridgeType>> = listOfNotNull(extension) + function.parameters
       .map { parameter ->
         parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
       }
-    val declaredDefaults: ForwardDeclaredDefaults = declaredDefaults(function.parameters, defaults)
+    val declaredDefaults: ForwardDeclaredDefaults =
+      declaredDefaults(function.parameters, defaults).withLeading(extension?.first)
     // ADR-170: a top-level nullable scalar (`Int?`, `Char?`, `Instant?`, `Duration?`, an enum, a
     // scalar value class) takes the same ADR-061 single-call `valueOut` route as a member, object
     // or companion function; the ADR-002 two-call pair is gone for functions.
@@ -3143,7 +3156,7 @@ internal class ForwardCallablePlanner(
       node = function,
       defaults = declaredDefaults,
       doc = function.forwardKdoc(expects).forParameters(function.parameters),
-    ).withMethodTypeParameters(function)
+    ).withMethodTypeParameters(function).asMemberExtension(extension != null, function)
   }
 
   /**
@@ -3156,6 +3169,72 @@ internal class ForwardCallablePlanner(
     pairMembers: Set<KSFunctionDeclaration>,
   ): Boolean = typeParameters.isNotEmpty() &&
       (forwardMemberGenericRefusal() != null || this in pairMembers)
+
+  /**
+   * ADR-238: a class member's extension receiver as the plan's leading parameter, named apart from
+   * the declared ones, or null for an ordinary member.
+   */
+  private fun KSFunctionDeclaration.memberExtensionParameter(): Pair<String, BridgeType>? {
+    val receiver: KSType = extensionReceiver?.resolve() ?: return null
+    if (parentDeclaration !is KSClassDeclaration) return null
+    // `receiver` in C#, as every extension route spells `this`
+    // (`Brush(Loafer receiver, int strokes)`);
+    // the plan shifts it off its own `receiver` slot name (`receiver_`), and `asMemberExtension`
+    // labels it back.
+    val taken: Set<String> = parameters.map { it.bridgeName() }.toSet()
+    val name: String = freshName("receiver".bridgeParameterName(), taken)
+    return name to (classifier.genericInterfaceOrNull(receiver.expandAliases())
+      ?: classifier.classifyParameter(receiver)).sealedAsHandle()
+  }
+
+  /** ADR-238: the bridge parameters of [this], a member extension's receiver leading them. */
+  private fun KSFunctionDeclaration.bridgeParameters(): List<Pair<String, BridgeType>> =
+    listOfNotNull(memberExtensionParameter()) + parameters.map { parameter ->
+      parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
+    }
+
+  /** ADR-238: whether [this] is a function declared in a class with its own extension receiver. */
+  private fun KSFunctionDeclaration.isMemberExtension(): Boolean =
+    extensionReceiver != null && parentDeclaration is KSClassDeclaration
+
+  /** ADR-238: [asMemberExtension] for a [method] that may or may not be one. */
+  private fun ForwardCallableCatalogEntry.asMemberExtension(
+    method: KSFunctionDeclaration,
+  ): ForwardCallableCatalogEntry =
+    asMemberExtension(method.memberExtensionParameter() != null, method)
+
+  /** ADR-238: [ForwardDeclaredDefaults] with a non-defaulted [name] slot in front, if any. */
+  private fun ForwardDeclaredDefaults.withLeading(name: String?): ForwardDeclaredDefaults {
+    if (name == null) return this
+    return copy(
+      flags = listOf(false) + flags,
+      kotlinNames = listOf(name) + kotlinNames,
+      marked = marked.mapKeys { (index, _) -> index + 1 },
+    )
+  }
+
+  /** ADR-238: marks a planned member extension, whose Kotlin call runs in its owner's scope. */
+  private fun ForwardCallableCatalogEntry.asMemberExtension(
+    memberExtension: Boolean,
+    method: KSFunctionDeclaration,
+  ): ForwardCallableCatalogEntry {
+    if (!memberExtension || this !is ForwardCallableCatalogEntry.Planned) return this
+    val signature: ForwardPublicSignature = plan.publicSignature
+    val declared: List<ForwardPublicParameter> = signature.parameters.drop(1)
+    // The C# label, unless a declared parameter already spells `receiver`.
+    val label: String? = "receiver".takeIf { name -> declared.none { it.csharpName == name } }
+    val leading: ForwardPublicParameter = signature.parameters.first().copy(csharpLabel = label)
+    return copy(
+      plan = plan.copy(
+        invocation = plan.invocation.copy(
+          memberExtension = true,
+          memberExtensionProperty = (method as? ForwardMemberExtensionAccessor)?.propertyName,
+          memberExtensionSetter = (method as? ForwardMemberExtensionAccessor)?.setter == true,
+        ),
+        publicSignature = signature.copy(parameters = listOf(leading) + declared),
+      ),
+    )
+  }
 
   /** ADR-225: stamps the Kotlin constructor spelling a value-class member re-wraps through. */
   private fun ForwardCallableCatalogEntry.withValueClassConstruction(
@@ -3211,8 +3290,8 @@ internal class ForwardCallablePlanner(
       "Forward extension planner received a non-extension function ${function.simpleName.asString()}"
     }.resolve().expandAliases()
     // ADR-222: a receiver is an input, so a generic interface binds there as at a parameter.
-    val receiverType: BridgeType =
-      classifier.genericInterfaceOrNull(receiver) ?: classifier.classify(receiver)
+    // ADR-238: and a star projection gets a synthesized method type parameter.
+    val receiverType: BridgeType = classifier.classifyReceiver(receiver)
     val functionName: String = function.simpleName.asString()
     // ADR-133 amendment: the whole enclosing chain of the receiver, so an extension on
     // `Aviary.Perch` binds under `aviary_perch_` exactly as that type's own members already do.
@@ -3224,9 +3303,12 @@ internal class ForwardCallablePlanner(
     // ADR-163: the receiver's UNQUALIFIED chain. The package part of an extension's symbol is the
     // EXTENSION's own package, not the receiver's (ADR-095's counter is scoped per package and
     // name), so `symbols.extension` supplies the qualifier from `function` below.
-    val receiverPrefix: String = (receiver.declaration as? KSClassDeclaration)
+    // ADR-238: a bare `T` takes its home's prefix (`dozer_`), `any_` when unbounded.
+    val home: KSDeclaration? = receiver.declaration.extensionHomeDeclaration()
+    val receiverPrefix: String = (home as? KSClassDeclaration)
       ?.let { declaration -> ForwardSymbolTable.ownerChain(declaration) }
-      ?: receiver.declaration.simpleName.asString().lowercase()
+      ?: home?.simpleName?.asString()?.lowercase()
+      ?: "any"
     // ADR-095 keeps an extension symbol receiver-agnostic (the overload counter is per package and
     // name, not per receiver). ADR-133 amendment: the receiver's enclosing-owner chain joins it,
     // because that chain now scopes the counter, so two nested receivers under different owners can
@@ -3240,20 +3322,9 @@ internal class ForwardCallablePlanner(
       "${function.packageName.asString()}.$ownerChain.$functionName$suffix"
     }
 
-    // ADR-064 cell 23 / BUG-010: a generic + suspend + inline + reified extension returning
-    // Result<T> has no legacy route at all — inline+reified erases at the C ABI and suspend
-    // needs a concrete continuation type — so it must be recognized as a genuine drop *before*
-    // the general SUSPEND/GENERIC structural checks below classify it as a silent legacy-route
-    // deferral. That classification is correct for an *ordinary* suspend or generic extension
-    // (each has its own working legacy route individually); it is wrong for this specific
-    // combination, since nothing re-emits it. Gated narrowly (suspend + inline + a reified type
-    // parameter + a `kotlin.Result` return) so ordinary suspend/generic extensions are unaffected.
-    if (function.isUnsupportedSuspendGenericResultExtension()) {
-      return ForwardCallableCatalogEntry.Skipped(
-        symbol, ForwardPlanSkipReason.UNSUPPORTED_COMBINATION, node = function,
-      )
-    }
-
+    // ADR-064 cell 23 / BUG-010 (ADR-238): `suspend inline fun <reified T> R.get(): Result<T>`
+    // binds on the static suspend route below, `T` reified at its bound (ADR-213) and the
+    // `Result` unwrapped inside the coroutine, so it needs no case of its own.
     val structuralReason: ForwardPlanSkipReason? = when {
       function.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
       // ADR-226: a top-level extension's own `T` binds as a top-level function's does.
@@ -3272,8 +3343,9 @@ internal class ForwardCallablePlanner(
       // ADR-229: a suspend extension binds on the static suspend route, the receiver crossing as
       // the leading slot. A receiver that route has no slot for stays the named drop.
       if (structuralReason == ForwardPlanSkipReason.SUSPEND) {
-        val slot: ForwardStaticSuspendReceiver? = classifier.staticSuspendReceiver(receiver)
-          .takeIf { receiver.declaration !is KSTypeParameter }
+        // ADR-238: any receiver a legacy parameter shape carries, a bare `T` included.
+        val slot: ForwardStaticSuspendReceiver? =
+          classifier.staticSuspendReceiver(receiver, extension = true)
         return ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = function)
           .onStaticSuspendRoute(
             slot?.let { receiverSlot ->
@@ -3325,19 +3397,20 @@ internal class ForwardCallablePlanner(
       // reasons (measured cells 6a/6b/13c/18c/22c; there is no legacy extension translator at
       // all, and `genericFunctions` excludes extensions outright), so every deferral here is a
       // drop, with no exemption.
-      .nameUnroutedPosition { false }
-  }
-
-  /**
-   * ADR-064 cell 23 / BUG-010: the one suspend+generic extension shape with no working legacy
-   * route (`suspend inline fun <reified T> Receiver.get(...): Result<T>`, NYTimes-KMP BUG-010).
-   */
-  private fun KSFunctionDeclaration.isUnsupportedSuspendGenericResultExtension(): Boolean {
-    if (!modifiers.contains(Modifier.SUSPEND)) return false
-    if (!modifiers.contains(Modifier.INLINE)) return false
-    if (typeParameters.none { it.isReified }) return false
-    val returnDeclaration: String? = returnType?.resolve()?.declaration?.qualifiedName?.asString()
-    return returnDeclaration == "kotlin.Result"
+      // ADR-238: but a `Flow` family return binds on the static flow route (ADR-230), the receiver
+      // crossing as the leading slot.
+      .onStaticFlowRoute(
+        receiver.takeIf { function.isStaticFlowCandidate() }
+          ?.let { type -> classifier.staticSuspendReceiver(type, extension = true) }
+          ?.let { slot ->
+          ForwardStaticFlowOwner.Extension(
+            symbols.extension(function, receiverPrefix, "${toCName(functionName)}$suffix", taken),
+            slot,
+            receiver,
+          )
+        },
+      )
+      .nameUnroutedPosition { skipped -> skipped.staticFlow != null }
   }
 
   private fun declaredDefaults(
@@ -3628,7 +3701,11 @@ internal class ForwardCallablePlanner(
       symbol, publicName, exportName, receiver, parameters, result, origin, target, ownerType,
       invocationReceiver, includeError, valueClassProperty, member, isOverride, isVirtual, node,
       defaults, doc, extensionImportAlias, isAbstract,
-    ).withStarTypeParameters(starTypeParameters(parameters.map { (_, type) -> type } + result))
+    ).withStarTypeParameters(
+      starTypeParameters(
+        listOfNotNull(receiver.type) + parameters.map { (_, type) -> type } + result,
+      ),
+    )
   } catch (failure: Exception) {
     ForwardCallableCatalogEntry.Skipped(
       symbol,
@@ -3659,8 +3736,24 @@ internal class ForwardCallablePlanner(
   // ADR-234: a star- or `out`-projected result included, which the caller supplies the same way.
   private fun starTypeParameters(types: List<BridgeType>): List<ForwardMethodTypeParameter> =
     types
-      .mapNotNull { type -> type.unwrapNullable() as? BridgeType.ValueClass }
-      .flatMap { valueClass -> valueClass.typeArguments }
+      .map { type -> type.unwrapNullable() }
+      .flatMap { type ->
+        when (type) {
+          is BridgeType.ValueClass -> type.typeArguments
+          // ADR-238: a star-projected receiver, a generic class or a collection.
+          is BridgeType.ObjectHandle -> type.starTypeParameters.map { name ->
+            BridgeType.TypeParameter(name, kotlinName = STAR_KOTLIN_NAME)
+          }
+          is BridgeType.Collection -> listOfNotNull(type.element, type.key, type.value)
+          BridgeType.Unit, is BridgeType.Primitive, BridgeType.Char, BridgeType.String,
+          BridgeType.Instant, BridgeType.Duration, is BridgeType.Throwable, BridgeType.Uuid,
+          is BridgeType.Enum, is BridgeType.Interface, is BridgeType.BoundInterface,
+          BridgeType.ByteArray, is BridgeType.Nullable, is BridgeType.Callback,
+          is BridgeType.AsyncCallback, is BridgeType.FlowSource, is BridgeType.ReturnedLambda,
+          is BridgeType.SpecializedProtocol, is BridgeType.RawKSType, is BridgeType.Unsupported,
+          is BridgeType.RawCollection, is BridgeType.TypeParameter -> emptyList()
+        }
+      }
       .mapNotNull { argument -> argument.unwrapNullable() as? BridgeType.TypeParameter }
       .filter { argument -> argument.kotlinName == STAR_KOTLIN_NAME }
       .map { argument -> argument.name }
@@ -4549,7 +4642,6 @@ internal class ForwardCallablePlanner(
       )
 
       BridgeType.Unit,
-      is BridgeType.BoundInterface,
       is BridgeType.Nullable,
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
@@ -4560,6 +4652,20 @@ internal class ForwardCallablePlanner(
       is BridgeType.Unsupported,
       is BridgeType.RawCollection,
         -> error("Forward planner cannot build an input parameter for nullable $inner")
+
+      // ADR-238: the non-null arm's transfer GCHandle, with the null pointer for a null value.
+      is BridgeType.BoundInterface -> listOf(
+        ForwardAbiParameter(
+          name = name,
+          wireType = ForwardAbiWireType.POINTER,
+          direction = ForwardAbiDirection.IN,
+          transfer = ForwardTransfer(
+            name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+            ForwardOwnership.MATERIALIZED, ForwardConversion.GC_HANDLE_TO_BOUND_VALUE,
+          ),
+          role = role,
+        )
+      )
     }
 
     BridgeType.Unit,
@@ -5397,11 +5503,9 @@ internal class ForwardCallablePlanner(
       is BridgeType.AsyncCallback -> ForwardPlanSkipReason.NULLABLE
       is BridgeType.FlowSource -> ForwardPlanSkipReason.NULLABLE
 
-      // ADR-088: `IFeedable?` is on this ADR's deferred list. The null-pointer ride is natural,
-      // but it needs its own lowering in four emitter positions; until then the skip names the
-      // position rather than falling through to the generic NULLABLE bucket below, whose
-      // diagnostic kind is SKIPPED_UNSUPPORTED_RETURN and whose hint talks about Booleans.
-      is BridgeType.BoundInterface -> ForwardPlanSkipReason.BOUND_INTERFACE_POSITION
+      // ADR-238: `IFeedable?` rides the null pointer. C# allocates a transfer GCHandle only for a
+      // present value, and Kotlin reads it through `nuget{Iface}Value` behind `?.let`.
+      is BridgeType.BoundInterface -> null
 
       // Issue #54 and ADR-154's 2026-10-08 amendment: the return side's rule, at an input position.
       is BridgeType.Unsupported ->

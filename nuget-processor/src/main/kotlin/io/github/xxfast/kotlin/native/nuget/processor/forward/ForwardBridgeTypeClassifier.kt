@@ -6,6 +6,7 @@ import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
+import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSTypeArgument
 import com.google.devtools.ksp.symbol.KSTypeParameter
@@ -235,6 +236,25 @@ internal class ForwardBridgeTypeClassifier(
           kotlinName = declaration.simpleName.asString(),
           additionalBounds = bounds.drop(1),
           trampolined = trampolined,
+          valueType = declaration.hasEnumConstraint(),
+        )
+        return if (declaration.hasNullableBound()) {
+          BridgeType.Nullable(parameter.copy(nullableFromBound = true))
+        } else {
+          parameter
+        }
+      }
+      // ADR-238: an extension property's own `T` (`val <T> Bindle<T>.peek: T`) crosses on the same
+      // boxed wire, named as declared, its block declaring it (`extension<T>(Bindle<T> receiver)`).
+      if (owner is KSPropertyDeclaration && owner.extensionReceiver != null &&
+        !declaration.hasUnspellableBound()
+      ) {
+        val bounds: List<String> = declaration.forwardBoundSpellings()
+        val parameter = BridgeType.TypeParameter(
+          name = declaration.simpleName.asString(),
+          boundQualifiedName = bounds.firstOrNull(),
+          kotlinName = declaration.simpleName.asString(),
+          additionalBounds = bounds.drop(1),
           valueType = declaration.hasEnumConstraint(),
         )
         return if (declaration.hasNullableBound()) {
@@ -1403,6 +1423,64 @@ internal class ForwardBridgeTypeClassifier(
       element == BridgeType.String || element is BridgeType.Primitive || element.isAsyncBoxed()
     if (!readable) return null
     return BridgeType.FlowSource(element, nullable).also { minted -> flowSources += minted }
+  }
+
+  /**
+   * ADR-238: [classify] at an extension RECEIVER. A receiver is an input, so it takes
+   * [classifyParameter]'s generic interface; and a star-projected exported generic class or
+   * collection (`Bindle<*>`, `List<*>`) gets one synthesized C# method type parameter per star
+   * (`IsPacked<TBindle>(this Bindle<TBindle> receiver)`), as ADR-226's star-projected value class
+   * parameter does. The projection refusal stays at every other position.
+   */
+  fun classifyReceiver(type: KSType): BridgeType =
+    genericInterfaceOrNull(type)
+      ?: starProjectedReceiverOrNull(type)
+      ?: classify(type)
+
+  private fun starProjectedReceiverOrNull(type: KSType): BridgeType? {
+    val expanded: KSType = type.expandAliases()
+    val declaration: KSClassDeclaration = expanded.declaration as? KSClassDeclaration ?: return null
+    val arguments: List<KSTypeArgument> = expanded.arguments
+    if (arguments.isEmpty() || arguments.any { argument -> argument.variance != Variance.STAR }) {
+      return null
+    }
+    val qualifiedName: String = declaration.qualifiedName?.asString() ?: return null
+    val simpleName: String = declaration.simpleName.asString()
+    val names: List<String> = arguments.indices.map { index ->
+      STAR_TYPE_PARAMETER_PREFIX + simpleName + if (arguments.size == 1) "" else "${index + 1}"
+    }
+    val stars: List<BridgeType> = names.map { name ->
+      BridgeType.Nullable(
+        BridgeType.TypeParameter(name, nullableFromBound = true, kotlinName = STAR_KOTLIN_NAME),
+      )
+    }
+    val kind: CollectionKind? = when (qualifiedName) {
+      "kotlin.collections.List" -> CollectionKind.LIST
+      "kotlin.collections.MutableList" -> CollectionKind.MUTABLE_LIST
+      "kotlin.collections.Map" -> CollectionKind.MAP
+      "kotlin.collections.MutableMap" -> CollectionKind.MUTABLE_MAP
+      "kotlin.collections.Set" -> CollectionKind.SET
+      "kotlin.collections.MutableSet" -> CollectionKind.MUTABLE_SET
+      else -> null
+    }
+    val projected: BridgeType = when {
+      kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP ->
+        BridgeType.Collection(kind, key = stars.first(), value = stars.last())
+
+      kind != null -> BridgeType.Collection(kind, element = stars.single())
+      declaration.classKind == ClassKind.CLASS && Modifier.INNER !in declaration.modifiers &&
+          qualifiedName in context.exportedObjectHandles &&
+          !declaration.isGenericSealedType() && declaration.forwardArmSealedParent() == null ->
+        BridgeType.ObjectHandle(
+          qualifiedName,
+          csharpType = "${csharpTypeNameFor(declaration)}<${names.joinToString(", ")}>",
+          kotlinReadType = "$qualifiedName<${names.joinToString(", ") { "*" }}>",
+          starTypeParameters = names,
+        )
+
+      else -> return null
+    }
+    return if (expanded.isMarkedNullable) BridgeType.Nullable(projected) else projected
   }
 
   /** [classify] at a parameter position: ADR-210's two asynchronous shapes first. */

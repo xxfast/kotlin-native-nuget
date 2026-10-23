@@ -211,8 +211,8 @@ an empty payload. `ByteArray` works as a property, constructor and method parame
 result, and as a `List` element or a `Map` value (`List<ByteArray>` is `IReadOnlyList<byte[]>`, see
 [Collections](collections.md)). It is not supported as a `Set` element or a `Map` key, since arrays
 compare by identity and every crossing copies, so a lookup could never succeed, nor as another array
-type (`IntArray`, `Array<T>`), nor as a non-`suspend` extension receiver. It binds as a `suspend`
-parameter and result, a `Flow` element and a `suspend` extension receiver
+type (`IntArray`, `Array<T>`). It binds as an extension receiver (`this byte[]`, nullable too), as a `suspend`
+parameter and result and a `Flow` element
 (see [Coroutines and Flow](coroutines-and-flow.md#async-wire-types)).
 
 ## Any {id="any"}

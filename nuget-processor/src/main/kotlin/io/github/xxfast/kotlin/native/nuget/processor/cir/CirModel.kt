@@ -1546,6 +1546,8 @@ internal data class CirExtensionProperty(
   val getter: String,
   val setter: String? = null,
   val doc: CirDoc? = null,
+  // ADR-238: the block's own type parameters, `extension<T>(Bindle<T> receiver) where T : ...`.
+  val typeParameters: List<CirTypeParameter> = emptyList(),
 ) : CirMember {
   init {
     requireUnescaped(name)

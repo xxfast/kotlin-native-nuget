@@ -579,8 +579,9 @@ class Tier1NamedSkipDiagnosticsTest {
    */
   @Test
   fun `extension property with an unsupported receiver fires SKIPPED_UNSUPPORTED_PROPERTY and is omitted`() {
-    // The receiver is [Tier1UnwrappableWitness.unroutedGeneric]; `Box<Int>` binds since ADR-208.
-    val generic: Tier1GenericCandidate = Tier1UnwrappableWitness.unroutedGeneric
+    // The receiver is [Tier1UnwrappableWitness.unroutedGenericInput]: `Box<Int>` binds since
+    // ADR-208, and a generic interface receiver since ADR-238 (ADR-222 at an input).
+    val generic: Tier1GenericCandidate = Tier1UnwrappableWitness.unroutedGenericInput
     val result = Tier1Harness.run(
       """
       package tier1.skipreceiver
@@ -605,7 +606,7 @@ class Tier1NamedSkipDiagnosticsTest {
     assertTrue(
       result.kspWarnings.any {
         it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name) &&
-            it.contains("${generic.simpleName}.label")
+            it.contains("${generic.receiverName}.label")
       },
       "expected a SKIPPED_UNSUPPORTED_PROPERTY diagnostic naming the receiver; " +
           "kspWarnings=${result.kspWarnings}",

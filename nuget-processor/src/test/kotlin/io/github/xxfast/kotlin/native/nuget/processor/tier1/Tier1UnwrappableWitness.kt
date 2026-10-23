@@ -161,4 +161,7 @@ internal class Tier1GenericCandidate(
 ) {
   /** The declared type's simple name (`Shelf`), as generated names and diagnostics spell it. */
   val simpleName: String get() = kotlin.replace(Regex("<[^>]*>"), "")
+
+  /** The receiver path without type arguments (`Tin.Latch` for `Tin<Int>.Latch`). */
+  val receiverName: String get() = kotlin.replace(Regex("<[^>]*>"), "")
 }

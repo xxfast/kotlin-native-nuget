@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedExtensionReceiver
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.findActualType
 import com.google.devtools.ksp.getDeclaredFunctions
@@ -759,13 +760,13 @@ internal fun warnDroppedForwardExtensionReceivers(
         // reaches extension-function receiver parity. ADR-132 amendment (2026-10-04): the has-value
         // fan-out class (`Int?`, `Mood?`, `Instant?`, `Duration?`, `Char?`, a nullable value class
         // over a primitive or enum underlying) and a bare `Char` bind too now, so what lands here
-        // is a receiver this route has no lowering for at any width (a raw generic `Box<Int>`, a
-        // type parameter, a `ByteArray`).
-        hint = "declare the property on a class, interface, nullable class, nullable interface, " +
-            "String, nullable String, primitive, nullable primitive, Char, nullable Char, enum, " +
-            "nullable enum, Uuid, nullable Uuid, Instant, nullable Instant, Duration, nullable " +
-            "Duration, collection, bound C# interface, value class, or nullable value class " +
-            "receiver, or expose a top-level getter function instead",
+        // is a receiver this route has no lowering for at any width. ADR-238: a type parameter, a
+        // generic class, a `ByteArray` and the nullable handle-minting receivers bind too, so what
+        // is left is an unexported type, an inner class of a generic owner or a raw collection.
+        hint = "declare the property on a class, interface, generic class, type parameter, " +
+            "String, primitive, Char, enum, value class, collection, ByteArray, Uuid, Instant, " +
+            "Duration or bound C# interface receiver, each nullable or not, or expose a " +
+            "top-level getter function instead",
         // Issue #249: no owner. The C# hole would be on the `{Receiver}Extensions` static class,
         // which may never be generated at all, so there is nothing to attach a paragraph to.
         owner = null,
@@ -978,8 +979,10 @@ internal fun warnRefusedLegacyRouteMembers(
       )
       return
     }
+    // ADR-238: a member extension's receiver is its leading parameter.
     val parameter: Pair<String, ForwardLegacyParameterShape.Refused>? =
-      classifier.legacyRefusedParameterShape(member.parameters)
+      classifier.legacyRefusedExtensionReceiver(member)
+        ?: classifier.legacyRefusedParameterShape(member.parameters)
     if (parameter != null) {
       val (name, shape) = parameter
       add(
@@ -1586,6 +1589,7 @@ internal fun warnRefusedLegacyRouteMembers(
         is ForwardStaticFlowOwner.Companion -> static.owner.forwardDiagnosticOwner()
         is ForwardStaticFlowOwner.EnumMember -> static.enum.forwardDiagnosticOwner()
         is ForwardStaticFlowOwner.ValueClass -> static.valueClass.forwardDiagnosticOwner()
+        is ForwardStaticFlowOwner.Extension -> func.forwardFileClassOwner()
       }
       nameRefused(func, func.simpleName.asString(), owner)
     }

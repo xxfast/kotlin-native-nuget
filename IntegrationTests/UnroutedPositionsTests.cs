@@ -210,10 +210,10 @@ public class UnroutedPositionsTests
         // ADR-160 binds, so it is asserted present rather than absent.
         Type? extensions = TopLevelType("DepotExtensions");
         Assert.NotNull(extensions);
-        AssertAllAbsent(
-            extensions,
-            PublicStatic,
-            "FlowReturnOnExtension");
+        // ADR-238: an extension's Flow return binds on the static flow route, the receiver first.
+        Assert.Equal(
+            typeof(KotlinFlow<int>),
+            extensions!.GetMethod("FlowReturnOnExtension", PublicStatic)?.ReturnType);
         // ADR-226: an extension's own `T` binds, as a top-level function's does.
         Assert.NotNull(extensions!.GetMethod("StructuralOnExtension", PublicStatic));
         Assert.NotNull(extensions!.GetMethod("CallbackParamOnExtension", PublicStatic));

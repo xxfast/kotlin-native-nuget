@@ -92,39 +92,4 @@ class Tier1DiagnosticCellsTest {
           "kspErrors=${result.kspErrors}",
     )
   }
-
-  /**
-   * Cell 23 · obs K, ADR-064's second permanent Tier 1 diagnostic cell. See
-   * [Tier1CompileCellsTest] for the still-compile-mode version of this assertion (kept there
-   * until ADR-064 lands, per that test's own doc comment) and the full mechanism writeup. Placed
-   * here too, non-`@XFail`, because — unlike cell 21 — nothing here is expected to keep failing
-   * once `ForwardDiagnosticKind` exists and the reclassification lands: the "no broken source"
-   * half is *already* true (Phase 10), so once the SUSPEND-for-extension-with-no-legacy-route
-   * case is reclassified as a genuine drop and given a diagnostic, this test goes green with no
-   * further generator change needed for *this* cell.
-   */
-  @Test
-  fun `cell 23 - suspend inline reified extension returning Result fires SKIPPED_UNSUPPORTED_COMBINATION`() {
-    val result = Tier1Harness.run(
-      """
-      package tier1.cell23diag
-
-      class Patient(val name: String)
-
-      suspend inline fun <reified T> Patient.chartEntry(entry: T): Result<T> = Result.success(entry)
-      """.trimIndent()
-    )
-
-    assertTrue(
-      "export_patient_chartEntry" !in result.generated,
-      "expected chartEntry to be absent from the generated CNameExports.kt; " +
-          "generated=${result.generated}",
-    )
-    assertTrue(
-      result.kspWarnings.any { it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_COMBINATION.name) },
-      "expected a SKIPPED_UNSUPPORTED_COMBINATION diagnostic naming Patient.chartEntry; " +
-          "today this callable is dropped with zero diagnostic at all " +
-          "(kspWarnings=${result.kspWarnings})",
-    )
-  }
 }

@@ -826,6 +826,8 @@ internal object ForwardCirPlanProjection {
       isExtension = true,
       isSyncErrorCheckEnabled = !result.hasCustomBody && plan.errorSlot != null,
       hasCustomBody = result.hasCustomBody,
+      // ADR-238: a generic receiver's own `T`, with its constraints (`where T : IDozer`).
+      typeParameters = plan.cirTypeParameters(isOverride = false),
       // ADR-150: the `this` receiver is a C# parameter of this member but not of the plan, so it
       // has to be named here or a documented parameter beside it is CS1573.
       doc = plan.publicSignature.cirDoc(listOf(receiverParam.name)),
@@ -1349,8 +1351,10 @@ internal object ForwardCirPlanProjection {
           }
         }
 
+        // ADR-238: the transfer GCHandle [boundInterfacePrelude] allocated, or the null pointer.
+        is BridgeType.BoundInterface -> listOf("${parameter.csharpLocal}Handle")
+
         BridgeType.Unit,
-        is BridgeType.BoundInterface,
         is BridgeType.Nullable,
         is BridgeType.Callback,
         is BridgeType.AsyncCallback,
@@ -1618,12 +1622,15 @@ internal object ForwardCirPlanProjection {
   private fun ForwardCallablePlan.boundInterfacePrelude(
     parameter: ForwardPublicParameter,
   ): ForwardCirHandleStep? {
-    if (parameter.type !is BridgeType.BoundInterface) return null
+    val type: BridgeType = parameter.type
+    val nullable: Boolean = type is BridgeType.Nullable && type.type is BridgeType.BoundInterface
+    if (type !is BridgeType.BoundInterface && !nullable) return null
+    val name: String = parameter.csharpName
+    val alloc = "GCHandle.ToIntPtr(GCHandle.Alloc($name))"
+    // ADR-238: a null `IFeedable?` ships the null pointer and allocates nothing.
+    val built: String = if (nullable) "$name != null ? $alloc : IntPtr.Zero" else alloc
     // No cleanup, so nothing to hoist: the local stays declared where it is used.
-    return ForwardCirHandleStep(
-      "IntPtr ${parameter.csharpLocal}Handle = " +
-          "GCHandle.ToIntPtr(GCHandle.Alloc(${parameter.csharpName}));",
-    )
+    return ForwardCirHandleStep("IntPtr ${parameter.csharpLocal}Handle = $built;")
   }
 
   // ADR-073: load-bearing, not cosmetic. All three Dispose members bind to the same

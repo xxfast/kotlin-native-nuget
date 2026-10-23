@@ -220,7 +220,8 @@ class Tier1ResultReturnTest {
     // The `Result` test is deliberately narrow: `TaskCompletionSource`/`SetResult` legitimately
     // contain the substring "Result", so a whole-file search would report a real fix as still
     // broken and keep this @XFail alive forever.
-    val boundCleanly: Boolean = "Load(" in result.generatedCSharp &&
+    // ADR-238: a suspend `Result<T>` binds as `Task<T>`, unwrapped by `getOrThrow()`.
+    val boundCleanly: Boolean = "Task<string> LoadAsync(" in result.generatedCSharp &&
         "<Result>" !in result.generatedCSharp
     val skippedNamed: Boolean = result.kspWarnings.any {
       it.contains("SKIPPED_") && it.contains("load")

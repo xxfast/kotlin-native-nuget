@@ -4,6 +4,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
 import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDllImport
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirExtensionProperty
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirTypeParameter
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirExtraNative
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirMember
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirMethod
@@ -124,6 +125,9 @@ internal object ForwardCirPropertyProjection {
         setterBody(plan, receiverArgument, receiverStep, receiverCleanup)
       },
       doc = plan.doc?.toCirDoc(),
+      typeParameters = plan.typeParameters.map { parameter ->
+        CirTypeParameter(parameter.name, parameter.constraints)
+      },
     )
     return imports + property
   }
@@ -813,9 +817,12 @@ internal object ForwardCirPropertyProjection {
       // a token-probe hit or hands it to the ADR-070 wrapper's cleaner), so freeing it here too
       // would double-free, and not allocating a fresh one would let Kotlin store a handle C# then
       // released. Nothing to hoist either, so the flat spelling is the only one.
-      is BridgeType.BoundInterface -> ForwardCirHandleStep(
-        flat = "IntPtr ${name}Handle = GCHandle.ToIntPtr(GCHandle.Alloc($name));",
-      )
+      // ADR-238: a null `IFeedable?` receiver ships the null pointer and allocates nothing.
+      is BridgeType.BoundInterface -> {
+        val alloc = "GCHandle.ToIntPtr(GCHandle.Alloc($name))"
+        val built: String = if (nullable) "$name != null ? $alloc : IntPtr.Zero" else alloc
+        ForwardCirHandleStep(flat = "IntPtr ${name}Handle = $built;")
+      }
 
       is BridgeType.Collection -> {
         val factory: String = when (value.kind) {

@@ -409,9 +409,13 @@ things to know:
   its twin is kept. An enum's member property is an extension method, so the twin stays beside it.
 - There is no twin on a `new` (covariant) sealed arm member, which inherits the base's, on an
   interface member whose payload mentions a variant type parameter (`fun next(): Result<T>` on
-  `I<out T>`; implementing classes keep theirs), or on a `suspend fun`. None of these warns. The
+  `I<out T>`; implementing classes keep theirs), or on a `suspend fun` (which binds as a `Task<T>`, see below). None of these warns. The
   twin carries no default parameter values and no XML doc.
 
-Only an ordinary return position is supported. `Result<T>` at a property, parameter, collection
-element, `Flow<Result<T>>`, value-class-own-member, or `suspend fun` position keeps its existing
-skip, as does a `Result<T>` whose payload has no return shape of its own (a sealed base, `Flow`).
+An ordinary return position and a `suspend fun` return are supported. `Result<T>` at a property,
+parameter, collection element, `Flow<Result<T>>` or value-class-own-member position keeps its
+existing skip, as does a `Result<T>` whose payload has no return shape of its own (a sealed base,
+`Flow`).
+
+A `suspend fun` returning `Result<T>` binds as `Task<T>` on every `suspend` owner, and a failure
+faults the task; see [`suspend fun` returning `Result<T>`](coroutines-and-flow.md#suspend-result).

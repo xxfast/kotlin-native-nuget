@@ -114,8 +114,9 @@ class Tier1SuspendOwnerAuditTest {
   @Test
   fun `a suspend member on an owner no suspend route carries is named exactly once`() {
     listOf(
-      // A receiver the suspend route has no slot for: every owner binds now (ADR-229, ADR-232).
-      "tier1.suspendowners.total",
+      // Every owner and receiver binds now (ADR-229, ADR-232, ADR-238); a generic interface
+      // nothing returns or takes is what is left.
+      "tier1.suspendowners.Holder.hold",
     ).forEach { member ->
       val matches: List<String> = warningsNaming(member)
       assertEquals(1, matches.size, "$member must be named once; kspWarnings=${result.kspWarnings}")
@@ -125,7 +126,7 @@ class Tier1SuspendOwnerAuditTest {
         "$member is a structural suspend drop; got=$warning",
       )
       assertTrue(
-        "as an extension on any other receiver" in warning,
+        "but not on a generic interface nothing returns or takes" in warning,
         "$member must read the widened suspend sentence; got=$warning",
       )
     }
@@ -256,20 +257,24 @@ class Tier1SuspendOwnerAuditTest {
       declarations.any { line -> "Task<int> PaceAsync(" in line },
       "an interface nothing returns declares its suspend member",
     )
-    listOf("Total", "Hold").forEach { member ->
+    listOf("Hold").forEach { member ->
       val leaks: List<String> = declarations.filter { line ->
         Regex("\\b${member}(Async)?\\s*[(<]").containsMatchIn(line)
       }
       assertTrue(leaks.isEmpty(), "$member is skipped, so no C# may declare it; got=$leaks")
     }
-    listOf("Count(", "Size(", "Make(", "Len(", "Peek(", "SettleAsync(", "Steps(", "UnboxAsync(")
+    // ADR-238: a `List` receiver binds as a `List` parameter does.
+    listOf(
+      "Count(", "Size(", "Make(", "Len(", "Peek(", "SettleAsync(", "Steps(", "UnboxAsync(",
+      "TotalAsync(",
+    )
       .forEach { member ->
         assertTrue(
           declarations.any { line -> member in line },
           "$member is a control member and must still bind",
         )
       }
-    listOf("count", "size", "make", "len", "peek", "settle", "steps").forEach { name ->
+    listOf("count", "size", "make", "len", "peek", "settle", "steps", "total").forEach { name ->
       assertTrue(
         result.kspWarnings.none { warning -> warning.contains(".$name") },
         "$name binds, so it must not be named; kspWarnings=${result.kspWarnings}",

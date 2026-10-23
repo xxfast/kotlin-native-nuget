@@ -179,7 +179,11 @@ internal fun legacyRouteParameters(
   val names: ForwardLegacyNames = legacyCsharpNames(parameters, classifier, defaults)
   val optional: List<Boolean> = legacyCsharpDefaults(names.shapes, siblingArities)
   return parameters.mapIndexed { index, param ->
-    legacyRouteParameter(param, index, names.shapes[index], tracker, names, optional[index])
+    legacyRouteParameter(
+      (param.name?.asString() ?: "_").csharpParameterName(),
+      param.type.resolve(),
+      index, names.shapes[index], tracker, names, optional[index],
+    )
   }
 }
 
@@ -202,6 +206,21 @@ private fun legacyCsharpDefaults(
 }
 
 /**
+ * ADR-238: an extension receiver [type] as the leading legacy-route parameter [name], slot zero of
+ * its own name set, through the declared parameters' own lowering.
+ */
+internal fun legacyReceiverParameter(
+  name: String,
+  type: KSType,
+  classifier: ForwardBridgeTypeClassifier,
+  tracker: CollectionHelperTracker,
+): CirParameter {
+  val shape: ForwardLegacyParameterShape = classifier.legacyParameterShape(type)
+  val names = ForwardLegacyNames(listOf(name), listOf(shape), csharp = true)
+  return legacyRouteParameter(name, type, 0, shape, tracker, names, optional = false)
+}
+
+/**
  * [ForwardLegacyNames] for a legacy member's parameters in their C# spelling, which is what the
  * `DllImport` declares its slots under. The translators read the fixed `scopeHandle` / `userData`
  * slot names off this same instance, so a user parameter spelled like either keeps its name.
@@ -216,15 +235,19 @@ internal fun legacyCsharpNames(
   csharp = true,
 )
 
-private fun legacyRouteParameter(
-  param: KSValueParameter,
+/**
+ * The C# parameter of legacy-route slot [index] of [names], spelled [name], of [declared] type.
+ * ADR-238: an extension receiver is lowered here too, as slot zero.
+ */
+internal fun legacyRouteParameter(
+  name: String,
+  declared: KSType,
   index: Int,
   shape: ForwardLegacyParameterShape,
   tracker: CollectionHelperTracker,
   names: ForwardLegacyNames,
   optional: Boolean,
 ): CirParameter {
-  val name: String = (param.name?.asString() ?: "_").csharpParameterName()
   return when (shape) {
     is ForwardLegacyParameterShape.Marshalled -> {
       tracker.trackCollection(shape.type)
@@ -292,7 +315,7 @@ private fun legacyRouteParameter(
     is ForwardLegacyParameterShape.NullableScalar -> {
       val enum: BridgeType.Enum? = shape.type as? BridgeType.Enum
       val inner: String = enum?.csharpType
-        ?: mapParamType(param.type.resolve().expandAliases().declaration.simpleName.asString())
+        ?: mapParamType(declared.expandAliases().declaration.simpleName.asString())
       val public: String = if (shape.optional) "global::Kotlin.Native.Interop.KotlinOptional<$inner?>" else "$inner?"
       val defaultValue: String? = when {
         !optional -> null
@@ -422,12 +445,11 @@ private fun legacyRouteParameter(
     // A `Plain` string is non-null (a nullable or defaulted one is `NullableScalar`), so its read
     // refuses the `null!` C# can always pass, as every other non-null string crossing does.
     ForwardLegacyParameterShape.Plain, is ForwardLegacyParameterShape.Refused -> {
-      val resolved: KSType = param.type.resolve().expandAliases()
-      val type: String = mapParamType(resolved.declaration.simpleName.asString())
+      val csharp: String = mapParamType(declared.expandAliases().declaration.simpleName.asString())
       CirParameter(
         name,
-        type,
-        nativeArgumentExpression = if (type == "string") nonNullStringOrThrow(name) else null,
+        csharp,
+        nativeArgumentExpression = if (csharp == "string") nonNullStringOrThrow(name) else null,
       )
     }
   }
@@ -460,7 +482,8 @@ internal fun legacyWireParameter(
   val nullable: Boolean = planned is BridgeType.Nullable
   // Only a bare `byte[]` or interface is a C# reference type; a struct or `Nullable<T>` is not.
   val declared: BridgeType = shape.declared.unwrapNullable()
-  val reference: Boolean = declared == BridgeType.ByteArray || declared is BridgeType.Interface
+  val reference: Boolean = declared == BridgeType.ByteArray || declared is BridgeType.Interface ||
+    declared is BridgeType.BoundInterface
   fun scalar(nativeType: String, argument: String): CirParameter = CirParameter(
     name,
     type = public,
@@ -535,10 +558,16 @@ internal fun legacyWireParameter(
       }
       minted(create, owned)
     }
+    // ADR-238: a fresh transfer GCHandle Kotlin's `nuget{Iface}Value` takes ownership of, so
+    // nothing is released here (the plan route's `boundInterfacePrelude`).
+    is BridgeType.BoundInterface -> {
+      val alloc = "GCHandle.ToIntPtr(GCHandle.Alloc($value))"
+      if (nullable) scalar("IntPtr", "($value) is null ? IntPtr.Zero : $alloc")
+      else scalar("IntPtr", alloc)
+    }
     BridgeType.Unit,
     BridgeType.Char,
     is BridgeType.Throwable,
-    is BridgeType.BoundInterface,
     is BridgeType.ValueClass,
     is BridgeType.Nullable,
     is BridgeType.Callback,

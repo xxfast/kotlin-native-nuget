@@ -110,7 +110,7 @@ class Tier1UnroutedPositionsTest {
     // --- extension owner (receiver `Depot`) ---------------------------------------------------
     // The extension planner's symbol carries no receiver: `{package}.{function}` (verified in
     // `ForwardCallablePlanner.extensionEntry`), so these names have no `Depot.` segment.
-    returns("tier1.unrouted.flowReturnOnExtension"),
+    // ADR-238: `flowReturnOnExtension` binds on the static flow route now; see the test below.
     returns("tier1.unrouted.genericReturnOnExtension"),
 
     // --- top-level owner ----------------------------------------------------------------------
@@ -354,7 +354,6 @@ class Tier1UnroutedPositionsTest {
       "GenericReturnOnObject(",
       "GenericParamOnObject(",
       "GenericReturnOnInterface(",
-      "FlowReturnOnExtension(",
       "GenericReturnOnExtension(",
       "GenericParamOnTopLevel(",
       "StructuralRefusedOnTopLevel(",
@@ -368,15 +367,25 @@ class Tier1UnroutedPositionsTest {
     }
   }
 
-  /** ADR-230: a Flow return on an object and at the top level binds as a static `KotlinFlow`. */
+  /**
+   * ADR-230: a Flow return on an object and at the top level binds as a static `KotlinFlow`;
+   * ADR-238: so does an extension's.
+   */
   @Test
   fun `the static Flow returns bind and are not named as a skip`() {
     val result: Tier1Result = run()
 
     assertContains(result.generatedCSharp, "public static KotlinFlow<int> FlowReturnOnObject()")
     assertContains(result.generatedCSharp, "public static KotlinFlow<int> FlowReturnOnTopLevel()")
+    assertContains(
+      result.generatedCSharp,
+      "public static KotlinFlow<int> FlowReturnOnExtension(this global::Interop.Depot receiver)",
+    )
     assertFalse(
-      result.kspWarnings.any { "flowReturnOnObject" in it || "flowReturnOnTopLevel" in it },
+      result.kspWarnings.any { warning ->
+        listOf("flowReturnOnObject", "flowReturnOnTopLevel", "flowReturnOnExtension")
+          .any { member -> member in warning }
+      },
       "kspWarnings=${result.kspWarnings}",
     )
   }

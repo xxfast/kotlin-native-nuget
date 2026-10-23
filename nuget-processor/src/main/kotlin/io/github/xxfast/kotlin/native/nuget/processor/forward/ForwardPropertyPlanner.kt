@@ -14,6 +14,7 @@ import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
+import io.github.xxfast.kotlin.native.nuget.processor.cir.extensionHomeDeclaration
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.forwardSuperInterfaceSpelling
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
@@ -477,6 +478,8 @@ internal class ForwardPropertyPlanner(
       .filter { it.getVisibility() == Visibility.PUBLIC }
       // Issue #235: a compiler plugin's property (`descriptor` and friends) never plans.
       .filter { prop -> !prop.isCompilerOwnedMember(cls) }
+      // ADR-238: a member extension property binds as accessor methods on the class method route.
+      .filter { prop -> !prop.isMemberExtension() }
       .filter { prop -> prop.isForwardPlannableMemberOf(cls, superClass) }
       .mapNotNull { prop ->
         propertyPlan(
@@ -821,7 +824,8 @@ internal class ForwardPropertyPlanner(
     // eligible sealed base becomes a bare `ObjectHandle` before `supportedReceiver` looks, so it
     // rides the existing handle arms of the emitter and the projection; an ineligible one stays a
     // protocol and drops below exactly as before.
-    val receiverType: BridgeType = classifier.classify(receiver).sealedAsHandle()
+    // ADR-238: a star-projected receiver (`Bindle<*>`, `List<*>`) synthesizes a block parameter.
+    val receiverType: BridgeType = classifier.classifyReceiver(receiver).sealedAsHandle()
     val supportedReceiver: Boolean = receiverType.isSupportedReceiver()
     // ADR-133 amendment: the receiver spelled with its enclosing chain (`Aviary.Perch`), in the
     // plan symbol and -- lowercased and `_`-joined by `nativePrefix()` -- in the entry point. The
@@ -839,9 +843,12 @@ internal class ForwardPropertyPlanner(
     val symbol: String = extensionPropertySymbol(prop, nullableValueReceiver)
     // ADR-163: the receiver chain UNQUALIFIED. The package part of an extension symbol is the
     // extension's own package, supplied by `symbols.extension` below.
-    val receiverPrefix: String = (receiver.declaration as? KSClassDeclaration)
+    // ADR-238: a bare `T` takes its home's prefix (`dozer_`), `any_` when unbounded.
+    val home: KSDeclaration? = receiver.declaration.extensionHomeDeclaration()
+    val receiverPrefix: String = (home as? KSClassDeclaration)
       ?.let { declaration -> ForwardSymbolTable.ownerChain(declaration) }
-      ?: receiver.declaration.simpleName.asString().lowercase()
+      ?: home?.simpleName?.asString()?.lowercase()
+      ?: "any"
     val name: String = prop.simpleName.asString()
     // ADR-064's position coverage: the receiver is the last position that used to vanish silently.
     // Nothing legacy-routes an extension property by receiver, so unlike `recordDropped` there is
@@ -915,7 +922,44 @@ internal class ForwardPropertyPlanner(
       prop = prop,
       getExport = symbols.extension(prop, receiverPrefix, "get_${toCName(name)}", taken),
       setExport = symbols.extension(prop, receiverPrefix, "set_${toCName(name)}", taken),
-    )
+    )?.copy(typeParameters = prop.extensionTypeParameters(receiverType))
+  }
+
+  /**
+   * ADR-238: the block type parameters of an extension property: its own, then the star
+   * projections of [receiverType] (`TBindle` for `Bindle<*>`), which Kotlin never names.
+   */
+  private fun KSPropertyDeclaration.extensionTypeParameters(
+    receiverType: BridgeType,
+  ): List<ForwardMethodTypeParameter> {
+    val own: List<ForwardMethodTypeParameter> = typeParameters.map { parameter ->
+      val bound: String = parameter.forwardBoundSpellings().firstOrNull() ?: "Any"
+      val nullable: String = if (parameter.hasNullableBound()) "?" else ""
+      ForwardMethodTypeParameter(
+        name = parameter.simpleName.asString(),
+        kotlinName = parameter.simpleName.asString(),
+        kotlinTypeArgument = bound + nullable,
+      )
+    }
+    val starred: List<String> = when (val unwrapped: BridgeType = receiverType.unwrapNullable()) {
+      is BridgeType.ObjectHandle -> unwrapped.starTypeParameters
+      is BridgeType.Collection -> listOfNotNull(unwrapped.element, unwrapped.key, unwrapped.value)
+        .mapNotNull { component -> component.unwrapNullable() as? BridgeType.TypeParameter }
+        .filter { component -> component.kotlinName == STAR_KOTLIN_NAME }
+        .map { component -> component.name }
+        .distinct()
+      BridgeType.Unit, is BridgeType.Primitive, BridgeType.Char, BridgeType.String,
+      BridgeType.Instant, BridgeType.Duration, is BridgeType.Throwable, BridgeType.Uuid,
+      is BridgeType.Enum, is BridgeType.Interface, is BridgeType.BoundInterface,
+      is BridgeType.ValueClass, BridgeType.ByteArray, is BridgeType.Nullable,
+      is BridgeType.Callback, is BridgeType.AsyncCallback, is BridgeType.FlowSource,
+      is BridgeType.ReturnedLambda, is BridgeType.SpecializedProtocol, is BridgeType.RawKSType,
+      is BridgeType.Unsupported, is BridgeType.RawCollection, is BridgeType.TypeParameter,
+        -> emptyList()
+    }
+    return own + starred.map { name ->
+      ForwardMethodTypeParameter(name, STAR_KOTLIN_NAME, kotlinTypeArgument = "")
+    }
   }
 
   /**
@@ -974,6 +1018,11 @@ internal class ForwardPropertyPlanner(
       is BridgeType.ObjectHandle, is BridgeType.Interface, BridgeType.String,
       BridgeType.Uuid -> true
 
+      // ADR-238: the handle-minting receivers ride the null pointer too: C# mints the bytes,
+      // collection or transfer handle only for a present value, and Kotlin reads it behind `?.`.
+      BridgeType.ByteArray, is BridgeType.BoundInterface, is BridgeType.TypeParameter -> true
+      is BridgeType.Collection -> inner.isSetterEligible()
+
       is BridgeType.ValueClass ->
         inner.underlying is BridgeType.String || inner.underlying is BridgeType.ObjectHandle ||
             hasValueFanOutInner() != null
@@ -985,9 +1034,6 @@ internal class ForwardPropertyPlanner(
       BridgeType.Duration,
       is BridgeType.Throwable,
       is BridgeType.Enum,
-      is BridgeType.BoundInterface,
-      BridgeType.ByteArray,
-      is BridgeType.Collection,
       is BridgeType.Nullable,
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
@@ -997,7 +1043,6 @@ internal class ForwardPropertyPlanner(
       is BridgeType.RawKSType,
       is BridgeType.Unsupported,
       is BridgeType.RawCollection,
-      is BridgeType.TypeParameter,
         -> hasValueFanOutInner() != null
     }
 
@@ -1017,13 +1062,17 @@ internal class ForwardPropertyPlanner(
     // setter value already uses, as the function route's `Char` receiver does.
     BridgeType.Char -> true
 
-    // ADR-147: an extension property over a bare `T` receiver is not a generic-class member and
-    // has no carrier to hang off; refused as it is today.
-    // ADR-151: a `ByteArray` receiver is still refused -- it is not in the ADR-132 function-route
-    // receiver set either, so admitting it here would be a new position, not parity.
-    BridgeType.ByteArray, BridgeType.Unit, is BridgeType.Throwable,
+    // ADR-238: a `ByteArray` receiver is the bytes handle C# mints and disposes around the call,
+    // exactly as a `ByteArray` setter value is (ADR-151).
+    BridgeType.ByteArray -> true
+
+    // ADR-238: a bare `T` receiver is the box C# mints with `Wrap<T>`, read by its bounds, homed
+    // on its first bound's `{Bound}Extensions` (or `ObjectExtensions`), as a function's is.
+    is BridgeType.TypeParameter -> true
+
+    BridgeType.Unit, is BridgeType.Throwable,
     is BridgeType.SpecializedProtocol, is BridgeType.RawKSType, is BridgeType.Unsupported,
-    is BridgeType.TypeParameter, is BridgeType.RawCollection -> false
+    is BridgeType.RawCollection -> false
   }
 
   private fun propertyPlan(

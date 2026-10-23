@@ -669,8 +669,11 @@ private fun inputLowering(type: BridgeType, name: String): String = when (type) 
         "$name?.let { ${inner.qualifiedName}($lowered) }"
       }
 
+    // ADR-238: a null `IFeedable?` receiver is the null pointer; a present one the transfer
+    // GCHandle `nuget{Iface}Value` takes ownership of, as the non-null arm below.
+    is BridgeType.BoundInterface -> "$name?.let { ${inner.valueHelper()}(it) }"
+
     BridgeType.Unit,
-    is BridgeType.BoundInterface,
     is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,

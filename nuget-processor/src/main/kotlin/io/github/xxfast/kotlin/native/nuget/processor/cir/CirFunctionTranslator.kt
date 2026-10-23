@@ -10,6 +10,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.freshName
 import io.github.xxfast.kotlin.native.nuget.processor.nonNullStringOrThrow
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticSuspendReceiver
+import io.github.xxfast.kotlin.native.nuget.processor.forward.starTypeParameters
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.nullableRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpAsyncMemberName
@@ -30,6 +31,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParam
 import io.github.xxfast.kotlin.native.nuget.processor.forward.declaredCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyInterfaceRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.suspendAwaitedType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyHandleRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyValueClassRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyEnumRead
@@ -67,7 +69,8 @@ internal fun translateSuspendFunction(
   if (classifier.legacyRefusedParameter(func.parameters) != null) return emptyList()
   // ADR-214: the Kotlin half's own admission, ADR-197/211's rules for a function's own `T`.
   if (func.forwardMemberGenericRefusal() != null) return emptyList()
-  val returnType = func.returnType?.resolve()?.expandAliases()
+  // ADR-238: a `Result<T>` result awaits its `T`.
+  val returnType = func.suspendAwaitedType()
   // ADR-119: a generic return that is not a marshallable collection skips on both halves.
   val returnShape: ForwardLegacyReturnShape = classifier.legacyReturnShape(returnType)
   if (returnShape is ForwardLegacyReturnShape.Refused) return emptyList()
@@ -224,7 +227,10 @@ internal fun translateSuspendFunction(
     isAsync = true,
     openSlotFills = classifier.openSlotFills(func),
     asyncReturnType = asyncReturnType,
-    typeParameters = func.cirMethodTypeParameters(context, logger),
+    // ADR-238: and a star-projected receiver's synthesized ones (`IsPackedLaterAsync<TBindle>`).
+    typeParameters = func.cirMethodTypeParameters(context, logger) +
+      (receiver as? ForwardStaticSuspendReceiver.Parameter)?.shape?.starTypeParameters().orEmpty()
+        .map { name -> CirTypeParameter(name) },
     flowElementRead = stateFlowElement?.read,
     flowElementNullable = stateFlowElement?.elementNullable == true,
     acquiredFlowNullable = acquiredFlowNullable,
@@ -349,6 +355,13 @@ internal fun ForwardStaticSuspendReceiver.cirReceiverParameter(
       hasValue = if (shape.fansOut) "${name}HasValue" else null,
       handle = "${name}Handle",
       owned = "${name}Owned",
+    )
+
+    // ADR-238: parameter zero of its own name set, through the declared parameters' lowering.
+    is ForwardStaticSuspendReceiver.Parameter -> legacyRouteParameter(
+      name, type, 0, shape, requireNotNull(tracker),
+      ForwardLegacyNames(listOf(name), listOf(shape), csharp = true),
+      optional = false,
     )
 
     // ADR-225: the ADR-214 boxed `T`, minted before the extern and released after it returns.

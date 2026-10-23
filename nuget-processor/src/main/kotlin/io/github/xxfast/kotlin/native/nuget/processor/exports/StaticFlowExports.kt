@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinIdentifier
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.CodeBlock
@@ -22,6 +23,10 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.importIfDefaultPac
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinPackageReference
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyHandleStatement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardBoundedRead
+import com.squareup.kotlinpoet.MemberName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardExtensionImportAlias
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyArgument
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyPrelude
 
 /**
  * ADR-230: how a static flow member is reached. [stem] is the planner's export stem; [qualifier]
@@ -32,6 +37,8 @@ internal data class ForwardStaticFlowCall(
   val stem: String,
   val qualifier: (String) -> String,
   val receiver: ForwardStaticSuspendReceiver?,
+  // ADR-238: the name the call spells in place of the member's own (an extension's import alias).
+  val name: String? = null,
 )
 
 /**
@@ -59,11 +66,27 @@ internal fun ForwardStaticFlowCall.slots(
       setOf(names.onNext, names.onComplete, names.onError, names.userData, names.obj, names.scope,
         names.scopeHandle),
   )
+  // ADR-238: an extension receiver on the parameter path is parameter zero of its own name set,
+  // the member's parameters and the fixed slots reserved so no lowered local meets them.
+  val reserved: List<String> = method.legacyParameterNames() + listOf(
+    names.onNext, names.onComplete, names.onError, names.userData, names.obj, names.scope,
+    names.scopeHandle,
+  )
+  val receiverNames = ForwardLegacyNames(
+    listOf(slot) + reserved,
+    listOf(
+      (receiver as? ForwardStaticSuspendReceiver.Parameter)?.shape
+        ?: ForwardLegacyParameterShape.Plain,
+    ) +
+      reserved.map { ForwardLegacyParameterShape.Plain },
+  )
   val read: String = when (val receiver = receiver) {
     is ForwardStaticSuspendReceiver.Handle, is ForwardStaticSuspendReceiver.Box -> names.obj
     is ForwardStaticSuspendReceiver.Wire -> receiver.shape.view?.kotlinWrap(names.obj) ?: names.obj
     is ForwardStaticSuspendReceiver.Enum -> "${receiver.kotlinType}.entries[$slot]"
     is ForwardStaticSuspendReceiver.Scalar, null -> slot
+    is ForwardStaticSuspendReceiver.Parameter ->
+      "(${receiverNames.legacyArgument(0, slot.kotlinIdentifier())})"
   }
   val prelude: String = when (val receiver = receiver) {
     is ForwardStaticSuspendReceiver.Handle ->
@@ -79,6 +102,7 @@ internal fun ForwardStaticFlowCall.slots(
     }
     is ForwardStaticSuspendReceiver.Wire -> receiver.wirePrelude(slot, names.obj) + "\n"
     is ForwardStaticSuspendReceiver.Scalar, is ForwardStaticSuspendReceiver.Enum, null -> ""
+    is ForwardStaticSuspendReceiver.Parameter -> receiverNames.legacyPrelude(listOf(slot))
   }
   val parameter: List<ParameterSpec> = when (val receiver = receiver) {
     is ForwardStaticSuspendReceiver.Wire ->
@@ -90,6 +114,12 @@ internal fun ForwardStaticFlowCall.slots(
     is ForwardStaticSuspendReceiver.Enum -> ParameterSpec.builder(slot, INT).build()
     is ForwardStaticSuspendReceiver.Box ->
       ParameterSpec.builder(slot, cOpaquePointer.copy(nullable = receiver.nullable)).build()
+    is ForwardStaticSuspendReceiver.Parameter -> return slotsOf(
+      qualifiedName, names, read, prelude,
+      FunSpec.builder("receiver").addLegacySlots(slot, 0, receiver.shape, receiverNames) {
+        receiver.type.toBridgeTypeName(nullable = false)
+      }.parameters,
+    )
     null -> null
   }.let(::listOfNotNull)
   return slotsOf(qualifiedName, names, read, prelude, parameter)
@@ -160,6 +190,14 @@ internal fun FileSpec.Builder.addStaticFlowExports(
     is ForwardStaticFlowOwner.EnumMember -> {
       importIfDefaultPackage(owner.enum)
       ForwardStaticFlowCall(owner.stem, { read -> "$read." }, owner.receiver)
+    }
+    // ADR-238: an extension is called on its receiver's read through its import alias.
+    is ForwardStaticFlowOwner.Extension -> {
+      val alias: String =
+        forwardExtensionImportAlias(function.packageName.asString(), function.simpleName.asString())
+      val member = MemberName(function.packageName.asString(), function.simpleName.asString())
+      addAliasedImport(member, alias)
+      ForwardStaticFlowCall(owner.stem, { read -> "$read." }, owner.receiver, name = alias)
     }
     is ForwardStaticFlowOwner.ValueClass -> {
       importIfDefaultPackage(owner.valueClass)
