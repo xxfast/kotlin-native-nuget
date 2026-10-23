@@ -212,6 +212,7 @@ internal fun translateSuspendFunction(
     isExtension = receiverParameter != null,
     asyncReceiver = structReceiver,
     isAsync = true,
+    openSlotFills = classifier.openSlotFills(func),
     asyncReturnType = asyncReturnType,
     typeParameters = func.cirMethodTypeParameters(context, logger),
     flowElementRead = stateFlowElement?.read,

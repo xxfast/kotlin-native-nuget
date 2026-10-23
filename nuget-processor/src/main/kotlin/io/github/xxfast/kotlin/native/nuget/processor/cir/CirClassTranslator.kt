@@ -23,6 +23,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.withOpenSlotFills
+import io.github.xxfast.kotlin.native.nuget.processor.forward.openSlotFills
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpAsyncMemberName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpMemberName
 import io.github.xxfast.kotlin.native.nuget.processor.kotlinConstantToPascalCase
@@ -2104,7 +2106,10 @@ internal fun flowProperty(
     type = type,
     nativeReturnType = nativeReturnType,
     nativeName = propName.asCSymbol(),
-    getter = getter,
+    // ADR-216 (second amendment): a flow getter fills every open slot its element nests.
+    getter = getter.withOpenSlotFills(
+      listOf(classifier.openSlotType(prop.type.resolve())).openSlotFills("                "),
+    ),
     setter = null,
     extraNatives = emptyList(),
     isFlow = true,
@@ -2283,6 +2288,7 @@ internal fun flowMembers(
         isFlowProperty = method is ForwardStaticFlowGetter,
         flowReceiverArgument = staticReceiver?.nativeArgument,
         flowReceiverLocal = receiverLocal,
+        openSlotFills = classifier.openSlotFills(method),
         typeParameters = ownTypeParameters,
         flowElementType = flowCsElementType,
         flowElementRead = flowElementRead,
@@ -2346,6 +2352,7 @@ internal fun flowMembers(
         isFlowProperty = method is ForwardStaticFlowGetter,
         flowReceiverArgument = staticReceiver?.nativeArgument,
         flowReceiverLocal = receiverLocal,
+        openSlotFills = classifier.openSlotFills(method),
         typeParameters = ownTypeParameters,
         isStateFlow = true,
         flowElementType = flowCsElementType,
@@ -2441,6 +2448,7 @@ internal fun flowMembers(
         isFlowProperty = method is ForwardStaticFlowGetter,
         flowReceiverArgument = staticReceiver?.nativeArgument,
         flowReceiverLocal = receiverLocal,
+        openSlotFills = classifier.openSlotFills(method),
         typeParameters = ownTypeParameters,
         isStateFlow = true,
         flowElementType = flowCsElementType,
@@ -2491,6 +2499,7 @@ internal fun flowMembers(
       isFlowProperty = method is ForwardStaticFlowGetter,
       flowReceiverArgument = staticReceiver?.nativeArgument,
       flowReceiverLocal = receiverLocal,
+      openSlotFills = classifier.openSlotFills(method),
       typeParameters = ownTypeParameters,
       flowElementType = flowCsElementType,
       flowElementRead = flowElementRead,
@@ -2657,6 +2666,7 @@ internal fun suspendMembers(
       parameters = methodParams,
       body = "",
       isAsync = true,
+      openSlotFills = classifier.openSlotFills(method),
       // ADR-214: the member's own `<T>`, constrained as the planned route constrains it. Only a
       // generic member reads the logger (a dropped builtin bound is reported once, here).
       typeParameters =
@@ -2807,6 +2817,7 @@ internal fun suspendMembers(
       parameters = methodParams,
       body = "",
       isAsync = true,
+      openSlotFills = classifier.openSlotFills(method),
       asyncReturnType = asyncReturnType,
       // The `read:` the awaited `KotlinStateFlow<T>` is constructed with (ADR-123's slot,
       // ADR-136's expression). Null for a class element, which keeps the ctor's default read.
@@ -6092,3 +6103,25 @@ internal fun awaitedStateFlowCollectionImports(
     visibility = CirVisibility.PRIVATE,
   ),
 )
+
+/**
+ * ADR-216 (second amendment): the `NugetFactory<T>` fills for every open instantiation [function]'s
+ * signature nests, for the `suspend` and `Flow` routes, which render from [CirMethod] rather than a
+ * planned body.
+ */
+internal fun ForwardBridgeTypeClassifier.openSlotFills(function: KSFunctionDeclaration): String =
+  (listOfNotNull(function.returnType) + function.parameters.map { it.type })
+    .map { reference -> openSlotType(reference.resolve()) }
+    .openSlotFills()
+
+/**
+ * [type] classified for [openSlots]. A `Flow`, `StateFlow` or `SharedFlow` classifies as its bare
+ * protocol, so its element is read instead: that is the value each emission brings to C#.
+ */
+internal fun ForwardBridgeTypeClassifier.openSlotType(type: KSType): BridgeType {
+  val expanded: KSType = type.expandAliases()
+  val name: String? = expanded.declaration.qualifiedName?.asString()
+  val element: KSType? = expanded.arguments.singleOrNull()?.type?.resolve()
+  val flow: Boolean = name in FLOW_TYPES || name in STATE_FLOW_TYPES
+  return if (flow && element != null) classify(element) else classify(type)
+}

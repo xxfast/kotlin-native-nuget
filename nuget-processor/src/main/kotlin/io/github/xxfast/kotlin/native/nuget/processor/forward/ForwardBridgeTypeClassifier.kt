@@ -835,10 +835,11 @@ internal class ForwardBridgeTypeClassifier(
       }
       if (argument.mentionsAnyTypeParameter()) {
         closed = false
-        // ADR-216 amendment: an open nested instantiation the member fills the slot for.
+        // ADR-216 amendment: an open nested instantiation the member fills the slot for. A
+        // generic sealed handle counts too (second amendment): its slot reads `FromHandle`.
         val nested: BridgeType =
           if (classified is BridgeType.Nullable) classified.type else classified
-        if (nested is BridgeType.ObjectHandle && !nested.viaDiscriminator) {
+        if (nested is BridgeType.ObjectHandle) {
           openArguments += nested.openArguments
           if (nested.open) openArguments += nested
         }

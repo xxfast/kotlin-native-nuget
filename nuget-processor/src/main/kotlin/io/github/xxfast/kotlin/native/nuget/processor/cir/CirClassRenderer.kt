@@ -311,13 +311,19 @@ private fun StringBuilder.renderClassDeclaration(cls: CirClass) {
   appendLine()
 
   // ADR-216 amendment: the ADR-199 `NugetFactory<T>` slot, extended to every exported generic
-  // class, so an erased read of an instantiation the consumer has touched finds its factory.
-  if (cls.typeParameters.isNotEmpty() && !cls.isAbstract) {
+  // class, so an erased read of an instantiation the consumer has touched finds its factory. An
+  // abstract one (second amendment) constructs its backing, held by the non-generic `${cls.name}`.
+  if (cls.typeParameters.isNotEmpty() && (!cls.isAbstract || cls.backingName != null)) {
+    val constructed: String = if (cls.isAbstract) {
+      "${cls.name}.${cls.backingName}$typeParameters"
+    } else {
+      "${cls.name}$typeParameters"
+    }
     appendLine("        static ${cls.name}()")
     appendLine("        {")
     appendLine(
       "            NugetFactory<${cls.name}$typeParameters>.Create = " +
-          "static handle => new ${cls.name}$typeParameters(handle, out _);",
+          "static handle => new $constructed(handle, out _);",
     )
     appendLine("        }")
     appendLine()
@@ -751,13 +757,11 @@ private fun StringBuilder.renderMethodBody(method: CirMethod, className: String)
   // ADR-174: `nameof(Crate)` does not bind inside `Crate<T>` (CS0305); an explicit implementation
   // names its interface instead, which always does.
   val disposedName: String = method.explicitInterface ?: className
-  if (method.isAsync) {
-    renderAsyncMethod(method, disposedName)
-    return
-  }
-
-  if (method.isFlow) {
-    renderFlowMethod(method, disposedName)
+  if (method.isAsync || method.isFlow) {
+    val rendered = StringBuilder()
+    if (method.isAsync) rendered.renderAsyncMethod(method, disposedName)
+    else rendered.renderFlowMethod(method, disposedName)
+    append(rendered.withOpeningFills(method.openSlotFills))
     return
   }
 
@@ -1224,4 +1228,18 @@ private fun StringBuilder.renderStateFlowCompareAndSetPropertyImport(
   appendLine(requireNotNull(narrowReturnMarshal("bool")))
   appendLine("        private static extern bool Native_CompareAndSet${prop.nativeStem}Value(NugetKotlinHandle handle, $params, out IntPtr error);")
   appendLine()
+}
+
+/**
+ * ADR-216 (second amendment): [fills] inserted as the first statements of a rendered member, right
+ * after its opening brace.
+ */
+private fun StringBuilder.withOpeningFills(fills: String): String {
+  val rendered: String = toString()
+  if (fills.isEmpty()) return rendered
+  val brace = "\n        {\n"
+  val at: Int = rendered.indexOf(brace)
+  check(at >= 0) { "A member filling open factory slots renders no opening brace:\n$rendered" }
+  val end: Int = at + brace.length
+  return rendered.substring(0, end) + fills + rendered.substring(end)
 }

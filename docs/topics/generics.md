@@ -800,16 +800,28 @@ IReadOnlyList<string> names = groomer.Gather(new List<string> { "Oreo", "Mylo" }
 A returned basket is yours to dispose, and a passed one is borrowed. A `Result` payload gains the
 `Try` twin of any other [`Result` return](exceptions.md). A `Basket<T>` also works inside a
 class-`T` member (`Basket<Basket<T>>`) and reads its inner basket without the consumer touching
-`Basket<int>` first.
+`Basket<int>` first. The same holds at any depth and any position: a getter or setter, a parameter, a list or map
+element, a callback argument, a `Flow` element, a returned lambda, a `suspend` result or a `Result`
+payload.
+
+```kotlin
+class Satchel<T>(val item: T) {
+  val nested: Basket<Basket<T>> = Basket(Basket(item))
+  val baskets: List<Basket<T>> = listOf(Basket(item), Basket(item))
+}
+```
+
+```C#
+using var satchel = new Satchel<short>(7);
+using Basket<Basket<short>> nested = satchel.Nested;
+using Basket<short> inner = nested.Item;            // no prior use of Basket<short> needed
+```
 
 What still skips, named:
 
 - `kotlin.Array<T>`, and a `T` inside a [generic value class](value-classes.md#a-generic-value-class)
   under `?` or in a `List`, `Set` or `Map`.
 - A nested generic class argument the wire cannot read, such as `Box<List<T>>`.
-- An open instantiation nested two or more levels deep that you read through a property getter,
-  or any position outside a member's result, before you hold one yourself. It throws
-  `NotSupportedException` on the read.
 
 ## Type aliases
 
