@@ -333,6 +333,10 @@ private fun legacyRouteParameter(
         tracker.asyncCallbacks += callback
       }
       (shape.type as? BridgeType.FlowSource)?.let { flow -> tracker.flowSources += flow }
+      // ADR-231: a plain lambda, key released by Kotlin when the coroutine or collection ends.
+      (shape.type as? BridgeType.Callback)?.let { callback ->
+        tracker.asyncPlainCallbacks += callback
+      }
       val slots: ForwardAsyncSlots = requireNotNull(names.asyncSlots[index])
       CirParameter(
         name,
@@ -344,6 +348,7 @@ private fun legacyRouteParameter(
         nativeSlots = slots.declared,
         asyncKeyLocal = slots.csharpKey,
         asyncKeyRegister = forwardAsyncRegistration(name, shape.type),
+        flowHeldKey = if (shape.type is BridgeType.Callback) "${slots.csharpKey}Held" else null,
       )
     }
 

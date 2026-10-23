@@ -7,6 +7,22 @@ internal fun StringBuilder.renderCallbackDelegateHelper(helper: CirCallbackDeleg
     appendLine()
   }
   renderAsyncCallbackDeclarations(helper)
+  // ADR-231: a returned flow's handle releases a plain lambda's key through this when it is
+  // disposed or finalized. Idempotent, like `UnregisterCtx` itself.
+  if (helper.includesReleaseContext) {
+    appendLine("    internal sealed class NugetContextRelease : IDisposable")
+    appendLine("    {")
+    appendLine("        private IntPtr _key;")
+    appendLine()
+    appendLine("        internal NugetContextRelease(IntPtr key) => _key = key;")
+    appendLine()
+    appendLine(
+      "        public void Dispose() => " +
+          "NugetThunks.UnregisterCtx(System.Threading.Interlocked.Exchange(ref _key, IntPtr.Zero));"
+    )
+    appendLine("    }")
+    appendLine()
+  }
 
   // ADR-102: one ahead-of-time compiled [UnmanagedCallersOnly] thunk per delegate shape. The
   // managed closure still exists and is still the thing that runs; what changes is how Kotlin
@@ -485,7 +501,11 @@ private fun StringBuilder.renderAsyncCallbackDeclarations(helper: CirCallbackDel
  * Every other thunk is keyless and acts on a handle Kotlin holds exactly once, so it has no miss.
  */
 private fun StringBuilder.appendAsyncCallbackThunks(helper: CirCallbackDelegateHelper) {
-  if (helper.asyncBegins.isEmpty() && helper.asyncCurrents.isEmpty()) return
+  if (helper.asyncBegins.isEmpty() && helper.asyncCurrents.isEmpty()) {
+    // ADR-231: a plain lambda on a `suspend` or Flow member needs only the release-context thunk.
+    if (helper.includesReleaseContext) appendReleaseContextThunk()
+    return
+  }
   if (helper.asyncCurrents.isNotEmpty()) appendAsyncEnumerationThunks(helper)
   helper.asyncBegins.forEach { begin ->
     val payload: List<String> = begin.payloadTypes.indices.map { index -> "a$index" }
@@ -529,7 +549,15 @@ private fun StringBuilder.appendAsyncCallbackThunks(helper: CirCallbackDelegateH
     "NugetTasks.ReleaseCancellation(a0, a1)",
   )
   appendThunkPointer("NugetAsyncReleaseCancellation", listOf("IntPtr", "int"), "void")
-  // The cleaner passes a null error slot, which selects the shell's FailFast branch.
+  appendReleaseContextThunk()
+}
+
+/**
+ * ADR-210: the thunk Kotlin hands a C# context key back through. The cleaner (ADR-210) and the
+ * launched body's `finally` (ADR-231) pass a null error slot, which selects the shell's FailFast
+ * branch.
+ */
+private fun StringBuilder.appendReleaseContextThunk() {
   appendThunkBody(
     "NugetAsyncReleaseContext", "IntPtr a0, IntPtr* errOut", "void", "UnregisterCtx(a0)",
     errOut = true,

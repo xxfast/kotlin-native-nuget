@@ -192,8 +192,8 @@ code): `Char` as either the lambda's payload or its own return; a payload that i
 non-scalar (`List`, `Set`, `Map`, `Any`, `Pair`, an array, `Duration`, or anything else under
 `kotlin`/`kotlinx` outside a primitive, `String`, `Char` or a `Throwable`, which binds as an unthrown
 `Exception`, see [Throwable values](exceptions.md#throwable-values)); a lambda's *own* return
-outside `Unit`, a primitive, `String` or a `Throwable`, `Exception` or `RuntimeException` (an
-object, an enum, `Char`, or one of those same builtins); a lambda type nested inside a `List`/`Set`/`Map`; a class or object member
+outside `Unit`, a primitive, `String`, an exported class or a `Throwable`, `Exception` or
+`RuntimeException` (an enum, `Char`, or one of those same builtins); a lambda type nested inside a `List`/`Set`/`Map`; a class or object member
 that returns a lambda rather than taking one (a [top-level function](#a-top-level-function-that-returns-a-lambda) can; expose a
 [lambda property](#kotlin-c-lambda-properties-and-returns) on the class instead); and a lambda parameter
 on a constructor, a data class's `copy()`, an enum-arm box constructor, or a value-class member,
@@ -204,7 +204,7 @@ it, and Kotlin owns its lifetime.
 
 ```kotlin
 fun onBatch(cb: (List<Int>) -> Unit) = cb(listOf(1))
-fun makeCat(cb: () -> Cat) { cb() }
+fun pickMood(cb: () -> Mood) { cb() }
 ```
 
 ```
@@ -213,14 +213,14 @@ primitive/String/Char, a class handle or an enum, but not `cb: (List<Int>) -> Un
 `List<Int>` is a Kotlin builtin with no crossing on a callback
     at Walker.kt:<line>
 
-[nuget:SKIPPED_UNSUPPORTED_RETURN] Skipping Walker.makeCat: a callback can return `Unit`, a
-primitive or a `String`, but `cb: () -> Cat` returns `Cat`
+[nuget:SKIPPED_UNSUPPORTED_RETURN] Skipping Walker.pickMood: a callback can return `Unit`, a
+primitive or a `String`, but `cb: () -> Mood` returns `Mood`
     at Walker.kt:<line>
 ```
 
 Neither member is generated on either half, Kotlin included, so nothing calls a delegate that
 doesn't exist on the C# side. Pass the collection one element at a time, or wrap it in an exported
-class and pass that; hand an object or enum result back through a method on the class instead of a
+class and pass that; hand an enum result back through a method on the class instead of a
 lambda return.
 
 ### A nullable lambda parameter {id="a-nullable-lambda-parameter"}
@@ -268,8 +268,32 @@ The rest, including bounds and `T?`, is covered in [Generics](generics.md#a-type
 
 A `suspend (T) -> T` lambda over a member's or class's `T` binds the same way, as
 `Func<T, CancellationToken, Task<T>>`; see [A type parameter in a `Flow` or `suspend` lambda
-parameter](coroutines-and-flow.md#flow-and-suspend-lambda-type-parameter). A `suspend` member cannot
-take a plain lambda at all, `T` or not.
+parameter](coroutines-and-flow.md#flow-and-suspend-lambda-type-parameter). A plain lambda also binds on a `suspend` member and on a member returning a `Flow`; see
+[below](#plain-lambda-on-suspend-or-flow-member).
+
+## A plain lambda on a `suspend` or `Flow` member {id="plain-lambda-on-suspend-or-flow-member"}
+
+A plain lambda parameter on a `suspend` member, or on a member that returns a `Flow`, binds as a
+delegate on every owner those members bind on, with the same payloads as above:
+
+```kotlin
+suspend fun run(steps: Int, onStep: (Int) -> Unit): Int { /* ... */ }
+suspend fun recruit(name: String, make: (String) -> Baton): String = make(name).holder
+```
+
+```C#
+await treadmill.RunAsync(3, step => seen.Add(step));
+string holder = await treadmill.RecruitAsync("Oreo", name => new Baton(name));
+```
+
+Kotlin may call the delegate repeatedly and from other threads while the coroutine runs, so it must
+be thread-safe. It stays valid until the `Task` completes, faults or is cancelled, or until the
+collection ends. Lifetime for each
+shape, including a `suspend` member that returns a `Flow`, is on
+[A plain lambda on a `suspend` or `Flow` member](coroutines-and-flow.md#plain-lambda-on-suspend-member).
+
+A lambda that returns an exported class binds on every per-call lambda route: return a new instance or
+an existing one, and Kotlin takes its own reference.
 
 ## Ownership of a callback payload {id="ownership-of-a-callback-payload"}
 

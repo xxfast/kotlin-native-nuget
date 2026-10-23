@@ -125,9 +125,6 @@ class Tier1CallbackParameterPlanTest {
           return beats
         }
 
-        // An object LAMBDA return: Kotlin would have to release a box the C# wrapper still owns.
-        fun pickToy(make: (Int) -> Toy): Int = make(beats).name.length
-
         // An enum LAMBDA return, refused for the same reason.
         fun pickMood(make: (Int) -> Mood): Int = make(beats).ordinal
 
@@ -151,14 +148,14 @@ class Tier1CallbackParameterPlanTest {
       "the rest of the owner must still be generated",
     )
     listOf(
-      "CountInitials(", "PickToy(", "PickMood(", "AwaitAll(", "CountInitialsAbove(",
+      "CountInitials(", "PickMood(", "AwaitAll(", "CountInitialsAbove(",
     ).forEach { member ->
       assertFalse(
         result.generatedCSharp.contains(member),
         "$member is refused, so no half of it may be rendered; got:\n${result.generatedCSharp}",
       )
     }
-    listOf("countInitials", "pickToy", "pickMood", "awaitAll", "countInitialsAbove")
+    listOf("countInitials", "pickMood", "awaitAll", "countInitialsAbove")
       .forEach { member ->
         assertTrue(
           result.kspWarnings.any { warning -> warning.contains("Refusals.$member") },

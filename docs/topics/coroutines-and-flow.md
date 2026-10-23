@@ -601,8 +601,8 @@ await timer.RingAsync(3); // "ding1,ding2,ding3"
 - **Types.** A payload is a primitive, `String`, an enum or an exported class. The result is `Unit`,
   a primitive or `String`. A `Char` or `Throwable` result, a collection, or a nullable payload or
   result is refused by name, and so is a nullable lambda parameter (`(suspend (T) -> R)?`); the
-  member is then not generated. A plain `(T) -> R` lambda on a `suspend fun` is also refused; see
-  [Lambdas and callbacks](lambdas-and-callbacks.md#c-kotlin-per-call-lambda-parameters). A
+  member is then not generated. A plain `(T) -> R` lambda on a `suspend fun` binds separately; see
+  [A plain lambda on a `suspend` or `Flow` member](#plain-lambda-on-suspend-member). A
   `suspend` lambda parameter on a data class `copy`, an enum member or a value class member is
   untested.
 - **Null.** Passing `null` for the delegate throws `ArgumentNullException` before Kotlin runs, as
@@ -723,6 +723,51 @@ unaffected.
   calling, but a C# class cannot implement that interface: the build reports
   `SKIPPED_UNIMPLEMENTABLE_INTERFACE`, and passing such an implementation to Kotlin throws
   `NotSupportedException`.
+
+## A plain lambda on a `suspend` or `Flow` member {id="plain-lambda-on-suspend-member"}
+
+A plain (non-suspend) lambda parameter on a `suspend` member, or on a member that returns a `Flow`,
+binds as a C# delegate. The delegate may be called any number of times, from other threads, while
+the coroutine runs:
+
+```kotlin
+suspend fun run(steps: Int, onStep: (Int) -> Unit): Int { /* calls onStep per step */ }
+fun watch(laps: Int, onSeen: (Int) -> Unit): Flow<Int> { /* calls onSeen per lap */ }
+suspend fun <T> relay(value: T, pass: (T) -> T): T { /* ... */ }
+```
+
+```C#
+public Task<int> RunAsync(int steps, Action<int> onStep, CancellationToken cancellationToken = default)
+public KotlinFlow<int> Watch(int laps, Action<int> onSeen)
+public Task<T> RelayAsync<T>(T value, Func<T, T> pass, CancellationToken cancellationToken = default)
+```
+
+```C#
+var seen = new List<int>();
+int steps = await treadmill.RunAsync(3, seen.Add); // seen == [0, 1, 2]
+```
+
+It binds on every owner that has a `suspend` or `Flow` route: a class, a sealed arm, a generic
+class, the top level, an `object`, a companion, an extension, an enum member and a value class.
+Payloads are the ones a [per-call lambda](lambdas-and-callbacks.md#c-kotlin-per-call-lambda-parameters)
+carries: primitives, `String`, an exported class in or out, and a member's own or the class's `T`.
+
+Your delegate stays registered until Kotlin is done with it, not until the first call returns:
+
+- **`suspend` member.** Released when the `Task` completes, faults or is cancelled. Cancellation
+  before the coroutine starts counts. Cancel through the `CancellationToken` as usual.
+- **`Flow` member.** Each enumeration registers the delegate afresh and releases it when that
+  enumeration completes, faults, is cancelled or is abandoned with `break` or `DisposeAsync()`.
+  Collecting twice calls the delegate during both.
+- **`suspend` member returning a `Flow`.** The delegate lives as long as the returned
+  `KotlinFlow`, so you can collect it again. Dispose the flow (or let it be collected) to release
+  the delegate. If the call faults, is cancelled or returns `null`, it is released at once.
+
+Passing `null` throws `ArgumentNullException` naming the parameter, immediately on a `suspend`
+member and at the first enumeration on a `Flow` member. An exception thrown by your delegate faults
+the `Task` or the enumeration with that same exception. If Kotlin stores the lambda and calls it
+after the coroutine has ended, a `Unit` lambda is dropped silently and a returning one reports an
+`ObjectDisposedException` to Kotlin, as for a [per-call lambda](lambdas-and-callbacks.md#c-kotlin-per-call-lambda-parameters).
 
 ## Cancellation and disposal
 
@@ -1523,8 +1568,8 @@ await cistern.GulpAsync(Pour(2, 3));   // 1, 2, 3
   takes its own reference. Each wrapper Kotlin returns in a `List<T>` is yours to dispose.
 - The enumerator lifetime, cancellation and error rules of a [`Flow` parameter](#flow-parameter-behaviour)
   and a [`suspend` lambda parameter](#suspend-lambda-parameter-behaviour) apply unchanged.
-- A `suspend` member that also takes a plain (non-suspend) lambda, over `T` or not, is skipped,
-  named. Take a `suspend` lambda instead.
+- A `suspend` member that also takes a plain (non-suspend) lambda binds; see
+  [A plain lambda on a `suspend` or `Flow` member](#plain-lambda-on-suspend-member).
 
 
 ## Parameters on `Flow`, `StateFlow`, and `suspend` members {id="parameters-on-flow-stateflow-and-suspend-members"}

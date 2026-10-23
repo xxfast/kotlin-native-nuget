@@ -38,6 +38,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isLegacyLowered
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isLegacyNullableSlot
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyPrelude
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyNames
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCallbackReleased
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyKotlinNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyParameterShapes
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
@@ -194,6 +195,8 @@ private fun FileSpec.Builder.addStaticSuspendExport(
   val paramShapes: List<ForwardLegacyParameterShape> =
     classifier.legacyParameterShapes(func.parameters, callableCatalog.legacyDefaultFlags(func))
   val names: ForwardLegacyNames = legacyKotlinNames(func.parameters, paramShapes)
+  // ADR-231: a returned flow takes its plain callbacks' keys back to C#, which releases them.
+  names.handsCallbacksBack = qualifiedReturn in FLOW_TYPES + STATE_FLOW_TYPES
   // ADR-229: the receiver slot, named apart from every parameter and generated slot.
   val receiverSlot: String = freshName(
     "receiver",
@@ -310,6 +313,8 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
       method.parameters, callableCatalog.legacyDefaultFlags(method),
     )
     val names: ForwardLegacyNames = legacyKotlinNames(method.parameters, paramShapes)
+    // ADR-231: a returned flow takes its plain callbacks' keys back to C#, which releases them.
+    names.handsCallbacksBack = qualifiedReturn in FLOW_TYPES + STATE_FLOW_TYPES
     // ADR-219: the Flow route's trampoline (ADR-215): a trampolined own `T`, or a multi-bound
     // owner `T` the star-projected receiver cannot be called with.
     val trampoline: ForwardFlowTrampoline? =
@@ -402,14 +407,11 @@ private fun buildSuspendFunctionBody(
     "return launchForCSharp(CoroutineScope(Dispatchers.Default), ${names.callback}, " +
         "${names.userData}, ::nugetMappedType) {"
   )
-  if (isUnit) {
-    appendLine("  $call")
-    appendLine("  null")
-  } else {
-    appendLine("  val result = $call")
-    appendLine("  val resultRef = $resultRefCode")
-    appendLine("  resultRef")
-  }
+  // ADR-231: a plain callback's key is released when the launched body ends, on every arm.
+  val launched: String =
+    if (isUnit) "$call\nnull"
+    else "val result = $call\nval resultRef = $resultRefCode\nresultRef"
+  names.legacyCallbackReleased(launched).trimEnd().lines().forEach { line -> appendLine("  $line") }
   append("}")
 }
 
@@ -435,14 +437,11 @@ private fun buildSuspendMethodBody(
   appendLine("return launchForCSharp(${names.scope}, ${names.callback}, ${names.userData}, ::nugetMappedType) {")
   // `result` / `resultRef` need no minting: they are declared inside the launch lambda and their
   // initializers read the user's argument before the local is in scope.
-  if (isUnit) {
-    appendLine("  $call")
-    appendLine("  null")
-  } else {
-    appendLine("  val result = $call")
-    appendLine("  val resultRef = $resultRefCode")
-    appendLine("  resultRef")
-  }
+  // ADR-231: a plain callback's key is released when the launched body ends, on every arm.
+  val launched: String =
+    if (isUnit) "$call\nnull"
+    else "val result = $call\nval resultRef = $resultRefCode\nresultRef"
+  names.legacyCallbackReleased(launched).trimEnd().lines().forEach { line -> appendLine("  $line") }
   append("}")
 }
 

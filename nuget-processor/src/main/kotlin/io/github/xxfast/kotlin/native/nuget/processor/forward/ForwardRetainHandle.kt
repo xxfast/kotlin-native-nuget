@@ -3,7 +3,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.forward
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 
 /**
- * ADR-215 lane A: the generated per-library export C#'s `NugetMarshal.WrapOwned<T>` calls to turn
+ * ADR-215 "lambda parameter on the plan": the generated per-library export C#'s `NugetMarshal.WrapOwned<T>` calls to turn
  * a borrowed wrapper handle (a live `INugetHandle` the consumer's lambda returned) into a box
  * Kotlin owns. ADR-163's library stem with no package segment: one per library, never a `nuget_*`
  * runtime name, since that ABI is frozen (ADR-201).
@@ -12,11 +12,13 @@ internal fun ForwardSymbolTable.retainHandleExport(): String = "${librarySegment
 
 /**
  * ADR-215: whether this parameter type hands a `T` from C# INTO Kotlin as an owned box, the one
- * position that needs [retainHandleExport]: a lambda's `T` result (lane A), a `suspend` lambda's
- * `T` result (`EndBoxed()`) and a `Flow<T>` element (`CurrentBoxed()`, both lane C).
+ * position that needs [retainHandleExport]: a lambda's `T` result (ADR-215, "lambda parameter on the plan"), a `suspend` lambda's
+ * `T` result (`EndBoxed()`) and a `Flow<T>` element (`CurrentBoxed()`, both ADR-215, "`T` flowing into Kotlin asynchronously"), and
+ * (ADR-231) a lambda's exported class result.
  */
 internal fun BridgeType.boxesIntoKotlin(): Boolean = when (this) {
-  is BridgeType.Callback -> result.unwrapNullable() is BridgeType.TypeParameter
+  is BridgeType.Callback ->
+    result.unwrapNullable() is BridgeType.TypeParameter || result is BridgeType.ObjectHandle
   is BridgeType.AsyncCallback -> result.unwrapNullable() is BridgeType.TypeParameter
   is BridgeType.FlowSource -> element.unwrapNullable() is BridgeType.TypeParameter
   BridgeType.Unit,
@@ -45,9 +47,9 @@ internal fun BridgeType.boxesIntoKotlin(): Boolean = when (this) {
 }
 
 /**
- * ADR-215 lane A: the symbol of the first plan that hands a `T` from C# back to Kotlin
+ * ADR-215 "lambda parameter on the plan": the symbol of the first plan that hands a `T` from C# back to Kotlin
  * ([boxesIntoKotlin]), or null when none does. It is the export's ADR-117 owner. Both halves
- * read this, so the export and its import appear and disappear together; lane C's legacy suspend
+ * read this, so the export and its import appear and disappear together; ADR-215's legacy suspend
  * route adds its own sighting (`ForwardBridgeTypeClassifier.boxedAsyncHost`) on both halves.
  */
 internal fun ForwardCallablePlanCatalog.objectCallbackResultOwner(): String? =

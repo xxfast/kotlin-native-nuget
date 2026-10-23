@@ -400,3 +400,12 @@ protocol name, so `val onNapFor: (Int) -> Unit` binds as `KotlinAction<int>` wit
 classification here is unchanged; a function-typed property still takes no part in the plan. See
 [ADR-064's 2026-10-04 amendment](064-forward-unsupported-declaration-diagnostics.md) for the
 per-owner rule, including the read-only `var` and the refused nullable lambda property.
+
+## Amendment (2026-10-22): an exported class result binds, and the key may outlive the call
+
+[ADR-231](231-plain-lambda-on-suspend-and-flow-members.md) admits an exported class as a callback
+result on every route (`make: (String) -> Baton`): C# returns an owned handle that Kotlin reads and
+releases, so the "a callback can return `Unit`, a primitive or a `String`" refusal no longer applies
+to a class. The call-scoped unregister in this ADR still holds for an ordinary member. On a `suspend`
+or `Flow`-returning member the key is handed over to Kotlin once the native call returns and released
+by a `finally` around the coroutine body; late use behaves as described here.

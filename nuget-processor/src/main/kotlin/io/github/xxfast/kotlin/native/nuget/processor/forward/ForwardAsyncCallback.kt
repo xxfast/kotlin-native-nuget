@@ -16,6 +16,14 @@ internal enum class ForwardAsyncKind {
 
   /** A `Flow<T>`: its own slots are the Enumerate thunk, the Current thunk and the key. */
   FLOW,
+
+  /**
+   * ADR-231: a plain `(T) -> R` on a `suspend` or `Flow`-returning legacy member. Its own slots are
+   * the ADR-160 thunk and the context key; Kotlin releases the key through the shared
+   * release-context thunk when the coroutine (or the collection) ends. Never a plan-route kind:
+   * [BridgeType.asyncKind] stays null for a [BridgeType.Callback].
+   */
+  CALLBACK,
 }
 
 /**
@@ -62,9 +70,13 @@ internal data class ForwardAsyncSlots(
   val moveNextEnd: String get() = shared.getValue(ForwardAsyncShared.MOVE_NEXT_END)
   val disposeEnumeration: String get() = shared.getValue(ForwardAsyncShared.DISPOSE_ENUMERATION)
 
-  /** The slots this parameter itself declares, in ABI order. */
+  /** The slots this parameter itself declares, in ABI order. ADR-231: a callback has no [end]. */
   val declared: List<String>
-    get() = listOf(begin, end, key) + carried.map { slot -> shared.getValue(slot) }
+    get() {
+      val own: List<String> =
+        if (kind == ForwardAsyncKind.CALLBACK) listOf(begin, key) else listOf(begin, end, key)
+      return own + carried.map { slot -> shared.getValue(slot) }
+    }
 }
 
 /** The shared thunks a parameter of [kind] reads, in declaration order. */
@@ -82,6 +94,8 @@ private fun ForwardAsyncKind.sharedSlots(): List<ForwardAsyncShared> = when (thi
     ForwardAsyncShared.DISPOSE_ENUMERATION,
     ForwardAsyncShared.RELEASE_CONTEXT,
   )
+
+  ForwardAsyncKind.CALLBACK -> listOf(ForwardAsyncShared.RELEASE_CONTEXT)
 }
 
 private fun ForwardAsyncShared.stem(): String = when (this) {
@@ -135,10 +149,18 @@ internal fun mintAsyncSlots(
   val shared: MutableMap<ForwardAsyncShared, String> = mutableMapOf()
   return parameters.map { (name, kind) ->
     if (kind == null) return@map null
-    val isFlow: Boolean = kind == ForwardAsyncKind.FLOW
-    val begin: String = mint(if (isFlow) "${name}Enumerate" else "${name}Begin")
-    val end: String = mint(if (isFlow) "${name}Current" else "${name}End")
-    val key: String = mint("${name}Key")
+    // ADR-231: a plain callback keeps the ADR-160 `${name}Ptr` / `${name}Ctx` spelling, no End.
+    val begin: String = when (kind) {
+      ForwardAsyncKind.LAMBDA -> mint("${name}Begin")
+      ForwardAsyncKind.FLOW -> mint("${name}Enumerate")
+      ForwardAsyncKind.CALLBACK -> mint("${name}Ptr")
+    }
+    val end: String = when (kind) {
+      ForwardAsyncKind.LAMBDA -> mint("${name}End")
+      ForwardAsyncKind.FLOW -> mint("${name}Current")
+      ForwardAsyncKind.CALLBACK -> begin
+    }
+    val key: String = mint(if (kind == ForwardAsyncKind.CALLBACK) "${name}Ctx" else "${name}Key")
     val carried: List<ForwardAsyncShared> = kind.sharedSlots().filter { slot -> slot !in shared }
     carried.forEach { slot -> shared[slot] = mint("$name${slot.stem()}") }
     ForwardAsyncSlots(
@@ -626,6 +648,9 @@ internal fun asyncParameterExpression(
   ForwardAsyncKind.FLOW ->
     flowSourceExpression(name, type as BridgeType.FlowSource, slots, holderBuilt)
 
+  // ADR-231: a plain callback is lowered inline at the call (`legacyArgument`), never here.
+  ForwardAsyncKind.CALLBACK -> error("ADR-231 lowers a plain callback at the call, not as $type")
+
   null -> error("ADR-210 has no asynchronous parameter lowering for $type")
 }
 
@@ -633,5 +658,6 @@ internal fun asyncParameterExpression(
 internal fun asyncParameterKotlinType(type: BridgeType): String = when (type.asyncKind()) {
   ForwardAsyncKind.LAMBDA -> (type as BridgeType.AsyncCallback).kotlinFunctionType()
   ForwardAsyncKind.FLOW -> (type as BridgeType.FlowSource).kotlinFlowType()
+  ForwardAsyncKind.CALLBACK -> error("ADR-231 declares no local for a plain callback $type")
   null -> error("ADR-210 has no asynchronous parameter type for $type")
 }

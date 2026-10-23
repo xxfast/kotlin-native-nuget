@@ -493,3 +493,12 @@ Verified by the fixture `purrclock/Doorways.kt` with `IntegrationTests/NullableF
 `NullableFlowParameter_NullAndPresent_ReturnToBaseline`, and `Tier1NullableFlowParameterTest`.
 `Tier1FlowParameterTest`'s `maybe` cell flipped to binding, and `Tier1NullableParameterDiagnosticTest`
 names its unwired nullable parameter with a nullable suspend lambda instead.
+
+## Amendment (2026-10-22): a plain lambda reuses the release thunk with a coroutine-scoped owner
+
+[ADR-231](231-plain-lambda-on-suspend-and-flow-members.md) hands a plain lambda's context key to
+Kotlin through the same `NugetAsyncReleaseContext` thunk and the same hand-over described under
+"Who owns the registered key", but the owner is the coroutine, not a `createCleaner` holder: a
+`finally` around the launched body or the `.collect` releases it, and a `suspend` member returning a
+`Flow` ties it to the returned flow's handle. The cleaner-owned lifetime above is unchanged for a
+`suspend` lambda and a `Flow` parameter.

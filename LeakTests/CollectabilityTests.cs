@@ -3,6 +3,7 @@ using TestLibrary;
 using TestLibrary.Cat;
 using TestLibrary.Catnap;
 using Purrclock = TestLibrary.Purrclock;
+using Dash = TestLibrary.Dash;
 using TestLibrary.Roster;
 using Playroom = TestLibrary.Playroom;
 using Stamps = TestLibrary.Stamps;
@@ -1272,5 +1273,456 @@ public class CollectabilityTests
         Assert.True(
             MarkerCollectedWithin(leash, TimeSpan.FromSeconds(5)),
             "the CancellationTokenSource passed to PurrClock.Forever stayed reachable after it cancelled the enumeration");
+    }
+
+    // ADR-231: a plain lambda on a suspend or Flow member. Its delegate is a key in the callback
+    // context table, which `nuget_live_handles` does not count, so only a collectability row can
+    // prove the key was released: the delegate captures a marker, and the marker must die once the
+    // `Task` (or the collection) ended, on completion, fault and cancellation alike, including when
+    // Kotlin releases the key before the P/Invoke has returned. Each row clears its locals in a
+    // `NoInlining` helper and yields before polling, so neither an async continuation frame nor a
+    // caught exception keeps the marker reachable under NativeAOT.
+    // Oreo chases the red dot until Mylo sits on the laser pointer.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (Action<int> OnStep, WeakReference Marker) DashMarker()
+    {
+        var marker = new object();
+        Action<int> onStep = _ => GC.KeepAlive(marker);
+        return (onStep, new WeakReference(marker));
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference> RunAndDrop(Dash.Treadmill treadmill)
+    {
+        (Action<int> onStep, WeakReference marker) = DashMarker();
+        Assert.Equal(2, await treadmill.RunAsync(2, onStep));
+        onStep = null!;
+        await Task.Yield();
+        return marker;
+    }
+
+    [Fact]
+    public async Task SuspendPlainLambda_AfterCompletion_ItsDelegateIsCollected()
+    {
+        await using var treadmill = new Dash.Treadmill("Oreo");
+        WeakReference marker = await RunAndDrop(treadmill);
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the delegate passed to Treadmill.RunAsync stayed reachable after the Task completed: its callback context was never released");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference> CrashAndDrop(Dash.Treadmill treadmill)
+    {
+        (Action<int> onStep, WeakReference marker) = DashMarker();
+        await Assert.ThrowsAnyAsync<InvalidOperationException>(() => treadmill.CrashAsync(onStep));
+        onStep = null!;
+        await Task.Yield();
+        return marker;
+    }
+
+    [Fact]
+    public async Task SuspendPlainLambda_AfterFault_ItsDelegateIsCollected()
+    {
+        await using var treadmill = new Dash.Treadmill("Mylo");
+        WeakReference marker = await CrashAndDrop(treadmill);
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the delegate passed to Treadmill.CrashAsync stayed reachable after the Task faulted");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference> ThrowingDelegateAndDrop(Dash.Treadmill treadmill)
+    {
+        var marker = new object();
+        Action<int> onStep = _ =>
+        {
+            GC.KeepAlive(marker);
+            throw new ArgumentException("Mylo hit the stop button");
+        };
+        await Assert.ThrowsAsync<ArgumentException>(() => treadmill.RunAsync(2, onStep));
+        onStep = null!;
+        await Task.Yield();
+        return new WeakReference(marker);
+    }
+
+    [Fact]
+    public async Task SuspendPlainLambda_DelegateThrows_ItsDelegateIsCollected()
+    {
+        await using var treadmill = new Dash.Treadmill("Mylo");
+        WeakReference marker = await ThrowingDelegateAndDrop(treadmill);
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the throwing delegate passed to Treadmill.RunAsync stayed reachable after it faulted the Task");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference> StallAndDrop(Dash.Treadmill treadmill)
+    {
+        (Action<int> onStep, WeakReference marker) = DashMarker();
+        using (var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20)))
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => treadmill.StallAsync(onStep, cts.Token));
+        }
+        onStep = null!;
+        await Task.Yield();
+        return marker;
+    }
+
+    [Fact]
+    public async Task SuspendPlainLambda_AfterCancellation_ItsDelegateIsCollected()
+    {
+        await using var treadmill = new Dash.Treadmill("Oreo");
+        WeakReference marker = await StallAndDrop(treadmill);
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the delegate passed to Treadmill.StallAsync stayed reachable after the Task was cancelled");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference> SprintHoldAndDrop()
+    {
+        (Action<int> onStep, WeakReference marker) = DashMarker();
+        using (var canceled = new CancellationTokenSource())
+        {
+            canceled.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Dash.Sprint.HoldAsync(onStep, canceled.Token));
+        }
+        onStep = null!;
+        await Task.Yield();
+        return marker;
+    }
+
+    [Fact]
+    public async Task SuspendPlainLambda_StaticOwner_PreCanceled_ItsDelegateIsCollected()
+    {
+        WeakReference marker = await SprintHoldAndDrop();
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the delegate passed to Sprint.HoldAsync with a pre-canceled token stayed reachable");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference[]> QuickManyAndDrop(Dash.Treadmill treadmill)
+    {
+        var markers = new WeakReference[200];
+        for (int i = 0; i < markers.Length; i++)
+        {
+            (Action<int> onStep, WeakReference marker) = DashMarker();
+            Assert.Equal(1, await treadmill.QuickAsync(onStep));
+            onStep = null!;
+            markers[i] = marker;
+        }
+        await Task.Yield();
+        return markers;
+    }
+
+    [Fact]
+    public async Task SuspendPlainLambda_TightLoop_CompletionBeforeReturn_EveryDelegateIsCollected()
+    {
+        await using var treadmill = new Dash.Treadmill("Mylo");
+        WeakReference[] markers = await QuickManyAndDrop(treadmill);
+
+        foreach (WeakReference marker in markers)
+        {
+            Assert.True(
+                MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+                "a delegate passed to Treadmill.QuickAsync stayed reachable: Kotlin's release raced the hand-over and the key stayed registered");
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference TagANullName(Dash.Treadmill treadmill)
+    {
+        (Action<int> onStep, WeakReference marker) = DashMarker();
+
+        ArgumentNullException refused = Assert.Throws<ArgumentNullException>(() =>
+        {
+            _ = treadmill.TagAsync(onStep, null!);
+        });
+
+        Assert.Equal("name", refused.ParamName);
+        return marker;
+    }
+
+    [Fact]
+    public async Task SuspendPlainLambda_LaterArgumentFailsItsNullGuard_ItsDelegateIsCollected()
+    {
+        await using var treadmill = new Dash.Treadmill("Oreo");
+        WeakReference marker = TagANullName(treadmill);
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the delegate passed to Treadmill.TagAsync stayed reachable after a later argument failed its null guard");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference> WatchAllAndDrop(Dash.Treadmill treadmill)
+    {
+        (Action<int> onSeen, WeakReference marker) = DashMarker();
+        using (KotlinFlow<int> watching = treadmill.Watch(3, onSeen))
+        {
+            await foreach (int _ in watching) { }
+        }
+        onSeen = null!;
+        await Task.Yield();
+        return marker;
+    }
+
+    [Fact]
+    public async Task FlowPlainLambda_AfterCompletion_ItsDelegateIsCollected()
+    {
+        await using var treadmill = new Dash.Treadmill("Oreo");
+        WeakReference marker = await WatchAllAndDrop(treadmill);
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the delegate passed to Treadmill.Watch stayed reachable after the collection completed");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference> WatchCrashAndDrop(Dash.Treadmill treadmill)
+    {
+        (Action<int> onSeen, WeakReference marker) = DashMarker();
+        using (KotlinFlow<int> crashing = treadmill.WatchCrash(onSeen))
+        {
+            await Assert.ThrowsAnyAsync<InvalidOperationException>(async () =>
+            {
+                await foreach (int _ in crashing) { }
+            });
+        }
+        onSeen = null!;
+        await Task.Yield();
+        return marker;
+    }
+
+    [Fact]
+    public async Task FlowPlainLambda_AfterFault_ItsDelegateIsCollected()
+    {
+        await using var treadmill = new Dash.Treadmill("Mylo");
+        WeakReference marker = await WatchCrashAndDrop(treadmill);
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the delegate passed to Treadmill.WatchCrash stayed reachable after the collection faulted");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference> WatchForeverAndDrop(Dash.Treadmill treadmill)
+    {
+        (Action<int> onSeen, WeakReference marker) = DashMarker();
+        using (var cts = new CancellationTokenSource())
+        using (KotlinFlow<int> forever = treadmill.WatchForever(onSeen))
+        {
+            // A cancelled KotlinFlow enumeration ends cleanly, the shipped Flow behaviour (no exception).
+            await foreach (int _ in forever.WithCancellation(cts.Token)) cts.Cancel();
+        }
+        onSeen = null!;
+        await Task.Yield();
+        return marker;
+    }
+
+    [Fact]
+    public async Task FlowPlainLambda_AfterCancellation_ItsDelegateIsCollected()
+    {
+        await using var treadmill = new Dash.Treadmill("Oreo");
+        WeakReference marker = await WatchForeverAndDrop(treadmill);
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the delegate passed to Treadmill.WatchForever stayed reachable after the collection was cancelled");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference> WatchBreakAndDrop(Dash.Treadmill treadmill)
+    {
+        (Action<int> onSeen, WeakReference marker) = DashMarker();
+        using (KotlinFlow<int> watching = treadmill.Watch(5, onSeen))
+        {
+            await foreach (int _ in watching) break;
+        }
+        onSeen = null!;
+        await Task.Yield();
+        return marker;
+    }
+
+    [Fact]
+    public async Task FlowPlainLambda_EarlyBreak_ItsDelegateIsCollected()
+    {
+        await using var treadmill = new Dash.Treadmill("Mylo");
+        WeakReference marker = await WatchBreakAndDrop(treadmill);
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the delegate passed to Treadmill.Watch stayed reachable after the enumeration was broken off");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference WatchNeverEnumerated(Dash.Treadmill treadmill)
+    {
+        (Action<int> onSeen, WeakReference marker) = DashMarker();
+        using KotlinFlow<int> watching = treadmill.Watch(1, onSeen);
+        return marker;
+    }
+
+    [Fact]
+    public async Task FlowPlainLambda_DisposedWithoutEnumerating_ItsDelegateIsCollected()
+    {
+        await using var treadmill = new Dash.Treadmill("Oreo");
+        WeakReference marker = WatchNeverEnumerated(treadmill);
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the delegate passed to Treadmill.Watch stayed reachable after the flow was disposed without being collected");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference[]> OtherOwnersAndDrop(Dash.Gait.Trot trot, Dash.Baton baton)
+    {
+        (Action<int> onStride, WeakReference strideMarker) = DashMarker();
+        var lanes = new object();
+        Func<int, string> describe = n => { GC.KeepAlive(lanes); return $"{n} lanes"; };
+        var holders = new object();
+        Action<string> onTug = _ => GC.KeepAlive(holders);
+        WeakReference[] markers = [strideMarker, new WeakReference(lanes), new WeakReference(holders)];
+        Assert.Equal(2, await trot.StrideAsync(onStride));
+        Assert.Equal("2 lanes", await Dash.LaneExtensions.PickAsync(describe));
+        Assert.Equal("Mylo", await new Dash.Leash(baton).TugAsync(onTug));
+        onStride = null!;
+        describe = null!;
+        onTug = null!;
+        lanes = null!;
+        holders = null!;
+        await Task.Yield();
+        return markers;
+    }
+
+    // ADR-231: a sealed arm, an enum companion and a value class over a handle release the
+    // delegate's callback context like every other owner.
+    [Fact]
+    public async Task SuspendPlainLambda_SealedArmEnumCompanionValueClass_EveryDelegateIsCollected()
+    {
+        await using var trot = new Dash.Gait.Trot(2);
+        using var baton = new Dash.Baton("Mylo");
+        WeakReference[] markers = await OtherOwnersAndDrop(trot, baton);
+
+        foreach (WeakReference marker in markers)
+        {
+            Assert.True(
+                MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+                "a delegate passed to Gait.Trot.StrideAsync, LaneExtensions.PickAsync or Leash.TugAsync stayed reachable after its Task completed");
+        }
+    }
+
+    // ADR-231: a `suspend` member returning a Flow keeps the delegate for the returned KotlinFlow's
+    // lifetime, and releases it once that is disposed, collected or not, and on a fault, a
+    // cancellation or a null flow.
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference> FeedCollectTwiceAndDispose(Dash.FoodBowl bowl)
+    {
+        (Action<int> onBite, WeakReference marker) = DashMarker();
+        using (KotlinFlow<int> feeding = await bowl.FeedAsync(2, onBite))
+        {
+            await foreach (int _ in feeding) { }
+            await foreach (int _ in feeding) { }
+        }
+        onBite = null!;
+        await Task.Yield();
+        return marker;
+    }
+
+    [Fact]
+    public async Task SuspendReturningFlowPlainLambda_AfterTheFlowIsDisposed_ItsDelegateIsCollected()
+    {
+        await using var bowl = new Dash.FoodBowl("Oreo");
+        WeakReference marker = await FeedCollectTwiceAndDispose(bowl);
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the delegate passed to FoodBowl.FeedAsync stayed reachable after its KotlinFlow was disposed");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference> FeedNeverCollected(Dash.FoodBowl bowl)
+    {
+        (Action<int> onBite, WeakReference marker) = DashMarker();
+        KotlinFlow<int> feeding = await bowl.FeedAsync(2, onBite);
+        feeding.Dispose();
+        onBite = null!;
+        await Task.Yield();
+        return marker;
+    }
+
+    [Fact]
+    public async Task SuspendReturningFlowPlainLambda_DisposedWithoutCollecting_ItsDelegateIsCollected()
+    {
+        await using var bowl = new Dash.FoodBowl("Mylo");
+        WeakReference marker = await FeedNeverCollected(bowl);
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the delegate passed to FoodBowl.FeedAsync stayed reachable after its KotlinFlow was disposed uncollected");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference[]> FeedFailuresAndDrop(Dash.FoodBowl bowl)
+    {
+        (Action<int> onSpill, WeakReference spilled) = DashMarker();
+        (Action<int> onWait, WeakReference waited) = DashMarker();
+        (Action<int> onEmpty, WeakReference empty) = DashMarker();
+        await Assert.ThrowsAnyAsync<InvalidOperationException>(() => bowl.SpillAsync(onSpill));
+        using (var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20)))
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => bowl.WaitAsync(onWait, cts.Token));
+        }
+        Assert.Null(await bowl.MaybeFeedAsync(false, onEmpty));
+        onSpill = null!;
+        onWait = null!;
+        onEmpty = null!;
+        await Task.Yield();
+        return [spilled, waited, empty];
+    }
+
+    [Fact]
+    public async Task SuspendReturningFlowPlainLambda_FaultCancelOrNullFlow_EveryDelegateIsCollected()
+    {
+        await using var bowl = new Dash.FoodBowl("Oreo");
+        WeakReference[] markers = await FeedFailuresAndDrop(bowl);
+
+        foreach (WeakReference marker in markers)
+        {
+            Assert.True(
+                MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+                "a delegate passed to FoodBowl.SpillAsync, WaitAsync or MaybeFeedAsync stayed reachable after the call returned no flow");
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference> WarmUpLapsAndDispose()
+    {
+        (Action<int> onLap, WeakReference marker) = DashMarker();
+        using (KotlinFlow<int> laps = await Dash.Sprint.WarmUpLapsAsync(2, onLap))
+        {
+            await foreach (int _ in laps) { }
+        }
+        onLap = null!;
+        await Task.Yield();
+        return marker;
+    }
+
+    [Fact]
+    public async Task SuspendReturningFlowPlainLambda_StaticOwner_ItsDelegateIsCollected()
+    {
+        WeakReference marker = await WarmUpLapsAndDispose();
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the delegate passed to Sprint.WarmUpLapsAsync stayed reachable after its KotlinFlow was disposed");
     }
 }

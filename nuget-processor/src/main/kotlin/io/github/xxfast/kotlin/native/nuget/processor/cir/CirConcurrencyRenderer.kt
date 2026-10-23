@@ -358,6 +358,21 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
   val callbackArgs: String =
     "NugetThunks.NugetAsyncCallbackPtr, GCHandle.ToIntPtr(${locals.callbackHandle})"
   val acquiredFlow = method.acquiredFlowCollectNativeName != null
+  // ADR-231: a returned flow keeps its plain callbacks' keys. Each is also held in a method-scope
+  // local the completion closure attaches to the flow's owned handle, so disposing (or finalizing)
+  // the `KotlinFlow` releases it; a null flow releases it at once. Kotlin released it itself on a
+  // fault or a cancellation.
+  val heldKeys: List<String> = if (acquiredFlow || method.isAwaitedStateFlow) {
+    method.parameters.mapNotNull { parameter -> parameter.flowHeldKey }
+  } else {
+    emptyList()
+  }
+  fun attachHeld(handle: String, indent: String): String = heldKeys.joinToString("") { key ->
+    "${indent}$handle.Attach(new NugetContextRelease($key));\n"
+  }
+  fun releaseHeld(indent: String): String = heldKeys.joinToString("") { key ->
+    "${indent}NugetThunks.UnregisterCtx($key);\n"
+  }
   val flowNames = method.parameters.localScopeNames()
   fun flowLocal(base: String): String = freshName(base, flowNames).also { flowNames += it }
   val ownedFlow = flowLocal("flowHandle")
@@ -407,12 +422,14 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
       if (method.acquiredFlowNullable) {
         appendLine("if (resultPtr == IntPtr.Zero)")
         appendLine("                    {")
+        append(releaseHeld("                        "))
         appendLine("                        t.SetResult(null);")
         appendLine("                        return;")
         appendLine("                    }")
         append("                    ")
       }
       appendLine("var $ownedFlow = new NugetKotlinHandle(resultPtr);")
+      append(attachHeld(ownedFlow, "                    "))
       appendLine("                    try")
       appendLine("                    {")
       appendLine("                        t.SetResult(new ${method.asyncReturnType}(")
@@ -451,6 +468,7 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
       if (memberNullable) {
         appendLine("if (resultPtr == IntPtr.Zero)")
         appendLine("                    {")
+        append(releaseHeld("                        "))
         appendLine("                        t.SetResult(null);")
         appendLine("                    }")
         appendLine("                    else")
@@ -460,6 +478,7 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
       // ADR-187: the flow handle is owned from here, and the lambdas capture that object and the
       // scope handle object, never raw pointers (see `renderHeldStateFlowMethod`).
       appendLine("var flowHandle = new NugetKotlinHandle(resultPtr);")
+      append(attachHeld("flowHandle", "$indent                    "))
       // ADR-068 (2026-09-27 amendment): a static (top-level) member has no parent scope. It passes
       // null and `nuget_stateflow_collect` launches on the runtime's ad-hoc scope, as the
       // top-level suspend call itself does; the enumerator's job is still the cancellation handle.
@@ -546,6 +565,7 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
   appendLine("            NugetAsyncCallback $callback = null!;")
   appendLine("            GCHandle $callbackHandle = default;")
   appendLine("            var $job = new NugetJobCell();")
+  heldKeys.forEach { key -> appendLine("            IntPtr $key = IntPtr.Zero;") }
   // ADR-187: an instance member's closure roots its wrapper until the call completes, so a wrapper
   // dropped mid-flight is never finalized, and its scope never cancelled, under the coroutine.
   val keepAlive: List<String> = if (staticCall) emptyList() else listOf("GC.KeepAlive(this);")
@@ -557,6 +577,11 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
   // built immediately before it and disposed in a `finally` immediately after it returns. The
   // Kotlin export copies out of it before `launch`, so the coroutine never sees the handle.
   val scoped: List<String>? = method.parameters
+    .map { parameter ->
+      val held: String? = parameter.flowHeldKey?.takeIf { key -> key in heldKeys }
+      if (held == null) parameter
+      else parameter.copy(asyncKeyRegister = "$held = ${parameter.asyncKeyRegister}")
+    }
     .collectionScopedCall(
       "            ",
       "$jobHandle = $nativeName($nativeCallArgs)",

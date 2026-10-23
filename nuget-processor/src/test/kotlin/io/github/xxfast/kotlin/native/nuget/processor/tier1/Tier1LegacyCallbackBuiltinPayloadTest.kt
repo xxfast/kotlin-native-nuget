@@ -48,7 +48,9 @@ class Tier1LegacyCallbackBuiltinPayloadTest {
     assertTrue(result.compiledClean, "expected compilable Kotlin; got: ${result.compileErrors}")
 
     val cs: String = result.generatedCSharp
-    listOf("OnBatch(", "OnAny(", "MakeCat(", "AddBatch(", "AddCounter(").forEach { member ->
+    // ADR-231: an exported class result binds on the per-call route, over an owned box.
+    assertTrue("MakeCat(" in result.generatedCSharp, "MakeCat must bind")
+    listOf("OnBatch(", "OnAny(", "AddBatch(", "AddCounter(").forEach { member ->
       assertFalse(member in cs, "$member must not bind")
     }
     assertFalse("Action<List>" in cs, "no unresolvable Action<List>")
@@ -58,7 +60,7 @@ class Tier1LegacyCallbackBuiltinPayloadTest {
     }
 
     val kotlin: String = result.generated
-    listOf("onBatch", "onAny", "makeCat", "addBatch", "removeBatch", "addCounter", "removeCounter")
+    listOf("onBatch", "onAny", "addBatch", "removeBatch", "addCounter", "removeCounter")
       .forEach { member ->
         assertFalse(
           "export_walker_$member" in kotlin,
@@ -67,7 +69,6 @@ class Tier1LegacyCallbackBuiltinPayloadTest {
       }
     assertNamed(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT, "onBatch", "List")
     assertNamed(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT, "onAny", "Any")
-    assertNamed(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN, "makeCat", "Cat")
     assertNamed(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT, "addBatch", "List")
     assertNamed(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT, "removeBatch", "List")
     assertNamed(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN, "addCounter", "Int")

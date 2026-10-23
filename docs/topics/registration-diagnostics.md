@@ -624,6 +624,33 @@ object the lambda captured and asserting it is collected:
 - `SuspendLambdaParameter_LambdaBeforeAString_AfterTheCallCompletes_ItsClosureIsCollected`: the
   control for the row above, with a valid later argument.
 
+### A plain lambda on a `suspend` or `Flow` member
+
+A [plain lambda parameter](coroutines-and-flow.md#plain-lambda-on-suspend-member) on a `suspend` or
+`Flow`-returning member registers a callback context that Kotlin releases when the coroutine or the
+collection ends. These `LeakTests/LiveHandleTests.cs` rows pin the handle count after the call
+settles:
+
+| Test | Pins |
+|---|---|
+| `SuspendPlainLambda_EveryOwnerAndPayload_Completion_ReturnsToBaseline` | every owner and payload kind, completing |
+| `SuspendPlainLambda_Fault_ReturnsToBaseline` | a Kotlin throw, and the delegate itself throwing |
+| `SuspendPlainLambda_Cancel_ReturnsToBaseline` | cancellation through the token |
+| `SuspendPlainLambda_TightLoop_CompletionBeforeReturn_ReturnsToBaseline` | a member that never suspends, so the release can beat the native call's return |
+| `SuspendPlainLambda_SealedArmEnumCompanionValueClass_ReturnsToBaseline` | a sealed arm, an enum companion and a value class |
+| `FlowPlainLambda_EveryArm_ReturnsToBaseline` | a `Flow` member completing, faulting, cancelled and abandoned |
+| `SuspendReturningFlowPlainLambda_ReturnsToBaseline` | a `suspend` member returning a `Flow` |
+
+The context table is not counted by `nuget_live_handles`, so
+`LeakTests/CollectabilityTests.cs` holds a `WeakReference` to state the delegate captured and
+asserts it is collected: `SuspendPlainLambda_AfterCompletion_ItsDelegateIsCollected`,
+`..._AfterFault_...`, `..._DelegateThrows_...`, `..._AfterCancellation_...`,
+`..._StaticOwner_PreCanceled_...`, `..._TightLoop_CompletionBeforeReturn_EveryDelegateIsCollected`,
+`..._LaterArgumentFailsItsNullGuard_...` and `..._SealedArmEnumCompanionValueClass_...`; the
+`FlowPlainLambda_*` rows for completion, fault, cancellation, early `break` and a flow disposed
+without enumerating; and `SuspendReturningFlowPlainLambda_*` for a disposed flow, a flow disposed
+uncollected, a fault, a cancellation or a `null` flow, and a static owner.
+
 ### A `Flow` parameter
 
 Each pull of a [`Flow` parameter](coroutines-and-flow.md#flow-parameter) mints a counted

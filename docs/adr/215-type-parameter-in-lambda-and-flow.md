@@ -390,3 +390,12 @@ export, a fresh `Tabby` created in the lambda and dropped, null), `GenericClass_
 The "Stopped, not opened" paragraph in lane B and the line in Consequences are superseded by
 [ADR-230](230-flow-on-static-owners.md): a `Flow` return on an `object`, a companion or the top
 level binds, generic or not, and a member's own `T` uses this ADR's trampoline with no owner.
+
+## Amendment (2026-10-22): a plain lambda on a `suspend` member binds
+
+The "Not bound, found by the red run" paragraph and the `SKIPPED_UNSUPPORTED_RETURN` wording
+"binds only as a per-call lambda on an ordinary (non-suspend) member" are superseded by
+[ADR-231](231-plain-lambda-on-suspend-and-flow-members.md): a plain lambda, over a member's own `T`
+or not, binds as a C# delegate on a `suspend` member and on a `Flow`-returning member, its callback
+context released by a `finally` in the launched body. `Siphon.decant` binds as
+`DecantAsync<T>(T value, Func<T, T> pour, CancellationToken)` and its xunit fact is live.

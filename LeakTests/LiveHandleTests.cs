@@ -51,6 +51,7 @@ using TestLibrary.Routes;
 using TestLibrary.Workshop;
 using Suspendgeneric = TestLibrary.Suspendgeneric;
 using TestLibrary.Catnap;
+using Dash = TestLibrary.Dash;
 using Purrclock = TestLibrary.Purrclock;
 
 namespace LeakTests;
@@ -6746,5 +6747,200 @@ public class LiveHandleTests
         var seen = new List<T>();
         await foreach (T item in flow) seen.Add(item);
         return seen;
+    }
+
+    // ADR-231
+    // A plain lambda on a suspend member. The delegate's callback context is a key in the context
+    // table, which `LiveHandles` does not count (the collectability rows pin that); these rows pin
+    // the handles that do cross beside it. Ledger per iteration: Run, Quick, Label, Cheer, Pace jobs
+    // +1/-1 each; Inspect(baton) job +1/-1, the baton lent to the delegate as a borrowed wrapper
+    // +1/-1; Recruit: the delegate's new Baton is consumed by Kotlin +1/-1, job +1/-1;
+    // Relay(i) box +1/-1, result +1/-1, job +1/-1; Relay(baton) result wrapper +1/-1;
+    // Baton.Hand: the delegate's borrowed wrapper +1/-1, result wrapper +1/-1; Sprint, Chase, top
+    // level, extensions, enum, value class, generic class members: job +1/-1 each, generic `T`
+    // boxes +1/-1. treadmill, baton and kibble outlive the loop. Net zero.
+    [Fact]
+    public async Task SuspendPlainLambda_EveryOwnerAndPayload_Completion_ReturnsToBaseline()
+    {
+        await using var treadmill = new Dash.Treadmill("Oreo");
+        using var baton = new Dash.Baton("Mylo");
+        await using var kibble = new Dash.Bowlful<Dash.Baton>(baton);
+        await using var chase = new Dash.Chase("the red dot");
+        int i = 0;
+        // Warm each lazy owner scope OUTSIDE the window: `GetOrCreateScope()` is counted.
+        Assert.Equal(1, await treadmill.QuickAsync(_ => { }));
+        using (Dash.Baton warmed = await kibble.ServeAsync(_ => { })) Assert.Equal("Mylo", warmed.Holder);
+        Assert.Equal("the red dot", await chase.PounceAsync(_ => { }));
+        await AssertNoLeakAsync(async () =>
+        {
+            i++;
+            int steps = 0;
+            Assert.Equal(2, await treadmill.RunAsync(2, _ => steps++));
+            Assert.Equal(1, await treadmill.QuickAsync(_ => steps++));
+            Assert.Equal("#3", await treadmill.LabelAsync(3, n => $"#{n}"));
+            Assert.Equal("go Oreo", await treadmill.CheerAsync(name => $"go {name}"));
+            Assert.True(await treadmill.PaceAsync((_, _, night) => night));
+            Assert.Equal("Mylo", await treadmill.InspectAsync(baton, held => held.Holder));
+            Assert.Equal("Oreo", await treadmill.RecruitAsync("Oreo", name => new Dash.Baton(name)));
+            Assert.Equal("Oreo", treadmill.RecruitNow("Oreo", name => new Dash.Baton(name)));
+            Assert.Equal("Mylo", treadmill.RecruitNow("ignored", _ => baton));
+            Assert.Equal(i * 2, await treadmill.RelayAsync(i, n => n * 2));
+            using (Dash.Baton passed = await treadmill.RelayAsync(baton, held => held)) Assert.Equal("Mylo", passed.Holder);
+            Assert.Equal(20, await treadmill.SwarmAsync(20, _ => Interlocked.Increment(ref steps)));
+            using (Dash.Baton handed = await Dash.Baton.HandAsync("Oreo", held => Assert.Equal("Oreo", held.Holder))) Assert.Equal("Oreo", handed.Holder);
+            Assert.Equal(1, await Dash.Sprint.LapsAsync(1, _ => steps++));
+            Assert.Equal("Mylo", await Dash.Sprint.FetchAsync("Mylo", name => name));
+            Assert.Equal(1, await Dash.Chase.BeginAsync(1, _ => steps++));
+            Assert.Equal("the red dot", await chase.PounceAsync(_ => steps++));
+            Assert.Equal(1, await Dash.DashSample.DashAsync(1, _ => steps++));
+            Assert.Equal(i, await Dash.DashSample.BounceAsync(i, n => n));
+            Assert.Equal("Oreo warmed up", await Dash.TreadmillExtensions.WarmUpAsync(treadmill, _ => steps++));
+            Assert.Equal("MYLO", await Dash.StringExtensions.ZoomAsync("Mylo", name => name.ToUpperInvariant()));
+            Assert.Equal(0, await Dash.ChaseToyExtensions.SwatAsync(Dash.ChaseToy.Feather, _ => steps++));
+            Assert.Equal(2, await new Dash.Strides(2).MeasureAsync(_ => 1));
+            using (Dash.Baton served = await kibble.ServeAsync(held => Assert.Equal("Mylo", held.Holder))) Assert.Equal("Mylo", served.Holder);
+        }, iterations: 200);
+    }
+
+    // ADR-231
+    // A fault on the plain-lambda suspend route: a Kotlin throw after the delegate ran, and the
+    // delegate itself throwing (ADR-161's stash, cleared by the completion closure). Ledger per
+    // iteration: Crash, Trip: job +1/-1, envelope +1/-1; Run with a throwing delegate: job +1/-1,
+    // the stashed managed exception's envelope +1/-1. Net zero.
+    [Fact]
+    public async Task SuspendPlainLambda_Fault_ReturnsToBaseline()
+    {
+        await using var treadmill = new Dash.Treadmill("Oreo");
+        // Warm each lazy owner scope OUTSIDE the window: `GetOrCreateScope()` is counted.
+        Assert.Equal(1, await treadmill.QuickAsync(_ => { }));
+        await AssertNoLeakAsync(async () =>
+        {
+            await Assert.ThrowsAnyAsync<InvalidOperationException>(() => treadmill.CrashAsync(_ => { }));
+            await Assert.ThrowsAnyAsync<InvalidOperationException>(() => Dash.Sprint.TripAsync(_ => { }));
+            await Assert.ThrowsAsync<ArgumentException>(
+                () => treadmill.RunAsync(2, _ => throw new ArgumentException("Mylo hit the stop button")));
+        }, iterations: 200);
+    }
+
+    // ADR-231
+    // Cancellation on the plain-lambda suspend route, with a pre-canceled token and with a timeout
+    // that fires while the coroutine is suspended. Ledger per iteration: Stall, Hold: job +1/-1.
+    // Net zero.
+    [Fact]
+    public async Task SuspendPlainLambda_Cancel_ReturnsToBaseline()
+    {
+        await using var treadmill = new Dash.Treadmill("Oreo");
+        // Warm each lazy owner scope OUTSIDE the window: `GetOrCreateScope()` is counted.
+        Assert.Equal(1, await treadmill.QuickAsync(_ => { }));
+        await AssertNoLeakAsync(async () =>
+        {
+            using (var canceled = new CancellationTokenSource())
+            {
+                canceled.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => treadmill.StallAsync(_ => { }, canceled.Token));
+            }
+            using (var soon = new CancellationTokenSource(TimeSpan.FromMilliseconds(1)))
+            {
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Dash.Sprint.HoldAsync(_ => { }, soon.Token));
+            }
+        }, iterations: 50);
+    }
+
+    // ADR-231
+    // `Quick` never suspends, so Kotlin's release of the callback context and the completion
+    // callback routinely run before the `_async` P/Invoke returns. Ledger per iteration: job
+    // +1/-1. Net zero.
+    [Fact]
+    public async Task SuspendPlainLambda_TightLoop_CompletionBeforeReturn_ReturnsToBaseline()
+    {
+        await using var treadmill = new Dash.Treadmill("Mylo");
+        // Warm each lazy owner scope OUTSIDE the window: `GetOrCreateScope()` is counted.
+        Assert.Equal(1, await treadmill.QuickAsync(_ => { }));
+        await AssertNoLeakAsync(async () =>
+        {
+            int seen = 0;
+            Assert.Equal(1, await treadmill.QuickAsync(step => seen = step));
+            Assert.Equal(7, seen);
+        }, iterations: 1000);
+    }
+
+    // ADR-231
+    // A plain lambda on a Flow-returning member: complete, fault, cancel and an early break. Ledger
+    // per iteration: each collection's Flow wrapper +1/-1 and its collect job +1/-1; WatchCrash's
+    // envelope +1/-1; Sprint.Stream, Chase.Calls and DashSample.Dashes the same. Net zero.
+    [Fact]
+    public async Task FlowPlainLambda_EveryArm_ReturnsToBaseline()
+    {
+        await using var treadmill = new Dash.Treadmill("Oreo");
+        // Warm each lazy owner scope OUTSIDE the window: `GetOrCreateScope()` is counted.
+        Assert.Equal(1, await treadmill.QuickAsync(_ => { }));
+        await AssertNoLeakAsync(async () =>
+        {
+            int seen = 0;
+            using (KotlinFlow<int> watching = treadmill.Watch(3, _ => seen++)) Assert.Equal([0, 1, 2], await DrainFlow(watching));
+            using (KotlinFlow<string> commentary = treadmill.Commentate(2, n => $"lap {n}")) Assert.Equal(["lap 0", "lap 1"], await DrainFlow(commentary));
+            using (KotlinFlow<int> crashing = treadmill.WatchCrash(_ => seen++))
+            {
+                await Assert.ThrowsAnyAsync<InvalidOperationException>(() => DrainFlow(crashing));
+            }
+            using (var cts = new CancellationTokenSource())
+            using (KotlinFlow<int> forever = treadmill.WatchForever(_ => seen++))
+            {
+                // A cancelled KotlinFlow enumeration ends cleanly, the shipped Flow behaviour (no exception).
+                await foreach (int _ in forever.WithCancellation(cts.Token)) cts.Cancel();
+            }
+            using (KotlinFlow<int> watching = treadmill.Watch(5, _ => seen++))
+            {
+                await foreach (int _ in watching) break;
+            }
+            using (KotlinFlow<int> stream = Dash.Sprint.Stream(2, _ => seen++)) Assert.Equal([0, 1], await DrainFlow(stream));
+            using (KotlinFlow<string> calls = Dash.Chase.Calls(1, n => $"psst {n}")) Assert.Equal(["psst 0"], await DrainFlow(calls));
+            using (KotlinFlow<int> dashes = Dash.DashSample.Dashes(1, _ => seen++)) Assert.Equal([0], await DrainFlow(dashes));
+        }, iterations: 100);
+    }
+
+    // ADR-231
+    // A sealed arm, an enum companion and a value class over a handle. Ledger per iteration:
+    // Stride, Pick, Tug jobs +1/-1 each; Tug's borrowed baton handle crosses lent. trot and baton
+    // outlive the loop. Net zero.
+    [Fact]
+    public async Task SuspendPlainLambda_SealedArmEnumCompanionValueClass_ReturnsToBaseline()
+    {
+        await using var trot = new Dash.Gait.Trot(1);
+        using var baton = new Dash.Baton("Mylo");
+        // Warm the arm's lazy scope OUTSIDE the window: `GetOrCreateScope()` is counted.
+        Assert.Equal(1, await trot.StrideAsync(_ => { }));
+        await AssertNoLeakAsync(async () =>
+        {
+            int steps = 0;
+            Assert.Equal(1, await trot.StrideAsync(_ => steps++));
+            Assert.Equal("2 lanes", await Dash.LaneExtensions.PickAsync(n => $"{n} lanes"));
+            Assert.Equal("Mylo", await new Dash.Leash(baton).TugAsync(_ => steps++));
+        }, iterations: 200);
+    }
+
+    // ADR-231
+    // A `suspend` member returning a Flow with a plain lambda: the returned KotlinFlow owns the
+    // delegate's key. Ledger per iteration: Feed job +1/-1, its flow handle +1/-1 (disposed with
+    // the KotlinFlow), each collect job +1/-1; Spill job +1/-1, envelope +1/-1; MaybeFeed(false)
+    // job +1/-1 and no flow; Sprint.WarmUpLaps the same as Feed. Net zero.
+    [Fact]
+    public async Task SuspendReturningFlowPlainLambda_ReturnsToBaseline()
+    {
+        await using var bowl = new Dash.FoodBowl("Oreo");
+        // Warm the lazy owner scope OUTSIDE the window: `GetOrCreateScope()` is counted.
+        Assert.Null(await bowl.MaybeFeedAsync(false, _ => { }));
+        await AssertNoLeakAsync(async () =>
+        {
+            int bites = 0;
+            using (KotlinFlow<int> feeding = await bowl.FeedAsync(2, _ => bites++))
+            {
+                Assert.Equal([0, 1], await DrainFlow(feeding));
+                Assert.Equal([0, 1], await DrainFlow(feeding));
+            }
+            await Assert.ThrowsAnyAsync<InvalidOperationException>(() => bowl.SpillAsync(_ => bites++));
+            Assert.Null(await bowl.MaybeFeedAsync(false, _ => bites++));
+            using (KotlinFlow<int> laps = await Dash.Sprint.WarmUpLapsAsync(1, _ => bites++)) Assert.Equal([0], await DrainFlow(laps));
+        }, iterations: 100);
     }
 }
