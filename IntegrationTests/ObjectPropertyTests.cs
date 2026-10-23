@@ -144,18 +144,15 @@ public class ObjectPropertyTests
     // --- named skip ---
 
     /// <summary>
-    /// A <c>StateFlow</c>-typed object property has no adapter on the static route, so it is a
-    /// NAMED skip: a diagnostic and NO C# member. Asserted by reflection so that a member
-    /// appearing one day is an assertion failure here rather than a compile break. The diagnostic
-    /// sentence itself is Tier 1's business, not this file's.
+    /// ADR-230: a <c>StateFlow</c>-typed object property binds as a static
+    /// <c>KotlinStateFlow&lt;int&gt;</c>, re-read on every access.
     /// </summary>
     [Fact]
-    public void ObjectStateFlowProperty_ProjectsNoStaticMember()
+    public void ObjectStateFlowProperty_BindsAsAStaticStateFlow()
     {
-        MemberInfo[] level = typeof(TreatPantry)
-            .GetMember("Level", BindingFlags.Public | BindingFlags.Static);
+        using KotlinStateFlow<int> level = TreatPantry.Level;
 
-        Assert.Empty(level);
+        Assert.Equal(0, level.Value);
     }
 
     // --- inherited ---

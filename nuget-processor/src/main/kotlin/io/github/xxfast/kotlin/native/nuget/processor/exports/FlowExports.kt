@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticFlowGetter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementEnvelope
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMemberGenericRefusal
 import io.github.xxfast.kotlin.native.nuget.processor.forward.asyncTypeParameterNames
@@ -10,6 +11,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.SharedFlowSurface
 import io.github.xxfast.kotlin.native.nuget.processor.cir.sharedFlowSurface
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.KSClassDeclaration
+import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
@@ -333,10 +335,15 @@ internal fun FileSpec.Builder.addFlowMethodExports(
   // ADR-215: the generic class whose own multi-bound `T` a parameter takes, so the export can
   // re-declare it on a trampoline; null for an arm and for every non-generic owner.
   owner: KSClassDeclaration? = null,
+  // ADR-230: the static receiver of a member on an owner with no C# instance scope; null for an
+  // instance member. The exports then take no `handle`, and a collection no `scopeHandle`.
+  static: ForwardStaticFlowCall? = null,
 ) {
   val methodName: String = method.simpleName.asString()
   // Issue #97: carry the planner's overload number, as the C# side does (ADR-090).
   val cname: String = toCName(methodName) + callableCatalog.overloadSuffix(method)
+  // ADR-230: a static member's stem is the planner's, minted beside its owner's sync members.
+  val stem: String = static?.stem ?: "${prefix}_$cname"
   val returnType: KSType? = method.returnType?.resolve()?.expandAliases()
   val returnQualified: String? = returnType?.declaration?.qualifiedName?.asString()
   val isStateFlowMethod: Boolean = returnQualified in STATE_FLOW_TYPES
@@ -371,11 +378,17 @@ internal fun FileSpec.Builder.addFlowMethodExports(
 
   // The whole call on `names.obj`, positional or dispatched; every body below reads it as is.
   // ADR-215: with the member's own type arguments (`<Any?>`), as the suspend route spells them.
-  val call: String =
+  // ADR-230: a static member is called through its owner, or its receiver slot's read.
+  val slots: ForwardStaticFlowSlots? = static?.slots(qualifiedName, names, method)
+  val callee: String = slots?.callee ?: "${names.obj}."
+  val call: String = if (method is ForwardStaticFlowGetter) {
+    "$callee${methodName.kotlinIdentifier()}"
+  } else {
     names.legacyInvocation(
-      "${names.obj}.${methodName.kotlinIdentifier()}${method.legacyTypeArguments()}",
+      "$callee${methodName.kotlinIdentifier()}${method.legacyTypeArguments()}",
       method.legacyParameterNames(),
     )
+  }
   val paramPrelude: String = names.legacyPrelude(method.legacyParameterNames())
 
   fun FunSpec.Builder.addFlowParameters() {
@@ -411,8 +424,8 @@ internal fun FileSpec.Builder.addFlowMethodExports(
   // then the acquired flow's own `_collect` and the flow-keyed shared seams.
   if (method.returnsHeldMutableSharedFlow()) {
     val acquireBuilder: FunSpec.Builder = FunSpec
-      .builder("export_${prefix}_$cname")
-      .addAnnotation(cNameAnnotation("${prefix}_$cname", ownedBy(method)))
+      .builder("export_$stem")
+      .addAnnotation(cNameAnnotation(stem, ownedBy(method)))
       .addParameter("handle", cOpaquePointer)
     acquireBuilder.addFlowParameters()
     acquireBuilder
@@ -422,9 +435,11 @@ internal fun FileSpec.Builder.addFlowMethodExports(
           qualifiedName, call, paramPrelude, names.obj, memberNullable,
         ),
       )
-    addFunction(acquireBuilder.build().flowTrampolined(trampoline, qualifiedName))
-    addAcquiredFlowCollectExport(method, "${prefix}_$cname", returnType, classifier)
-    addFlowKeyedSharedFlowExports("${prefix}_$cname", method, returnType, classifier)
+    addFunction(
+      acquireBuilder.build().staticReceived(slots).flowTrampolined(trampoline, qualifiedName),
+    )
+    addAcquiredFlowCollectExport(method, stem, returnType, classifier)
+    addFlowKeyedSharedFlowExports(stem, method, returnType, classifier)
     return
   }
 
@@ -435,8 +450,8 @@ internal fun FileSpec.Builder.addFlowMethodExports(
   // they re-invoked the function, so a body that builds a fresh flow per call lost every write.
   if (method.returnsHeldMutableStateFlow()) {
     val acquireBuilder: FunSpec.Builder = FunSpec
-      .builder("export_${prefix}_$cname")
-      .addAnnotation(cNameAnnotation("${prefix}_$cname", ownedBy(method)))
+      .builder("export_$stem")
+      .addAnnotation(cNameAnnotation(stem, ownedBy(method)))
       .addParameter("handle", cOpaquePointer)
 
     acquireBuilder.addFlowParameters()
@@ -447,15 +462,19 @@ internal fun FileSpec.Builder.addFlowMethodExports(
         buildStateFlowAcquireMethodBody(qualifiedName, call, paramPrelude, names.obj)
       )
 
-    addFunction(acquireBuilder.build().flowTrampolined(trampoline, qualifiedName))
-    addHeldStateFlowSetValueExport("${prefix}_${cname}", method, flowElementType)
-    addHeldStateFlowCompareAndSetExport("${prefix}_${cname}", method, flowElementType)
+    addFunction(
+
+      acquireBuilder.build().staticReceived(slots).flowTrampolined(trampoline, qualifiedName),
+
+    )
+    addHeldStateFlowSetValueExport(stem, method, flowElementType)
+    addHeldStateFlowCompareAndSetExport(stem, method, flowElementType)
     return
   }
 
   val builder: FunSpec.Builder = FunSpec
-    .builder("export_${prefix}_${cname}_collect")
-    .addAnnotation(cNameAnnotation("${prefix}_${cname}_collect", ownedBy(method)))
+    .builder("export_${stem}_collect")
+    .addAnnotation(cNameAnnotation("${stem}_collect", ownedBy(method)))
     .addParameter("handle", cOpaquePointer)
     .addParameter(names.scopeHandle, cOpaquePointer)
 
@@ -475,7 +494,7 @@ internal fun FileSpec.Builder.addFlowMethodExports(
     )
   if (paramShapes.castsGenericBound()) builder.addAnnotation(forwardUncheckedCastSuppression)
 
-  addFunction(builder.build().flowTrampolined(trampoline, qualifiedName))
+  addFunction(builder.build().staticReceived(slots).flowTrampolined(trampoline, qualifiedName))
 
   // ADR-209: a re-invoked SharedFlow return's `ReplayCache`, keyed like the collect: the owner and
   // the method's own arguments, the method re-run per read.
@@ -483,8 +502,8 @@ internal fun FileSpec.Builder.addFlowMethodExports(
     // The error slot moves off a user parameter spelled `errorOut`, as the fixed slots do.
     val errorOut: String = freshName("errorOut", method.legacyParameterNames().toMutableSet())
     val replayBuilder: FunSpec.Builder = FunSpec
-      .builder("export_${prefix}_${cname}_replay_cache")
-      .addAnnotation(cNameAnnotation("${prefix}_${cname}_replay_cache", ownedBy(method)))
+      .builder("export_${stem}_replay_cache")
+      .addAnnotation(cNameAnnotation("${stem}_replay_cache", ownedBy(method)))
       .addParameter("handle", cOpaquePointer)
     replayBuilder.addFlowParameters()
     val flow: String = if (memberNullable) {
@@ -501,7 +520,9 @@ internal fun FileSpec.Builder.addFlowMethodExports(
         classifier.replayCacheExpression(flow, requireNotNull(returnType)), "null",
         errorOut = errorOut,
       )
-    addFunction(replayBuilder.build().flowTrampolined(trampoline, qualifiedName))
+    addFunction(
+      replayBuilder.build().staticReceived(slots).flowTrampolined(trampoline, qualifiedName),
+    )
   }
 
   if (isStateFlowMethod) {
@@ -510,8 +531,8 @@ internal fun FileSpec.Builder.addFlowMethodExports(
     // ADR-067: a nullable element or nullable member widens the return to `COpaquePointer?` and
     // guards the box with `if (v != null) … else null`.
     val valueBuilder: FunSpec.Builder = FunSpec
-      .builder("export_${prefix}_${cname}_value")
-      .addAnnotation(cNameAnnotation("${prefix}_${cname}_value", ownedBy(method)))
+      .builder("export_${stem}_value")
+      .addAnnotation(cNameAnnotation("${stem}_value", ownedBy(method)))
       .addParameter("handle", cOpaquePointer)
 
     valueBuilder.addFlowParameters()
@@ -528,7 +549,11 @@ internal fun FileSpec.Builder.addFlowMethodExports(
         )
       )
 
-    addFunction(valueBuilder.build().flowTrampolined(trampoline, qualifiedName))
+    addFunction(
+
+      valueBuilder.build().staticReceived(slots).flowTrampolined(trampoline, qualifiedName),
+
+    )
 
     // ADR-071 (2026-09-11): the settable half of a function return no longer lands here. A
     // `MutableStateFlow<T>`-declared return is held by handle and returned above, before the
@@ -541,8 +566,8 @@ internal fun FileSpec.Builder.addFlowMethodExports(
     // pattern; the getter returns `null` when this is false, else constructs normally. Since
     // 2026-10-09 (ADR-026 amendment) a plain `Flow<T>?` return takes the same probe.
     val hasValueBuilder: FunSpec.Builder = FunSpec
-      .builder("export_${prefix}_${cname}_has_value")
-      .addAnnotation(cNameAnnotation("${prefix}_${cname}_has_value", ownedBy(method)))
+      .builder("export_${stem}_has_value")
+      .addAnnotation(cNameAnnotation("${stem}_has_value", ownedBy(method)))
       .addParameter("handle", cOpaquePointer)
 
     hasValueBuilder.addFlowParameters()
@@ -553,7 +578,11 @@ internal fun FileSpec.Builder.addFlowMethodExports(
         buildFlowHasValueMethodBody(qualifiedName, call, paramPrelude, names.obj)
       )
 
-    addFunction(hasValueBuilder.build().flowTrampolined(trampoline, qualifiedName))
+    addFunction(
+
+      hasValueBuilder.build().staticReceived(slots).flowTrampolined(trampoline, qualifiedName),
+
+    )
   }
 }
 
@@ -884,7 +913,7 @@ private fun heldStateFlowElementSpelling(elementType: KSType?): String =
  */
 internal fun FileSpec.Builder.addHeldStateFlowSetValueExport(
   stem: String,
-  owner: KSFunctionDeclaration,
+  owner: KSDeclaration,
   elementType: KSType?,
 ) {
   val elementQualified: String = heldStateFlowElementSpelling(elementType)
@@ -1058,7 +1087,7 @@ private fun FileSpec.Builder.addStateFlowCompareAndSetPropertyExport(
  */
 internal fun FileSpec.Builder.addHeldStateFlowCompareAndSetExport(
   stem: String,
-  owner: KSFunctionDeclaration,
+  owner: KSDeclaration,
   elementType: KSType?,
 ) {
   val elementQualified: String = heldStateFlowElementSpelling(elementType)

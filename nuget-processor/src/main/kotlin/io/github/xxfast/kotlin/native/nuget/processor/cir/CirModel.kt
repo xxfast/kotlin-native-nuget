@@ -1054,6 +1054,20 @@ internal data class CirMethod(
   val asyncResultRead: String? = null,
   val isSyncErrorCheckEnabled: Boolean = false,
   val isFlow: Boolean = false,
+  /**
+   * ADR-230: a flow member of an owner with no C# instance scope. Its externs take no `_handle` and
+   * no scope; a held flow collects with a null scope, an ad-hoc root scope per collection.
+   */
+  val isStaticFlow: Boolean = false,
+  /** ADR-230: the static flow member is a Kotlin property, rendered as a get-only C# property. */
+  val isFlowProperty: Boolean = false,
+  /**
+   * ADR-230: the C# expression a static flow member passes first to every extern (an enum's
+   * ordinal, a value class's underlying); null for an owner with no receiver slot.
+   */
+  val flowReceiverArgument: String? = null,
+  /** ADR-230: the local [flowReceiverArgument] is copied to first, so no lambda captures `this`. */
+  val flowReceiverLocal: String? = null,
   // ADR-065: true when this is a StateFlow-returning method. Reuses isFlow's whole legacy route
   // (the _collect export + KotlinFlow substrate) and additionally renders a KotlinStateFlow<T>
   // wrapper plus a synchronous `_value` native import (see [stateFlowValueNativeName]).

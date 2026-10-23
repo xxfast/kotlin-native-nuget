@@ -7,6 +7,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.importIfDefaultPac
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinPackageReference
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.KSClassDeclaration
+import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSTypeParameter
@@ -159,7 +160,7 @@ private fun ForwardBridgeTypeClassifier.admitsStaticSuspend(func: KSFunctionDecl
     func.forwardMemberGenericRefusal() == null
 
 /** ADR-229: [this] declaration's fully qualified Kotlin spelling, each segment escaped. */
-private fun KSClassDeclaration.kotlinQualifiedReference(): String {
+internal fun KSClassDeclaration.kotlinQualifiedReference(): String {
   val packageName: String = packageName.asString()
   val qualified: String = qualifiedName?.asString() ?: simpleName.asString()
   val local: String = if (packageName.isEmpty()) qualified else qualified.removePrefix("$packageName.")
@@ -251,6 +252,13 @@ private fun FileSpec.Builder.addStaticSuspendExport(
   addAcquiredFlowCollectExport(func, cname, returnType, classifier)
   addFlowKeyedSharedFlowExports(cname, func, returnType, classifier)
   addAwaitedStateFlowCollectionExports(func, cname, returnType, classifier)
+  // ADR-230: a settable awaited `MutableStateFlow<T>`, written through the held route's seams as
+  // on the class route.
+  if (func.awaitsSettableMutableStateFlow()) {
+    val element: KSType? = returnType?.arguments?.firstOrNull()?.type?.resolve()?.expandAliases()
+    addHeldStateFlowSetValueExport(cname, func, element)
+    addHeldStateFlowCompareAndSetExport(cname, func, element)
+  }
 }
 
 /**
@@ -567,7 +575,7 @@ internal fun FunSpec.Builder.addLegacyScalarParameter(
 }
 
 internal fun FileSpec.Builder.addAcquiredFlowCollectExport(
-  method: KSFunctionDeclaration,
+  method: KSDeclaration,
   prefix: String,
   returnType: KSType?,
   classifier: ForwardBridgeTypeClassifier,

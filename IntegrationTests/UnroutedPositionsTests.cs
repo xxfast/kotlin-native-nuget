@@ -118,7 +118,7 @@ public class UnroutedPositionsTests
         AssertAllAbsent(
             registry,
             PublicStatic,
-            "FlowReturnOnObject",
+            // ADR-230: `FlowReturnOnObject` BINDS now, asserted present below.
             // ADR-210: `FlowParamOnObject` BINDS now, asserted present below.
             // ADR-160 moved the per-call lambda parameter onto the ADR-062 plan, which is keyed to
             // the position rather than to the owner kind, so `CallbackParamOnObject` BINDS now and
@@ -130,6 +130,7 @@ public class UnroutedPositionsTests
         // lost. Asserted positively so the row cannot silently go back to refusing it.
         Assert.NotNull(registry!.GetMethod("CallbackParamOnObject", PublicStatic));
         Assert.NotNull(registry.GetMethod("FlowParamOnObject", PublicStatic));
+        Assert.NotNull(registry.GetMethod("FlowReturnOnObject", PublicStatic));
     }
 
     /// <summary>
@@ -220,12 +221,9 @@ public class UnroutedPositionsTests
         // ADR-210: and so does the extension's Flow parameter.
         Assert.NotNull(extensions.GetMethod("FlowParamOnExtension", PublicStatic));
 
-        // The LIE cell: today this renders `public static Flow<int> FlowReturnOnTopLevel()` against
-        // a `Flow<T>` type that exists nowhere in Interop.cs (the class route spells the same thing
-        // `KotlinFlow<int>`), so the generated bindings do not compile. There is no top-level Flow
-        // route, so the member must be gone -- and its whole static class with it, which is why
-        // this resolves the type by name.
-        Assert.Null(TopLevelType("UnroutedTopLevelFlow")?.GetMethod("FlowReturnOnTopLevel", PublicStatic));
+        // ADR-230: the old LIE cell. A top-level Flow return binds on the static flow route, as a
+        // `KotlinFlow<int>` on its file facade.
+        Assert.NotNull(TopLevelType("UnroutedTopLevelFlow")?.GetMethod("FlowReturnOnTopLevel", PublicStatic));
     }
 
     // -----------------------------------------------------------------------------------------

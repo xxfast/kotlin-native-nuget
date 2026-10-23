@@ -49,11 +49,11 @@ object TreatPantry : Stockroom("kitchen"), Labelled {
    */
   val favourite: Cat = Cat("Oreo", 9)
 
-  /**
-   * No adapter exists for a state flow on a static owner, so this is expected to be a NAMED skip:
-   * a diagnostic and no C# member at all.
-   */
+  /** A state flow on a static owner: a static `KotlinStateFlow<int>` (ADR-230). */
   val level: StateFlow<Int> = MutableStateFlow(0)
+
+  /** A `Sequence` has no bridge shape, so this is a NAMED skip: a diagnostic and no C# member. */
+  val shelves: Sequence<Int> = emptySequence()
 
   /** Read before assignment, this must surface in C# as an exception rather than a crash. */
   lateinit var keeper: String

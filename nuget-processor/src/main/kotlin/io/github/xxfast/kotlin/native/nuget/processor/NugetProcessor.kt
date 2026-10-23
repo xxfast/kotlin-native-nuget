@@ -92,6 +92,11 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticSuspe
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticSuspendOwner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.staticSuspendRouteMembers
 import io.github.xxfast.kotlin.native.nuget.processor.forward.staticSuspendCandidates
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticFlowMember
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticFlowOwner
+import io.github.xxfast.kotlin.native.nuget.processor.forward.staticFlowCandidates
+import io.github.xxfast.kotlin.native.nuget.processor.forward.staticFlowRouteMembers
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addStaticFlowExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addValueClassExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedDeclaration
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
@@ -841,6 +846,8 @@ internal fun warnRefusedLegacyRouteMembers(
   strictDependencyTypes: Boolean = false,
   // ADR-229: every member the planner handed the static suspend route, refused or not.
   staticSuspend: List<ForwardStaticSuspendMember> = emptyList(),
+  // ADR-230: the static flow route's candidates, named as the static suspend route's are.
+  staticFlow: List<ForwardStaticFlowMember.Function> = emptyList(),
 ) {
   // ROADMAP Phase 4 line 23: the plan route's diagnostic for a dependency type the closure
   // refused (reason, `admit(...)` / `exclude(...)` hint, ADR-154 strict escalation), so a suspend
@@ -1188,18 +1195,15 @@ internal fun warnRefusedLegacyRouteMembers(
   fun MutableList<ForwardDiagnostic>.nameReadOnlyRouteWrite(
     member: KSDeclaration,
     declaration: String,
-    topLevel: Boolean = false,
   ) {
     val function: KSFunctionDeclaration = member as? KSFunctionDeclaration ?: return
     val type: KSType = function.returnType?.resolve()?.expandAliases() ?: return
     if (type.declaration.qualifiedName?.asString() !in MUTABLE_STATE_FLOW_TYPES) return
     val element: KSType? = type.arguments.firstOrNull()?.type?.resolve()?.expandAliases()
     val awaited: Boolean = Modifier.SUSPEND in function.modifiers
+    // ADR-230: the top-level and static suspend routes write an awaited MutableStateFlow too, so
+    // they share the class route's arms.
     val route: String = when {
-      topLevel ->
-        "a top-level suspend function's MutableStateFlow has no write arm (the awaited write " +
-            "is keyed on a class member)"
-
       awaited && type.isMarkedNullable -> "an awaited nullable MutableStateFlow has no write arm"
       awaited && element?.isMarkedNullable == true ->
         "an awaited MutableStateFlow of a nullable element has no write arm"
@@ -1563,7 +1567,7 @@ internal fun warnRefusedLegacyRouteMembers(
     suspendFunctions.forEach { func ->
       nameRefused(func, func.simpleName.asString(), func.forwardFileClassOwner())
       nameRefusedSharedFlowWrite(func, func.simpleName.asString(), func.forwardFileClassOwner())
-      nameReadOnlyRouteWrite(func, func.simpleName.asString(), topLevel = true)
+      nameReadOnlyRouteWrite(func, func.simpleName.asString())
     }
     // ADR-229: the static suspend route's refusals, named as the top-level route's are.
     staticSuspend.forEach { member ->
@@ -1574,6 +1578,19 @@ internal fun warnRefusedLegacyRouteMembers(
         is ForwardStaticSuspendOwner.EnumMember -> static.enum.forwardDiagnosticOwner()
         is ForwardStaticSuspendOwner.ValueClass -> static.valueClass.forwardDiagnosticOwner()
         is ForwardStaticSuspendOwner.Extension -> func.forwardFileClassOwner()
+      }
+      nameRefused(func, func.simpleName.asString(), owner)
+      nameReadOnlyRouteWrite(func, func.simpleName.asString())
+    }
+    // ADR-230: the static flow route's refusals.
+    staticFlow.forEach { member ->
+      val func: KSFunctionDeclaration = member.function
+      val owner: ForwardDiagnosticOwner? = when (val static = member.owner) {
+        is ForwardStaticFlowOwner.TopLevel -> func.forwardFileClassOwner()
+        is ForwardStaticFlowOwner.Object -> static.obj.forwardDiagnosticOwner()
+        is ForwardStaticFlowOwner.Companion -> static.owner.forwardDiagnosticOwner()
+        is ForwardStaticFlowOwner.EnumMember -> static.enum.forwardDiagnosticOwner()
+        is ForwardStaticFlowOwner.ValueClass -> static.valueClass.forwardDiagnosticOwner()
       }
       nameRefused(func, func.simpleName.asString(), owner)
     }
@@ -2879,6 +2896,7 @@ internal class NugetProcessor(
       droppedExtensionReceivers = ordinaryCatalog.droppedExtensionReceivers +
           forwardPropertyPlanner.droppedExtensionReceivers,
       genericBridgeInterfaces = genericBridgeInterfaces,
+      staticFlowProperties = ordinaryCatalog.staticFlowProperties,
     )
 
     // ADR-113: a SECOND catalog, planned over every exported interface rather than the reachable
@@ -2975,6 +2993,7 @@ internal class NugetProcessor(
       classes, sealedClasses, suspendFunctions, forwardClassifier, logger, reachableInterfaces,
       context.excludePackages, context.strictDependencyTypes,
       staticSuspend = callableCatalog.staticSuspendCandidates(),
+      staticFlow = callableCatalog.staticFlowCandidates(),
     )
     // ADR-064 amendment (2026-09-13): the structural generic functions, which never reach the
     // planner (see the function's own KDoc).
@@ -3645,9 +3664,12 @@ internal class NugetProcessor(
           iface.forwardInterfaceFlowProperties(forwardClassifier).isNotEmpty()
     }
 
+    // ADR-230: the static owners' flow members collect on the same runtime surface.
+    val staticFlowMembers: List<ForwardStaticFlowMember> =
+      callableCatalog.staticFlowRouteMembers(forwardClassifier)
     val needsFlowImports: Boolean = classesHaveFlowPropertiesForImports ||
         classesHaveFlowMethodsForImports || armsHaveFlowMembers || sealedBasesHaveAsyncMembers ||
-        interfacesHaveFlowMembers
+        interfacesHaveFlowMembers || staticFlowMembers.isNotEmpty()
 
     // The coroutines opt-in is gated on the SAME condition as the coroutines imports below: every
     // emission that names anything from `kotlinx.coroutines` (suspend functions and suspend
@@ -3810,6 +3832,13 @@ internal class NugetProcessor(
     staticSuspendMembers.forEach { member ->
       guardDeclaration(member.function) {
         builder.addStaticSuspendExports(member, forwardClassifier, callableCatalog)
+      }
+    }
+
+    // ADR-230: the static flow route's members, read through the selector the C# half reads.
+    staticFlowMembers.forEach { member ->
+      guardDeclaration(member.function) {
+        builder.addStaticFlowExports(member, forwardClassifier, callableCatalog)
       }
     }
 

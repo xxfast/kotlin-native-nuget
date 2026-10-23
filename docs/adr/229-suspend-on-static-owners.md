@@ -75,3 +75,11 @@ Alternatives rejected:
   `StaticSuspend_ObjectCallCompletes_ItsStateIsCollected`,
   `StaticSuspend_ExtensionCallCompletes_ItsStateAndReceiverAreCollected`,
   `StaticSuspend_ArgumentFailsItsNullGuard_ItsStateIsCollected`.
+
+## Amendment (2026-10-22): a flow result of a static `suspend` member
+
+[ADR-230](230-flow-on-static-owners.md) binds the non-suspend `Flow` family on the same owners. The
+awaited flow result is now the same wrapper there: a `suspend` member returning
+`MutableStateFlow<T>` awaits to a settable `KotlinMutableStateFlow<T>` on every owner this ADR
+covers, the top level included, and `SharedFlow` results follow. The top-level route used to hand
+back a read-only `KotlinStateFlow<T>`.

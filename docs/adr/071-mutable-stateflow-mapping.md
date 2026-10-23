@@ -1095,3 +1095,11 @@ signatures (`Tier1MutableStateFlowEnumElementTest`, `Tier1MutableStateFlowNullab
 The collection, `ByteArray`, interface and route refusals are verified by Tier 1 only
 (`Tier1MutableStateFlowReadOnlyElementTest`): no `test-library` fixture has those shapes.
 Inferred, not run: a refused value class element on an interface is named, but no cell pins it.
+
+## Amendment (2026-10-22): the hot kinds bind on owners with no instance scope
+
+A `StateFlow`, `MutableStateFlow`, `SharedFlow` or `MutableSharedFlow` return or property on the top
+level, an `object`, a companion, an enum body and enum companion or a value class was a named skip.
+[ADR-230](230-flow-on-static-owners.md) binds it as the same wrapper, static or as an extension, with
+the held `Mutable*` kinds taking a null collection scope. The `.Value` write, `CompareAndSet`,
+`Update`, `EmitAsync` and `TryEmit` are unchanged.

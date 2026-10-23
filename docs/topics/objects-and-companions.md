@@ -116,9 +116,27 @@ colliding with it directly.
 
 An `Int?`-style nullable property round-trips its null branch the same way a class property does. A
 `lateinit var` read before it is assigned surfaces in C# as a `KotlinException`, not a crash. A
-`Flow`/`StateFlow`/lambda-typed object property has no static-owner adapter, so it generates no C#
-member at all and is named with a `SKIPPED_UNSUPPORTED_PROPERTY` warning instead of vanishing
-silently.
+lambda-typed object property has no static-owner adapter, so it generates no C# member at all and is
+named with a `SKIPPED_UNSUPPORTED_PROPERTY` warning instead of vanishing silently.
+
+A `Flow`, `StateFlow` or `SharedFlow` object property (and a `Mutable*` one) binds as a static
+`KotlinFlow<T>` or its variant, read fresh on every access:
+
+```kotlin
+object PurrClock {
+  val beats: Flow<Int> = flowOf(1, 2)
+  val hour: MutableStateFlow<Int> = MutableStateFlow(9)
+}
+```
+
+```C#
+await foreach (int beat in PurrClock.Beats) { }
+using KotlinMutableStateFlow<int> hour = PurrClock.Hour;   // dispose the holder
+hour.Value = 10;
+```
+
+A `Flow`-returning object function binds the same way. See
+[Coroutines and Flow](coroutines-and-flow.md#flow-static-owners).
 
 ## Companion objects
 
@@ -153,6 +171,11 @@ warning, so move it to a top-level declaration or an `object`.
 A `suspend` member of a companion binds the same way, as a static `Task` method on the owning
 class: `await Swing.HangAsync("Oreo")`. A named companion binds too. See
 [Coroutines and Flow](coroutines-and-flow.md#suspend-static-owners).
+
+A companion `Flow`-returning function or flow property binds as a static member too, named or
+default: `Cuckoo.Calls()` for `companion object { fun calls(): Flow<String> }`, and
+`Hourglass.Level` for a `StateFlow` in `companion object Sand`. See
+[Coroutines and Flow](coroutines-and-flow.md#flow-static-owners).
 
 ## Method overloads {id="method-overloads"}
 

@@ -718,3 +718,13 @@ Not decided: binding the setter. A C# property cannot have a `KotlinFlow<T>` get
 hot-flow setter cannot bind at all. Pinned by `Tier1FlowVarPropertySetterTest`, which also pins a
 flow property on a generic class as a silent whole-property drop (a `DEFECT` cell, tracked in the
 ROADMAP).
+
+## Amendment (2026-10-22): a `Flow` binds on an owner with no instance scope
+
+The route was instance-keyed, so a `Flow` return or property on the top level, an `object`, a
+companion, an enum body and enum companion or a value class was a named skip (the nullable-member
+amendment above lists the top-level and object cases as unchanged). [ADR-230](230-flow-on-static-owners.md)
+binds all of them as a static `KotlinFlow<T>`: the collect export drops `handle` and `scopeHandle`,
+and each collection runs on `CoroutineScope(Dispatchers.Default)`, which is what the original
+design sketch of this ADR already said of top-level returns. The member is re-invoked per
+collection, and the enumerator's own job is the only cancellation handle.

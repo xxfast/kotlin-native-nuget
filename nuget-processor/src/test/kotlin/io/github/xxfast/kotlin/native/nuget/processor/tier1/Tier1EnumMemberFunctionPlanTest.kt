@@ -135,14 +135,16 @@ class Tier1EnumMemberFunctionPlanTest {
 
   @Test
   fun `every enum member with no route is named exactly once`() {
-    listOf("Mood.tagged", "Mood.ticks", "Mood.sound")
+    // ADR-230: `Mood.ticks` (a Flow return) binds on the static flow route, `this Mood`.
+    listOf("Mood.tagged", "Mood.sound")
       .forEach { symbol ->
         val skips: List<String> = warningsFor(symbol)
         assertEquals(1, skips.size, "$symbol kspWarnings=${result.kspWarnings}")
       }
     val cs: String = result.generatedCSharp
-    listOf("Tagged", "Ticks")
+    listOf("Tagged")
       .forEach { name -> assertFalse(cs.contains(" $name("), "$name must not render") }
+    assertContains(cs, "public static KotlinFlow<int> Ticks(this ")
   }
 
   /**

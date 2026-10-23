@@ -59,9 +59,9 @@ class Tier1StaticSuspendTest {
     assertContains(result.generated, "_den_companion_open_async")
   }
 
-  /** The ADR-230 boundary: a static owner's `Flow` result keeps its named skip, never silent. */
+  /** ADR-230: a static owner's `Flow` result binds, awaited and then collected statically. */
   @Test
-  fun `a static suspend member returning a Flow stays named`() {
+  fun `a static suspend member returning a Flow binds`() {
     val result: Tier1Result = Tier1Harness.run(
       """
       package tier1.staticsuspendflow
@@ -76,9 +76,9 @@ class Tier1StaticSuspendTest {
       libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
     )
 
-    val named: List<String> = result.kspWarnings.filter { "Clock.ticks" in it }
-    assertTrue(named.size == 1, "Clock.ticks must be named once; kspWarnings=${result.kspWarnings}")
-    assertContains(named.single(), "with a Flow result on an owner with no instance scope")
+    assertTrue(result.kspWarnings.none { "Clock.ticks" in it }, "kspWarnings=${result.kspWarnings}")
+    assertContains(result.generated, "_clock_ticks_async")
+    assertContains(result.generatedCSharp, "public static Task<KotlinFlow<int>> TicksAsync(")
   }
 
   /** A receiver the route has no slot for (a `List`) keeps the extension's named skip. */

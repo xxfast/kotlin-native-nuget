@@ -106,7 +106,7 @@ class Tier1ObjectPropertyTest {
   }
 
   @Test
-  fun `an object state flow property is a named skip`() {
+  fun `an object state flow property binds as a static KotlinStateFlow`() {
     val result = Tier1Harness.run(
       """
       package tier1.objectflow
@@ -122,13 +122,15 @@ class Tier1ObjectPropertyTest {
       libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
     )
 
-    // No adapter exists for a state flow on a static owner, so it must skip *named* rather than
-    // vanish the way it does on the class route (where an adapter re-emits it).
-    assertTrue(
+    // ADR-230: the static flow route binds it, re-read on every access, and names nothing.
+    assertFalse(
       result.kspWarnings.any { it.contains("tier1.objectflow.Hub.level") },
-      "expected a named skip for the object's StateFlow property; got: ${result.kspWarnings}",
+      "kspWarnings=${result.kspWarnings}",
     )
-    assertFalse(result.generatedCSharp.contains("Level"), result.generatedCSharp)
+    assertTrue(
+      result.generatedCSharp.contains("public static KotlinStateFlow<int> Level"),
+      result.generatedCSharp,
+    )
   }
 
   @Test
@@ -300,12 +302,11 @@ class Tier1ObjectPropertyTest {
   }
 
   /**
-   * Decision 3's probe, kept as a cell: a `StateFlow` property on a COMPANION and at TOP LEVEL is
-   * dropped by the planner and has no legacy adapter either, so it must be named too. Both used to
-   * ride `recordDropped`'s silence exemption, which was written for the class route's adapters.
+   * Decision 3's probe, kept as a cell: a `StateFlow` property on a COMPANION and at TOP LEVEL.
+   * ADR-230: both bind on the static flow route now, so neither is named.
    */
   @Test
-  fun `companion and top-level state flow properties are named skips too`() {
+  fun `companion and top-level state flow properties bind as static KotlinStateFlows`() {
     val result = Tier1Harness.run(
       """
       package tier1.staticflow
@@ -324,18 +325,14 @@ class Tier1ObjectPropertyTest {
       libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
     )
 
-    assertTrue(
-      result.kspWarnings.any { it.contains("tier1.staticflow.ambient") },
-      "expected a named skip for the top-level StateFlow property; got: ${result.kspWarnings}",
+    assertFalse(
+      result.kspWarnings.any {
+        "tier1.staticflow.ambient" in it || "Tracker.Companion.shared" in it
+      },
+      "kspWarnings=${result.kspWarnings}",
     )
-    assertTrue(
-      result.kspWarnings.any { it.contains("Tracker.Companion.shared") },
-      "expected a named skip for the companion StateFlow property; got: ${result.kspWarnings}",
-    )
-    // ...and the silence really was hiding an absence: neither position has a flow adapter, so no
-    // C# member is emitted for either of them.
     val cs: String = result.generatedCSharp
-    assertFalse(cs.contains("Ambient"), cs)
-    assertFalse(cs.contains("Shared"), cs)
+    assertTrue(cs.contains("public static KotlinStateFlow<int> Ambient"), cs)
+    assertTrue(cs.contains("public static KotlinStateFlow<int> Shared"), cs)
   }
 }

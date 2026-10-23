@@ -1,5 +1,9 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import io.github.xxfast.kotlin.native.nuget.processor.freshName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticFlowMember
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticFlowOwner
+import io.github.xxfast.kotlin.native.nuget.processor.forward.staticFlowRouteMembers
 import com.google.devtools.ksp.symbol.ClassKind
 
 import io.github.xxfast.kotlin.native.nuget.processor.forward.staticSuspendRouteMembers
@@ -381,6 +385,25 @@ internal fun translate(
     namespaces.mergeStaticClass(namespace, finalClassName, members)
   }
 
+  // ADR-230: a top-level flow member lands on its ADR-007 file facade, beside the file's functions.
+  val topLevelFlow: List<ForwardStaticFlowMember> = callableCatalog
+    .staticFlowRouteMembers(classifier)
+    .filter { member -> member.owner is ForwardStaticFlowOwner.TopLevel }
+  groupByNamespaceAndFile(topLevelFlow.map { member -> member.function }).forEach { (key, funcs) ->
+    val (namespace, fileClassName) = key
+    val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
+    val members: List<CirMember> = funcs.flatMap { function ->
+      val member: ForwardStaticFlowMember = topLevelFlow.first { it.function === function }
+      flowMembers(
+        listOf(function), prefix = "", context.libraryName, classifier, tracker, callableCatalog,
+        context, logger, staticFlow = true, staticStem = member.owner.stem,
+      ).also { emitted ->
+        recordStatic(namespace, finalClassName, emitted, function, function.spelling("fun"))
+      }
+    }
+    namespaces.mergeStaticClass(namespace, finalClassName, members)
+  }
+
   // ADR-229: the static suspend route, read through the selector the Kotlin half reads. Each
   // member is translated once, on the C# owner its static owner renders as.
   val staticSuspend: List<ForwardStaticSuspendMember> =
@@ -405,6 +428,38 @@ internal fun translate(
   }
   fun KSClassDeclaration.isSameAs(other: KSClassDeclaration): Boolean =
     qualifiedName?.asString() == other.qualifiedName?.asString()
+
+  // ADR-230: the static flow route, read through the selector the Kotlin half reads. Each member
+  // is translated once, on the C# owner its static owner renders as.
+  val staticFlow: List<ForwardStaticFlowMember> = callableCatalog.staticFlowRouteMembers(classifier)
+  fun staticFlowCir(
+    member: ForwardStaticFlowMember,
+    receiver: CirParameter? = null,
+  ): List<CirMember> {
+    // An enum member's ordinal is the C# `this` parameter, named apart from the declared ones.
+    val taken: Set<String> =
+      member.function.parameters.map { it.name?.asString().orEmpty() }.toSet()
+    val extension: CirParameter? = (member.owner as? ForwardStaticFlowOwner.EnumMember)
+      ?.receiver
+      ?.cirReceiverParameter(freshName("receiver", taken))
+    return flowMembers(
+      listOf(member.function), prefix = "", context.libraryName, classifier, tracker,
+      callableCatalog, context, logger,
+      staticFlow = true, staticReceiver = receiver, staticStem = member.owner.stem,
+      extensionReceiver = extension,
+    )
+  }
+  fun objectFlow(obj: KSClassDeclaration): List<CirMember> = staticFlow
+    .filter { member ->
+      (member.owner as? ForwardStaticFlowOwner.Object)?.obj?.isSameAs(obj) == true
+    }
+    .flatMap { member -> staticFlowCir(member) }
+  fun companionFlow(cls: KSClassDeclaration): List<CirMember> = staticFlow
+    .filter { member ->
+      (member.owner as? ForwardStaticFlowOwner.Companion)?.owner?.isSameAs(cls) == true &&
+        cls.classKind != ClassKind.ENUM_CLASS
+    }
+    .flatMap { member -> staticFlowCir(member) }
   fun objectAsync(obj: KSClassDeclaration): List<CirMember> = staticSuspend
     .filter { member -> (member.owner as? ForwardStaticSuspendOwner.Object)?.obj?.isSameAs(obj) == true }
     .flatMap { member -> staticSuspendCir(member) }
@@ -418,7 +473,11 @@ internal fun translate(
       .filter { member ->
         (member.owner as? ForwardStaticSuspendOwner.ValueClass)?.valueClass?.isSameAs(cls) == true
       }
-      .flatMap { member -> staticSuspendCir(member, receiver) }
+      .flatMap { member -> staticSuspendCir(member, receiver) } + staticFlow
+      .filter { member ->
+        (member.owner as? ForwardStaticFlowOwner.ValueClass)?.valueClass?.isSameAs(cls) == true
+      }
+      .flatMap { member -> staticFlowCir(member, receiver) }
   }
 
   groupPropertiesByNamespaceAndFile(properties).forEach { (key, props) ->
@@ -492,7 +551,7 @@ internal fun translate(
       val translated: CirClass = translateClass(
         cls, context.libraryName, tracker, exportedTypes, logger, callableCatalog, context,
         classifier, interfaceDeclarationCatalog, expects, memberRegistry,
-        companionAsyncMembers = companionAsync(cls),
+        companionAsyncMembers = companionAsync(cls) + companionFlow(cls),
       )
       addAll(withNestedDeclarations(translated, translateNestedOf(cls)))
     }
@@ -537,7 +596,7 @@ internal fun translate(
       add(
         translateObject(
           obj, context.libraryName, context.symbols, callableCatalog, tracker, logger, expects,
-          asyncMembers = objectAsync(obj),
+          asyncMembers = objectAsync(obj) + objectFlow(obj),
         )
           .copy(nestedDeclarations = translateNestedOf(obj)),
       )
@@ -554,7 +613,7 @@ internal fun translate(
       val translated: CirClass = translateClass(
         cls, context.libraryName, tracker, exportedTypes, logger, callableCatalog, context,
         classifier, interfaceDeclarationCatalog, expects, memberRegistry,
-        companionAsyncMembers = companionAsync(cls),
+        companionAsyncMembers = companionAsync(cls) + companionFlow(cls),
       )
       withNestedDeclarations(translated, translateNestedOf(cls))
     } ?: return@forEach
@@ -748,7 +807,7 @@ internal fun translate(
     val declaration: CirDeclaration = guarded(obj.forwardGuardName(), obj, logger) {
       translateObject(
         obj, context.libraryName, context.symbols, callableCatalog, tracker, logger, expects,
-        asyncMembers = objectAsync(obj),
+        asyncMembers = objectAsync(obj) + objectFlow(obj),
       )
         .copy(nestedDeclarations = translateNestedOf(obj))
     } ?: return@forEach
@@ -981,6 +1040,26 @@ internal fun translate(
       logger = logger,
       properties = staticProperties,
     )
+  }
+
+  // ADR-230: an enum body's and an enum companion's flow members land on `{Enum}Extensions` too.
+  staticFlow.forEach { member ->
+    val enum: KSClassDeclaration? = when (val owner = member.owner) {
+      is ForwardStaticFlowOwner.EnumMember -> owner.enum
+      is ForwardStaticFlowOwner.Companion ->
+        owner.owner.takeIf { it.classKind == ClassKind.ENUM_CLASS }
+      is ForwardStaticFlowOwner.TopLevel,
+      is ForwardStaticFlowOwner.Object,
+      is ForwardStaticFlowOwner.ValueClass,
+        -> null
+    }
+    if (enum != null) {
+      namespaces.mergeStaticClass(
+        namespaceOf(enum.packageName.asString()),
+        "${enum.extensionReceiverKey().replace(".", "")}Extensions",
+        staticFlowCir(member),
+      )
+    }
   }
 
   // ADR-229: an enum body's and an enum companion's suspend members land on `{Enum}Extensions`,

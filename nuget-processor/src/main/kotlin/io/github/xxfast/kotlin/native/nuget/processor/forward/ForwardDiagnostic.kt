@@ -906,15 +906,14 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
             "enum or class payloads and a Unit, primitive or String result), but not here"
 
       // The ADR-064 audit amendment: one sentence for every owner the route skips, so it lists
-      // each of them. ADR-229: the static owners bind on the top-level route now, so what is left
-      // is a static owner's `Flow` result, an extension on another receiver and an interface
-      // nothing returns.
+      // each of them. ADR-229: the static owners bind on the top-level route now, and their `Flow`
+      // results too (ADR-230), so what is left is an extension on another receiver and an
+      // interface nothing returns.
       ForwardPlanSkipReason.SUSPEND.name ->
         "a `suspend` function binds at the top level, on a class or sealed type, an object, a " +
           "companion, an enum or a value class, as an extension on a class, String, primitive " +
-          "or enum receiver, and on an interface a function returns, but not with a Flow " +
-          "result on an owner with no instance scope, as an extension on any other receiver, " +
-          "or on an interface nothing returns"
+          "or enum receiver, and on an interface a function returns, but not as an extension " +
+          "on any other receiver, or on an interface nothing returns"
 
       // ADR-197: a member's own type parameter binds too now, on the owners and at the positions
       // the boxed wire reaches, so the sentence names those rather than "top-level only".

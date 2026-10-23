@@ -626,8 +626,9 @@ internal fun FileSpec.Builder.addCompanionExports(
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { !it.modifiers.contains(Modifier.CONST) }
     .forEach { prop ->
-      val planned: ForwardPropertyPlan? =
-        callableCatalog.propertyFor("$qualifiedName.Companion.${prop.simpleName.asString()}")
+      val symbol: String =
+        "$qualifiedName.${companion.simpleName.asString()}.${prop.simpleName.asString()}"
+      val planned: ForwardPropertyPlan? = callableCatalog.propertyFor(symbol)
       if (planned != null) addForwardPropertyPlanExports(planned)
     }
 }
