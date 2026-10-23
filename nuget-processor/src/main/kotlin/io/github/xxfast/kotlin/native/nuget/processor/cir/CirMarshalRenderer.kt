@@ -550,6 +550,25 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("            finally { if (owned && box != IntPtr.Zero) Dispose(box); }")
   appendLine("        }")
   appendLine()
+  // One extern call over a handle minted for it (a struct's collection, bytes or interface
+  // underlying), released after the call.
+  appendLine(
+    "        internal static TResult WithHandle<TResult>(IntPtr handle, Func<IntPtr, TResult> call)"
+  )
+  appendLine("        {")
+  appendLine("            try { return call(handle); }")
+  appendLine("            finally { if (handle != IntPtr.Zero) Dispose(handle); }")
+  appendLine("        }")
+  appendLine()
+  appendLine(
+    "        internal static TResult WithHandle<TResult>(" +
+      "IntPtr handle, BoxedCall<TResult> call, out IntPtr error)"
+  )
+  appendLine("        {")
+  appendLine("            try { return call(handle, out error); }")
+  appendLine("            finally { if (handle != IntPtr.Zero) Dispose(handle); }")
+  appendLine("        }")
+  appendLine()
   // ADR-073: the boxing switch shared by CreateList/CreateSet/CreateMap, so a future component
   // type is added in exactly one place.
   // ADR-099: `owned` reports whether this call MINTED the box. A freshly wrapped primitive/string

@@ -2439,7 +2439,9 @@ internal object ForwardCirPlanProjection {
   /** The ADR-075 null-handle guard, after the error check: a null handle is Kotlin `null`. */
   private fun StringBuilder.appendNullHandleExit(handle: String, exit: CirBodyExit) {
     if (exit.names == null) {
-      appendLine("            if ($handle == IntPtr.Zero) return null;")
+      // A non-null struct over a nullable underlying (`MaybeBundle<T>(val items: List<T>?)`) wraps
+      // the null: `return new MaybeBundle<int>(null);`.
+      appendLine("            if ($handle == IntPtr.Zero) ${exit.returning("null")}")
       return
     }
     appendLine("            if ($handle == IntPtr.Zero)")

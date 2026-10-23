@@ -84,6 +84,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeC
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardValueClassUnderlying
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardValueClassView
 import io.github.xxfast.kotlin.native.nuget.processor.forward.valueClassViewOrNull
+import io.github.xxfast.kotlin.native.nuget.processor.forward.valueClassSelf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.valueClassUnderlying
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInheritedOutcome
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceHierarchy
@@ -2473,7 +2474,10 @@ internal fun flowMembers(
         isStaticFlow = staticFlow,
         isStatic = staticFlow && staticReceiver == null,
         isFlowProperty = method is ForwardStaticFlowGetter,
-        flowReceiverArgument = staticReceiver?.let { it.boxedRead ?: it.nativeArgument },
+        flowReceiverArgument = staticReceiver?.let { receiver ->
+          if (receiver.flowMint != null) "this" else receiver.boxedRead ?: receiver.nativeArgument
+        },
+        flowReceiverMint = staticReceiver?.flowMint,
         flowReceiverBox = staticReceiver?.boxedRead != null,
         flowRegistrations = flowRegistrations,
         flowReceiverLocal = receiverLocal,
@@ -2539,7 +2543,10 @@ internal fun flowMembers(
         isStaticFlow = staticFlow,
         isStatic = staticFlow && staticReceiver == null,
         isFlowProperty = method is ForwardStaticFlowGetter,
-        flowReceiverArgument = staticReceiver?.let { it.boxedRead ?: it.nativeArgument },
+        flowReceiverArgument = staticReceiver?.let { receiver ->
+          if (receiver.flowMint != null) "this" else receiver.boxedRead ?: receiver.nativeArgument
+        },
+        flowReceiverMint = staticReceiver?.flowMint,
         flowReceiverBox = staticReceiver?.boxedRead != null,
         flowRegistrations = flowRegistrations,
         flowReceiverLocal = receiverLocal,
@@ -2654,7 +2661,10 @@ internal fun flowMembers(
         isStaticFlow = staticFlow,
         isStatic = staticFlow && staticReceiver == null,
         isFlowProperty = method is ForwardStaticFlowGetter,
-        flowReceiverArgument = staticReceiver?.let { it.boxedRead ?: it.nativeArgument },
+        flowReceiverArgument = staticReceiver?.let { receiver ->
+          if (receiver.flowMint != null) "this" else receiver.boxedRead ?: receiver.nativeArgument
+        },
+        flowReceiverMint = staticReceiver?.flowMint,
         flowReceiverBox = staticReceiver?.boxedRead != null,
         flowRegistrations = flowRegistrations,
         flowReceiverLocal = receiverLocal,
@@ -2709,7 +2719,10 @@ internal fun flowMembers(
       isStaticFlow = staticFlow,
       isStatic = staticFlow && staticReceiver == null,
       isFlowProperty = method is ForwardStaticFlowGetter,
-      flowReceiverArgument = staticReceiver?.let { it.boxedRead ?: it.nativeArgument },
+      flowReceiverArgument = staticReceiver?.let { receiver ->
+        if (receiver.flowMint != null) "this" else receiver.boxedRead ?: receiver.nativeArgument
+      },
+      flowReceiverMint = staticReceiver?.flowMint,
         flowReceiverBox = staticReceiver?.boxedRead != null,
         flowRegistrations = flowRegistrations,
       flowReceiverLocal = receiverLocal,
@@ -5318,7 +5331,8 @@ internal fun translateValueClass(
   // primary has no `CreateChecked` (one constructor cannot call a per-instantiation export), so
   // `init` runs in Kotlin when a value first crosses. ADR-225: its own members and secondary
   // constructors ride the ordinary route.
-  if (cls.typeParameters.isNotEmpty()) {
+  val isWire: Boolean = classifier?.valueClassUnderlying(cls) == ForwardValueClassUnderlying.WIRE
+  if (cls.typeParameters.isNotEmpty() && !isWire) {
     val isOwnTypeParameter: Boolean = underlyingResolved.declaration is KSTypeParameter
     val genericUnderlyingType: String = if (isOwnTypeParameter) {
       underlyingType + if (underlyingResolved.isMarkedNullable) "?" else ""
@@ -5408,14 +5422,25 @@ internal fun translateValueClass(
     // ADR-240: a `suspend` or `Flow` member's receiver is the struct's own innermost underlying,
     // on its ordinary-route wire, unwrapped from `this` (refusing a reference-typed default).
     val self: ForwardLegacyParameterShape.Wire? =
-      legacyWireShape(requireNotNull(classifier).classify(cls.asStarProjectedType()))
-    val asyncMembers: List<CirMember> = if (self == null) emptyList() else staticSuspend(
+      requireNotNull(classifier).valueClassSelf(cls)?.let(::legacyWireShape)
+    // A generic one (`Bundle<T>`) is one struct for every instantiation, compared as itself.
+    val typeParameters: List<String> = cls.typeParameters.map { it.name.asString() }
+    val selfName: String =
+      if (typeParameters.isEmpty()) name else typeParameters.joinToString(", ", "$name<", ">")
+    // A flow member's lambdas cannot read `this`: they mint the handle from the struct's copy.
+    fun receiverOf(shape: ForwardLegacyParameterShape.Wire, source: String): CirParameter =
       legacyWireParameter(
-        "receiver", self, tracker,
+        "receiver", shape, tracker,
         hasValue = null, handle = "receiverHandle", owned = "receiverOwned",
-        source = "this", named = null, root = underlyingName,
-      ),
-    )
+        source = source, named = null, root = underlyingName,
+      )
+    val receiver: CirParameter? = self?.let { receiverOf(it, "this") }
+    val mintReceiver: CirParameter? =
+      if (self == null || receiver?.collectionCreate == null) null
+      else receiverOf(self, "receiverValue")
+    val asyncMembers: List<CirMember> = if (receiver == null) emptyList() else {
+      staticSuspend(receiver.copy(flowMint = mintReceiver?.collectionCreate))
+    }
     // ADR-235: every member and secondary constructor is on the ADR-225 route, [routeMembers].
     return CirValueClass(
       name = name,
@@ -5431,7 +5456,8 @@ internal fun translateValueClass(
       underlyingDoc = underlyingProp.forwardKdoc(expects)?.toCirDoc(),
       routeMembers = routeMembers,
       asyncMembers = asyncMembers,
-      contentEquality = contentEqualityMembers(name, underlyingName, wireUnderlying),
+      typeParameters = typeParameters,
+      contentEquality = contentEqualityMembers(selfName, underlyingName, wireUnderlying),
       // ADR-240: the box pair an erased position (`Box<V>`, a flow element, an awaited result)
       // crosses through.
       boxing = callableCatalog.valueClassBoxing(cls.qualifiedName?.asString().orEmpty())

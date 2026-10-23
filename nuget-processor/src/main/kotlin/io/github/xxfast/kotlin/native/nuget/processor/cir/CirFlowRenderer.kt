@@ -1035,9 +1035,12 @@ private fun StringBuilder.renderMutableStateFlowCompareAndSetMembers() {
  * ADR-228: [text] with every extern call that passes [local] first rewritten to run inside
  * `NugetMarshal.WithBox`, which mints the generic value class underlying's box for that one call
  * and releases it once the export returns. A static flow export reads its receiver before it
- * launches anything, so the box never outlives the call.
+ * launches anything, so the box never outlives the call. With [mint] (a handle-wired receiver,
+ * `NugetMarshal.CreateList(...)` over the struct in [local]) the call runs inside
+ * `NugetMarshal.WithHandle` over that freshly minted handle instead.
  */
-internal fun boxedReceiverCalls(text: String, local: String): String {
+internal fun boxedReceiverCalls(text: String, local: String, mint: String? = null): String {
+  val carrier: String = if (mint == null) "WithBox($local" else "WithHandle($mint"
   val call = Regex("""([A-Za-z_][A-Za-z0-9_]*)\(${Regex.escape(local)}\b""")
   val out = StringBuilder()
   var cursor = 0
@@ -1060,12 +1063,12 @@ internal fun boxedReceiverCalls(text: String, local: String): String {
     // A call with an error slot keeps it: the box call reports it through `WithBox`'s own `out`.
     val error: MatchResult? = Regex("""out IntPtr (\w+)""").find(arguments)
     if (error == null) {
-      out.append("NugetMarshal.WithBox($local, ${local}Box => ${match.groupValues[1]}($arguments))")
+      out.append("NugetMarshal.$carrier, ${local}Box => ${match.groupValues[1]}($arguments))")
     } else {
       val name: String = error.groupValues[1]
       val inner: String = arguments.replaceRange(error.range, "out ${name}Boxed")
       out.append(
-        "NugetMarshal.WithBox($local, (IntPtr ${local}Box, out IntPtr ${name}Boxed) => " +
+        "NugetMarshal.$carrier, (IntPtr ${local}Box, out IntPtr ${name}Boxed) => " +
           "${match.groupValues[1]}($inner), out IntPtr $name)",
       )
     }

@@ -722,6 +722,12 @@ private fun underlyingElementCast(expression: String, underlying: BridgeType): S
     val nullable: Boolean = underlying is BridgeType.Nullable
     return typeParameterElementCast(expression, parameter, nullable)
   }
+  // A collection underlying (`MaybeBundle<T>(val items: List<T>?)`) converts per element.
+  val collection: BridgeType.Collection? = underlying.unwrapNullable() as? BridgeType.Collection
+  if (collection != null) {
+    if (underlying !is BridgeType.Nullable) return componentLowering(expression, collection)
+    return "($expression)?.let { nugetItems -> ${componentLowering("nugetItems", collection)} }"
+  }
   return "$expression as ${underlyingElementTypeName(underlying)}"
 }
 

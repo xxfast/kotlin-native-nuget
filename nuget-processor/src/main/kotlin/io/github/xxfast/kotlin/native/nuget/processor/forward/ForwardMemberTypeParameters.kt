@@ -175,7 +175,17 @@ internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
       underlying.declaration is KSTypeParameter &&
           parameter.name.asString() == underlying.declaration.simpleName.asString()
     }
-    if (index < 0) return false
+    // A collection of its own `T` (`Bundle<T>(val items: List<T>)`) carries the member's `T` per
+    // element, on ADR-212's element wire.
+    if (index < 0) {
+      if (underlying.declaration.qualifiedName?.asString() !in OWN_PARAMETER_COLLECTIONS) {
+        return false
+      }
+      return arguments.all { argument ->
+        val type: KSType = argument.type?.resolve()?.expandAliases() ?: return false
+        type.ownParameter() || !type.mentionsOwn()
+      }
+    }
     return arguments.withIndex().all { (position, argument) ->
       val type: KSType = argument.type?.resolve()?.expandAliases() ?: return false
       if (position == index) {

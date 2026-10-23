@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
 import com.google.devtools.ksp.getAllSuperTypes
+import com.google.devtools.ksp.getDeclaredProperties
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
@@ -462,7 +463,7 @@ internal class ForwardBridgeTypeClassifier(
       return BridgeType.Enum(qualifiedName, csharpTypeNameFor(classDeclaration))
     }
     if (classDeclaration.isValueClass()) {
-      return valueClass(classDeclaration, qualifiedName, type.arguments)
+      return valueClass(classDeclaration, qualifiedName, type)
     }
     if (classDeclaration.modifiers.contains(Modifier.SEALED)) {
       // ADR-105: the protocol still names the legacy route (every position that had one keeps it,
@@ -972,8 +973,9 @@ internal class ForwardBridgeTypeClassifier(
   private fun valueClass(
     declaration: KSClassDeclaration,
     qualifiedName: String,
-    arguments: List<KSTypeArgument>,
+    useSite: KSType,
   ): BridgeType {
+    val arguments: List<KSTypeArgument> = useSite.arguments
     // The membership gate the value-class branch never had, ahead of the underlying checks: since
     // ADR-134 a nested value class IS declared as a `readonly record struct` under an admitted
     // owner, so a nested one missing from `exportedValueClasses` is one the owner walk deferred (a
@@ -1073,7 +1075,7 @@ internal class ForwardBridgeTypeClassifier(
       return genericValueClass(
         declaration,
         qualifiedName,
-        arguments,
+        useSite,
         underlyingParam.type.resolve(),
         underlyingPropertyName,
       )
@@ -1104,10 +1106,11 @@ internal class ForwardBridgeTypeClassifier(
   private fun genericValueClass(
     declaration: KSClassDeclaration,
     qualifiedName: String,
-    arguments: List<KSTypeArgument>,
+    useSite: KSType,
     underlying: KSType,
     underlyingPropertyName: String,
   ): BridgeType {
+    val arguments: List<KSTypeArgument> = useSite.arguments
     val resolved: List<KSType> = arguments.map { argument ->
       val reference = argument.type
       if (argument.variance != Variance.INVARIANT || reference == null) {
@@ -1122,11 +1125,17 @@ internal class ForwardBridgeTypeClassifier(
       underlying.declaration is KSTypeParameter &&
           parameter.name.asString() == underlying.declaration.simpleName.asString()
     }
-    val substituted: KSType = if (index < 0) {
-      underlying
-    } else {
-      val argument: KSType = resolved[index]
-      if (underlying.isMarkedNullable) argument.makeNullable() else argument
+    val substituted: KSType = when {
+      index >= 0 -> {
+        val argument: KSType = resolved[index]
+        if (underlying.isMarkedNullable) argument.makeNullable() else argument
+      }
+      // A collection of its own `T` (`Bundle<T>(val items: List<T>)`): the underlying property read
+      // as a member of the use site substitutes every argument, at any depth (`List<Int>`).
+      underlying.arguments.isNotEmpty() -> declaration.getDeclaredProperties()
+        .first { property -> property.simpleName.asString() == underlyingPropertyName }
+        .asMemberOf(useSite.makeNotNullable())
+      else -> underlying
     }
     val classifiedUnderlying: BridgeType = classify(substituted)
     // An own-`T` instantiation over an underlying no value-class wire carries (`Sticker<Char>`,
@@ -1142,8 +1151,18 @@ internal class ForwardBridgeTypeClassifier(
         valueClassUnderlying = substituted.kotlinSpelling(keepProjections = true),
       )
     }
-    val spelled: List<String> = resolved.map { argument ->
-      val classified: BridgeType = classify(argument).sealedAsHandle()
+    // A `T?` underlying (`Opt<T>(val value: T?)`) or a collection of `T?` (`Gappy<T>(val items:
+    // List<T?>)`): C# reads an unconstrained `T?` as `T` for a value type, so `Opt<Int>` is spelled
+    // `Opt<int?>` to keep its null. A reference type keeps its spelling (`Opt<string>`).
+    val nullableUses: List<Boolean> = declaration.typeParameters.mapIndexed { position, parameter ->
+      val name: String = parameter.name.asString()
+      val usedNullable: Boolean = if (index >= 0) position == index && underlying.isMarkedNullable
+      else underlying.mentionsNullableTypeParameter(name)
+      usedNullable && classify(resolved[position].makeNullable()).isNullableValueTypeReceiver()
+    }
+    val spelled: List<String> = resolved.mapIndexed { position, argument ->
+      val classified: BridgeType =
+        classify(if (nullableUses[position]) argument.makeNullable() else argument).sealedAsHandle()
       val unspellable: Boolean = classified is BridgeType.SpecializedProtocol ||
           classified is BridgeType.RawKSType || classified is BridgeType.Unsupported ||
           classified is BridgeType.RawCollection
@@ -2177,3 +2196,11 @@ internal const val STAR_TYPE_PARAMETER_PREFIX: String = "T"
 
 /** ADR-226: the Kotlin name a synthesized star-projection type parameter carries. */
 internal const val STAR_KOTLIN_NAME: String = "*"
+
+/** Whether [name] appears as `T?` anywhere among this type's arguments (`List<T?>`). */
+private fun KSType.mentionsNullableTypeParameter(name: String): Boolean =
+  arguments.any { argument ->
+    val type: KSType = argument.type?.resolve() ?: return@any false
+    val named: Boolean = (type.declaration as? KSTypeParameter)?.name?.asString() == name
+    (named && type.isMarkedNullable) || type.mentionsNullableTypeParameter(name)
+  }
