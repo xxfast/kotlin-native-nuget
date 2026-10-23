@@ -59,6 +59,7 @@ using Feedingtime = TestLibrary.Feedingtime;
 using Catsitter = TestLibrary.Catsitter;
 using Cattery = TestLibrary.Cattery;
 using Hoards = TestLibrary.Hoard;
+using Furcoat = TestLibrary.Furcoat;
 
 namespace LeakTests;
 
@@ -8393,5 +8394,101 @@ public class LiveHandleTests
             await Task.Yield();
             yield return new TestLibrary.Stickers.Sticker<int>(value);
         }
+    }
+
+    // ADR-235
+    // A value class over a handle-backed underlying (`ByteArray`, a collection, a plain interface)
+    // crosses on that underlying's own wire, so each crossing below releases exactly what the bare
+    // underlying would: the byte and list handles once read, the Kotlin-backed `IRumbler` on
+    // dispose, and the C#-implemented `IRumbler`'s bridge once Kotlin drops it. Each row reads the
+    // value back in Kotlin too, so the re-wrap (and `init`) runs every iteration.
+    [Fact]
+    public void ValueClassOverByteArray_ParamReturnAndElement_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            Furcoat.PawPrint echoed = Furcoat.FurcoatSample.EchoPaw(new Furcoat.PawPrint(new byte[] { 1, 2 }));
+            Assert.Equal(new byte[] { 1, 2 }, echoed.Pads);
+            Assert.Null(Furcoat.FurcoatSample.MaybePaw(null));
+            Assert.Equal(3, Furcoat.FurcoatSample.CountPads(Furcoat.FurcoatSample.PawPrints(3)));
+            Assert.ThrowsAny<ArgumentException>(
+                () => Furcoat.FurcoatSample.EchoPaw(new Furcoat.PawPrint(Array.Empty<byte>())));
+        });
+    }
+
+    [Fact]
+    public void ValueClassOverCollection_ParamReturnAndElement_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            Furcoat.ToyBasket echoed =
+                Furcoat.FurcoatSample.EchoBasket(new Furcoat.ToyBasket(new List<string> { "yarn", "box" }));
+            Assert.Equal(2, echoed.Toys.Count);
+            Assert.Null(Furcoat.FurcoatSample.MaybeBasket(null));
+            Assert.Equal(3, Furcoat.FurcoatSample.CountToys(Furcoat.FurcoatSample.Baskets()));
+            Assert.ThrowsAny<ArgumentException>(() => Furcoat.FurcoatSample.EchoBasket(
+                new Furcoat.ToyBasket(new List<string> { "a", "b", "c", "d" })));
+        });
+    }
+
+    [Fact]
+    public void ValueClassOverInterface_KotlinBackedAndCSharpImplemented_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            Furcoat.PurrVoice oreo = Furcoat.FurcoatSample.OreoVoice();
+            using (Furcoat.IRumbler rumbler = oreo.Rumbler)
+            {
+                Assert.Equal("Oreo: prr", Furcoat.FurcoatSample.HearPurr(oreo, 1));
+            }
+            var mylo = new MyloFurcoatRumbler();
+            Assert.Same(mylo, Furcoat.FurcoatSample.EchoVoice(new Furcoat.PurrVoice(mylo)).Rumbler);
+            Assert.Null(Furcoat.FurcoatSample.MaybeVoice(null));
+            IReadOnlyList<Furcoat.PurrVoice> choir = Furcoat.FurcoatSample.Choir();
+            Assert.Equal("Oreo,Mylo", Furcoat.FurcoatSample.Owners(choir));
+            foreach (Furcoat.PurrVoice voice in choir) voice.Rumbler.Dispose();
+        });
+    }
+
+    // ADR-235: an `Instant`, `Duration` or `Uuid` element crosses as a boxed tick count or text, so
+    // each crossing below mints and releases one box per element and one container handle.
+    [Fact]
+    public void NarrowStdlibComponents_ListSetAndMap_ReturnToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            Assert.Equal(3, Furcoat.NapLog.NapStarts(3).Count);
+            Assert.Equal(65L, Furcoat.NapLog.TotalNapMinutes(Furcoat.NapLog.NapLengths()));
+            Assert.Equal(2, Furcoat.NapLog.ChipIds().Count);
+            Assert.Equal(2, Furcoat.NapLog.NapsByChip().Count);
+            Assert.Equal(1, Furcoat.NapLog.MissingStarts(new List<DateTimeOffset?> { null, DateTimeOffset.UnixEpoch }));
+            Assert.Equal(1, Furcoat.NapLog.CountTags(Furcoat.NapLog.TagsByChip()));
+            Assert.ThrowsAny<ArgumentException>(() => Furcoat.NapLog.EarliestSunbeam(
+                new List<Furcoat.SunbeamStart> { new(DateTimeOffset.FromUnixTimeSeconds(-1)) }));
+        });
+    }
+
+    // ADR-235: a member of a value class over a handle-wired underlying mints the receiver's handle
+    // before the call and releases it in a `finally`, including when the call throws.
+    [Fact]
+    public void ValueClassMembers_HandleWiredReceivers_ReturnToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            var paw = new Furcoat.PawPrint(new byte[] { 1, 2 });
+            Assert.Equal(2, paw.PadCount);
+            Assert.Equal(3, paw.WithPad(3).Pads.Length);
+            Assert.True(new Furcoat.ToyBasket(new List<string> { "yarn" }).Has("yarn"));
+            var mylo = new MyloFurcoatRumbler();
+            Assert.Equal("Mylo: mrrp", new Furcoat.PurrVoice(mylo).Purr(1));
+            Assert.ThrowsAny<ArgumentException>(() => Furcoat.FurcoatSample.EchoPaw(default));
+        });
+    }
+
+    private sealed class MyloFurcoatRumbler : Furcoat.IRumbler
+    {
+        public string Owner => "Mylo";
+        public string Rumble(int times) => "Mylo: mrrp";
+        public void Dispose() { }
     }
 }

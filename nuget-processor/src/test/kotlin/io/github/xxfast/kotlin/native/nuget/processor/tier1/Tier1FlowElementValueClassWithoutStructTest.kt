@@ -8,8 +8,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * A value class whose underlying no value-class wire carries (`Char`, `Instant`, another value
- * class, a collection) gets no C# `readonly record struct` at all (`SKIPPED_UNSUPPORTED_TYPE`).
+ * A value class whose underlying no value-class wire carries (`Char`) gets no C# `readonly record
+ * struct` at all (`SKIPPED_UNSUPPORTED_TYPE`).
  * As a `Flow`/`StateFlow`/`MutableStateFlow` ELEMENT it used to be spelled anyway
  * (`KotlinStateFlow<global::Interop.Initial>`), so the consumer's build failed with CS0234 on a
  * type nothing declares. The member is now a named skip on every flow route and owner, decided on
@@ -109,7 +109,7 @@ class Tier1FlowElementValueClassWithoutStructTest {
   @Test
   fun `the generated C# compiles and never spells a value class nothing declares`() {
     assertClean()
-    listOf("Initial", "Stamp", "Outer", "Tags").forEach { name ->
+    listOf("Initial", "Initial").forEach { name ->
       assertFalse(
         Regex("""Interop\.$name\b""").containsMatchIn(code),
         "expected no C# spelling of the undeclared $name; got:\n" +
@@ -138,7 +138,7 @@ class Tier1FlowElementValueClassWithoutStructTest {
   @Test
   fun `the Kotlin half exports nothing for a dropped member`() {
     assertClean()
-    listOf("Initial", "Stamp", "Outer", "Tags").forEach { name ->
+    listOf("Initial", "Initial").forEach { name ->
       assertFalse(
         "tier1.flowvc.$name" in result.generated,
         "expected no Kotlin export touching $name; got:\n" +
@@ -156,9 +156,6 @@ class Tier1FlowElementValueClassWithoutStructTest {
       "Tracker.maybeInitial:" to "tier1.flowvc.Initial",
       "Tracker.initials:" to "tier1.flowvc.Initial",
       "Tracker.byName:" to "tier1.flowvc.Initial",
-      "Tracker.stamp:" to "tier1.flowvc.Stamp",
-      "Tracker.outer:" to "tier1.flowvc.Outer",
-      "Tracker.tags:" to "tier1.flowvc.Tags",
       "Cat.initial:" to "tier1.flowvc.Initial",
     ).forEach { (member, valueClass) ->
       assertSkipped(member, valueClass)
@@ -224,6 +221,14 @@ class Tier1FlowElementValueClassWithoutStructTest {
         )
       }
     assertContains(code, Regex("""KotlinStateFlow<[\w.:]*Nick> Nick\b"""))
+    // ADR-235: an `Instant`, a nested value class and a collection underlying have a record struct
+    // over the underlying's own C# spelling; ADR-228's box pair carries each as a bare element.
+    listOf("Tracker.stamp:", "Tracker.outer:", "Tracker.tags:").forEach { member ->
+      assertTrue(
+        result.kspWarnings.none { it.contains(member) },
+        "expected $member to bind silently; got: ${result.kspWarnings.filter { it.contains(member) }}",
+      )
+    }
     assertContains(
       result.generatedCSharp,
       Regex("""public KotlinStateFlow<IReadOnlyList<[\w.:]*Nick>> Nicks\b"""),

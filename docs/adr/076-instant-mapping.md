@@ -494,3 +494,8 @@ To re-check, add a dummy variant to `BridgeType` and compile non-incrementally:
 `./gradlew :nuget-processor:compileKotlin -Pkotlin.incremental=false --rerun`. **Verified:** this
 flagged 102 sites (the 94 converted plus 8 already exhaustive). An ordinary incremental compile
 reports only 2 sites before it stops, so it is not a valid check.
+
+## Amendment, 2026-10-22: see ADR-235
+
+[ADR-235](235-value-class-wire-underlyings.md) binds `Instant` as a `List`, `Set` and `Map`
+component on the ticks wire, per element. The collection deferral above no longer applies.

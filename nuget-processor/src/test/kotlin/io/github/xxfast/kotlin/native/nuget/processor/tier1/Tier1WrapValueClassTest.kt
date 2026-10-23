@@ -129,7 +129,9 @@ class Tier1WrapValueClassTest {
     val cs: String = result.generatedCSharp
     assertContains(cs, "public string Label()")
 
-    listOf("tier1.refused.Initial" to "kotlin.Char", "tier1.refused.TagRef" to "tier1.refused.Tagged")
+    assertContains(cs, "public readonly record struct TagRef(")
+    assertContains(cs, "TagOf(")
+    listOf("tier1.refused.Initial" to "kotlin.Char")
       .forEach { (valueClass, underlying) ->
         val simple: String = valueClass.substringAfterLast('.')
         assertFalse(cs.contains("record struct $simple"), "expected no record struct for $simple")
@@ -144,7 +146,7 @@ class Tier1WrapValueClassTest {
       }
 
     // Members typed with a refused value class skip on their own owner, by name.
-    listOf("Registrar.initialOf", "Registrar.tagOf", "Registrar.onInitial").forEach { member ->
+    listOf("Registrar.initialOf", "Registrar.onInitial").forEach { member ->
       assertTrue(
         result.kspWarnings.any { it.contains("[nuget:SKIPPED_") && it.contains(member) },
         "expected a named skip for $member; kspWarnings=${result.kspWarnings}",

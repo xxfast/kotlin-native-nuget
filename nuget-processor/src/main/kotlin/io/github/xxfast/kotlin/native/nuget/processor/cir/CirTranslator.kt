@@ -574,6 +574,7 @@ internal fun translate(
       add(translateValueClass(
         cls, context.libraryName, logger, context, callableCatalog, expects, tracker,
         staticSuspend = valueClassAsync(cls),
+        classifier = classifier,
       ))
     }
     interfaces.filter { isOwnedBy(owner, it) }.forEach { iface ->
@@ -635,6 +636,7 @@ internal fun translate(
       translateValueClass(
         cls, context.libraryName, logger, context, callableCatalog, expects, tracker,
         staticSuspend = valueClassAsync(cls),
+        classifier = classifier,
       )
     } ?: return@forEach
     namespaces.addDeclaration(namespaceOf(cls.packageName.asString()), declaration)

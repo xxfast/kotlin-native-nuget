@@ -37,6 +37,16 @@ internal enum class ForwardValueClassUnderlying {
    */
   GENERIC,
 
+  /**
+   * ADR-235: an underlying that already has a C# spelling and a wire at every ordinary position
+   * (`Instant`, `Duration`, `Uuid`, `ByteArray`, a collection, another value class, a plain
+   * interface). Declared as a positional record struct over that spelling; a position typed with
+   * the value class is planned as its innermost underlying, so it crosses on that wire, and the
+   * value class is unwrapped in C# and re-wrapped (running `init`) in Kotlin. See
+   * [ForwardValueClassView].
+   */
+  WIRE,
+
   /** Neither wire implements it: the value class is not declared, and is refused by name. */
   REFUSED,
 }
@@ -71,17 +81,19 @@ internal fun BridgeType.valueClassUnderlyingRole(): ForwardValueClassUnderlying 
   is BridgeType.Nullable ->
     if (type == BridgeType.String || type is BridgeType.Primitive) ForwardValueClassUnderlying.VALUE
     else ForwardValueClassUnderlying.REFUSED
-  BridgeType.Unit,
-  BridgeType.Char,
+  // ADR-235: each already crosses on its own wire; the value class rides it as a view.
   BridgeType.Instant,
   BridgeType.Duration,
-  is BridgeType.Throwable,
   BridgeType.Uuid,
   is BridgeType.Interface,
-  is BridgeType.BoundInterface,
   is BridgeType.ValueClass,
   BridgeType.ByteArray,
   is BridgeType.Collection,
+    -> ForwardValueClassUnderlying.WIRE
+  BridgeType.Unit,
+  BridgeType.Char,
+  is BridgeType.Throwable,
+  is BridgeType.BoundInterface,
   is BridgeType.Callback,
   is BridgeType.AsyncCallback,
   is BridgeType.FlowSource,
@@ -131,3 +143,86 @@ internal fun BridgeType.ValueClass.underlyingCs(struct: String, parameter: Strin
  * `default(V)` receiver is refused without a `nameof`: it is no parameter the caller passed.
  */
 internal const val VALUE_CLASS_SELF: String = "nugetSelf"
+
+/**
+ * ADR-235: a position typed with a [ForwardValueClassUnderlying.WIRE] value class (or its nullable
+ * form), seen through to its innermost underlying. The plan carries [planned] at the position, so
+ * the ABI slot, the preludes, the cleanups and the result read are exactly the underlying's; only
+ * the public C# spelling stays [declared], and both halves convert at the edge: C# unwraps the
+ * struct before the underlying's own lowering ([csharpUnwrap]) and wraps the read result
+ * ([csharpWrap]); Kotlin re-wraps the lowered argument ([kotlinWrap], running each `init` from the
+ * innermost out) and unwraps the call's result ([kotlinUnwrap]).
+ */
+internal data class ForwardValueClassView(val declared: BridgeType) {
+  val isNullable: Boolean get() = declared is BridgeType.Nullable
+
+  /** The value classes from the outermost in; a nested value class has more than one. */
+  val chain: List<BridgeType.ValueClass>
+    get() = generateSequence(declared.unwrapNullable() as BridgeType.ValueClass) { outer ->
+      outer.underlying as? BridgeType.ValueClass
+    }.toList()
+
+  /** The type the plan carries at this position. */
+  val planned: BridgeType
+    get() {
+      val innermost: BridgeType = chain.last().underlying
+      return if (isNullable) BridgeType.Nullable(innermost) else innermost
+    }
+
+  fun kotlinWrap(lowered: String): String {
+    fun wrap(value: String): String =
+      chain.foldRight(value) { valueClass, inner -> "${valueClass.qualifiedName}($inner)" }
+    return if (isNullable) "($lowered)?.let { nugetUnderlying -> ${wrap("nugetUnderlying")} }"
+    else wrap(lowered)
+  }
+
+  fun kotlinUnwrap(call: String): String {
+    val access: String = if (isNullable) "?." else "."
+    return "($call)" + chain.joinToString("") { valueClass ->
+      access + valueClass.underlyingPropertyName.kotlinIdentifier()
+    }
+  }
+
+  /**
+   * The struct's underlying. A reference-typed innermost underlying (`byte[]`, a collection, an
+   * interface) refuses `default(V)`, whose underlying is a null no non-null Kotlin slot takes, as
+   * the String and handle underlyings do; a nullable struct's own null stays null.
+   */
+  fun csharpUnwrap(value: String, parameter: String? = value): String {
+    val properties: String = chain.joinToString(".") { valueClass ->
+      valueClass.underlyingPropertyName.replaceFirstChar { it.uppercase() }
+    }
+    val innermost: BridgeType = chain.last().underlying
+    val guarded: Boolean = innermost == BridgeType.ByteArray ||
+        innermost is BridgeType.Collection || innermost is BridgeType.Interface
+    if (!guarded) return if (isNullable) "($value?.$properties)" else "$value.$properties"
+    val structName: String = chain.first().qualifiedName.substringAfterLast('.')
+    if (!isNullable) return valueClassUnderlyingOrThrow(value, properties, structName, parameter)
+    val present: String = valueClassUnderlyingOrThrow("$value.Value", properties, structName, parameter)
+    return "($value.HasValue ? $present : null)"
+  }
+
+  fun csharpWrap(read: String): String {
+    fun wrap(value: String): String =
+      chain.foldRight(value) { valueClass, inner -> "new ${valueClass.csharpType}($inner)" }
+    if (!isNullable) return wrap(read)
+    if (read == "null") return read
+    val underlying: String = chain.last().underlying.forwardPublicCsharpType()
+    return "(($underlying?)($read)) is { } nugetUnderlying ? ${wrap("nugetUnderlying")} : " +
+        "(${chain.first().csharpType}?)null"
+  }
+}
+
+/** ADR-235: the view of this position when it is a [ForwardValueClassUnderlying.WIRE] value class. */
+internal fun BridgeType.valueClassViewOrNull(): ForwardValueClassView? {
+  val valueClass: BridgeType.ValueClass = unwrapNullable() as? BridgeType.ValueClass ?: return null
+  if (valueClass.qualifiedName == "kotlin.Result") return null
+  if (valueClass.underlying.valueClassUnderlyingRole() != ForwardValueClassUnderlying.WIRE) {
+    return null
+  }
+  return ForwardValueClassView(this)
+}
+
+/** ADR-235: this value class when its underlying is a WIRE one, so it rides that wire as a view. */
+internal fun BridgeType.ValueClass.wireOrNull(): BridgeType.ValueClass? =
+  takeIf { underlying.valueClassUnderlyingRole() == ForwardValueClassUnderlying.WIRE }

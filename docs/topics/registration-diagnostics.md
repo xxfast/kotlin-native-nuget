@@ -210,6 +210,16 @@ count returns to baseline. `LeakTests/LiveHandleTests.cs`'s
 `GenericValueClass_Instantiations_ReturnToBaseline` pins the closed, own-`T` and nullable shapes.
 `GenericValueClass_BoundedOwnTypeParameter_ReturnsToBaseline` pins an own `T` with a `Comparable`, `Enum` or intersection bound. `GenericValueClassMembers_ReceiverParameterAndResultBoxes_ReturnToBaseline` pins the receiver, parameter and result boxes of a member, `GenericValueClassMembers_FaultPaths_ReturnToBaseline` the throwing paths, and `GenericValueClassSuspendMembers_ReturnToBaseline` a `suspend` member. `GenericValueClass_ErasedPositions_ReturnToBaseline`, `GenericValueClass_ErasedPositionInitThrows_ReturnsToBaseline` and `GenericValueClass_AsyncErasedPositions_ReturnToBaseline` pin a generic value class at an erased position: a `Box`, a lambda, a flow element, an `init` that throws on the re-wrap, and the awaited and `Flow` parameter shapes. `GenericValueClass_NullableAndCollections_ReturnToBaseline` and `GenericValueClass_NullableAndCollectionInitThrows_ReturnsToBaseline` pin the box handle for `Sticker<T>?` and `Nick?`, per-element collections, and an `init` that throws as a box is minted or a set element is re-wrapped.
 
+A [value class over `ByteArray`, a collection or an interface](value-classes.md#over-instant-bytearray-collection-interface)
+crosses on that underlying's own wire, so it releases what the bare underlying would: the bytes and
+list copies once read, a Kotlin-backed `IRumbler` when you dispose it, and a C#-implemented one once
+Kotlin drops it. `LeakTests/LiveHandleTests.cs`'s `ValueClassOverByteArray_ParamReturnAndElement_ReturnsToBaseline`,
+`ValueClassOverCollection_ParamReturnAndElement_ReturnsToBaseline` and
+`ValueClassOverInterface_KotlinBackedAndCSharpImplemented_ReturnsToBaseline` pin the crossings,
+`ValueClassMembers_HandleWiredReceivers_ReturnToBaseline` the receiver of a member (released even
+when the call throws), and `NarrowStdlibComponents_ListSetAndMap_ReturnToBaseline` a `List`, `Set` or
+`Map` of `Instant`, `Duration` and `Uuid`.
+
 The [members of a generic arm](interfaces-abstract-sealed.md#generic-sealed-arm-members) add no new
 handle kind either. Each element a flow collects from `Dish.Hot<string>.Portions` mints one owned
 crossing, and the count returns to baseline once you `DisposeAsync` the arm. A stored-callback or

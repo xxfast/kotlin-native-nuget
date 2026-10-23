@@ -1236,6 +1236,20 @@ internal class ForwardCallablePlanner(
     }
     val isReferenceUnderlying: Boolean = role == ForwardValueClassUnderlying.REFERENCE
 
+    // ADR-235: a WIRE value class's members, properties and secondary constructors ride the
+    // ADR-225 route with its error slot, the receiver crossing as its innermost underlying on that
+    // underlying's wire, so a failing `init` on the re-wrap throws in C# rather than in a member
+    // export that has no slot to report it through.
+    val wireView: ForwardValueClassView? = if (role == ForwardValueClassUnderlying.WIRE) {
+      classifier.classify(cls.asStarProjectedType()).valueClassViewOrNull()
+    } else {
+      null
+    }
+    if (wireView != null) {
+      return genericValueClassEntries(
+        cls, owner, prefix, underlyingPropName, underlyingType, wireView = wireView,
+      )
+    }
     val receiver: ForwardReceiver = if (isReferenceUnderlying) {
       ForwardReceiver.Handle(underlyingType, name = "handle")
     } else {
@@ -1294,6 +1308,8 @@ internal class ForwardCallablePlanner(
     prefix: String,
     underlyingPropName: String,
     underlying: BridgeType,
+    // ADR-235: set for a WIRE value class, whose receiver is its innermost underlying.
+    wireView: ForwardValueClassView? = null,
   ): List<ForwardCallableCatalogEntry> {
     val underlyingName: String? =
       (cls.primaryConstructor?.parameters?.singleOrNull()?.type?.resolve()?.declaration
@@ -1303,7 +1319,11 @@ internal class ForwardCallablePlanner(
       underlying = underlying,
       underlyingPropertyName = underlyingPropName,
     )
-    val receiver = ForwardReceiver.Value(receiverType, name = "value")
+    val receiver: ForwardReceiver.Value = if (wireView != null) {
+      ForwardReceiver.Value(wireView.planned, name = "value", view = wireView)
+    } else {
+      ForwardReceiver.Value(receiverType, name = "value")
+    }
     val genericOwner: ForwardGenericOwner? = cls.forwardGenericOwner()
     // Inferred from the underlying for its own `T`; a phantom one is `Nothing`, which satisfies
     // every bound and which no member's signature can observe, since it never reaches a value.
@@ -3751,6 +3771,10 @@ internal class ForwardCallablePlanner(
       } else {
         parameter
       }
+    }.map { parameter ->
+      // ADR-235: a WIRE value class is planned as its underlying; see `ForwardValueClassView`.
+      val view: ForwardValueClassView? = parameter.type.valueClassViewOrNull()
+      if (view == null) parameter else parameter.copy(type = view.planned, view = view)
     }
     val declared: List<Pair<String, BridgeType>> =
       publicParameters.map { parameter -> parameter.name to parameter.type }
@@ -3844,7 +3868,9 @@ internal class ForwardCallablePlanner(
     // adapter in exports/FunctionExports.kt), and every member spelling took a skip that no route
     // re-emitted, so the member was dropped with no C# member and no diagnostic. Scope (d) applies
     // the same rewrite to the parameters above.
-    val plannedResult: BridgeType = result.sealedAsHandle()
+    // ADR-235: a WIRE value class result is planned as its underlying, like its parameters.
+    val resultView: ForwardValueClassView? = result.sealedAsHandle().valueClassViewOrNull()
+    val plannedResult: BridgeType = resultView?.planned ?: result.sealedAsHandle()
     val unwrappedResult: BridgeType? = plannedResult.kotlinResultPayloadOrNull(origin)
     val effectiveResult: BridgeType =
       if (unwrappedResult != null && unwrappedResult.shapeOrNull() != null) {
@@ -3968,7 +3994,11 @@ internal class ForwardCallablePlanner(
         isAbstract = isAbstract,
         doc = doc.forPublic(publicParameters),
         dispatchMask = widening.dispatchMask,
-        receiver = widening.receiver,
+        receiver = widening.receiver?.let { parameter ->
+          (receiver as? ForwardReceiver.Value)?.view?.let { view -> parameter.copy(view = view) }
+            ?: parameter
+        },
+        resultView = resultView,
       ),
       evaluation = ForwardEvaluation.EXACTLY_ONCE,
       nativeExports = listOf(nativeCall),
@@ -5154,6 +5184,8 @@ internal class ForwardCallablePlanner(
     data class Value(
       override val type: BridgeType,
       val name: String = "receiver",
+      /** ADR-235: the WIRE value class this receiver is the innermost underlying of. */
+      val view: ForwardValueClassView? = null,
     ) : ForwardReceiver
 
     data object Static : ForwardReceiver {
@@ -5677,9 +5709,10 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
   // ADR-160 amendment: a returned lambda binds at a top-level result only, never nested.
   is BridgeType.ReturnedLambda -> false
 
-  // ADR-106: collection components are deferred (the component would need a `nuget_wrap_*` arm
-  // over the text form), so `List<Uuid>` skips named rather than half-binding.
-  BridgeType.Uuid -> false
+  // ADR-235: `Instant`, `Duration` and `Uuid` components ride a narrow wire the boxes already
+  // carry, projected per element on both sides: .NET ticks (`long`) for the first two, the
+  // RFC 9562 hex-dash text for `Uuid`, exactly their own parameter wires.
+  BridgeType.Uuid, BridgeType.Instant, BridgeType.Duration -> true
 
   // ROADMAP Phase 4 (ADR-151 amendment): a `ByteArray` component crosses as its own StableRef
   // handle in the pointer-shaped slot every component already uses -- the ADR-099 nested-collection
@@ -5712,12 +5745,9 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
     }
   }
 
-  // ADR-076: "Instant as a collection element" is explicitly deferred (its own boxing question,
-  // ADR-073/075's isWrappableComponent allow-list territory) -- same route.
-  // ADR-088: "bound interfaces as collection components" is on this ADR's own deferred list, for
-  // the same reason -- the wrap/box helpers have no route for a GCHandle element.
-  // ADR-103: "Duration as a collection element" is deferred for the identical reason.
-  is BridgeType.BoundInterface, BridgeType.Instant, BridgeType.Duration,
+  // ADR-088: "bound interfaces as collection components" is on this ADR's own deferred list: the
+  // wrap/box helpers have no route for a GCHandle element.
+  is BridgeType.BoundInterface,
   is BridgeType.RawCollection, is BridgeType.RawKSType, is BridgeType.SpecializedProtocol,
   is BridgeType.Unsupported,
     -> false
@@ -5981,13 +6011,15 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
   // Collection became wrappable, and it would bind with a write projection that has no null arm --
   // the exact trap ADR-097 hit with `List<Mood?>`. A nullable *leaf* under nesting
   // (`List<List<String?>>`) is admitted and rides ADR-083's arms under the recursion.
+  // ADR-235: and so is a value class over a collection, whose write projection is the same one.
   is BridgeType.Nullable -> type !is BridgeType.Nullable && type !is BridgeType.Collection &&
+      (type as? BridgeType.ValueClass)?.underlying !is BridgeType.Collection &&
       type.isWrappableComponent()
 
+  // ADR-235: the narrow wire each crosses on as a parameter, projected per element.
+  BridgeType.Instant, BridgeType.Duration, BridgeType.Uuid -> true
+
   BridgeType.Unit,
-  BridgeType.Instant,
-  BridgeType.Duration,
-  BridgeType.Uuid,
   is BridgeType.BoundInterface,
   is BridgeType.Callback,
   is BridgeType.AsyncCallback,

@@ -905,6 +905,11 @@ internal data class ForwardPublicParameter(
    * shipped that label, and a static wrapper body declares no `handle`. Null means the default.
    */
   val csharpLabel: String? = null,
+  /**
+   * ADR-235: set when the declared type is a WIRE value class; [type] is then its underlying, which
+   * every encoder reads, and only the public spelling and the edge conversions read this.
+   */
+  val view: ForwardValueClassView? = null,
 ) {
   val isOptional: Boolean get() = default?.encoding == ForwardDefaultEncoding.OPTIONAL
 
@@ -982,6 +987,8 @@ internal data class ForwardPublicSignature(
    * non-null inner type, so lowering from that slot compiles clean and drops the caller's `null`.
    */
   val receiver: ForwardPublicParameter? = null,
+  /** ADR-235: set when the declared result is a WIRE value class; [result] is its underlying. */
+  val resultView: ForwardValueClassView? = null,
   /**
    * ADR-197: the callable's own type parameters, in declaration order (`fun <T, U> pair(...)`).
    * Empty for every callable that declares none, and for every owner but a class, object,
