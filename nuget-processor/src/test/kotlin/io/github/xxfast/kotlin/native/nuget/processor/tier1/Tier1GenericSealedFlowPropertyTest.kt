@@ -249,60 +249,21 @@ class Tier1GenericSealedFlowPropertyTest {
   }
 
   /**
-   * The flow property route meets the named setter skip of a public `var`
-   * (`Tier1FlowVarPropertySetterTest`): the getter binds on the arm exactly as a `val`'s does, and
-   * the setter the route cannot bind is named once, for the declaration that owns the `var`. The
-   * whole list is compared, so a second line for the same property (one per arm of an inherited
-   * base member, or one for the erased and one for the declared arm) fails here, and so does any
-   * other skip: every member of the fixture binds.
+   * ADR-233 amendment: a flow `var` on a generic sealed owner binds its setter on the arm exactly
+   * as on any other owner, and no setter is named as dropped. The whole skip list is compared, so
+   * any skip fails here: every member of the fixture binds.
    */
   @Test
-  fun `a var flow property keeps its getter and names its dropped setter once`() {
-    val coldReason: String =
-      "its setter is not generated because a Flow property binds read-only: its getter hands " +
-          "out the Kotlin flow, and no setter route turns a C# stream back into one"
-    val hotReason: String =
-      "its setter is not generated because a MutableStateFlow property binds read-only: its " +
-          "getter hands out the Kotlin flow, and C# has no source for a synchronous current " +
-          "value or a replay cache to set it from"
-    fun coldHint(publicName: String): String =
-      "the C# property $publicName is read-only; to let C# replace the flow, expose a function " +
-          "taking a `Flow<T>` parameter instead, which binds as `IAsyncEnumerable<T>` for a " +
-          "primitive or String element"
-    val hotHint: String =
-      "the C# property Dial is read-only; to let C# replace the flow, expose a function " +
-          "instead: declare the parameter as `Flow<T>` and call `stateIn(scope)` (or `shareIn`) " +
-          "on it in Kotlin"
-    val code: String = "[nuget:SKIPPED_UNSUPPORTED_INPUT]"
-    // Each diagnostic's own line: the `at <file>:<line>` location KSP appends is dropped.
+  fun `a var flow property binds its setter on a generic sealed owner`() {
     val skips: List<String> = result.kspWarnings
       .flatMap { warning -> warning.lines() }
       .filter { line -> line.startsWith("[nuget:SKIPPED") }
+    assertEquals(emptyList(), skips, "kspWarnings=${result.kspWarnings}")
 
-    assertEquals(
-      listOf(
-        // The generic arm: named as the arm, never as the erased `Hot<Any?>` or the base.
-        "$code Skipping tier1.menu.Dish.Hot.dial: $hotReason. $hotHint",
-        // The generic base: one line for the declaration, though every arm binds the getter.
-        "$code Skipping tier1.menu.Dish.served: $coldReason. ${coldHint("Served")}",
-        // The phantom arm: generic in C# only, and named once like any other arm.
-        "$code Skipping tier1.menu.Plate.Bare.crumbs: $coldReason. ${coldHint("Crumbs")}",
-      ),
-      skips.sorted(),
-      "kspWarnings=${result.kspWarnings}",
-    )
-
-    // The getter half is untouched: the exports a `val` has, and no setter export beside them.
     listOf(
       "dish_hot_get_dial_collect", "dish_hot_get_dial_value", "dish_hot_get_served_collect",
       "dish_cold_get_served_collect", "plate_bare_get_crumbs_collect",
+      "dish_hot_set_dial", "dish_hot_set_served", "dish_cold_set_served", "plate_bare_set_crumbs",
     ).forEach { name -> export("library_menu__$name") }
-    val setterExports: List<String> = result.generated.lines().filter { line ->
-      val isExport: Boolean = line.startsWith("@CName(")
-      val isPropertySetter: Boolean =
-        listOf("_set_dial\")", "_set_served\")", "_set_crumbs\")").any { suffix -> suffix in line }
-      isExport && isPropertySetter
-    }
-    assertEquals(emptyList(), setterExports)
   }
 }

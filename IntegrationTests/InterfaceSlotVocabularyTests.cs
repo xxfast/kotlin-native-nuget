@@ -77,7 +77,6 @@ public class InterfaceSlotVocabularyTests
 
         public int OnPurr(Func<string, int> callback) => callback("Mylo") + 1;
 
-        // Not on ISitter yet: the interface member returning a lambda is skipped there today.
         public Func<int, string> Purrer() => times => $"purr x{times}";
 
         public async Task<int> WhenHungryAsync(
@@ -335,6 +334,35 @@ public class InterfaceSlotVocabularyTests
         Assert.Equal(1, Feedingtime.Feeders.TurnUp(radiator));
         Assert.Equal(1, wall.Dial.Value);
     }
+
+    /// <summary>A Kotlin-backed member FUNCTION's hot flows handed back through a C# implementation.</summary>
+    [Fact]
+    public async Task Headline_KotlinBackedMemberFunctionHotFlowsHandedBack()
+    {
+        using Feedingtime.IThermostat wall = Feedingtime.Feeders.WallThermostat();
+        using var radiator = new Radiator(wall);
+
+        Assert.True(Feedingtime.Feeders.Ring(radiator, "Oreo wants tuna"));
+        Assert.Equal("Oreo wants tuna", await Feedingtime.Feeders.HeadlineAsync(radiator));
+        Assert.Equal("Oreo wants tuna", await Feedingtime.Feeders.HeadlineAsync(wall));
+    }
+
+    /// <summary>A C# implementation of a generic interface whose suspend member returns its own <c>T</c> flow.</summary>
+    internal sealed class Basket(params string[] names) : ILitter<string>
+    {
+        public async Task<KotlinFlow<string>> KittensAsync(CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(1, cancellationToken);
+            return KotlinFlow<string>.From(Each(names));
+        }
+
+        public void Dispose() { }
+        public ValueTask DisposeAsync() => default;
+    }
+
+    [Fact]
+    public async Task Head_CSharpLitter_SuspendFlowOfItsOwnT() =>
+        Assert.Equal("Mylo", await Sitters.HeadAsync(new Basket("Mylo", "Oreo")));
 
     // -----------------------------------------------------------------------------------------
     // Generator collisions and generic owners.

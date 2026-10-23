@@ -1142,6 +1142,9 @@ internal data class CirMethod(
   // ADR-209: the KotlinSharedFlow<T> / KotlinMutableSharedFlow<T> surface of a flow method return
   // or an awaited flow; null for a plain Flow or a StateFlow.
   val sharedFlow: CirSharedFlow? = null,
+  // ADR-233 amendment: the `_flow` extern a re-invoked flow method return mints its own Kotlin handle
+  // through (`MintHandle`) when C# hands the wrapper back to Kotlin; empty when it has none.
+  val flowMintNativeName: String = "",
   // ADR-026 amendment (2026-10-09): the acquired Flow is a nullable member (`Flow<T>?`), so the
   // task yields `KotlinFlow<T>?` and a zero `resultPtr` completes with null. A flag, never a `?`
   // on [asyncReturnType], which the completion reuses inside `new ...(`.
@@ -1407,6 +1410,9 @@ internal data class CirProperty(
   // ADR-209: the KotlinSharedFlow<T> / KotlinMutableSharedFlow<T> surface; null for a plain Flow
   // or a StateFlow. [renderFlowPropertyNativeImports] declares its externs from [nativeStem].
   val sharedFlow: CirSharedFlow? = null,
+  // ADR-233 amendment: a cold `Flow` `var`'s `_set_<p>_source` import, which takes a C#-made flow
+  // through ADR-210's seam; true exactly when the Kotlin half emits that export.
+  val flowSetterSource: Boolean = false,
   // Issue #38: true when this is a sealed-subclass property of a nullable non-String primitive
   // type (`Int?`), which crosses on the ADR-002 two-call pair (`_get_<p>_has_value` +
   // `_get_<p>_value`) instead of a single scalar slot. Read only by [renderSealedClass], which

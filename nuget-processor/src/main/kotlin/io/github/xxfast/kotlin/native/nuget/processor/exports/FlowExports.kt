@@ -12,6 +12,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.freshName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.SharedFlowSurface
 import io.github.xxfast.kotlin.native.nuget.processor.cir.sharedFlowSurface
 import com.google.devtools.ksp.getVisibility
+import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
@@ -44,6 +45,12 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.MutableStateFlowElemen
 import io.github.xxfast.kotlin.native.nuget.processor.cir.writableMutableStateFlowElement
 import io.github.xxfast.kotlin.native.nuget.processor.cir.isMutableStateFlowElementWritable
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAsyncKind
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAsyncSlots
+import io.github.xxfast.kotlin.native.nuget.processor.forward.flowSourceExpression
+import io.github.xxfast.kotlin.native.nuget.processor.forward.mintAsyncSlots
+import io.github.xxfast.kotlin.native.nuget.processor.forward.asyncKind
+import io.github.xxfast.kotlin.native.nuget.processor.forward.mentionsAnyTypeParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardKotlinArgumentSpelling
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
@@ -254,9 +261,9 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
       .build()
   )
 
-  // ADR-233: a hot flow's own handle, which its member-built C# wrapper mints when it is handed
-  // back to Kotlin through a C#-implemented interface slot.
-  if (propType in STATE_FLOW_TYPES || propType in SHARED_FLOW_TYPES) {
+  // ADR-233: a flow's own handle, which its member-built C# wrapper mints when it is handed back
+  // to Kotlin, through a C#-implemented interface slot or a `var` flow setter.
+  run {
     addFunction(
       FunSpec.builder("export_${prefix}_get_${propName}_flow")
         .addAnnotation(cNameAnnotation("${prefix}_get_${propName}_flow", ownedBy(prop)))
@@ -270,9 +277,15 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
     )
   }
 
-  // ADR-233: a cold `Flow` `var` takes the Kotlin flow a `KotlinFlow<T>` wraps, as its handle.
+  // ADR-233: a flow `var` takes the Kotlin flow a `KotlinFlow<T>` wraps (or mints), as its handle.
   if (prop.takesFlowSetter()) {
-    val flowType: String = propTypeResolved.forwardKotlinDeclaredSpelling()
+    // A generic owner's export receives it erased (`Trough<Any?>`), so a flow of its `T` is too.
+    val erased: Boolean = propTypeResolved.mentionsAnyTypeParameter()
+    val flowType: String = if (erased) {
+      "$propType<Any?>${if (memberNullable) "?" else ""}"
+    } else {
+      propTypeResolved.forwardKotlinDeclaredSpelling()
+    }
     val read: String = if (memberNullable) {
       "value?.asStableRef<Any>()?.get() as $flowType"
     } else {
@@ -286,6 +299,25 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
         .addCode("handle.asStableRef<$qualifiedName>().get().$propCall = $read\n")
         .build(),
     )
+    // ADR-233 amendment: a flow made in C# wraps no Kotlin flow, so a cold `var` takes it through
+    // ADR-210's `flowForKotlin` seam instead, one `GetAsyncEnumerator` per Kotlin `collect`.
+    val source: BridgeType.FlowSource? = prop.flowSetterSource(classifier)
+    if (source != null) {
+      val taken: MutableSet<String> = mutableSetOf("handle")
+      val slots: ForwardAsyncSlots = mintAsyncSlots(listOf("value" to ForwardAsyncKind.FLOW)) { base ->
+        freshName(base, taken).also { taken += it }
+      }.single()!!
+      val function: FunSpec.Builder = FunSpec.builder("export_${prefix}_set_${propName}_source")
+        .addAnnotation(cNameAnnotation("${prefix}_set_${propName}_source", ownedBy(prop)))
+        .addParameter("handle", cOpaquePointer)
+      slots.declared.forEach { slot -> function.addParameter(slot, cOpaquePointer) }
+      val flow: String = flowSourceExpression("value", source, slots)
+      addFunction(
+        function
+          .addCode("handle.asStableRef<$qualifiedName>().get().$propCall = %L\n", flow)
+          .build(),
+      )
+    }
   }
 
   // ADR-209: a SharedFlow's `ReplayCache`, and a writable MutableSharedFlow's write surface.
@@ -533,6 +565,28 @@ internal fun FileSpec.Builder.addFlowMethodExports(
   if (paramShapes.castsGenericBound()) builder.addAnnotation(forwardUncheckedCastSuppression)
 
   addFunction(builder.build().staticReceived(slots).flowTrampolined(trampoline, qualifiedName))
+
+  // ADR-233 amendment: the re-invoked return's own handle, keyed like the collect, which its C#
+  // wrapper mints when it is handed back to Kotlin (a C#-implemented slot or a `var` flow setter).
+  if (method.mintsFlowHandle(classifier)) {
+    val errorOut: String = freshName("errorOut", method.legacyParameterNames().toMutableSet())
+    val mintBuilder: FunSpec.Builder = FunSpec
+      .builder("export_${stem}_flow")
+      .addAnnotation(cNameAnnotation("${stem}_flow", ownedBy(method)))
+      .addParameter("handle", cOpaquePointer)
+    mintBuilder.addFlowParameters()
+    mintBuilder
+      .addParameter(errorOut, cOpaquePointer.copy(nullable = true))
+      .returns(cOpaquePointer.copy(nullable = true))
+      .addCode("val ${names.obj} = handle.asStableRef<$qualifiedName>().get()\n")
+      .addCode(paramPrelude)
+      .addGuardedReturn("($call as Any?)?.let { NugetHandles.retain(it) }", "null", errorOut = errorOut)
+    if (paramShapes.castsGenericBound()) mintBuilder.addAnnotation(forwardUncheckedCastSuppression)
+    // ADR-230: a static member mints through its owner, or its receiver slot's read.
+    addFunction(
+      mintBuilder.build().staticReceived(slots).flowTrampolined(trampoline, qualifiedName),
+    )
+  }
 
   // ADR-209: a re-invoked SharedFlow return's `ReplayCache`, keyed like the collect: the owner and
   // the method's own arguments, the method re-run per read.
@@ -1256,24 +1310,49 @@ private fun List<ForwardLegacyParameterShape>.castsGenericBound(): Boolean =
     .any { shape -> !shape.type.trampolined && shape.type.legacyBounds().any { '<' in it } }
 
 /**
- * ADR-233: a public `var` of a cold `Flow<T>` on a non-generic owner takes a setter: C# hands the
- * Kotlin flow its `KotlinFlow<T>` wraps, and a C#-made flow, which wraps none, is refused at the
- * call with an `ArgumentException`, the rule a hot-flow slot already follows.
+ * ADR-233: a public `var` of any flow (`Flow`, `StateFlow`, `SharedFlow` and the mutable forms)
+ * takes a setter, on any owner: generic, sealed base or sealed arm. C# hands the Kotlin flow its
+ * `KotlinFlow<T>` wraps, or mints for a member's flow; a cold flow made in C# crosses through
+ * [flowSetterSource]'s seam.
  */
 internal fun KSPropertyDeclaration.takesFlowSetter(): Boolean {
   val owner: KSClassDeclaration = parentDeclaration as? KSClassDeclaration ?: return false
+  // ADR-230: an object, a companion, an enum and a value class serve their flows on the static
+  // route, which has no receiver to set through, so their setter stays the named skip.
+  if (owner.classKind == ClassKind.OBJECT || owner.classKind == ClassKind.ENUM_CLASS) return false
+  if (Modifier.VALUE in owner.modifiers || Modifier.INLINE in owner.modifiers) return false
   val flow: String? = type.resolve().expandAliases().declaration.qualifiedName?.asString()
   val hidden: Set<Modifier> = setOf(
     Modifier.PRIVATE,
     Modifier.INTERNAL,
     Modifier.PROTECTED,
   )
-  val sealedParent: Boolean =
-    (owner.parentDeclaration as? KSClassDeclaration)?.modifiers?.contains(Modifier.SEALED) == true
-  val sealedBelow: Boolean =
-    owner.getAllSuperTypes().any { type -> Modifier.SEALED in type.declaration.modifiers }
   return isMutable && setter?.modifiers.orEmpty().none { modifier -> modifier in hidden } &&
-    owner.typeParameters.isEmpty() && Modifier.SEALED !in owner.modifiers &&
-    !sealedParent && !sealedBelow &&
-    flow == "kotlinx.coroutines.flow.Flow"
+    (flow in FLOW_TYPES || flow in STATE_FLOW_TYPES)
+}
+
+/**
+ * ADR-233 amendment: whether a re-invoked flow method return has a `_flow` export its C# wrapper
+ * mints a Kotlin handle through. Not for a held return (it owns its handle already) nor for a
+ * method taking an ADR-210 asynchronous parameter, whose keys belong to one call. One predicate
+ * for both halves.
+ */
+internal fun KSFunctionDeclaration.mintsFlowHandle(classifier: ForwardBridgeTypeClassifier): Boolean {
+  if (returnsHeldMutableStateFlow() || returnsHeldMutableSharedFlow()) return false
+  if (modifiers.contains(Modifier.SUSPEND)) return false
+  return parameters.none { parameter ->
+    classifier.classifyParameter(parameter.type.resolve()).asyncKind() != null
+  }
+}
+
+/**
+ * ADR-233 amendment: the [BridgeType.FlowSource] a cold `Flow` `var` takes a C#-made flow through,
+ * or null for a hot flow (C# has nothing to make one from but `Create`, which owns its Kotlin flow)
+ * and for an element ADR-210's seam does not read. One predicate for both halves.
+ */
+internal fun KSPropertyDeclaration.flowSetterSource(
+  classifier: ForwardBridgeTypeClassifier,
+): BridgeType.FlowSource? {
+  if (!takesFlowSetter()) return null
+  return classifier.flowSourceOrNull(type.resolve().expandAliases().makeNotNullable())
 }

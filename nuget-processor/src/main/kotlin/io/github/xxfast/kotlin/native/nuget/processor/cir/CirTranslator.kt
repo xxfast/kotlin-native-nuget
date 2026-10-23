@@ -1111,27 +1111,6 @@ internal fun translate(
 
   if (tracker.suspendLambdaArities.isNotEmpty()) tracker.needsAsync = true
 
-  // ADR-208 part E: every closed flow type argument a position classified. Read here, after every
-  // member is translated, and ahead of the helper flags: a module can reach `KotlinFlow<T>` (and
-  // the scope its materialised holder owns) only through a box.
-  val flowArguments: List<CirFlowArgument> = classifier.closedFlowArguments.values.map { flow ->
-    tracker.needsFlow = true
-    if (flow.kind == ForwardFlowArgumentKind.STATE_FLOW) tracker.needsStateFlow = true
-    flow.collection?.let { collection -> tracker.trackCollection(collection) }
-    if (flow.bytes) tracker.needsBytes = true
-    flow.toCir(context.libraryName, context.symbols)
-  }
-
-  // ADR-239: every closed collection an erased position carries needs its kind's native class and
-  // its `NugetMarshal` table entries. Read after every member is translated, as above.
-  val boxedCollections: List<CirBoxedCollection> = classifier.boxedCollections.map { collection ->
-    tracker.trackCollection(collection)
-    collection.toBoxedCollection()
-  }
-
-  // ADR-239: a boxed `ByteArray` callback component needs `NugetMarshal.ReadBytes` / `CreateBytes`.
-  if (classifier.boxesBytes) tracker.needsBytes = true
-  if (tracker.needsFlow) tracker.needsAsync = true
 
   // ADR-209: `ReplayCache` reads through `NugetMarshal.ReadList`, and `SubscriptionCount` is a
   // `KotlinStateFlow<int>` over the runtime's handle-keyed `NugetStateFlowNative` pair.
@@ -1157,6 +1136,28 @@ internal fun translate(
         iface.cirBridgeTypeParameters(logger, context),
       )
     }
+  // ADR-208 part E: every closed flow type argument a position classified. Read here, after every
+  // member is translated and every bridge planned (a `var` flow slot registers its own), and ahead of the helper flags: a module can reach `KotlinFlow<T>` (and
+  // the scope its materialised holder owns) only through a box.
+  val flowArguments: List<CirFlowArgument> = classifier.closedFlowArguments.values.map { flow ->
+    tracker.needsFlow = true
+    if (flow.kind == ForwardFlowArgumentKind.STATE_FLOW) tracker.needsStateFlow = true
+    flow.collection?.let { collection -> tracker.trackCollection(collection) }
+    if (flow.bytes) tracker.needsBytes = true
+    flow.toCir(context.libraryName, context.symbols)
+  }
+
+  // ADR-239: every closed collection an erased position carries needs its kind's native class and
+  // its `NugetMarshal` table entries. Read after every member is translated, as above.
+  val boxedCollections: List<CirBoxedCollection> = classifier.boxedCollections.map { collection ->
+    tracker.trackCollection(collection)
+    collection.toBoxedCollection()
+  }
+
+  // ADR-239: a boxed `ByteArray` callback component needs `NugetMarshal.ReadBytes` / `CreateBytes`.
+  if (classifier.boxesBytes) tracker.needsBytes = true
+  if (tracker.needsFlow) tracker.needsAsync = true
+
   // ADR-224: a constrained generic bridge state's `where` clauses, restated on the interface its
   // default method mints from and on the backing wrapper implementing it.
   val bridgeBounds: Map<String, List<CirTypeParameter>> = bridgePlans
