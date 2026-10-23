@@ -17,9 +17,9 @@ internal fun ForwardSymbolTable.retainHandleExport(): String = "${librarySegment
  * (ADR-231) a lambda's exported class result.
  */
 internal fun BridgeType.boxesIntoKotlin(): Boolean = when (this) {
-  is BridgeType.Callback ->
-    result.unwrapNullable() is BridgeType.TypeParameter || result is BridgeType.ObjectHandle
-  is BridgeType.AsyncCallback -> result.unwrapNullable() is BridgeType.TypeParameter
+  // ADR-239: every boxed callback result, not only a `T` (ADR-215) or a class (ADR-231).
+  is BridgeType.Callback -> result.isBoxedCallbackResult()
+  is BridgeType.AsyncCallback -> result.isBoxedCallbackResult()
   is BridgeType.FlowSource -> element.unwrapNullable() is BridgeType.TypeParameter
   BridgeType.Unit,
   is BridgeType.Primitive,

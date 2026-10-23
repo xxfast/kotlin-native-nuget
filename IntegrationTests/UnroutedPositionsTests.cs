@@ -90,7 +90,8 @@ public class UnroutedPositionsTests
             PublicInstance,
             // ADR-210: `FlowParamOnClass` BINDS now (a `Flow<T>` parameter is `IAsyncEnumerable<T>`),
             // asserted present below.
-            "CallbackReturnOnClass",
+            // ADR-239: `CallbackReturnOnClass` BINDS now (a returned lambda is a BCL delegate on every
+            // owner), asserted present below.
             // ADR-208: `GenericReturnOnClass`, `GenericParamOnClass` and `GenericElementOnClass`
             // BIND now (a closed `Box<Int>` is an ordinary handle at every position) and are called
             // in GenericInstantiationsBindOnEveryOwner instead of being absent here.
@@ -102,6 +103,7 @@ public class UnroutedPositionsTests
         // ADR-210: the cell this row lost. Asserted positively so it cannot quietly go back.
         Assert.NotNull(typeof(Depot).GetMethod("SuspendCallbackParamOnClass", PublicInstance));
         Assert.NotNull(typeof(Depot).GetMethod("FlowParamOnClass", PublicInstance));
+        Assert.Equal(typeof(Action<int>), typeof(Depot).GetMethod("CallbackReturnOnClass", PublicInstance)?.ReturnType);
     }
 
     /// <summary>
@@ -115,22 +117,18 @@ public class UnroutedPositionsTests
     {
         Type? registry = TopLevelType("DepotRegistry");
         Assert.NotNull(registry);
-        AssertAllAbsent(
-            registry,
-            PublicStatic,
-            // ADR-230: `FlowReturnOnObject` BINDS now, asserted present below.
-            // ADR-210: `FlowParamOnObject` BINDS now, asserted present below.
-            // ADR-160 moved the per-call lambda parameter onto the ADR-062 plan, which is keyed to
-            // the position rather than to the owner kind, so `CallbackParamOnObject` BINDS now and
-            // is asserted present below instead of absent here.
-            // ADR-208: `GenericReturnOnObject` and `GenericParamOnObject` bind too.
-            "CallbackReturnOnObject");
+        // Every object cell binds now, so nothing is asserted absent: ADR-230 `FlowReturnOnObject`,
+        // ADR-210 `FlowParamOnObject`, ADR-160 `CallbackParamOnObject` (the per-call lambda
+        // parameter is on the ADR-062 plan, keyed to the position rather than to the owner kind),
+        // ADR-208 `GenericReturnOnObject` and `GenericParamOnObject`, and ADR-239
+        // `CallbackReturnOnObject` (a returned lambda is a BCL delegate on every owner).
 
         // ADR-160: the object position's per-call lambda parameter is the one cell this matrix row
         // lost. Asserted positively so the row cannot silently go back to refusing it.
         Assert.NotNull(registry!.GetMethod("CallbackParamOnObject", PublicStatic));
         Assert.NotNull(registry.GetMethod("FlowParamOnObject", PublicStatic));
         Assert.NotNull(registry.GetMethod("FlowReturnOnObject", PublicStatic));
+        Assert.Equal(typeof(Action<int>), registry.GetMethod("CallbackReturnOnObject", PublicStatic)?.ReturnType);
     }
 
     /// <summary>
@@ -250,7 +248,7 @@ public class UnroutedPositionsTests
     [Fact]
     public void TopLevelLambdaReturnStillBinds()
     {
-        using KotlinFunc<string, string> echo = UnroutedPositionsSample.CallbackReturnOnTopLevel();
+        Func<string, string> echo = UnroutedPositionsSample.CallbackReturnOnTopLevel();
 
         Assert.Equal("Oreo", echo.Invoke("Oreo"));
     }

@@ -434,7 +434,10 @@ internal object ForwardInterfaceBridgePlanner {
     if (returnType.isFlowType()) {
       return refuse("returns a Flow, which a C# implementation cannot supply", ASYNC_HINT)
     }
-    val result: ForwardBridgeType = bridgeType(returnType, classifier, owner)
+    // ADR-239: a returned lambda crosses as a lambda property's getter does, the delegate C#
+    // returned minted into a Kotlin lambda through the ADR-236 managed-lambda exports.
+    val result: ForwardBridgeType = lambdaSlotType(returnType, classifier)
+      ?: bridgeType(returnType, classifier, owner)
       ?: return refuse(
         "returns `${returnType.kotlinSpelling(keepProjections = true)}`, a type the bridge " +
             "cannot carry",
@@ -513,9 +516,9 @@ internal object ForwardInterfaceBridgePlanner {
   }
 
   /**
-   * ADR-236: a lambda-typed property crosses as the lambda handle, under the same BCL delegate
-   * spelling the Kotlin-backed half declares, on the bridge factory and the ADR-039 listener alike. Property positions only: a lambda
-   * PARAMETER keeps the per-call callback route.
+   * ADR-236 / ADR-239: a lambda-typed property or function result crosses as the lambda handle,
+   * under the same BCL delegate spelling the Kotlin-backed half declares, on the bridge factory and
+   * the ADR-039 listener alike. A lambda PARAMETER keeps the per-call callback route.
    */
   private fun lambdaSlotType(
     type: KSType,
@@ -527,7 +530,7 @@ internal object ForwardInterfaceBridgePlanner {
     return ForwardBridgeType(
       ForwardBridgeWire.OBJECT,
       type.kotlinQualifiedSpelling(),
-      classified.forwardPropertyCsharpType(),
+      classified.forwardPublicCsharpType(),
       nullable = classified is BridgeType.Nullable,
       lambda = lambda,
     )

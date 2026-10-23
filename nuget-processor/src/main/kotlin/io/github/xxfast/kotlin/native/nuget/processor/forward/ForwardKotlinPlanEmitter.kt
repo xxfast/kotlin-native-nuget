@@ -458,9 +458,10 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
     }
 
     // ADR-151: the byte array is retained whole, with no per-element projection.
+    // ADR-239: so is a returned lambda.
     // An interface result is the same `NugetHandles.retain` mint the ordinary route uses.
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
-    BridgeType.ByteArray -> {
+    BridgeType.ByteArray, is BridgeType.ReturnedLambda -> {
       // ADR-081: same projected-copy boxing as the ordinary result route above.
       val boxed: String =
         if (result is BridgeType.Collection) collectionResultProjection(invocation, result)
@@ -523,7 +524,6 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
     is BridgeType.FlowSource,
-    is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
     is BridgeType.Unsupported,
@@ -940,9 +940,10 @@ private fun addNullableResult(
     // null pointer is the null. ADR-081's per-element projection is `?.`-lifted so a null result
     // never dereferences, exactly as the ADR-075 getter does it.
     // ADR-147: `T?` rides the same null-pointer-then-handle body.
+    // ADR-239: and so does a nullable returned lambda.
     // ADR-151: and so does `ByteArray?`.
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
-    BridgeType.ByteArray, is BridgeType.TypeParameter -> {
+    BridgeType.ByteArray, is BridgeType.TypeParameter, is BridgeType.ReturnedLambda -> {
       val boxed: String =
         if (type is BridgeType.Collection) {
           collectionResultProjection(invocation, type, nullable = true)
@@ -1114,7 +1115,6 @@ private fun addNullableResult(
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
     is BridgeType.FlowSource,
-    is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
     is BridgeType.Unsupported,
@@ -2261,33 +2261,11 @@ internal fun loweredCallbackExpression(
   val signature: String = (
       type.parameters.map(::wireKotlinType) + "COpaquePointer" + "COpaquePointer?"
       ).joinToString(", ")
-  val resultWire: String = when (val result: BridgeType = type.result) {
-    BridgeType.Unit -> "Unit"
-    is BridgeType.Primitive,
-    BridgeType.Char,
-    BridgeType.String,
-    BridgeType.Instant,
-    BridgeType.Duration,
-    is BridgeType.Throwable,
-    BridgeType.Uuid,
-    is BridgeType.Enum,
-    is BridgeType.ObjectHandle,
-    is BridgeType.Interface,
-    is BridgeType.BoundInterface,
-    is BridgeType.ValueClass,
-    BridgeType.ByteArray,
-    is BridgeType.Collection,
-    is BridgeType.Nullable,
-    is BridgeType.Callback,
-    is BridgeType.AsyncCallback,
-    is BridgeType.FlowSource,
-    is BridgeType.ReturnedLambda,
-    is BridgeType.SpecializedProtocol,
-    is BridgeType.RawKSType,
-    is BridgeType.Unsupported,
-    is BridgeType.RawCollection,
-    is BridgeType.TypeParameter,
-      -> wireKotlinType(result)
+  // ADR-239: every boxed result is the owned `Object` box, whatever its payload wire would be.
+  val resultWire: String = when {
+    type.result == BridgeType.Unit -> "Unit"
+    type.result.isBoxedCallbackResult() -> "COpaquePointer?"
+    else -> wireKotlinType(type.result)
   }
   val arguments: String = (
       type.parameters.mapIndexed { index, component ->
@@ -2371,6 +2349,9 @@ internal fun loweredCallbackExpression(
 
       // ADR-215 lane A: C# always hands back an owned box (`WrapOwned<T>`), so this side reads it,
       // releases it and casts the value to the bound chain.
+      is BridgeType.Nullable if result.type !is BridgeType.TypeParameter ->
+        appendLine("  ${boxedCallbackResultRead("${name}Box", invocation)}")
+
       is BridgeType.TypeParameter, is BridgeType.Nullable -> {
         val nullable: Boolean = result is BridgeType.Nullable
         val parameter: BridgeType.TypeParameter = result.unwrapNullable() as BridgeType.TypeParameter
@@ -2397,16 +2378,20 @@ internal fun loweredCallbackExpression(
         appendLine("  ${name}Value")
       }
 
+      // ADR-239: every other erased result is the same owned box, cast to the lambda's declared
+      // result by inference (the lowered lambda is always passed where its type is declared).
       BridgeType.Char,
       BridgeType.Instant,
       BridgeType.Duration,
       BridgeType.Uuid,
       is BridgeType.Enum,
       is BridgeType.Interface,
-      is BridgeType.BoundInterface,
       is BridgeType.ValueClass,
-      BridgeType.ByteArray,
       is BridgeType.Collection,
+        -> appendLine("  ${boxedCallbackResultRead("${name}Box", invocation)}")
+
+      is BridgeType.BoundInterface,
+      BridgeType.ByteArray,
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
       is BridgeType.FlowSource,
@@ -2577,3 +2562,12 @@ private fun BridgeType.Interface.handleRead(ref: String, nullable: Boolean): Str
   return if (nullable) "($ref?.asStableRef<Any>()?.get() as $cast?)"
   else "($ref.asStableRef<Any>().get() as $cast)"
 }
+
+/**
+ * ADR-239: the read of an owned callback-result box C# minted with `WrapOwned<T>`: the boxed value
+ * cast to the declared result (by inference from where the lambda is passed), then the box
+ * released whatever the cast does. A null box is a null result.
+ */
+internal fun boxedCallbackResultRead(box: String, invocation: String): String =
+  "$invocation.let { $box -> try { nugetUncheckedCast($box?.asStableRef<Any>()?.get()) } " +
+    "finally { if ($box != null) NugetHandles.release($box) } }"

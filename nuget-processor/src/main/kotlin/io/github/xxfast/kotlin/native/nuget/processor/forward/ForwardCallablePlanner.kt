@@ -1501,7 +1501,7 @@ internal class ForwardCallablePlanner(
             parameters = method.parameters.map { parameter ->
               parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
             },
-            result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
+            result = method.returnType?.resolve()?.let(classifier::classifyResult) ?: BridgeType.Unit,
             origin = ForwardCallableOrigin.VALUE_CLASS,
             target = owner,
             includeError = false,
@@ -1603,7 +1603,7 @@ internal class ForwardCallablePlanner(
           parameters = method.parameters.map { parameter ->
             parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
           },
-          result = resultType?.let(classifier::classify) ?: BridgeType.Unit,
+          result = resultType?.let(classifier::classifyResult) ?: BridgeType.Unit,
           origin = ForwardCallableOrigin.CLASS,
           // The symbol carries the overload suffix; the Kotlin call site must not.
           member = name,
@@ -1727,7 +1727,7 @@ internal class ForwardCallablePlanner(
         parameters = method.parameters.map { parameter ->
           parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
         },
-        result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
+        result = method.returnType?.resolve()?.let(classifier::classifyResult) ?: BridgeType.Unit,
         origin = ForwardCallableOrigin.CLASS,
         ownerType = ownerType,
         // The symbol carries the overload suffix; the Kotlin call site must not.
@@ -1942,7 +1942,7 @@ internal class ForwardCallablePlanner(
           parameters = method.parameters.map { parameter ->
             parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
           },
-          result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
+          result = method.returnType?.resolve()?.let(classifier::classifyResult) ?: BridgeType.Unit,
           origin = ForwardCallableOrigin.CLASS,
           // ADR-199: a generic base reads its receiver erased, as ADR-147's class route does.
           ownerType = sealed.forwardGenericOwner(),
@@ -2086,7 +2086,7 @@ internal class ForwardCallablePlanner(
           parameters = method.parameters.map { parameter ->
             parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
           },
-          result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
+          result = method.returnType?.resolve()?.let(classifier::classifyResult) ?: BridgeType.Unit,
           origin = ForwardCallableOrigin.CLASS,
           // ADR-199: a generic arm reads its receiver erased, as ADR-147's class route does.
           ownerType = subclass.forwardGenericOwner(),
@@ -2651,7 +2651,7 @@ internal class ForwardCallablePlanner(
         parameters = function.parameters.map { parameter ->
           parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
         },
-        result = function.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
+        result = function.returnType?.resolve()?.let(classifier::classifyResult) ?: BridgeType.Unit,
         origin = ForwardCallableOrigin.ENUM_MEMBER,
         target = owner,
         member = name,
@@ -2822,18 +2822,9 @@ internal class ForwardCallablePlanner(
       return ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = function)
     }
     val returnType: KSType? = function.returnType?.resolve()
-    // ADR-160 amendment: a lambda handed OUT is planned at a top-level function's result only (an
-    // object or companion member returning one keeps its named CALLBACK_PROTOCOL skip), whatever
-    // the function's parameters are. Asked before `classify`, which is position-agnostic and
-    // would answer a parameter-position `Callback` or a `lambda` protocol.
-    val result: BridgeType = returnType
-      ?.let { type ->
-        val returnedLambda: BridgeType.ReturnedLambda? =
-          if (origin != ForwardCallableOrigin.TOP_LEVEL) null
-          else classifier.returnedLambdaOrNull(type)
-        returnedLambda ?: classifier.classify(type)
-      }
-      ?: BridgeType.Unit
+    // ADR-239: a lambda handed OUT is planned at every static owner's result, as at every other
+    // owner's ([ForwardBridgeTypeClassifier.classifyResult]).
+    val result: BridgeType = returnType?.let(classifier::classifyResult) ?: BridgeType.Unit
     val parameters: List<Pair<String, BridgeType>> = function.parameters
       .map { parameter ->
         parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
@@ -3004,7 +2995,7 @@ internal class ForwardCallablePlanner(
       parameters = function.parameters.map { parameter ->
         parameter.bridgeName() to classifier.classifyParameter(parameter.type.resolve())
       },
-      result = function.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
+      result = function.returnType?.resolve()?.let(classifier::classifyResult) ?: BridgeType.Unit,
       origin = ForwardCallableOrigin.EXTENSION,
       member = functionName,
       node = function,
@@ -4336,6 +4327,9 @@ internal class ForwardCallablePlanner(
     // ADR-147: `T?` out is the null pointer, then the handle.
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.TypeParameter ->
       handleResultShape(BridgeType.Nullable(type))
+    // ADR-239: a nullable returned lambda is the null pointer, then the lambda handle.
+    is BridgeType.ReturnedLambda ->
+      if (type.unnameableTypeArgument() == null) handleResultShape(BridgeType.Nullable(type)) else null
     // ADR-061 (2026-09-16 amendment): the nullable ObjectHandle shape above, verbatim. The
     // collection handle is a StableRef on the same POINTER slot, so a null pointer already means
     // Kotlin null and no has-value channel is needed. The component gate is the non-nullable
@@ -4609,7 +4603,6 @@ internal class ForwardCallablePlanner(
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
     is BridgeType.FlowSource,
-    is BridgeType.ReturnedLambda,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
     is BridgeType.Unsupported,

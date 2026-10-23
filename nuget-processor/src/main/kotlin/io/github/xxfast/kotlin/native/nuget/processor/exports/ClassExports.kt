@@ -155,6 +155,10 @@ internal fun KSFunctionDeclaration.hasPlannedCallbackParameter(
  *    routes carry today.
  *  - a lambda RESULT outside `Unit`, the primitives and `String`: the per-call route reads every
  *    other result back as a `String` box on both halves, so `() -> Cat` did not compile.
+ *
+ * ADR-239: none of this applies to a lambda the plan's [BridgeType.Callback] classifies. That one
+ * binds on the plan (a per-call member) or on the stored-callback route over the same classification
+ * (an `add`/`remove` pair), with the whole erased result vocabulary.
  */
 internal fun KSFunctionDeclaration.refusedLegacyLambdaShape(
   classifier: ForwardBridgeTypeClassifier,
@@ -168,6 +172,14 @@ internal fun KSFunctionDeclaration.refusedLegacyLambdaShape(
     val asyncType: BridgeType? = (async as? ForwardLegacyParameterShape.Async)?.type
     val boundAsync: Boolean = asyncType is BridgeType.Callback
     if (boundAsync) return@firstNotNullOfOrNull null
+    // ADR-239: a lambda the plan's callback carries (every result in the erased vocabulary) is
+    // bound there, or by the stored-callback route over the same classification, so it is never
+    // refused here. Naming it anyway made a bound member also read as skipped (`recruitNow`).
+    // A `T` component keeps the checks below: the stored route has no `T` to spell its bridge with.
+    val callback: BridgeType.Callback? = classifier.classify(param.type.resolve()) as? BridgeType.Callback
+    val closed: Boolean = callback != null &&
+        (callback.parameters + callback.result).none { it.unwrapNullable() is BridgeType.TypeParameter }
+    if (closed) return@firstNotNullOfOrNull null
     val paramName: String = param.name?.asString() ?: "_"
     // Every argument, the last of which is the lambda's RETURN type: both positions are refused,
     // and they are dropped by separate lines of the route's own selector, so neither is redundant.
@@ -250,12 +262,14 @@ internal fun KSFunctionDeclaration.refusedLegacyLambdaShape(
             "ordinary, `suspend` or Flow-returning member), but $spelled returns " +
             "`${result.kotlinSpelling()}` from a member that lambda route does not carry",
         hint = "take the lambda as a per-call parameter the member does not store, or return " +
-            "`Unit`, a primitive or a `String` from it",
+            "a concrete type from it",
       )
     }
     LegacyRefusedInterfaceBridgePair(
       kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
-      reason = "a callback can return `Unit`, a primitive or a `String`, but $spelled returns " +
+      reason = "a callback can return `Unit`, a primitive, `Char`, a `String`, an enum, " +
+          "`Instant`, `Duration`, `Uuid`, a class, interface or value class, or a `List`, `Set` " +
+          "or `Map` of those, each nullable or not, but $spelled returns " +
           "`${result.kotlinSpelling()}`",
       hint = "return one of those from the lambda; hand anything else back through a method on " +
           "the class instead",

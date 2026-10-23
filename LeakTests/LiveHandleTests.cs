@@ -53,6 +53,7 @@ using Suspendgeneric = TestLibrary.Suspendgeneric;
 using TestLibrary.Catnap;
 using Dash = TestLibrary.Dash;
 using Zoomrun = TestLibrary.Zoomrun;
+using Cheersquad = TestLibrary.Cheersquad;
 using Purrclock = TestLibrary.Purrclock;
 
 namespace LeakTests;
@@ -1825,7 +1826,7 @@ public class LiveHandleTests
         AssertNoLeak(() =>
         {
             using IPet rex = new Dog("Rex");
-            using KotlinFunc<IPet, IPet> relay = PetRelayKt.PetRelay();
+            Func<IPet, IPet> relay = PetRelayKt.PetRelay();
             Assert.Same(rex, relay.Invoke(rex));
         });
     }
@@ -1895,7 +1896,7 @@ public class LiveHandleTests
         AssertNoLeak(() =>
         {
             using IPet rex = new Dog("Rex");
-            using KotlinFunc<IPet> supplier = PetRelayKt.PetSupplier(rex);
+            Func<IPet> supplier = PetRelayKt.PetSupplier(rex);
             Assert.Same(rex, supplier.Invoke());
             Assert.Same(rex, supplier.Invoke());
         });
@@ -1909,7 +1910,7 @@ public class LiveHandleTests
         AssertNoLeak(() =>
         {
             using Cat oreo = new Cat("Oreo", 9);
-            using KotlinFunc<Cat> supplier = PetRelayKt.CatSupplier(oreo);
+            Func<Cat> supplier = PetRelayKt.CatSupplier(oreo);
             using Cat back = supplier.Invoke();
             Assert.Equal("Oreo", back.Name);
         });
@@ -1923,10 +1924,10 @@ public class LiveHandleTests
     {
         AssertNoLeak(() =>
         {
-            using KotlinFunc<int> naps = PetRelayKt.NullableSupplier(null);
-            using KotlinFunc<int> treats = PetRelayKt.ListSupplier(new List<int> { 1, 2, 3 });
-            using KotlinFunc<int> mood = PetRelayKt.MoodSupplier(TestLibrary.Cat.Mood.Sleepy);
-            using KotlinFunc<int, int> twoMore = PetRelayKt.Adder(2);
+            Func<int> naps = PetRelayKt.NullableSupplier(null);
+            Func<int> treats = PetRelayKt.ListSupplier(new List<int> { 1, 2, 3 });
+            Func<int> mood = PetRelayKt.MoodSupplier(TestLibrary.Cat.Mood.Sleepy);
+            Func<int, int> twoMore = PetRelayKt.Adder(2);
             Assert.Equal(-1, naps.Invoke());
             Assert.Equal(6, treats.Invoke());
             Assert.Equal((int)TestLibrary.Cat.Mood.Sleepy, mood.Invoke());
@@ -1960,6 +1961,13 @@ public class LiveHandleTests
     // Fault injection on the `ListReturn_ThrowingElementFactory_ReleasesTheListHandle` pattern: the
     // returned lambda hands back a Kotlin-backed stray, which only the `IPet` factory can build.
     // Swap it to dispose-and-throw; neither the lambda handle nor the element handle may leak.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void InvokeThrowingPetSupplier(IPet stray)
+    {
+        Func<IPet> supplier = PetRelayKt.PetSupplier(stray);
+        Assert.Throws<InvalidOperationException>(() => supplier.Invoke());
+    }
+
     [Fact]
     public void LambdaReturn_ThrowingInterfaceFactory_ReleasesTheLambdaHandle()
     {
@@ -1976,11 +1984,9 @@ public class LiveHandleTests
             Settle();
             long before = NugetMarshal.LiveHandles;
 
-            // The supplier is minted after `before` and disposed before `after`.
-            using (KotlinFunc<IPet> supplier = PetRelayKt.PetSupplier(stray))
-            {
-                Assert.Throws<InvalidOperationException>(() => supplier.Invoke());
-            }
+            // ADR-239: the supplier is a delegate minted after `before` in its own frame, so the
+            // settle below collects it, and its target releases the lambda handle, before `after`.
+            InvokeThrowingPetSupplier(stray);
 
             Settle();
             long after = NugetMarshal.LiveHandles;
@@ -4785,12 +4791,12 @@ public class LiveHandleTests
     {
         AssertNoLeak(() =>
         {
-            using KotlinAction<string?> record = Recorder.SignIn();
+            Action<string?> record = Recorder.SignIn();
             record.Invoke(null);
             record.Invoke("Oreo");
             Assert.Equal("Oreo", Recorder.LastSeen());
 
-            using KotlinFunc<string, string?> find = Recorder.Finder();
+            Func<string, string?> find = Recorder.Finder();
             Assert.Null(find.Invoke("Mylo"));
         });
     }
@@ -5393,7 +5399,8 @@ public class LiveHandleTests
 
         using (var deep = new Nap.Deep(minutes: 12)) Assert.Equal(12, deep.Minutes);
         using (IBrusher brusher = BrusherKt.HouseBrusher()) Assert.Equal("Oreo is brushed", brusher.Brush());
-        using (KotlinFunc<int, int> adder = PetRelayKt.Adder(2)) Assert.Equal(5, adder.Invoke(3));
+        // ADR-239: a returned lambda is a delegate with nothing to dispose; its target releases it.
+        Assert.Equal(5, PetRelayKt.Adder(2).Invoke(3));
 
         using (var dispenser = new CatSnackDispenser())
         using (KotlinMutableStateFlow<int> level = dispenser.Level())
@@ -7069,5 +7076,118 @@ public class LiveHandleTests
                 Assert.Equal(5, Zoomrun.Lighthouse.Turn(5));
             }
         }, iterations: 50);
+    }
+
+    // ADR-239: a returned lambda is a BCL delegate whose target releases the Kotlin lambda handle
+    // when it is collected, on every owner. Ledger per iteration: each returned delegate +1, released
+    // by the settle's GC -1; the tassel, megaphone and tumble outlive the loop; the C# Pompom crosses
+    // into Kotlin as a bridge handle +1/-1 per call, and the delegate it returns is minted into a
+    // Kotlin lambda that Kotlin drops when the call ends. Net zero. Oreo shakes the pompoms; Mylo
+    // counts.
+    private sealed class LeakyPompom : Cheersquad.IChanter
+    {
+        public Func<string, string> Cheer() => who => who;
+
+        public Func<string, CancellationToken, Task<string>> Chant() => (who, _) => Task.FromResult(who);
+
+        public Func<string, string>? MaybeCheer(bool loud) => loud ? who => who : null;
+
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void ReturnedLambda_EveryOwner_ReturnsToBaseline()
+    {
+        using var tassel = new Cheersquad.Tassel("black");
+        using var megaphone = new Cheersquad.Megaphone<string>("bell");
+        using var tumble = new Cheersquad.Routine.Tumble(2);
+        AssertNoLeak(() =>
+        {
+            Assert.Equal("go Oreo", Cheersquad.CheersquadSample.Cheer().Invoke("Oreo"));
+            Cheersquad.CheersquadSample.Clap().Invoke(1);
+            Assert.Null(Cheersquad.CheersquadSample.MaybeCheer(false));
+            Assert.Equal("GO Mylo", Cheersquad.CheersquadSample.MaybeCheer(true)!.Invoke("Mylo"));
+            Assert.Equal("black tassel for Oreo", tassel.Cheer().Invoke("Oreo"));
+            tassel.Clap().Invoke(1);
+            Assert.Equal("Oreo x2 in black", tassel.Pair().Invoke("Oreo", 2));
+            Assert.Equal("the bleachers cheer Mylo", Cheersquad.Bleachers.Cheer().Invoke("Mylo"));
+            Assert.Equal("the mascot cheers Oreo", Cheersquad.Mascot.Cheer().Invoke("Oreo"));
+            Assert.Equal("raised 1 paws high", Cheersquad.Pennant.Raise().Invoke(1));
+            Assert.Equal("Oreo", megaphone.Echo().Invoke("Oreo"));
+            Assert.Equal("bell", megaphone.Hold().Invoke());
+            Assert.Equal("3 flips", tumble.Flip().Invoke(1));
+            Assert.Equal("tumble for Mylo", tumble.Cheer().Invoke("Mylo"));
+            Assert.Equal(6, new Cheersquad.Squad(3).Count().Invoke(2));
+            Assert.Equal("Oreo into the line", Cheersquad.FormationExtensions.Call(Cheersquad.Formation.Line).Invoke("Oreo"));
+            Assert.Equal("black encore for Mylo", Cheersquad.TasselExtensions.Encore(tassel).Invoke("Mylo"));
+            using (Cheersquad.IChanter horn = Cheersquad.CheersquadSample.Megaphone())
+            {
+                Assert.Equal("Mylo cheers Oreo", horn.Cheer().Invoke("Oreo"));
+            }
+            var pompom = new LeakyPompom();
+            Assert.Equal("Oreo", Cheersquad.CheersquadSample.Rally(pompom, "Oreo"));
+            Assert.Equal("silence for Mylo", Cheersquad.CheersquadSample.RallyMaybe(pompom, false, "Mylo"));
+            Assert.Equal("Mylo", Cheersquad.CheersquadSample.RallyMaybe(pompom, true, "Mylo"));
+        }, iterations: 200);
+    }
+
+    [Fact]
+    public async Task ReturnedLambda_SuspendResults_ReturnsToBaseline()
+    {
+        using var tassel = new Cheersquad.Tassel("brown");
+        using var tumble = new Cheersquad.Routine.Tumble(2);
+        using var cheerleader = new Cheersquad.Cheerleader(new LeakyPompom());
+        await AssertNoLeakAsync(async () =>
+        {
+            Assert.Equal("Oreo, Oreo, Oreo", await Cheersquad.CheersquadSample.Chant().Invoke("Oreo", CancellationToken.None));
+            await Cheersquad.CheersquadSample.Stomp().Invoke(1, CancellationToken.None);
+            Assert.Equal("brown chant for Mylo", await tassel.Chant().Invoke("Mylo", CancellationToken.None));
+            Assert.Equal(4, await tumble.Spin().Invoke(2, CancellationToken.None));
+            Assert.Equal("Mylo", await cheerleader.RallyLaterAsync("Mylo"));
+        }, iterations: 50);
+    }
+
+    // ADR-239 with ADR-236: a delegate on a sealed arm, both directions. Ledger per iteration: the
+    // OnLand write mints a Kotlin lambda over the C# delegate's callback key (not counted), Kotlin
+    // calls it, and C# clears it (a C# null) or Kotlin clears it (`Stick`); the OnLand read hands C#
+    // a delegate over the Kotlin-held lambda +1, released by the settle's GC -1; the arm's own
+    // returned `Flip` delegate +1/-1. The tumble outlives the loop. Net zero. Oreo sticks the
+    // landing, Mylo scores it.
+    [Fact]
+    public void SealedArmDelegate_SetCallClearAndReturn_ReturnsToBaseline()
+    {
+        using var tumble = new Cheersquad.Routine.Tumble(3);
+        AssertNoLeak(() =>
+        {
+            tumble.OnLand = who => $"{who} stuck it";
+            Assert.Equal("Oreo stuck it", tumble.Land("Oreo"));
+            Assert.Equal("Mylo stuck it", tumble.OnLand!.Invoke("Mylo"));
+            tumble.OnLand = null;
+            Assert.Equal("Oreo wobbled", tumble.Land("Oreo"));
+            tumble.OnLand = who => who;
+            tumble.Stick();
+            Assert.Null(tumble.OnLand);
+            Assert.Equal("4 flips", tumble.Flip().Invoke(1));
+        }, iterations: 200);
+    }
+
+    // ADR-239 with ADR-236: a listener-style delegate a Kotlin `object` stores and later clears
+    // itself. `Buzzer` is touched once before the baseline so its lazily initialised object instance
+    // is not counted against the first iteration. Ledger per iteration: the write mints a Kotlin
+    // lambda over the delegate's callback key (not counted); the read hands C# a delegate over it +1,
+    // released by the settle's GC -1; `Unplug` drops it in Kotlin. Net zero. Mylo rings for dinner.
+    [Fact]
+    public void ListenerDelegate_KotlinObjectStoresAndClearsIt_ReturnsToBaseline()
+    {
+        Assert.Equal("nobody answered Mylo", Cheersquad.Buzzer.Buzz("Mylo"));
+        AssertNoLeak(() =>
+        {
+            Cheersquad.Buzzer.OnBuzz = who => $"{who} came running";
+            Assert.Equal("Oreo came running", Cheersquad.Buzzer.Buzz("Oreo"));
+            Assert.Equal("Mylo came running", Cheersquad.Buzzer.OnBuzz!.Invoke("Mylo"));
+            Cheersquad.Buzzer.Unplug();
+            Assert.Null(Cheersquad.Buzzer.OnBuzz);
+            Assert.Equal("nobody answered Oreo", Cheersquad.Buzzer.Buzz("Oreo"));
+        }, iterations: 200);
     }
 }

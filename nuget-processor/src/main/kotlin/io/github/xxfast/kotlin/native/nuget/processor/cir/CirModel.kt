@@ -711,7 +711,19 @@ internal data class CirMarshalHelper(
    * plan hands a `T` from a C# lambda back to Kotlin (then neither is rendered).
    */
   val retainHandleExport: String? = null,
+  /**
+   * ADR-239: every closed collection a lambda type argument or a boxed callback result carries,
+   * read and written through `NugetMarshal.FromHandle<T>` / `Wrap<T>` by its static type.
+   */
+  val boxedCollections: List<CirBoxedCollection> = emptyList(),
 ) : CirDeclaration
+
+/**
+ * ADR-239: one closed collection at an erased position. [type] is the public C# spelling
+ * (`IReadOnlyList<string>`), the `typeof` key; [read] builds the C# collection from an owned
+ * handle (and disposes it); [write] mints the Kotlin collection from the value, as `object`.
+ */
+internal data class CirBoxedCollection(val type: String, val read: String, val write: String)
 
 /**
  * ADR-094 (write side): an enum's `Boxers` line. [qualifiedTypeName] is `global::`-free, as in

@@ -295,14 +295,14 @@ public class MemberGenericLambdaTests
     [Fact]
     public void Echoer_ReturnedLambda_EchoesBuiltinsAndWrappers()
     {
-        using KotlinFunc<int, int> ages = Decks.Echoer<int>();
+        Func<int, int> ages = Decks.Echoer<int>();
         Assert.Equal(4, ages.Invoke(4));
 
-        using KotlinFunc<string, string> names = Decks.Echoer<string>();
+        Func<string, string> names = Decks.Echoer<string>();
         Assert.Equal("Oreo", names.Invoke("Oreo"));
 
         using var mylo = new Tabby("Mylo", 5);
-        using KotlinFunc<Tabby, Tabby> cats = Decks.Echoer<Tabby>();
+        Func<Tabby, Tabby> cats = Decks.Echoer<Tabby>();
         using Tabby back = cats.Invoke(mylo);
         Assert.Equal("Mylo", back.Name);
     }

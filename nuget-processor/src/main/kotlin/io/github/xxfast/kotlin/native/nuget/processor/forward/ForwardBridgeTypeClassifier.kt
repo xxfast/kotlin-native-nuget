@@ -103,6 +103,17 @@ internal class ForwardBridgeTypeClassifier(
   internal val flowSources: MutableSet<BridgeType.FlowSource> = linkedSetOf()
 
   /**
+   * ADR-239: every closed collection a lambda type argument or a callback result carries, so the
+   * C# half renders its `NugetMarshal` read and write table entries. Recorded at classification,
+   * which every route (the plan, the legacy callback routes, the bridge) goes through.
+   */
+  internal val boxedCollections: MutableSet<BridgeType.Collection> = linkedSetOf()
+
+  private fun recordBoxed(types: List<BridgeType>) {
+    types.forEach { type -> boxedCollections += type.boxedCollections() }
+  }
+
+  /**
    * ADR-215 lane C: the first legacy-route member whose `Flow<T>` element or `suspend` lambda
    * result hands a `T` box INTO Kotlin, the owner of `<lib>__retain_handle` when no plan is.
    */
@@ -1134,28 +1145,26 @@ internal class ForwardBridgeTypeClassifier(
     }
     if (!payloads) return null
     if (!result.isCallbackResult() && !result.isBoxedTypeParameter()) return null
+    recordBoxed(components)
     return BridgeType.Callback(parameters, result)
   }
 
   /**
-   * ADR-160 amendment: the [BridgeType.ReturnedLambda] for a non-nullable `kotlin.FunctionN`
-   * return, or null for any other type. Position-specific, so [classify] never calls it: the
-   * planner asks only at a top-level function's RESULT.
+   * ADR-239: [classify] at a RESULT position. A function type handed out of Kotlin is the
+   * [BridgeType.ReturnedLambda] handle on every owner, `suspend` and nullable included, exactly as
+   * a lambda property is (ADR-236); every other type is its [classify]. Position-specific because
+   * [classify] answers a parameter-position `Callback` or a `lambda` protocol for the same type.
    *
    * Every argument is classified, never refused here: whether C# can spell it is the plan's
    * question ([BridgeType.ReturnedLambda.unnameableTypeArgument]), so an unspellable one is a
    * named skip rather than a fall-through to a protocol with no route. An ADR-009 sealed class
    * argument is carried as its [BridgeType.ObjectHandle], the same unwrap a sealed result takes.
    */
-  fun returnedLambdaOrNull(type: KSType): BridgeType.ReturnedLambda? {
-    val expanded: KSType = type.expandAliases()
-    if (type.isMarkedNullable || expanded.isMarkedNullable) return null
-    return lambdaHandleOrNull(expanded)?.takeUnless { lambda -> lambda.suspend }
-  }
+  fun classifyResult(type: KSType): BridgeType = lambdaPropertyOrNull(type) ?: classify(type)
 
   /**
    * ADR-236: the lambda handle a PROPERTY of function type crosses as, on every owner: the
-   * [returnedLambdaOrNull] wire, a `suspend` function type included, and a nullable one wrapped in
+   * [classifyResult] wire, a `suspend` function type included, and a nullable one wrapped in
    * [BridgeType.Nullable] (the null pointer is the null). Null for any other type.
    */
   fun lambdaPropertyOrNull(type: KSType): BridgeType? {
@@ -1209,6 +1218,7 @@ internal class ForwardBridgeTypeClassifier(
         }
       }
     }
+    recordBoxed(typeArguments)
     val kotlinTypeArguments: List<String> = resolved.map { argument ->
       val declaration = argument?.expandAliases()?.declaration
       declaration?.qualifiedName?.asString() ?: declaration?.simpleName?.asString()
@@ -1246,6 +1256,7 @@ internal class ForwardBridgeTypeClassifier(
     if (!boxed) return null
     if (result is BridgeType.Throwable) return null
     if (!result.isCallbackResult() && !result.isAsyncBoxed()) return null
+    recordBoxed(components)
     return BridgeType.AsyncCallback(parameters, result).also { minted -> asyncCallbacks += minted }
   }
 
@@ -1382,25 +1393,34 @@ internal class ForwardBridgeTypeClassifier(
       -> false
   }
 
-  /** The result shapes both callback halves lower, out. See [callbackType]. */
+  /**
+   * The result shapes both callback halves lower, out. See [callbackType]. `Unit`, a primitive and a
+   * `String` keep their by-value and string-box wires; every other ERASED type (ADR-239: an enum,
+   * `Char`, `Instant`, `Duration`, `Uuid`, a class or interface, a value class, a closed collection,
+   * and a nullable of each) crosses as the owned box C# mints with `WrapOwned<T>`, which Kotlin
+   * reads back and releases.
+   */
   private fun BridgeType.isCallbackResult(): Boolean = when (this) {
     BridgeType.Unit, is BridgeType.Primitive, BridgeType.String -> true
-    // ADR-231: an exported class, over the owned box C# mints with `WrapOwned<T>`.
-    is BridgeType.ObjectHandle -> true
     // ADR-201 amendment: the managed-exception text over the `String` result box, so only a
     // declaration that can hold a `NugetManagedException`.
     is BridgeType.Throwable -> acceptsManagedException
+    // ADR-215 lane A: a `T` is asked for separately ([isBoxedTypeParameter], [isAsyncBoxed]).
+    is BridgeType.TypeParameter -> false
     BridgeType.Char,
     BridgeType.Instant,
     BridgeType.Duration,
     BridgeType.Uuid,
     is BridgeType.Enum,
+    is BridgeType.ObjectHandle,
     is BridgeType.Interface,
-    is BridgeType.BoundInterface,
     is BridgeType.ValueClass,
-    BridgeType.ByteArray,
     is BridgeType.Collection,
     is BridgeType.Nullable,
+      -> isErasedBoxable() && unwrapNullable() !is BridgeType.TypeParameter
+
+    is BridgeType.BoundInterface,
+    BridgeType.ByteArray,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
     is BridgeType.FlowSource,
@@ -1409,7 +1429,6 @@ internal class ForwardBridgeTypeClassifier(
     is BridgeType.RawKSType,
     is BridgeType.Unsupported,
     is BridgeType.RawCollection,
-    is BridgeType.TypeParameter,
       -> false
   }
 

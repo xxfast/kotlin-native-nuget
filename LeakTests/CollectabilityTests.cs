@@ -5,6 +5,7 @@ using TestLibrary.Catnap;
 using Purrclock = TestLibrary.Purrclock;
 using Dash = TestLibrary.Dash;
 using Zoomrun = TestLibrary.Zoomrun;
+using Cheersquad = TestLibrary.Cheersquad;
 using TestLibrary.Roster;
 using Playroom = TestLibrary.Playroom;
 using Stamps = TestLibrary.Stamps;
@@ -1899,5 +1900,202 @@ public class CollectabilityTests
         Assert.True(
             MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
             "the delegate passed to LaserTower.BeamAsync stayed reachable after its KotlinStateFlow was disposed");
+    }
+
+    // ADR-239 with ADR-236: a C# delegate set into a sealed arm's nullable `var` is held by Kotlin
+    // through a callback-context key `nuget_live_handles` does not count, so only a collectability
+    // row proves the key is released. Two clears: C# writes `null`, and Kotlin drops it itself
+    // (`Stick`). Oreo sticks the landing twice; Mylo forgets both scores.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (Func<string, string> Land, WeakReference Marker) LandMarker()
+    {
+        var marker = new object();
+        Func<string, string> land = who =>
+        {
+            GC.KeepAlive(marker);
+            return $"{who} stuck it";
+        };
+        return (land, new WeakReference(marker));
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference SetAndClearTumbleOnLand(Cheersquad.Routine.Tumble tumble, bool kotlinClears)
+    {
+        (Func<string, string> land, WeakReference marker) = LandMarker();
+        tumble.OnLand = land;
+        Assert.Equal("Oreo stuck it", tumble.Land("Oreo"));
+        if (kotlinClears) tumble.Stick();
+        else tumble.OnLand = null;
+        Assert.Null(tumble.OnLand);
+        return marker;
+    }
+
+    [Fact]
+    public void SealedArmDelegate_ClearedByCSharp_IsCollected()
+    {
+        using var tumble = new Cheersquad.Routine.Tumble(3);
+        WeakReference marker = SetAndClearTumbleOnLand(tumble, kotlinClears: false);
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the delegate set into Routine.Tumble.OnLand stayed reachable after C# cleared it");
+    }
+
+    [Fact]
+    public void SealedArmDelegate_ClearedByKotlin_IsCollected()
+    {
+        using var tumble = new Cheersquad.Routine.Tumble(3);
+        WeakReference marker = SetAndClearTumbleOnLand(tumble, kotlinClears: true);
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the delegate set into Routine.Tumble.OnLand stayed reachable after Kotlin cleared it");
+    }
+
+    // A listener-style delegate a Kotlin `object` stores and later clears itself (`Unplug`): C#
+    // never writes `null`, so the release must come from Kotlin dropping the lambda. The object is
+    // warmed first so its lazy instance is not what the marker's closure is measured against.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference PlugInAndUnplugBuzzer()
+    {
+        (Func<string, string> buzz, WeakReference marker) = LandMarker();
+        Cheersquad.Buzzer.OnBuzz = buzz;
+        Assert.Equal("Mylo stuck it", Cheersquad.Buzzer.Buzz("Mylo"));
+        Cheersquad.Buzzer.Unplug();
+        Assert.Null(Cheersquad.Buzzer.OnBuzz);
+        return marker;
+    }
+
+    [Fact]
+    public void ListenerDelegate_KotlinObjectClearsIt_IsCollected()
+    {
+        Assert.Equal("nobody answered Oreo", Cheersquad.Buzzer.Buzz("Oreo"));
+        WeakReference marker = PlugInAndUnplugBuzzer();
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the delegate set into Buzzer.OnBuzz stayed reachable after Kotlin unplugged it");
+    }
+
+    // An ADR-039 listener whose lambda property is a C# delegate: once the subscription is removed
+    // and the listener dropped, Kotlin holds nothing that reaches the delegate.
+    private sealed class MarkedLapCounter(Func<int, string> onLap) : Zoomrun.ILapListener
+    {
+        public Func<int, string> OnLap { get; } = onLap;
+
+        public Func<int, int>? OnSplit { get; set; }
+
+        public void Dispose() { }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference SubscribeAndRemoveLapCounter(Zoomrun.Stopwatch stopwatch)
+    {
+        var marker = new object();
+        var counter = new MarkedLapCounter(count =>
+        {
+            GC.KeepAlive(marker);
+            return $"lap {count}";
+        });
+        using (IDisposable subscription = stopwatch.AddLapListener(counter))
+        {
+            Assert.Equal("lap 2", stopwatch.Lap(2));
+        }
+        Assert.Equal(0, stopwatch.Count());
+        return new WeakReference(marker);
+    }
+
+    [Fact]
+    public void ListenerInterfaceDelegate_RemovedListener_IsCollected()
+    {
+        using var stopwatch = new Zoomrun.Stopwatch("Mylo");
+        WeakReference marker = SubscribeAndRemoveLapCounter(stopwatch);
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "the OnLap delegate of a removed ILapListener stayed reachable");
+    }
+
+    // ADR-239: a C# implementation of a Kotlin interface RETURNS a delegate; Kotlin calls it and
+    // drops it when `rally` ends, so the delegate must not stay pinned by its callback key.
+    private sealed class MarkedPompom(Func<string, string> cheer) : Cheersquad.IChanter
+    {
+        public Func<string, string> Cheer() => cheer;
+
+        public Func<string, CancellationToken, Task<string>> Chant() => (who, _) => Task.FromResult(who);
+
+        public Func<string, string>? MaybeCheer(bool loud) => loud ? cheer : null;
+
+        public void Dispose() { }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference RallyAMarkedPompom()
+    {
+        (Func<string, string> cheer, WeakReference marker) = LandMarker();
+        var pompom = new MarkedPompom(cheer);
+        Assert.Equal("Oreo stuck it", Cheersquad.CheersquadSample.Rally(pompom, "Oreo"));
+        Assert.Equal("Mylo stuck it", Cheersquad.CheersquadSample.RallyMaybe(pompom, true, "Mylo"));
+        return marker;
+    }
+
+    [Fact]
+    public void ReturnedDelegate_FromACSharpImplementation_IsCollectedOnceKotlinDropsIt()
+    {
+        WeakReference marker = RallyAMarkedPompom();
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "a delegate a C# IChanter returned to Kotlin stayed reachable after the call ended");
+    }
+
+    // The async twin: Kotlin awaits the `suspend` lambda a C# implementation returned. Per
+    // CLAUDE.md, the helper clears its locals and yields so no continuation frame keeps the marker.
+    private sealed class MarkedChanter(Func<string, CancellationToken, Task<string>> chant) : Cheersquad.IChanter
+    {
+        public Func<string, string> Cheer() => who => who;
+
+        public Func<string, CancellationToken, Task<string>> Chant() => chant;
+
+        public Func<string, string>? MaybeCheer(bool loud) => null;
+
+        public void Dispose() { }
+    }
+
+    // Not `async`, so no state machine hoists the marker.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (Func<string, CancellationToken, Task<string>> Chant, WeakReference Marker) ChantMarker()
+    {
+        var marker = new object();
+        Func<string, CancellationToken, Task<string>> chant = async (who, token) =>
+        {
+            await Task.Delay(1, token);
+            GC.KeepAlive(marker);
+            return who;
+        };
+        return (chant, new WeakReference(marker));
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference> RallyLaterAMarkedChanter()
+    {
+        (Func<string, CancellationToken, Task<string>> chant, WeakReference weak) = ChantMarker();
+        using (var cheerleader = new Cheersquad.Cheerleader(new MarkedChanter(chant)))
+        {
+            chant = null!;
+            Assert.Equal("Oreo", await cheerleader.RallyLaterAsync("Oreo"));
+        }
+        await Task.Yield();
+        return weak;
+    }
+
+    [Fact]
+    public async Task ReturnedAsyncDelegate_FromACSharpImplementation_IsCollectedOnceKotlinDropsIt()
+    {
+        WeakReference marker = await RallyLaterAMarkedChanter();
+
+        Assert.True(
+            MarkerCollectedWithin(marker, TimeSpan.FromSeconds(5)),
+            "an async delegate a C# IChanter returned to Kotlin stayed reachable after the Task completed and the Cheerleader was disposed");
     }
 }

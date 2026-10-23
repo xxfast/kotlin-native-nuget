@@ -30,12 +30,50 @@ internal fun BridgeType.Callback.forwardCallbackDelegate(): CirCallbackDelegate 
 internal fun BridgeType.Callback.forwardCallbackDelegateName(): String {
   val suffixes: String = parameters.joinToString("") { parameter -> parameter.wireSuffix() }
   // ADR-201 amendment: a Throwable RESULT is a `String` box on the wire, a payload an envelope.
-  val resultSuffix: String = if (result is BridgeType.Throwable) "String" else result.wireSuffix()
+  // ADR-239: any other boxed result is an `Object` box, whatever its payload wire would be.
+  val resultSuffix: String = when {
+    result is BridgeType.Throwable -> "String"
+    result.isBoxedCallbackResult() -> "Object"
+    else -> result.wireSuffix()
+  }
   return "Nuget$suffixes${resultSuffix}Callback"
 }
 
 internal fun BridgeType.Callback.forwardCallbackDelegateReturnType(): String =
-  result.callbackWireCsharpType()
+  if (result.isBoxedCallbackResult()) "IntPtr" else result.callbackWireCsharpType()
+
+/**
+ * ADR-239: a callback RESULT that crosses as the owned box C# mints with `WrapOwned<T>` and Kotlin
+ * reads back and releases: every result but `Unit`, a primitive, a `String` and a `Throwable`, which
+ * keep their by-value and string-box wires. A `T` (ADR-215 lane A) and a class (ADR-231) included.
+ */
+internal fun BridgeType.isBoxedCallbackResult(): Boolean = when (this) {
+  BridgeType.Unit, is BridgeType.Primitive, BridgeType.String, is BridgeType.Throwable -> false
+  BridgeType.Char,
+  BridgeType.Instant,
+  BridgeType.Duration,
+  BridgeType.Uuid,
+  is BridgeType.Enum,
+  is BridgeType.ObjectHandle,
+  is BridgeType.Interface,
+  is BridgeType.ValueClass,
+  is BridgeType.Collection,
+  is BridgeType.Nullable,
+  is BridgeType.TypeParameter,
+    -> true
+
+  is BridgeType.BoundInterface,
+  BridgeType.ByteArray,
+  is BridgeType.Callback,
+  is BridgeType.AsyncCallback,
+  is BridgeType.FlowSource,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+    -> false
+}
 
 /**
  * The delegate's own parameter list, ending in the echoed ADR-102 ctx slot. [names] are the
@@ -130,19 +168,14 @@ private fun forwardCallbackBody(
     // ADR-215 lane A: always an OWNED box, since the thunk returns before Kotlin reads it: a
     // borrowed wrapper handle is retained through the generated `<lib>__retain_handle`.
     // ADR-231: an exported class result is the same owned box, read back at its class.
-    is BridgeType.TypeParameter, is BridgeType.Nullable, is BridgeType.ObjectHandle ->
+    // ADR-239: and so is every other erased result ([isBoxedCallbackResult]).
+    is BridgeType.TypeParameter, is BridgeType.Nullable, is BridgeType.ObjectHandle,
+    BridgeType.Char, BridgeType.Instant, BridgeType.Duration, BridgeType.Uuid, is BridgeType.Enum,
+    is BridgeType.Interface, is BridgeType.ValueClass, is BridgeType.Collection ->
       "return NugetMarshal.WrapOwned<${result.forwardPublicCsharpType()}>($call);"
 
-    BridgeType.Char,
-    BridgeType.Instant,
-    BridgeType.Duration,
-    BridgeType.Uuid,
-    is BridgeType.Enum,
-    is BridgeType.Interface,
     is BridgeType.BoundInterface,
-    is BridgeType.ValueClass,
     BridgeType.ByteArray,
-    is BridgeType.Collection,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
     is BridgeType.FlowSource,
@@ -320,7 +353,8 @@ internal fun BridgeType.AsyncCallback.forwardAsyncBeginName(): String =
 
 /** `NugetAsync{Result}End`, one per result type: the End thunk casts the `Task<R>` it names. */
 internal fun BridgeType.AsyncCallback.forwardAsyncEndName(): String =
-  "NugetAsync${result.wireSuffix()}End"
+  // ADR-239: every boxed result shares the one `Object` End, which reads the task untyped.
+  "NugetAsync${if (result.isBoxedCallbackResult()) "Object" else result.wireSuffix()}End"
 
 internal fun BridgeType.AsyncCallback.forwardAsyncBegin(): CirAsyncBegin =
   CirAsyncBegin(
@@ -350,21 +384,15 @@ internal fun BridgeType.AsyncCallback.forwardAsyncEnd(): CirAsyncEnd {
 
     // ADR-215 lane C: the Begin registration stored a `NugetBoxedTask<T>`, which boxes the result
     // through `WrapOwned<T>` on the read, so Kotlin always owns the box it reads.
-    is BridgeType.TypeParameter, is BridgeType.Nullable ->
+    // ADR-239: so does every other boxed result ([isBoxedCallbackResult]).
+    is BridgeType.TypeParameter, is BridgeType.Nullable, BridgeType.Char, BridgeType.Instant,
+    BridgeType.Duration, BridgeType.Uuid, is BridgeType.Enum, is BridgeType.ObjectHandle,
+    is BridgeType.Interface, is BridgeType.ValueClass, is BridgeType.Collection ->
       CirAsyncEnd(name, "IntPtr", "NugetTasks.EndBoxed(a0)")
 
-    BridgeType.Char,
-    BridgeType.Instant,
-    BridgeType.Duration,
     is BridgeType.Throwable,
-    BridgeType.Uuid,
-    is BridgeType.Enum,
-    is BridgeType.ObjectHandle,
-    is BridgeType.Interface,
     is BridgeType.BoundInterface,
-    is BridgeType.ValueClass,
     BridgeType.ByteArray,
-    is BridgeType.Collection,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
     is BridgeType.FlowSource,

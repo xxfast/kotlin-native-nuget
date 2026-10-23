@@ -334,7 +334,7 @@ public class GenericSealedTests
     [Fact]
     public void ReturnedLambda_TakesAndReturnsAnOutcome()
     {
-        using TestLibrary.KotlinFunc<Outcome<int>, Outcome<int>> retry = OutcomeSample.Retry();
+        Func<Outcome<int>, Outcome<int>> retry = OutcomeSample.Retry();
         using var two = new Outcome.Ok<int>(2);
         using var asleep = new Outcome.Err<int>("Oreo is asleep");
 

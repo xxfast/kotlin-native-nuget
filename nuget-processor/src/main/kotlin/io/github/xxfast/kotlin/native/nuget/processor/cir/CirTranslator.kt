@@ -25,6 +25,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.sanitizeLibrarySegment
 import io.github.xxfast.kotlin.native.nuget.processor.csharpIdentifier
 import io.github.xxfast.kotlin.native.nuget.processor.kotlinConstantToPascalCase
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.CollectionKind
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardGuardName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.guarded
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBoundInterface
@@ -1116,6 +1118,13 @@ internal fun translate(
     flow.toCir(context.libraryName, context.symbols)
   }
 
+  // ADR-239: every closed collection an erased position carries needs its kind's native class and
+  // its `NugetMarshal` table entries. Read after every member is translated, as above.
+  val boxedCollections: List<CirBoxedCollection> = classifier.boxedCollections.map { collection ->
+    tracker.trackCollection(collection)
+    collection.toBoxedCollection()
+  }
+
   if (tracker.needsFlow) tracker.needsAsync = true
 
   // ADR-209: `ReplayCache` reads through `NugetMarshal.ReadList`, and `SubscriptionCount` is a
@@ -1206,6 +1215,7 @@ internal fun translate(
       flowArgumentImports = flowArguments.flatMap { flow -> flow.imports },
       retainHandleExport = context.symbols.retainHandleExport()
         .takeIf { callableCatalog.objectCallbackResultOwner() != null || boxesAsync },
+      boxedCollections = boxedCollections,
     ),
   )
   if (bridgePlans.isNotEmpty()) helpers.add(CirBridgeHelper(context.libraryName, bridgePlans))
@@ -1987,4 +1997,38 @@ private fun CirDeclaration.fillsFactorySlot(): Boolean {
     else -> emptyList()
   }
   return nested.any { declaration -> declaration.fillsFactorySlot() }
+}
+
+/**
+ * ADR-239: the `NugetMarshal` table entries for one closed collection at an erased position. The
+ * read takes the owned handle (the `ReadList`/`ReadSet`/`ReadMap` helpers dispose it) and reads
+ * each component through `FromHandle<T>`; the write mints the Kotlin collection, each component
+ * through `Wrap<T>`.
+ */
+private fun BridgeType.Collection.toBoxedCollection(): CirBoxedCollection {
+  val type: String = forwardPublicCsharpType()
+  return when (kind) {
+    CollectionKind.LIST, CollectionKind.MUTABLE_LIST, CollectionKind.SET,
+    CollectionKind.MUTABLE_SET -> {
+      val element: String = requireNotNull(element).forwardPublicCsharpType()
+      val isList: Boolean = kind == CollectionKind.LIST || kind == CollectionKind.MUTABLE_LIST
+      val read: String = if (isList) "ReadList" else "ReadSet"
+      val create: String = if (isList) "CreateList" else "CreateSet"
+      CirBoxedCollection(
+        type = type,
+        read = "$read<$element>(handle, FromHandle<$element>)",
+        write = "$create((IEnumerable<$element>)value)",
+      )
+    }
+
+    CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> {
+      val key: String = requireNotNull(key).forwardPublicCsharpType()
+      val value: String = requireNotNull(value).forwardPublicCsharpType()
+      CirBoxedCollection(
+        type = type,
+        read = "ReadMap<$key, $value>(handle, FromHandle<$key>, FromHandle<$value>)",
+        write = "CreateMap((IEnumerable<KeyValuePair<$key, $value>>)value)",
+      )
+    }
+  }
 }

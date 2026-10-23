@@ -260,6 +260,10 @@ internal object ForwardCirPlanProjection {
       )
       is BridgeType.ObjectHandle ->
         ValueClassMemberBody(type, "IntPtr", result.handleReconstruction(call))
+      // ADR-239: a delegate bound to the wrapper that owns the returned lambda handle.
+      is BridgeType.ReturnedLambda -> ValueClassMemberBody(
+        result.forwardPublicCsharpType(), "IntPtr", result.lambdaDelegateRead(call),
+      )
       is BridgeType.Interface -> held(interfaceReturnExpression(type, result.backingType))
       is BridgeType.Collection -> ValueClassMemberBody(
         type, "IntPtr", componentCollectionRead(call, result, csharpType = { it.csharpType() }),
@@ -280,6 +284,8 @@ internal object ForwardCirPlanProjection {
           BridgeType.Uuid ->
             held(present + "global::System.Guid.Parse(Marshal.PtrToStringUTF8(nativeResult)!)")
           is BridgeType.ObjectHandle -> held(present + inner.handleReconstruction())
+          is BridgeType.ReturnedLambda -> held(present + inner.lambdaDelegateRead("nativeResult"))
+            .copy(returnType = "${inner.forwardPublicCsharpType()}?")
           is BridgeType.Interface ->
             held(present + interfaceReturnExpression(inner.csharpType(), inner.backingType))
           is BridgeType.Collection -> held(
@@ -307,7 +313,6 @@ internal object ForwardCirPlanProjection {
           is BridgeType.Callback,
           is BridgeType.AsyncCallback,
           is BridgeType.FlowSource,
-          is BridgeType.ReturnedLambda,
           is BridgeType.SpecializedProtocol,
           is BridgeType.RawKSType,
           is BridgeType.Unsupported,
@@ -323,7 +328,6 @@ internal object ForwardCirPlanProjection {
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
       is BridgeType.FlowSource,
-      is BridgeType.ReturnedLambda,
       is BridgeType.SpecializedProtocol,
       is BridgeType.RawKSType,
       is BridgeType.Unsupported,
@@ -1504,20 +1508,17 @@ internal object ForwardCirPlanProjection {
         ),
       )
 
-      // ADR-160 amendment: the OWNED lambda handle becomes ADR-012's `KotlinFunc<...>` (or
-      // `KotlinAction<...>`), which owns it from here and releases it on `Dispose`. `Invoke` goes
-      // through the shared arity-generic `NugetFunctionNative` exports the tracker declares.
-      is BridgeType.ReturnedLambda -> {
-        val lambdaType: String = result.forwardPublicCsharpType()
-        CirResultProjection(
-          returnType = lambdaType,
-          nativeReturnType = "IntPtr",
-          body = checkedPointerBody(
-            nativeName, callArguments, exit.returning("new $lambdaType(nativeResult)"), prelude,
-            cleanup, exit,
-          ),
-        )
-      }
+      // ADR-239: the OWNED lambda handle becomes ADR-012's `KotlinFunc<...>` (or sibling), and the
+      // caller gets the BCL delegate bound to its `Invoke`: the wrapper owns the handle from here
+      // and releases it when the delegate (its only reference) is collected.
+      is BridgeType.ReturnedLambda -> CirResultProjection(
+        returnType = result.forwardPublicCsharpType(),
+        nativeReturnType = "IntPtr",
+        body = checkedPointerBody(
+          nativeName, callArguments, exit.returning(result.lambdaDelegateRead("nativeResult")),
+          prelude, cleanup, exit,
+        ),
+      )
 
       // ADR-040: the public return type is the projected interface (`IPet`); construction uses
       // the generated backing wrapper class (`Pet`) instead.
@@ -1637,6 +1638,22 @@ internal object ForwardCirPlanProjection {
       )
 
       is BridgeType.Nullable -> when (val type: BridgeType = result.type) {
+        // ADR-239: the null pointer is a null delegate.
+        is BridgeType.ReturnedLambda -> CirResultProjection(
+          returnType = "${type.forwardPublicCsharpType()}?",
+          nativeReturnType = "IntPtr",
+          body = checkedPointerBody(
+            nativeName,
+            callArguments,
+            exit.returning(
+              "nativeResult == IntPtr.Zero ? null : ${type.lambdaDelegateRead("nativeResult")}",
+            ),
+            prelude,
+            cleanup,
+            exit,
+          ),
+        )
+
         is BridgeType.ObjectHandle -> CirResultProjection(
           returnType = "${type.csharpType()}?",
           nativeReturnType = "IntPtr",

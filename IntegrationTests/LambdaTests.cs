@@ -95,7 +95,7 @@ public class LambdaTests
     [Fact]
     public void Greeter_ReturnsInvocableLambda()
     {
-        using var greet = Mappings.Greeter("Hello");
+        Func<string, string> greet = Mappings.Greeter("Hello");
         string result = greet.Invoke("World");
         Assert.Equal("Hello, World!", result);
     }
@@ -103,8 +103,8 @@ public class LambdaTests
     [Fact]
     public void Greeter_DifferentGreetings()
     {
-        using var hi = Mappings.Greeter("Hi");
-        using var hey = Mappings.Greeter("Hey");
+        Func<string, string> hi = Mappings.Greeter("Hi");
+        Func<string, string> hey = Mappings.Greeter("Hey");
         Assert.Equal("Hi, Alice!", hi.Invoke("Alice"));
         Assert.Equal("Hey, Bob!", hey.Invoke("Bob"));
     }

@@ -504,6 +504,16 @@ internal enum class PrimitiveKind {
 
 internal enum class CollectionKind { LIST, MUTABLE_LIST, MAP, MUTABLE_MAP, SET, MUTABLE_SET }
 
+/** ADR-239: the `kotlin.collections` simple name this kind is declared with. */
+internal fun CollectionKind.kotlinSimpleName(): kotlin.String = when (this) {
+  CollectionKind.LIST -> "List"
+  CollectionKind.MUTABLE_LIST -> "MutableList"
+  CollectionKind.MAP -> "Map"
+  CollectionKind.MUTABLE_MAP -> "MutableMap"
+  CollectionKind.SET -> "Set"
+  CollectionKind.MUTABLE_SET -> "MutableSet"
+}
+
 /** The direction of a value over the language boundary, independent of declaration syntax. */
 internal enum class ForwardFlow { INTO_KOTLIN, OUT_OF_KOTLIN }
 

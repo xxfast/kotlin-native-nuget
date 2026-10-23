@@ -246,15 +246,22 @@ private fun BridgeType.asyncKotlinType(): String = when (this) {
   // whichever of `Throwable` / `Exception` / `RuntimeException` the member declared.
   is BridgeType.Throwable -> "kotlin.Throwable"
   // ADR-215 lane C: `T` at its one bound (`kotlin.Any` when none), so the member's call infers it.
-  is BridgeType.TypeParameter, is BridgeType.Nullable -> asyncBoxedKotlinType()
-  BridgeType.Char,
-  BridgeType.Instant,
-  BridgeType.Duration,
-  BridgeType.Uuid,
+  is BridgeType.TypeParameter -> asyncBoxedKotlinType()
+  is BridgeType.Nullable ->
+    if (type is BridgeType.TypeParameter) asyncBoxedKotlinType() else "${type.asyncKotlinType()}?"
+  // ADR-239: the boxed result vocabulary, spelled as the member declares it.
+  BridgeType.Char -> "kotlin.Char"
+  BridgeType.Instant -> "kotlin.time.Instant"
+  BridgeType.Duration -> "kotlin.time.Duration"
+  BridgeType.Uuid -> "kotlin.uuid.Uuid"
+  is BridgeType.ValueClass -> qualifiedName
+  is BridgeType.Collection -> {
+    val components: String = listOfNotNull(element, key, value)
+      .joinToString(", ") { component -> component.asyncKotlinType() }
+    "kotlin.collections.${kind.kotlinSimpleName()}<$components>"
+  }
   is BridgeType.BoundInterface,
-  is BridgeType.ValueClass,
   BridgeType.ByteArray,
-  is BridgeType.Collection,
   is BridgeType.Callback,
   is BridgeType.AsyncCallback,
   is BridgeType.FlowSource,
@@ -432,7 +439,9 @@ internal fun asyncCallbackExpression(
         parameter.asyncPayloadArgument(arguments[index])
       } + listOf("nugetCallback", "nugetCtx", "$holder.key", "nugetErr")
       ).joinToString(", ")
-  val resultWire: String = type.result.asyncKotlinWire()
+  // ADR-239: a boxed result is the owned `Object` box, whatever its payload wire would be.
+  val resultWire: String =
+    if (type.result.isBoxedCallbackResult()) "$POINTER?" else type.result.asyncKotlinWire()
   val end: String = "nugetCallbackCall { nugetErr -> " +
       "${slots.end}.reinterpret<$CFUNCTION<($POINTER, $POINTER?) -> $resultWire>>()" +
       ".invoke($task, nugetErr) }"
@@ -476,21 +485,27 @@ internal fun asyncCallbackExpression(
 
       // ADR-215 lane C: `EndBoxed()` always hands back an owned box: read it, cast it to the
       // bound, release it, exactly lane A's lambda result.
+      // ADR-239: every other boxed result, the same owned box cast to the declared result.
+      is BridgeType.Nullable if result.type !is BridgeType.TypeParameter ->
+        appendLine("    ${boxedCallbackResultRead(box, end)}")
+
       is BridgeType.TypeParameter, is BridgeType.Nullable ->
         asyncBoxedRead(result, end, box, value).forEach { line -> appendLine("    $line") }
 
       BridgeType.Char,
       BridgeType.Instant,
       BridgeType.Duration,
-      is BridgeType.Throwable,
       BridgeType.Uuid,
       is BridgeType.Enum,
       is BridgeType.ObjectHandle,
       is BridgeType.Interface,
-      is BridgeType.BoundInterface,
       is BridgeType.ValueClass,
-      BridgeType.ByteArray,
       is BridgeType.Collection,
+        -> appendLine("    ${boxedCallbackResultRead(box, end)}")
+
+      is BridgeType.Throwable,
+      is BridgeType.BoundInterface,
+      BridgeType.ByteArray,
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
       is BridgeType.FlowSource,
