@@ -1,12 +1,12 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
 import com.google.devtools.ksp.symbol.ClassKind
+import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSTypeParameter
-import com.google.devtools.ksp.symbol.Modifier
 import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
@@ -206,7 +206,8 @@ internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
       }
 
   // ADR-222: a generic interface PARAMETER (`Keepsake<T>`) whose arguments are the own `T` or
-  // do not mention it; its bridge reads the erased owner. Never a result (ADR-208's skip).
+  // do not mention it; its bridge reads the erased owner. ADR-224: [carriesOwn] admits it at
+  // every position too.
   fun KSType.isOwnInsideGenericInterface(): Boolean {
     val cls: KSClassDeclaration = declaration as? KSClassDeclaration ?: return false
     if (cls.classKind != ClassKind.INTERFACE || cls.typeParameters.isEmpty()) return false
@@ -297,7 +298,12 @@ private fun KSType.witnessesTypeParameter(name: String): Boolean = namesTypePara
  */
 private fun KSDeclaration.isOwnParameterCarrierClass(): Boolean {
   val cls: KSClassDeclaration = this as? KSClassDeclaration ?: return false
-  if (cls.typeParameters.isEmpty() || cls.classKind != ClassKind.CLASS || cls.isValueClass()) {
+  // ADR-224: a non-sealed generic interface carries `T` at every position too, read back through
+  // its generic backing wrapper.
+  val isGenericInterface: Boolean = cls.classKind == ClassKind.INTERFACE &&
+      Modifier.SEALED !in cls.modifiers
+  val isCarrierKind: Boolean = cls.classKind == ClassKind.CLASS || isGenericInterface
+  if (cls.typeParameters.isEmpty() || !isCarrierKind || cls.isValueClass()) {
     return false
   }
   val pkg: String = cls.packageName.asString()

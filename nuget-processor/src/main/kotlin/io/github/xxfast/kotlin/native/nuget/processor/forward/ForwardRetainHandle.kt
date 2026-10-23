@@ -65,7 +65,19 @@ private fun ForwardCallablePlanCatalog.genericBridgeOwner(): String? = plans.fir
   plan.nativeExports.flatMap { call -> call.parameters }.any { parameter ->
     (parameter.transfer.type.unwrapNullable() as? BridgeType.Interface)?.bridgeEntry != null
   }
-}?.invocation?.symbol
+}?.invocation?.symbol ?: erasedGenericBridgeOwner()
+
+/** ADR-224: a generic bridge reached only at an erased position still needs the retain export. */
+private fun ForwardCallablePlanCatalog.erasedGenericBridgeOwner(): String? =
+  if (ForwardAsyncInterfaces.bridgesGeneric) plans.firstOrNull()?.invocation?.symbol else null
+
+/**
+ * ADR-224: a lambda result typed by a bridged generic interface (`() -> Keepsake<String>`), which
+ * C# hands back as an owned box (`WrapOwned<IKeepsake<string>>`): a retained wrapper handle for a
+ * Kotlin-backed value, a minted bridge for a C# implementation.
+ */
+internal fun BridgeType.isBridgedInterfaceResult(): Boolean =
+  (unwrapNullable() as? BridgeType.Interface)?.bridgeEntry != null
 
 /**
  * ADR-239: the generated per-library export that turns the GCHandle C# mints over a bound C#

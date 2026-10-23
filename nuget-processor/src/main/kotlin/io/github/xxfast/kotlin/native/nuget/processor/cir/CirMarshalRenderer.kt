@@ -598,6 +598,9 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   // `HandleOf` every interface parameter uses (`NugetBridge.HandleFor`, or the ADR-040 throw when
   // the module has no bridge layer). `typeof(T)`, not `type`, so `T = IPet` picks the `IPet`
   // bridge first. `owned` is assigned only after the mint (ADR-135).
+  // ADR-224: a C# implementation of a bridged generic interface mints its own bridge, at the
+  // instantiation `T` names (`NugetBridge.HandleFor` has no generic-interface arm).
+  if (helper.includesBridge) appendBridgeableMint(minted = "bridged")
   appendLine("            IntPtr bridged = HandleOf((object)value!, typeof(T));")
   appendLine("            owned = true;")
   appendLine("            return bridged;")
@@ -861,6 +864,7 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   // the call site reads `owned` in its `finally`: assigning it first meant a failed mint ran
   // `NugetMarshal.Dispose(IntPtr.Zero)`, whose non-nullable `COpaquePointer` export took the host
   // down with a Kotlin NullPointerException instead of surfacing the managed throw.
+  if (helper.includesBridge) appendBridgeableMint(minted = "minted")
   appendLine("            IntPtr handle = HandleOf((object)value!, typeof(T));")
   appendLine("            owned = true;")
   appendLine("            return handle;")
@@ -1047,4 +1051,17 @@ internal fun StringBuilder.renderSetHelper(helper: CirSetHelper) {
   appendLine("        internal static extern void Dispose(IntPtr handle);")
   appendLine("    }")
   appendLine()
+}
+
+/**
+ * ADR-224: `value is INugetBridgeable<T>` mints a bridged generic interface's own bridge. `owned`
+ * is assigned only after the mint (ADR-135).
+ */
+private fun StringBuilder.appendBridgeableMint(minted: String) {
+  appendLine("            if (value is INugetBridgeable<T> bridgeable)")
+  appendLine("            {")
+  appendLine("                IntPtr ${minted}Bridge = bridgeable.MintBridge();")
+  appendLine("                owned = true;")
+  appendLine("                return ${minted}Bridge;")
+  appendLine("            }")
 }

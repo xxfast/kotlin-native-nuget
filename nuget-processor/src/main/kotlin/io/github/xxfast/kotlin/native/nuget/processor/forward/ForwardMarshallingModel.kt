@@ -175,6 +175,12 @@ internal sealed interface BridgeType {
     val kotlinTypeVariableReadType: kotlin.String? = null,
     val typeVariables: List<kotlin.String> = emptyList(),
     val readsAsTypeVariable: kotlin.Boolean = false,
+    /**
+     * ADR-224: the open instantiations this generic interface reference nests in its type
+     * arguments (`Basket<T>` in `Keepsake<Basket<T>>`, `Keepsake<T>` in `Keepsake<Keepsake<T>>`),
+     * each a slot a generated body fills before it reads the reference.
+     */
+    val openArguments: List<BridgeType> = emptyList(),
   ) : BridgeType
 
   /**
@@ -521,9 +527,12 @@ private fun BridgeType.collectOpenSlots(): List<OpenSlot> = when (this) {
   is BridgeType.FlowSource -> element.collectOpenSlots()
   is BridgeType.ReturnedLambda -> typeArguments.flatMap { it.collectOpenSlots() }
   is BridgeType.SpecializedProtocol -> sealedHandle?.collectOpenSlots() ?: emptyList()
+  // ADR-224: an open generic interface reads back as its generic backing wrapper.
+  is BridgeType.Interface -> (if (open) listOf(openSlot()) else emptyList()) +
+      openArguments.flatMap { it.collectOpenSlots() }
   BridgeType.Unit, is BridgeType.Primitive, BridgeType.Char, BridgeType.String,
   BridgeType.Instant, BridgeType.Duration, is BridgeType.Throwable, BridgeType.Uuid,
-  is BridgeType.Enum, is BridgeType.Interface, is BridgeType.BoundInterface,
+  is BridgeType.Enum, is BridgeType.BoundInterface,
   is BridgeType.ValueClass, BridgeType.ByteArray, is BridgeType.RawKSType,
   is BridgeType.Unsupported, is BridgeType.RawCollection, is BridgeType.TypeParameter,
     -> emptyList()
@@ -541,6 +550,10 @@ private fun BridgeType.ObjectHandle.openSlot(): OpenSlot = OpenSlot(
     "new ${constructType ?: csharpType}(handle, out _)"
   },
 )
+
+/** ADR-224: a generic interface's slot constructs its generic backing wrapper. */
+private fun BridgeType.Interface.openSlot(): OpenSlot =
+  OpenSlot(csharpType = csharpType, factory = "new $backingType(handle, out _)")
 
 /**
  * ADR-216 (second amendment): the `??=` lines filling every slot [types] mention, one per C# type,
@@ -563,6 +576,10 @@ internal fun List<OpenSlot>.fills(indent: String = "            "): String =
  */
 internal fun BridgeType.openSlotsBeneath(): List<OpenSlot> {
   val root: BridgeType = if (this is BridgeType.Nullable) type else this
+  // ADR-224: a generic interface root is reconstructed as its backing wrapper.
+  if (root is BridgeType.Interface) {
+    return root.openArguments.flatMap { it.openSlots() }.distinctBy { it.csharpType }
+  }
   val handle: BridgeType.ObjectHandle? = if (root is BridgeType.SpecializedProtocol) {
     root.sealedHandle
   } else {

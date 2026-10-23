@@ -624,7 +624,12 @@ private fun elementKotlinTypeName(type: BridgeType): String = when (type) {
   is BridgeType.Enum -> type.qualifiedName
   // ADR-176: the box holds the Kotlin object itself (a Kotlin-backed instance, or the ADR-084
   // bridge object `nuget_list_add` dereferenced from a C# transfer handle).
-  is BridgeType.Interface -> type.qualifiedName
+  // ADR-224: a generic interface element is cast at its applied (or type-variable) spelling.
+  is BridgeType.Interface -> if (type.readsAsTypeVariable) {
+    requireNotNull(type.kotlinTypeVariableReadType)
+  } else {
+    type.kotlinReadType ?: type.qualifiedName
+  }
   // ROADMAP Phase 4 (ADR-151 amendment): the incoming box holds the real `ByteArray` --
   // `nuget_list_add` dereferenced the `nuget_bytes_create` handle before storing it -- so the
   // lowering is the plain cast every other handle-shaped component uses. Without this arm the

@@ -1558,11 +1558,9 @@ internal class ForwardCallablePlanner(
     // generation on a duplicate plan.
     val occurrences: MutableMap<String, Int> = mutableMapOf()
     // ADR-064 audit amendment: the ADR-174 suspend route carries an interface only when it is
-    // reachable. A generic interface's suspend member is already named by
-    // SKIPPED_GENERIC_INTERFACE_ASYNC_MEMBER, and a sealed interface's arms bind it, so only an
-    // unreachable, non-generic, non-sealed interface names its SUSPEND deferral here.
-    val namesSuspend: Boolean = !ForwardAsyncInterfaces.carries(iface) &&
-        iface.typeParameters.isEmpty() && !iface.isSealedInterface()
+    // reachable. A sealed interface's arms bind it, so only an unreachable, non-sealed interface
+    // names its SUSPEND deferral here.
+    val namesSuspend: Boolean = !ForwardAsyncInterfaces.carries(iface) && !iface.isSealedInterface()
     return methods.mapIndexed { index, method ->
       val name: String = method.simpleName.asString()
       val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
@@ -1597,6 +1595,8 @@ internal class ForwardCallablePlanner(
           },
           result = resultType?.let(classifier::classifyResult) ?: BridgeType.Unit,
           origin = ForwardCallableOrigin.CLASS,
+          // ADR-224: a generic interface reads its receiver erased, as a generic class does.
+          ownerType = iface.forwardGenericOwner(),
           // The symbol carries the overload suffix; the Kotlin call site must not.
           member = name,
           node = method,

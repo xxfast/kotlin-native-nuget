@@ -235,3 +235,9 @@ skip" no longer holds at a parameter or extension receiver: it binds as the C#-i
 `IShelf<string>` ([ADR-222](222-csharp-implemented-generic-interfaces.md)). Output positions (a
 return, a getter, a class property) and erased positions (a `List` element, a `Box` argument, a
 lambda payload) keep the named skip.
+
+## Amendment (2026-10-22): a generic interface binds at output and erased positions
+
+The 2026-10-22 amendment above no longer holds: a return, a getter, a class property, a `List`
+element, a `Box` argument and a lambda payload typed by a generic interface bind as `IShelf<string>`
+([ADR-224](224-generic-interface-at-every-position.md)).

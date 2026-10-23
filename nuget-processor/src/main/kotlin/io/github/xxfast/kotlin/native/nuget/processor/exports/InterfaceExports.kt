@@ -7,6 +7,7 @@ import com.google.devtools.ksp.getVisibility
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardOwnerTypeName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardInterfaceFlowMethods
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardInterfaceFlowProperties
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardInterfaceSuspendMethods
@@ -46,11 +47,14 @@ internal fun FileSpec.Builder.addInterfaceExports(
   if (iface.forwardInterfaceSuspendMethods(classifier).isNotEmpty()) {
     addSuspendClassMethodExports(iface, classifier, callableCatalog, symbols, prefix = prefix)
   }
+  // ADR-224: a generic interface reads its receiver erased (`asStableRef<Heirloom<Any?>>()`), the
+  // ADR-215 spelling a generic class's flow members take.
+  val receiver: String = iface.forwardOwnerTypeName() ?: qualifiedName
   iface.forwardInterfaceFlowProperties(classifier).forEach { prop ->
-    addFlowPropertyExports(prop, qualifiedName, prefix, classifier)
+    addFlowPropertyExports(prop, receiver, prefix, classifier)
   }
   iface.forwardInterfaceFlowMethods(classifier).forEach { method ->
-    addFlowMethodExports(method, qualifiedName, prefix, classifier, callableCatalog)
+    addFlowMethodExports(method, receiver, prefix, classifier, callableCatalog, owner = iface)
   }
 
   iface.getAllProperties()

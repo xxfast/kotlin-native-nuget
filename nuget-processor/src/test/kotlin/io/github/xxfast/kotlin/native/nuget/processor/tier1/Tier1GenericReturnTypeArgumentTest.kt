@@ -168,7 +168,7 @@ class Tier1GenericReturnTypeArgumentTest {
     val result = run()
 
     mapOf(
-      "maybeUnrouted" to "`${unrouted.kotlin}?`",
+      "maybeUnrouted" to "`${unrouted.diagnosticSpelling}?`",
       "maybeCrateOfList" to "`Crate<List<Int>>?`",
     ).forEach { (function, spelled) ->
       val diagnostic: String =

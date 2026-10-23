@@ -1157,6 +1157,18 @@ internal fun translate(
         iface.cirBridgeTypeParameters(logger, context),
       )
     }
+  // ADR-224: a constrained generic bridge state's `where` clauses, restated on the interface its
+  // default method mints from and on the backing wrapper implementing it.
+  val bridgeBounds: Map<String, List<CirTypeParameter>> = bridgePlans
+    .filter { entry -> entry.typeParameters.any { parameter -> parameter.bounds.isNotEmpty() } }
+    .associate { entry -> entry.csQualifiedName to entry.typeParameters }
+  if (bridgeBounds.isNotEmpty()) {
+    namespaces.replaceAll { namespace ->
+      namespace.copy(declarations = namespace.declarations.map { declaration ->
+        declaration.withBridgeBounds(namespace.name, bridgeBounds)
+      })
+    }
+  }
   if (bridgePlans.isNotEmpty()) {
     tracker.callbackDelegates.addAll(
       bridgeDelegates(bridgePlans).filter { delegate ->
@@ -2051,5 +2063,29 @@ private fun BridgeType.Collection.toBoxedCollection(): CirBoxedCollection {
         write = "CreateMap((IEnumerable<KeyValuePair<$key, $value>>)value)",
       )
     }
+  }
+}
+
+/**
+ * ADR-224: [bounds] (keyed by the interface's qualified C# name) applied to a top-level generic
+ * interface and to the backing wrapper of one, keeping each parameter's own variance.
+ */
+private fun CirDeclaration.withBridgeBounds(
+  namespace: String,
+  bounds: Map<String, List<CirTypeParameter>>,
+): CirDeclaration {
+  fun List<CirTypeParameter>.bounded(key: String): List<CirTypeParameter> {
+    val bridged: List<CirTypeParameter> = bounds[key] ?: return this
+    return mapIndexed { index, parameter ->
+      parameter.copy(bounds = bridged.getOrNull(index)?.bounds.orEmpty())
+    }
+  }
+  return when (this) {
+    is CirInterface -> copy(typeParameters = typeParameters.bounded("$namespace.$name"))
+    is CirClass -> {
+      val backs: String = backsInterface?.substringBefore('<') ?: return this
+      copy(typeParameters = typeParameters.bounded("$namespace.$backs"))
+    }
+    else -> this
   }
 }

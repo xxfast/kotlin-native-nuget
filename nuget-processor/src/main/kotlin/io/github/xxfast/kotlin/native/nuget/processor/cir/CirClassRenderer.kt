@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.fills
+
 internal fun StringBuilder.renderInterface(iface: CirInterface) {
   val typeParamStr: String = if (iface.typeParameters.isNotEmpty()) {
     val params: String = iface.typeParameters.joinToString(", ") { param ->
@@ -15,10 +17,27 @@ internal fun StringBuilder.renderInterface(iface: CirInterface) {
 
   renderDoc(iface.doc, generated = iface.remarks)
   // ADR-174 ruling 5: `IAsyncDisposable` when the interface projects a scope-using member.
+  // ADR-224: a bridged generic interface is its own erased mint, `INugetBridgeable<IKeepsake<T>>`.
+  val selfType: String? = iface.bridgeMint?.let {
+    iface.name + iface.typeParameters.joinToString(", ", "<", ">") { param -> param.name }
+  }
   val bases: String = (iface.superInterfaces + "IDisposable" +
-      listOfNotNull("IAsyncDisposable".takeIf { iface.isAsyncDisposable })).joinToString(", ")
-  appendLine("    public interface ${iface.name}$typeParamStr : $bases")
+      listOfNotNull("IAsyncDisposable".takeIf { iface.isAsyncDisposable }) +
+      listOfNotNull(selfType?.let { self -> "INugetBridgeable<$self>" })).joinToString(", ")
+  // ADR-224: a bridged generic interface restates its bridge state's constraints, so the mint
+  // compiles (`IPodium<T> ... where T : IComparable<T>`).
+  val wheres: String = iface.typeParameters
+    .filter { param -> param.bounds.isNotEmpty() }
+    .joinToString("") { param -> " where ${param.name} : ${param.bounds.joinToString(", ")}" }
+  appendLine("    public interface ${iface.name}$typeParamStr : $bases$wheres")
   appendLine("    {")
+  if (selfType != null) {
+    appendLine(
+      "        IntPtr INugetBridgeable<$selfType>.MintBridge() => " +
+          "${iface.bridgeMint}.Create(this).KotlinHandle;",
+    )
+    appendLine()
+  }
 
   for (prop in iface.properties) {
     renderDoc(prop.doc, "        ", generated = prop.remarks)
@@ -325,6 +344,7 @@ private fun StringBuilder.renderClassDeclaration(cls: CirClass) {
       "            NugetFactory<${cls.name}$typeParameters>.Create = " +
           "static handle => new $constructed(handle, out _);",
     )
+    append(cls.interfaceSlots.fills())
     appendLine("        }")
     appendLine()
   }
