@@ -1,0 +1,87 @@
+# Ledger: clear every deferral the Phase 4 and Phase 7 stacks added (base origin/main 6ee56924)
+
+| Lane | Worktree | Slug | ADR | ROADMAP line (verbatim start) |
+|---|---|---|---|---|
+| A1 | kn-p4f-a | nested-generic-getter-factory | 223 | Phase 4: "An open exported generic instantiation nested two or more levels deep..." (ADR-216) |
+| A2 | kn-p4f-a | generic-interface-output-position | 224 | Phase 4: "A generic interface reference at an output position..." (ADR-222) |
+| B1 | kn-p4f-b | generic-value-class-members | 225 | Phase 4: "A generic value class's own members and secondary constructors are skipped..." (ADR-220) |
+| B2 | kn-p4f-b | generic-value-class-nullable-and-collection | 226 | Phase 4: "A function's own `T` inside a generic value class under `?`..." (ADR-220) |
+| B3 | kn-p4f-b | generic-value-class-trampoline-bound | 227 | Phase 4: "A function's own `T` inside a generic value class whose bound needs the ADR-198 trampoline..." (ADR-220) |
+| B4 | kn-p4f-b | generic-value-class-erased-positions | 228 | Phase 4: "A generic value class at an erased position..." (ADR-220) |
+| C1 | kn-p4f-c | suspend-on-object-and-companion | 229 | Phase 6: "A `suspend` member of an `object` or companion has no route..." (ADR-214) |
+| C2 | kn-p4f-c | flow-return-on-static-owner | 230 | Phase 6: "A `Flow` return on an `object`, companion or top-level function has no route..." |
+| C3 | kn-p4f-c | plain-lambda-on-suspend-member | 231 | Phase 6: "A plain (non-suspend) lambda parameter on a `suspend` member has no route..." (ADR-215) |
+
+Chains run serially inside a worktree (A1 then A2, B1..B4, C1..C3); the three chains run side by side.
+ADR numbers are reserved; a lane that amends an existing ADR instead releases its number (renumber at assembly).
+
+## Gaps found during research (each must be built)
+- From A1: a C#-implemented interface slot rejects every exported class handle, generic or not (`ForwardInterfaceBridgePlanner.kt:498-575`). Fold into A2.
+- From A1: a Kotlin body conjuring a non-null `T` by unchecked cast with no `T` input has no reflection-free factory (ADR-216 rejected reflection). Not one of the nine; confirm with the gate whether it is a shipped skip in this neighbourhood.
+- From A2: a C#-implemented interface with a `suspend` member is refused its C# bridge (ADR-222's existing refusal, every interface, generic or not). Must be built: new lane A3 (reserved ADR-232) after A2.
+- From C1: suspend extensions, suspend members of an enum body, a value class, an unreachable interface are named drops (`ForwardCallablePlanner.kt:1478, 1543, 2576, 2822`). Build in C1.
+- From C2: static `Flow`/`StateFlow`/`SharedFlow` properties (object, companion, top level) are named skips (`ForwardPropertyPlanner.kt:1431-1436`). Build in C2.
+- From C3: a plain lambda on a `Flow`-returning member has the same gap. Build in C3. Probe: lambda properties on static owners (unverified).
+- USER (2026-10-22): build the `Any` wire for a member-level `<R>` on a C#-implemented interface: lane A5 (ADR-237), chain a after A4.
+- From A1 red: an extension function/property on a generic receiver (`fun <T> Satchel<T>.bundle()`, `val <T> Satchel<T>.bundled`) is refused (SKIPPED_UNSUPPORTED_COMBINATION / _PROPERTY). New lane A6 (ADR-238), chain a after A5; also covers C1's generic-receiver suspend extension.
+- From A1 red: a returned lambda on a class member is refused (SKIPPED_UNSUPPORTED_RETURN). New lane C5 (ADR-239), chain c after C4.
+- From A1 red: lambda-typed `var` setter position: add fixture + row in A1 green.
+- From C1 red: static `suspend fun` returning `Flow`/`StateFlow`/`MutableStateFlow`: C2 owns it. CollectabilityTests rows + Tier 1 cell + async collision unit test: C1 green.
+- From A1 green: a lambda-typed `var`/`val` carrying a generic class (`var unwind: () -> Basket<Basket<Spool>>`) is skipped (SKIPPED_UNSUPPORTED_PROPERTY / _INPUT): generic type arguments on the lambda-property route. Build in C4, plus its A1 fill row (Spindle fixture).
+- From C1 green: a suspend extension on a collection, interface, value class or nullable-enum receiver stays a named skip. A6 widens to "an extension on every receiver, sync and suspend, generic or not".
+- From C1 green: suspend members of a generic value class: B1 builds them with the sync members.
+- FINAL SWEEP: grep docs/adr/README.md and every ADR 213-239 for "Deferred", "Declined", "Out of scope", "not designed here", "named skip" left in place; each must be built or already built. Check ADR-217 README Deferred list.
+- STACK ORDER: chain b depends on C1 (value-class suspend route). Order at assembly: a, c(C1..), then b on top. Rebase kn-p4f-b onto C1 commit before B1 suspend rows.
+- 17:30: worktree kn-p4f-d (base C1 8f247de8) takes A6 then B6, off the critical path. Stack order: a, c, d(A6, B6), b.
+- A6 gated (DECISIONS "A6"): needs C2 and should rebase after C3. Worktree d runs B6 first; A6 starts on d after rebasing d onto chain c tip. Stack: a, c, d(B6, A6), b.
+- B6 green: builds bare List/Set/Map of Instant/Duration/Uuid too (ADR-106 deferral). B6 Box<V> erased rows may need B4; if gated behind #if B4_ERASED, they get enabled in B4 (chain b sits after d in the stack).
+- From A2 green: refused generic-interface bridges are named skips at erased inputs (Q2). A3 (suspend/Flow) and A5 (<R>) must remove every refusal reason; at the end grep ForwardDiagnostic/InterfaceBridgePlanner for remaining interface-bridge refusals and build any left. Collector (generic iface returned by C#-impl iface method) is A4.
+- DOC CHECK: ADR-225 claims a violated bound surfaces as KotlinInvalidCastException (unverified). Confirm with a test row or remove before commit of B1.
+- From B6 green: B4 must cover erased positions (Box<V>, Flow element, suspend result, StateFlow) for value classes over Instant/Duration/Uuid/ByteArray/collection/nested/interface too, incl. C# NugetBox/NugetUnbox prelude/cleanup for handle underlyings; remove the #if B4_ERASED fence in ValueClassWireUnderlyingTests.cs.
+- From A2 round 2: a generic interface member with its own <R> is now left off IMapper<T> (as the class route does). A5 must add it via the Any wire.
+- DOC CHECK A2: ADR-224 "InvalidCastException" for an IKeepsake<int> read at IKeepsake<string> is labelled inferred: add a row and correct the text before committing A2.
+- From C2: a returned lambda (`fun readings(): (Int) -> Int`) drops on BOTH a class and an object: C5 covers every owner. Lambda property on an object: C4.
+- From C2 docs: nullable `Flow<T>?` returns (top level, likely every owner) have no binding: C2 follow-up after its refactorer. Also confirm NugetDiagnostics.json shows `Owner.<Name>.x` for a named companion. Then fix coroutines-and-flow.md ~943 and ADR-026's "Not changed" line.
+- From C2 docs: Flow members/properties on a GENERIC value class: B4.
+- From B4 red (all build in B4): Sticker.glow StateFlow<T> property dropped SILENTLY (no diagnostic); callback parameter returning a value class (SKIPPED_UNSUPPORTED_RETURN, likely non-generic too); callback with nullable value class (SKIPPED_UNSUPPORTED_INPUT); Flow<Sticker<Int>> parameter; suspend parameter of a generic value class; value-class Flow members need C2's route.
+- PLAN: commit C2 (nullable Flow<T>? as a follow-up commit C2b on chain c), commit B6, rebase d onto c tip, rebase b onto d tip, then B4 green.
+- 19:xx REORDER: stack = a, c(C1, C2, C2b, C3, C4, C5), b(B3, B1, B4, B2, B5), d(B6, B7, A6). b rebased onto C2 (7d2f1ee0); d rebasing onto B1 (6986bd23); re-rebase d onto b tip at the end. B6's #if B4_ERASED rows get enabled in d after rebasing onto B4.
+- New lane B7 (ADR-240, worktree d after B6): suspend/Flow parameter+receiver wires for bare Instant/Duration/Uuid/ByteArray/plain interface, and value classes over any underlying (incl. String), on both halves; plus ADR-229 staticSuspendReceiver for the same five.
+- ASSEMBLY: B1 commit (ADR-225) breaks compile atop C2 (StaticFlowExports Box arm). Fold the Box-arm fix into the B1 commit in chain b; verify every commit builds at assembly.
+- HELD: B4 `wrapper` row (generic value class through a returned lambda on a class member) parked in held/B4-wrapper.md; re-add in chain b after it rebases onto C5, or in C5 itself if chain c builds generic value class support by then.
+- DOC CHECK B6 (rows to add before commit): struct over a collection compares by reference; nested value class over a reference underlying refuses default; Set/Map over a ByteArray struct.
+- DOC FIX later in d (B7 / after b rebase): generics.md:321, coroutines-and-flow.md:1228,1643 say Instant/Duration/Uuid value classes have no struct at erased/flow positions.
+- B6 committed 2c42c37e on ir/value-class-wire-underlyings WITH `#if B4_ERASED` fenced rows in ValueClassWireUnderlyingTests.cs. MUST be removed (rows enabled) in d after rebasing onto B4; final grep for B4_ERASED/B1_SUSPEND must be empty.
+- USER 2026-10-22 ~20:00: no more ADR questions to the user; consult advisor (research) / fable or take the recommendation, and report.
+- CALL (main thread, 20:xx): A3 gap 1 Kotlin-made flow round-trips through IAsyncEnumerable: accepted, ADR-232 records it. Gap 2 hot flows: build via KotlinMutableStateFlow/SharedFlow.Create factories. Gap 3 + suspend-returning-Flow: build in A3.
+- A4 gets from A3: bridge slot arity > 2 parameters; star-projected Flow; Flow element outside String/primitives/own T; var of Flow; slot param/result/property type vocabulary (incl. inherited super-interface T); backticked member with no @CSharpName (synthesize the name the class route uses).
+- Not gaps (parity with class route): Unit property, unresolved result type, narrower-Throwable result (ADR-201).
+- PRE-EXISTING BUG (from B4): a value class over a nullable primitive (`value class Tally(val count: Int?)`) breaks the module build at its `_create` export (Forward ABI mismatch: planned (bool,int,out ptr)->int, actual has-value wire). B5 fixes it first, as its own commit, then the Int? box pair.
+- B4: List<Sticker<T>> own-T collection (stickAll) stays for B2 (its scope).
+- To A5: a generic value class held in an erased object/Any position (Box<object> with a Sticker) must work via the Any wire; add row in A5.
+- To A4 (from A3 round 2): suspend member returning Flow<own T> (generic End thunk); suspend member returning a hot flow; a Kotlin-backed member wrapper's hot flow (wall.Level) handed back through a C# impl throws ArgumentException: give member-produced hot flows their own handle; KotlinMutable*Flow.Create scope handle must be owned/released by Dispose, not only the finalizer; nullable flow types on the bridge; generic interfaces in no position (Haversack : Satchel<Int> broke Pannier<T> forwards).
+- B2 phase 1 (pre-existing bug commit): Int? underlying ctor ABI crash (moved from B5), List<Nick?> param generator crash + result data loss, closed Sticker<String?> param CS8604. Commit separately before B2 feature. B5 no longer owns the Int? ctor bug (keep the Int? box pair in B2 phase 2 if not done).
+- To C4 red: add fixture+rows for a suspend member returning StateFlow/SharedFlow with a plain lambda (C3 path, unexercised).
+- From C3 docs: lambda RESULT vocabulary still refuses enum, Char, builtins (Instant/Duration/Uuid/ByteArray), and likely collections/nullables: C5 widens callback results to the plan vocabulary on every callback route, and fixes the stale "a callback can return Unit, a primitive or a String" message in ClassExports.kt.
+- To B5: box pair (erased positions, async result, Flow element) for a value class over a nullable PRIMITIVE (`Int?`); C# box-pair code has no wire for it.
+- ASSEMBLY: B6 commit carries `#if B4_ERASED`-fenced rows; B7 commit removes the fence. At assembly move those rows out of B6 into B7 so no commit has a fence.
+- B7 follow-up (after refactorer): MutableStateFlow/MutableSharedFlow of bare ByteArray/collection/interface are read-only from C#: make them settable (write the handle). Also pin "ByteArray arg copied for the call" with a row; assert KotlinArgumentException exactly where docs say so.
+- PUSHED 23:xx: #582 A1, #583 A2, #584 A3 (stack #588); #585 C1, #586 C2, #587 C2b (stack #589). Ready for review. Remote branch ir/nested-generic-factory-every-position = A1 (local branch of same name in kn-p4f-a is ahead); push later lanes with explicit SHA refspecs. Next layers: chain a on #584, chain c on #587, chain b on #586 (C2).
+- A4 ships partial (green). New lane A4b (ADR-233 amendment, chain a after A4, before A5): generic iface in no position (Pannier<T> forwards Task<T> ISatchel<int>.FetchAsync unsubstituted CS9334/CS0535); hot-flow handle for member FUNCTIONS (News(), Bell()); Kotlin-backed flow setter accepting KotlinFlow.From; flow setter on sealed/generic owners; var flow slot factory entry ordering (closedFlowArguments read before bridge planning); C# impl of ILitter<T> (suspend returning Flow<own T>); bridge refusals: backticked member without @CSharpName, nullable/suspend lambda property/result/parameter, var of lambda type, other kotlinx.coroutines.flow types, non-boxable flow elements.
+- To A5: Flow<*> (KotlinFlow<Any> on Kotlin-backed ITracker; re-add Tracker.anything()). Parity, not gaps: Unit property, unresolved result type, ADR-201 narrow Throwable.
+- A4b also: C# row setting a class Flow var (feeder.Source = other.Source) + C#-made flow; class-member returned-lambda delegate release leak row; stale comment in InterfaceSlotVocabularyTests.cs ("skipped there today"); delete the narrowed ROADMAP var-flow-setter line once hot/generic/sealed setters ship.
+- CALL C4: lambda property getters keep wrapper types (KotlinFunc/KotlinAction, ADR-210 suspend shape); setters BIND (overrides DECISIONS' "setter stays named partial skip": that was a deferral) via an implicit conversion from the BCL delegate on the wrapper types, class route too; nullable lambda properties bind on the class route too.
+- HELD: C4 row `ZoomrunSample.LeapAsync` (suspend member taking an interface) needs A3 (chain a). Re-add after both stacks merge or in the first lane that has both.
+- To B5: probe nullable value class as a Map KEY (Map<Sticker<T>?, ..>, Map<Nick?, ..>): if refused only for value classes (not a general nullable-key policy), build it.
+- PUSHED: #590 C3 (stack #589); #591 A4 (stack #588); chain b #592 B3 2c1fb2b6, #593 B1 0c50c909, #594 B4 72412e29, #595 fix 99ffff2f, #596 B2 decd3afc (stack #597, base ir/flow-on-static-owners). d must rebase onto decd3afc (its base adefb170 is the OLD B4).
+- CALL C4: lambda properties use BCL delegate types (Func/Action, ADR-210 suspend shape), consistent with #591 members returning a lambda; breaking for class lambda properties (KotlinFunc -> Func): say so in the PR. C4 also builds sealed arms/bases and ADR-039 listener interfaces.
+- SWEEP lane Z (last, after A6): MutableStateFlow/SharedFlow of a NULLABLE collection/ByteArray element (MutableStateFlow<List<T>?>) keeps a named skip: build.
+- HELD: A4b IWhistle (nullable/suspend lambda as bridge slot property/parameter/result, var lambda on interface; class route too) -> held/A4b-whistle.md; needs C4+C5 (chain c). Sweep Z.
+- SWEEP Z: flow property on an enum member has no flow route (getter too): needs C2 (chain c) + a's work.
+- C5: function RETURNS of a lambda on every owner use BCL delegates too (A4 #591 did class/interface members in chain a; chain c still has KotlinFunc returns at top level). Collectability rows for sealed-arm and listener lambda property delegates.
+- From B5 green: an interface member returning `Sticker<*>` still skips (C# implementer cannot pick TSticker). Build in lane Z via the A5 Any wire (erase to object, as member-level <R>).
+- From A5 red: `Hoarding.Pouncing(IPouncer)` emitted though Pouncer is unimplementable (missing gate); A5 green resolves by making Pouncer implementable.
+- 10:20 PRs: C4 #599 (stack 589), B6 #600, B7 #601 (stack 597). B5 must rebase onto c406f9f5 before its PR. A6 red started on kn-p4f-d (base c406f9f5).
+- B5 committed (kn-p4f-b, ir/value-class-char-sealed-star). Flake seen once: SealedArmCallbackPairTests.AddWatcher_InterfaceBridgePairOnADataObjectArm_ReceivesWake got extra "oreo-sat-on-the-keyboard" (shared state); lane Z must fix.
+- A6 green running on kn-p4f-d (base c406f9f5). Stack 597 order: ...601 B7, B5, A6 -> rebase A6 onto rebased B5 before its PR.
+- 11:xx USER: pause after the current A5/C5/A6 green agents report. Start nothing new after that. Resume next: docs+style per lane, PRs, A6 rebase onto 1e8ef49a, lane Z.
