@@ -31,9 +31,9 @@ constructor's `init` does not run when called from C#.
 
 A value class over a `String`, a primitive, a `Char`, an enum, a nullable `String`, primitive or
 `Char`, an object handle, a sealed base or interface, `Instant`, `Duration`, `Uuid`, `ByteArray`, a
-collection, another value class, or a plain interface binds (the last group is
+collection (nullable too), another value class, or a plain interface binds (the last group is
 [below](#over-instant-bytearray-collection-interface)). A value class over a `Throwable`, a nullable
-non-scalar, or a type outside the export set is refused by name; every member typed with it, at any
+non-scalar other than a collection, or a type outside the export set is refused by name; every member typed with it, at any
 position, is a separate named skip (`SKIPPED_UNSUPPORTED_TYPE`: "its value class type `X` has no C#
 record struct, because it wraps `kotlin.Throwable`, which no value-class wire carries"). That covers
 a `Box<X>`, `List<X>`, lambda or `Flow` of one.
@@ -133,6 +133,16 @@ bool same = oreo == mylo;                                    // true, order igno
 var seen = new HashSet<PawPrint> { new(new byte[] { 3 }), new(new byte[] { 3 }) };   // one entry
 ```
 
+- A collection underlying can be nullable. `value class TreatTin(val treats: List<Int>?)` becomes
+  `TreatTin(IReadOnlyList<int>? Treats)`, and `null` list, `TreatTin(null)` and `null` tin stay three
+  different values under `?`, as a `Box<TreatTin>` and as an element.
+
+  ```C#
+  Optionals.TinSize(new TreatTin(null));            // -1, Kotlin sees a null list
+  Optionals.TinSize(new TreatTin(new int[0]));      // 0
+  TreatTin? empty = Optionals.MaybeTin(1);          // not null: a tin with no list
+  ```
+
 - A value class over an interface holds an `IDisposable` interface value. Dispose a Kotlin-backed
   one you read out (`using IRumbler rumbler = voice.Rumbler`). A C#-implemented one you pass in
   comes back as the same instance.
@@ -198,8 +208,75 @@ Decal<Cat> decal = Stickers.OreoDecal();                // Serial stays a long
 - A closed instantiation works as a `List`, `Set` or `Map` component and under `?`, and at an
   [erased position](#a-generic-value-class-at-an-erased-position). A function's own `T` does too:
   see [Under `?` and inside collections](#a-generic-value-class-under-and-inside-collections).
-- A generic value class over `List<T>` or any other shape that is not `T` or a phantom stays
-  refused by name.
+- A generic value class over a collection of its own `T` binds too, see
+  [below](#a-generic-value-class-over-a-collection).
+
+### Over a collection of its own `T` {id="a-generic-value-class-over-a-collection"}
+
+A generic value class over a `List<T>`, `Set<T>`, `Map<String, T>`, `List<T>?` or `List<T?>` becomes
+a record struct over the matching read-only collection. It binds everywhere `Sticker<T>` does: a
+closed parameter or result, under `?`, as a collection element, with a function's own `T`, as a class
+property or constructor parameter, its own members and secondary constructors, `suspend` and `Flow`
+members, and the erased positions. As with `Sticker<T>`, `init` runs in
+Kotlin when it crosses, and a `default` struct is refused before it crosses.
+
+```kotlin
+value class Bundle<T>(val items: List<T>) {
+  init { require(items.size <= 3) { "Mylo cannot carry more than three" } }
+  constructor(item: T, times: Int) : this(List(times) { item })
+  fun first(): T = items.first()
+  fun each(): Flow<T> = items.asFlow()
+}
+value class MaybeBundle<T>(val items: List<T>?)
+value class Gappy<T>(val items: List<T?>)
+
+fun pack(items: List<Int>): Bundle<Int> = Bundle(items)
+fun <T> wrap(items: List<T>): Bundle<T> = Bundle(items)
+fun repack(bundles: List<Bundle<Int>>): List<Bundle<Int>> = bundles
+fun boxedBundle(): Box<Bundle<Int>> = Box(Bundle(listOf(1, 2)))
+```
+
+```C#
+Bundle<int> packed = Bundles.Pack(new[] { 1, 2 });             // Items is IReadOnlyList<int>
+Bundle<string> toys = Bundles.Wrap<string>(new[] { "mouse" }); // a function's own T
+Bundles.Pack(new[] { 1, 2, 3, 4 });                            // throws, init ran in Kotlin
+Gappy<int?> gappy = Bundles.Gappy();                           // Items is IReadOnlyList<int?>
+
+string first = new Bundle<string>(new[] { "mouse", "ball" }).First();   // "mouse"
+var ball = new Bundle<string>("ball", 2);                               // secondary constructor, runs init
+using Box<Bundle<int>> boxed = Bundles.BoxedBundle();
+bool same = new Bundle<int>(new[] { 1, 2 }) == Bundles.Pack(new[] { 1, 2 });   // true, compares items
+```
+
+- The struct compares by content, like any [struct over a collection](#over-instant-bytearray-collection-interface).
+- A `List<T>?` underlying (`MaybeBundle<T>`) keeps `null` list apart from an empty one, and
+  `MaybeBundle<Int>?` apart from both.
+- The list is copied at each crossing, so changing the one you passed in does not reach Kotlin. An item that is an exported class crosses as its handle, so
+  you dispose the objects you read out of `Items` like any other.
+
+### When the underlying is a `T?` {id="a-generic-value-class-over-a-nullable-t"}
+
+A generic value class that uses its `T` as `T?` (`Opt<T>(val value: T?)`, or `Gappy<T>` above) is
+spelled with a nullable type argument when the closed argument is a C# value type, because C# reads
+an unconstrained `T?` as plain `T` for a value type. A reference type and a function's own `T`
+keep their spelling.
+
+```kotlin
+value class Opt<T>(val value: T?)
+
+fun optNone(): Opt<Int> = Opt(null)
+fun optNamed(): Opt<String> = Opt(null)
+fun <T> optOf(value: T?): Opt<T> = Opt(value)
+```
+
+```C#
+Opt<int?> none = Optionals.OptNone();           // Value is null
+Opt<string> named = Optionals.OptNamed();       // not Opt<string?>
+Opt<long> some = Optionals.OptOf<long>(4);      // own T unchanged
+```
+
+`Opt<Int>` and `Gappy<Int>` therefore appear as `Opt<int?>` and `Gappy<int?>` in your signatures, and
+you construct them that way: `new Opt<int?>(5)`.
 
 ### Under `?` and inside collections {id="a-generic-value-class-under-and-inside-collections"}
 

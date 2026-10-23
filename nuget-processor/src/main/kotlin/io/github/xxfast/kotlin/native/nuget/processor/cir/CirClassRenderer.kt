@@ -807,8 +807,13 @@ private fun StringBuilder.renderMethodBody(method: CirMethod, className: String)
   val disposedName: String = method.explicitInterface ?: className
   if (method.isAsync || method.isFlow) {
     val rendered = StringBuilder()
+    val mint: String? = method.flowReceiverMint
     if (method.isAsync) {
       rendered.renderAsyncMethod(method, disposedName)
+    } else if (mint != null) {
+      // ADR-235: each extern call mints its receiver handle from the struct and releases it after.
+      val flow: String = buildString { renderFlowMethod(method, disposedName) }
+      rendered.append(boxedReceiverCalls(flow, requireNotNull(method.flowReceiverLocal), mint))
     } else if (!method.flowReceiverBox) {
       rendered.renderFlowMethod(method, disposedName)
     } else {

@@ -1245,7 +1245,8 @@ internal class ForwardCallablePlanner(
     // underlying's wire, so a failing `init` on the re-wrap throws in C# rather than in a member
     // export that has no slot to report it through.
     val wireView: ForwardValueClassView? = if (role == ForwardValueClassUnderlying.WIRE) {
-      classifier.classify(cls.asStarProjectedType()).valueClassViewOrNull()
+      // A generic one (`Bundle<T>(val items: List<T>)`) is seen as its own declaration spells it.
+      classifier.valueClassSelf(cls)?.valueClassViewOrNull()
     } else {
       null
     }
@@ -1315,9 +1316,8 @@ internal class ForwardCallablePlanner(
     // ADR-235: set for a WIRE value class, whose receiver is its innermost underlying.
     wireView: ForwardValueClassView? = null,
   ): List<ForwardCallableCatalogEntry> {
-    val underlyingName: String? =
-      (cls.primaryConstructor?.parameters?.singleOrNull()?.type?.resolve()?.declaration
-        as? KSTypeParameter)?.simpleName?.asString()
+    // The class's own type parameters the underlying mentions: `T` in `T`, `T?` and `List<T>`.
+    val underlyingNames: Set<String> = cls.underlyingTypeParameterNames()
     val receiverType = BridgeType.ValueClass(
       qualifiedName = owner,
       underlying = underlying,
@@ -1332,7 +1332,7 @@ internal class ForwardCallablePlanner(
     // Inferred from the underlying for its own `T`; a phantom one is `Nothing`, which satisfies
     // every bound and which no member's signature can observe, since it never reaches a value.
     val arguments: List<String> = cls.typeParameters.map { parameter ->
-      if (parameter.simpleName.asString() == underlyingName) "_" else "Nothing"
+      if (parameter.simpleName.asString() in underlyingNames) "_" else "Nothing"
     }
     val receiverConstruction: String =
       if (arguments.all { it == "_" }) owner else "$owner${arguments.joinToString(", ", "<", ">")}"
@@ -1350,11 +1350,11 @@ internal class ForwardCallablePlanner(
         // `constructor(label: String, times: Int) : this(label.repeat(times) as T)`, the author's
         // unchecked cast, so that one is spelled at the erased bound.
         val witnessed: Boolean = ctor.parameters.any { parameter ->
-          underlyingName != null && parameter.type.resolve().mentionsTypeParameter(underlyingName)
+          underlyingNames.any { name -> parameter.type.resolve().mentionsTypeParameter(name) }
         }
         val spelled: List<String> = cls.typeParameters.mapIndexed { position, parameter ->
           when {
-            parameter.simpleName.asString() != underlyingName -> "Nothing"
+            parameter.simpleName.asString() !in underlyingNames -> "Nothing"
             witnessed -> "_"
             // No erased argument is within an unspellable or multiple bound: the export runs
             // under the ADR-198 trampoline and names its type variable instead.
@@ -1536,18 +1536,17 @@ internal class ForwardCallablePlanner(
     val type: BridgeType.ValueClass = (if (cls.typeParameters.isEmpty()) {
       classifier.classify(cls.asStarProjectedType()).sealedAsHandle()
     } else {
-      genericValueClassSelf(cls, owner)
+      classifier.valueClassSelf(cls)
     }) as? BridgeType.ValueClass ?: return emptyList()
     // The four underlying kinds both value-class wires already implement (ADR-077 sub-item 4).
     if (!type.hasErasedCrossing()) return emptyList()
     // ADR-228: a generic one is constructed with a phantom `T` spelled `Nothing` (within every
     // bound, and never observed), read back as its star projection, and trampolined (ADR-198)
     // for an own `T` with no erased spelling.
-    val underlyingName: String? = (cls.primaryConstructor?.parameters?.firstOrNull()?.type
-      ?.resolve()?.declaration as? KSTypeParameter)?.simpleName?.asString()
+    val underlyingNames: Set<String> = cls.underlyingTypeParameterNames()
     val construction: String? = cls.typeParameters.takeIf { it.isNotEmpty() }
       ?.map { parameter ->
-        if (parameter.simpleName.asString() == underlyingName) "_" else "Nothing"
+        if (parameter.simpleName.asString() in underlyingNames) "_" else "Nothing"
       }
       ?.takeIf { arguments -> arguments.any { it != "_" } }
       ?.joinToString(", ", "$owner<", ">")
@@ -1581,25 +1580,6 @@ internal class ForwardCallablePlanner(
     )
     val pair: List<ForwardCallableCatalogEntry> = listOf(box, unbox)
     return if (pair.all { it is ForwardCallableCatalogEntry.Planned }) pair else emptyList()
-  }
-
-  /**
-   * ADR-228: a generic value class as its own declaration spells it, `Sticker<T>` over its own `T`
-   * (or a phantom's plain underlying): the one type its box/unbox pair carries for every
-   * instantiation, since Kotlin boxes them all as one runtime class.
-   */
-  private fun genericValueClassSelf(cls: KSClassDeclaration, owner: String): BridgeType? {
-    val underlyingParam = cls.primaryConstructor?.parameters?.firstOrNull() ?: return null
-    val name: String = underlyingParam.name?.asString() ?: return null
-    val underlying: BridgeType = classifier.classify(underlyingParam.type.resolve())
-    val parameters: List<String> = cls.typeParameters.map { it.simpleName.asString() }
-    return BridgeType.ValueClass(
-      qualifiedName = owner,
-      underlying = underlying,
-      underlyingPropertyName = name,
-      csharpType = "${cls.simpleName.asString()}${parameters.joinToString(", ", "<", ">")}",
-      typeArguments = parameters.map { BridgeType.TypeParameter(it) },
-    )
   }
 
   private fun valueClassConstructorEntries(
@@ -6146,7 +6126,7 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
   // ADR-235: and so is a value class over a collection, whose write projection is the same one.
   is BridgeType.Nullable -> type !is BridgeType.Nullable && type !is BridgeType.Collection &&
       (type as? BridgeType.ValueClass)?.underlying !is BridgeType.Collection &&
-      type.isWrappableComponent()
+      (type.isWrappableComponent() || type.isNullableCollectionValueClass())
 
   // ADR-235: the narrow wire each crosses on as a parameter, projected per element.
   BridgeType.Instant, BridgeType.Duration, BridgeType.Uuid -> true

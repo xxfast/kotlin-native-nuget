@@ -177,7 +177,7 @@ A `T` whose bound needs ADR-198's trampoline is bound inside `Sticker<T>` too; s
 | `List<Sticker<T>>` (own `T`) | bound by [ADR-226](226-generic-value-class-nullable-and-collections.md) | the element projects to its underlying and re-wraps in Kotlin |
 | `Box<Sticker<Int>>`, lambda payload/result, flow element, awaited `suspend` result or value-class parameter on a `suspend` member | bound by [ADR-228](228-generic-value-class-erased-positions.md) | one box/unbox pair per generic value class serves every instantiation; [ADR-240](240-async-routes-carry-wire-underlyings.md) carries the `suspend` and `Flow` routes |
 | own members and secondary constructors of a generic value class | bound by ADR-225 | see the 2026-10-22 amendment below |
-| underlying `List<T>` or any non-bare, non-phantom shape | unchanged `REFUSED` for a generic value class; a non-generic value class over a collection, `Instant`, `Duration`, `Uuid`, `ByteArray` or interface binds by [ADR-235](235-value-class-wire-underlyings.md) | pre-existing |
+| underlying `List<T>` or any non-bare, non-phantom shape | bound by [ADR-235](235-value-class-wire-underlyings.md) (2026-10-23 amendment) | a non-generic value class over a collection, `Instant`, `Duration`, `Uuid`, `ByteArray` or interface bound earlier; a generic one over a collection of its own `T` now binds too |
 
 ## Consequences
 
@@ -268,10 +268,25 @@ as ADR-226 did for a parameter.
 
 ## Amendment 2026-10-23: the named-skips table is historical
 
-Every skip in the "Named skips" table except a generic value class over a `List<T>` or other non-bare
-underlying has since been bound: `Sticker<T>?` and `List<Sticker<T>>` by
+Every skip in the "Named skips" table (the last, a generic value class over a `List<T>` or other non-bare
+underlying, by the 2026-10-23 ADR-235 amendment) has since been bound: `Sticker<T>?` and `List<Sticker<T>>` by
 [ADR-226](226-generic-value-class-nullable-and-collections.md), the erased positions by
 [ADR-228](228-generic-value-class-erased-positions.md) with the `suspend` and `Flow` routes carried
 by [ADR-240](240-async-routes-carry-wire-underlyings.md), and a non-generic value class over a
 collection or another wire underlying by [ADR-235](235-value-class-wire-underlyings.md). The table
 above shows each row's outcome now; the Decision prose is left as written.
+
+## Amendment 2026-10-23: a generic value class over a collection, and the `T?` spelling
+
+[ADR-235](235-value-class-wire-underlyings.md)'s 2026-10-23 amendment supersedes the named-skips row
+"underlying `List<T>` or any non-bare, non-phantom shape" (unchanged `REFUSED`): `Bundle<T>(val
+items: List<T>)`, and a `Set<T>`, `Map<String, T>`, `List<T>?` or `List<T?>` underlying, bind at
+every position this ADR and ADR-225, ADR-226 and ADR-228 bind `Sticker<T>`.
+
+Fixed: a generic value class that uses its `T` as `T?` and is closed at a C# value type generated an
+`Interop.cs` that did not compile (`Opt<Int>` for `value class Opt<T>(val value: T?)` gave CS1061,
+`'int' does not contain a definition for 'HasValue'`), because C# reads an unconstrained `T?` as `T`
+for a value type. The type argument now carries the nullability: `Opt<Int>` is `Opt<int?>`,
+`Gappy<Int>` (`List<T?>`) is `Gappy<int?>`, `Opt<String>` stays `Opt<string>`, and a function's own
+`T` is unchanged. **Verified** by `Tier1NullableUnderlyingSpellingTest` and
+`NullableUnderlyingSpellingTests.cs`.

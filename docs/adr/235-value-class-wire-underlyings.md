@@ -123,3 +123,44 @@ Verified by `Erased_GenericClass_InstantUuidCollectionAndInterfaceUnderlyings_Ro
 `Erased_GenericClass_DefaultReferencePayload_IsRefusedBeforeItCrosses`,
 `SettableHolders_OfNarrowTypesAndWireValueClasses_ReadAndWrite` and
 `ValueClassOverANullableUnderlying_KeepsNullAndAbsentApart`.
+
+## Amendment (2026-10-23): a generic value class over a collection, a nullable collection and a Flow-member fix
+
+**Generic value class over a collection of its own `T`.** `value class Bundle<T>(val items: List<T>)`
+(also `Set<T>`, `Map<String, T>`, `List<T>?` and `List<T?>` as `Gappy<T>`) takes this ADR's WIRE
+underlying role and renders as `readonly record struct Bundle<T>(IReadOnlyList<T> Items)`. This
+supersedes the [ADR-220](220-generic-value-class-record-struct.md) named skip for a generic value
+class over `List<T>` or another non-bare, non-phantom shape. The classifier substitutes the use site
+into the underlying property (`asMemberOf`), so a closed `Bundle<Int>` is, to every planner and
+emitter, the non-generic collection value class over `List<Int>`. A function's own `T`
+(`fun <T> wrap(items: List<T>): Bundle<T>`) rides the ADR-212 boxed element wire. One shared
+`valueClassSelf(cls)` spells the receiver. When the class is generic, the WIRE box pair gets the
+ADR-228 `NugetRegister` and `INugetGenericValue`. A type parameter the underlying mentions is
+inferred in the generated Kotlin; only a true phantom spells `Nothing`.
+
+It binds at a closed parameter and result, under `?`, as a collection element (`List<Bundle<Int>>`),
+as a class property and constructor parameter, as own members, a property and a secondary
+constructor, as `suspend` and `Flow` members, and at the erased positions (`Box<Bundle<Int>>`, a
+lambda payload or result, a `Flow` element, an awaited result, a `suspend` parameter and a
+`MutableStateFlow` write). `default(V)` is refused before it crosses. Equality is by items.
+
+**A nullable collection underlying is WIRE for every value class**, generic or not.
+`value class TreatTin(val treats: List<Int>?)` binds as a parameter, a result, under `?` (as its box,
+so `null`, `TreatTin(null)` and a full tin stay distinct) and in a `Box<TreatTin>`;
+`MaybeBundle<Int>?` is likewise distinct from a bundle with no list. A non-null struct over a nullable
+underlying reads `new V(null)` rather than `null` for a null handle.
+
+**The `T?` spelling rule** is recorded in the ADR-220 2026-10-23 amendment: `Opt<Int>` is
+`Opt<int?>`, `Gappy<Int>` is `Gappy<int?>`, `Opt<String>` stays `Opt<string>`.
+
+**Fixed: a `Flow` member on a handle-minted receiver.** A `Flow` member on any value class whose
+receiver is minted as a handle (a collection, `ByteArray` or interface underlying) generated
+`var receiverValue = receiverHandle;`, which did not compile (CS0103). Each call now mints the handle
+inside `NugetMarshal.WithHandle`, mirroring ADR-228's `WithBox`.
+
+Verified by `Tier1GenericValueClassCollectionUnderlyingTest`, `Tier1NullableUnderlyingSpellingTest`,
+`GenericValueClassCollectionUnderlyingTests.cs`, `NullableUnderlyingSpellingTests.cs` and the leak
+rows `GenericValueClassOverCollection_OrdinaryPositions_ReturnToBaseline`,
+`GenericValueClassOverCollection_Members_ReturnToBaseline`,
+`GenericValueClassOverCollection_ErasedPositions_ReturnToBaseline` and
+`GenericValueClassOverCollection_AsyncPositions_ReturnToBaseline`.

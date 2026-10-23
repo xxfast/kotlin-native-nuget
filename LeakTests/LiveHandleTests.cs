@@ -4,6 +4,8 @@ using Test.Menagerie;
 using TestLibrary;
 using TestLibrary.Admission;
 using TestLibrary.Cat;
+using Bundler = TestLibrary.Stickers.Bundler;
+using Bundles = TestLibrary.Stickers.Bundles;
 using TestLibrary.Charms;
 using Catfeed = TestLibrary.Catfeed;
 using Curlup = TestLibrary.Curlup;
@@ -9038,5 +9040,111 @@ public class LiveHandleTests
         var chorus = new BindleCrossings.CSharpChorus();
         BindleCrossings.InterfaceMemberExtensions(choir, chorus);
         AssertNoLeak(() => BindleCrossings.InterfaceMemberExtensions(choir, chorus));
+    }
+
+    // A generic value class over a collection of its own `T` crosses on the collection's handle,
+    // minted and released around each call; a nullable outer over a nullable underlying crosses as
+    // one box. Every list, set and map handle, element box and struct box is released in the same
+    // call, including when `init` refuses the re-wrap. Net zero.
+    [Fact]
+    public void GenericValueClassOverCollection_OrdinaryPositions_ReturnToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            Assert.Equal(3, Bundles.Total(Bundles.Pack(new[] { 1, 2 })));
+            using (var oreo = new Cat("Oreo", 9))
+            {
+                Assert.Equal("Oreo", Bundles.CatNames(new TestLibrary.Stickers.Bundle<Cat>(new[] { oreo })));
+            }
+            Assert.Equal(2, Bundles.PileSize(Bundles.PileOf(new HashSet<string> { "mouse", "ball" })));
+            Assert.Equal(3, Bundles.LedgerSum(Bundles.LedgerOf(new Dictionary<string, int> { ["Oreo"] = 3 })));
+            Assert.Equal(-1, Bundles.MaybeBundleSize(Bundles.MaybeBundle(false)));
+            Assert.Equal("empty", Bundles.MaybeMaybeState(Bundles.MaybeMaybe(1)));
+            Assert.Equal(1, Bundles.Gaps(Bundles.Gappy()));
+            Assert.Equal(-1, Bundles.MaybeTotal(Bundles.MaybePack(false)));
+            Assert.Equal(2, Bundles.Repack(new[] { new TestLibrary.Stickers.Bundle<int>(new[] { 1 }), new TestLibrary.Stickers.Bundle<int>(new[] { 2 }) }).Count);
+            Assert.Equal(new[] { "a" }, Bundles.Unwrap(Bundles.Wrap<string>(new[] { "a" })));
+            using (var bundler = new Bundler(new TestLibrary.Stickers.Bundle<string>(new[] { "Oreo" })))
+            {
+                bundler.Current = new TestLibrary.Stickers.Bundle<string>(new[] { "Mylo" });
+                Assert.Single(bundler.Current.Items);
+                bundler.Spare = new TestLibrary.Stickers.Bundle<int>(new[] { 4 });
+                Assert.NotNull(bundler.Spare);
+                bundler.MaybeSpare = new TestLibrary.Stickers.MaybeBundle<int>(null);
+                Assert.NotNull(bundler.MaybeSpare);
+                Assert.Equal(2, Bundles.Maybes(new TestLibrary.Stickers.MaybeBundle<int>?[] { null, new TestLibrary.Stickers.MaybeBundle<int>(null) }).Count);
+            }
+            Assert.Throws<KotlinArgumentException>(() => Bundles.Total(new TestLibrary.Stickers.Bundle<int>(new[] { 1, 2, 3, 4 })));
+            Assert.Throws<KotlinArgumentException>(() => Bundles.Wrap<string>(new[] { "a", "b", "c", "d" }));
+        });
+    }
+
+    // The struct's own members take the receiver as its collection handle, released in the
+    // `finally` whether the member returns or `init` refuses the receiver. Net zero.
+    [Fact]
+    public void GenericValueClassOverCollection_Members_ReturnToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            var toys = new TestLibrary.Stickers.Bundle<string>(new[] { "mouse", "ball" });
+            Assert.Equal(2, toys.Count);
+            Assert.Equal("mouse", toys.First());
+            Assert.Equal(3, toys.Plus("yarn").Items.Count);
+            Assert.Equal(2, new TestLibrary.Stickers.Bundle<string>("ball", 2).Items.Count);
+            Assert.Throws<KotlinArgumentException>(() => toys.Plus("yarn").Plus("bell"));
+            Assert.Throws<KotlinArgumentException>(() => new TestLibrary.Stickers.Bundle<int>(new[] { 1, 2, 3, 4 }).First());
+            Assert.Throws<KotlinArgumentException>(() => new TestLibrary.Stickers.Bundle<string>("ball", 4));
+        });
+    }
+
+    // Erased positions cross through the struct's box pair: the box handle each `Box`, lambda
+    // payload or result and `MutableStateFlow` write mints is released after its read. Net zero.
+    [Fact]
+    public void GenericValueClassOverCollection_ErasedPositions_ReturnToBaseline()
+    {
+        using var bundler = new Bundler(new TestLibrary.Stickers.Bundle<string>(new[] { "Oreo" }));
+        AssertNoLeak(() =>
+        {
+            using (Box<TestLibrary.Stickers.Bundle<int>> boxed = Bundles.BoxedBundle())
+            {
+                Assert.Equal(3, Bundles.BoxedTotal(boxed));
+            }
+            using (var made = new Box<TestLibrary.Stickers.Bundle<int>>(new TestLibrary.Stickers.Bundle<int>(new[] { 5 })))
+            {
+                Assert.Equal(5, Bundles.BoxedTotal(made));
+            }
+            Assert.Single(Bundles.MapBundle(new TestLibrary.Stickers.Bundle<int>(new[] { 1 }), bundle => bundle).Items);
+            bundler.Board.Value = new TestLibrary.Stickers.Bundle<int>(new[] { 2, 3 });
+            Assert.Equal(5, bundler.BoardTotal());
+            Assert.ThrowsAny<ArgumentException>(() => bundler.Board.Value = new TestLibrary.Stickers.Bundle<int>(new[] { 1, 2, 3, 4 }));
+        });
+    }
+
+    // The `suspend` and `Flow` routes: a parameter's collection handle is read before the coroutine
+    // launches, each awaited result and flow element box is released after its read, and the
+    // struct's own `suspend` and `Flow` members release their receiver handle.
+    // Each route is warmed once before the baseline. Net zero.
+    [Fact]
+    public async Task GenericValueClassOverCollection_AsyncPositions_ReturnToBaseline()
+    {
+        async Task Crossing()
+        {
+            Assert.Single((await Bundles.BundleLaterAsync()).Items);
+            Assert.Equal(6, await Bundles.TotalLaterAsync(new TestLibrary.Stickers.Bundle<int>(new[] { 1, 2, 3 })));
+            int seen = 0;
+            await foreach (TestLibrary.Stickers.Bundle<int> _ in Bundles.BundleStream())
+                seen++;
+            Assert.Equal(2, seen);
+            var toys = new TestLibrary.Stickers.Bundle<string>(new[] { "mouse", "ball" });
+            Assert.Equal(2, await toys.CountLaterAsync());
+            int each = 0;
+            await foreach (string _ in toys.Each())
+                each++;
+            Assert.Equal(2, each);
+            Assert.Throws<KotlinArgumentException>(() => { _ = Bundles.TotalLaterAsync(new TestLibrary.Stickers.Bundle<int>(new[] { 1, 2, 3, 4 })); });
+        }
+
+        await Crossing();
+        await AssertNoLeakAsync(Crossing);
     }
 }

@@ -1179,6 +1179,8 @@ internal data class CirMethod(
   val flowReceiverLocal: String? = null,
   /** ADR-228: [flowReceiverLocal] holds an unboxed generic value class underlying. */
   val flowReceiverBox: Boolean = false,
+  /** [flowReceiverLocal] holds the struct, and each extern call mints this handle from it. */
+  val flowReceiverMint: String? = null,
   /** ADR-228: generic value class instantiations the member registers before handing one out. */
   val flowRegistrations: List<String> = emptyList(),
   // ADR-065: true when this is a StateFlow-returning method. Reuses isFlow's whole legacy route
@@ -1643,6 +1645,10 @@ internal data class CirParameter(
   // ADR-228: the unboxed C# read a static flow receiver copies into its local before any lambda
   // captures it; the extern call then mints and releases the box around itself. Null otherwise.
   val boxedRead: String? = null,
+  // A static flow receiver minted as a handle (a collection, bytes or interface underlying): the
+  // mint over the struct copied into the flow's receiver local, run around each extern call so a
+  // re-collected flow mints a fresh handle. Null otherwise.
+  val flowMint: String? = null,
   // ADR-240: what the `finally` keeps alive past the call instead of the parameter itself, when
   // the parameter is no C# variable (a struct's own member reads its receiver off `this`).
   val keepAlive: String? = null,

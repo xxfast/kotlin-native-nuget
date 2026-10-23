@@ -43,7 +43,11 @@ internal enum class ForwardValueClassUnderlying {
    * interface). Declared as a positional record struct over that spelling; a position typed with
    * the value class is planned as its innermost underlying, so it crosses on that wire, and the
    * value class is unwrapped in C# and re-wrapped (running `init`) in Kotlin. See
-   * [ForwardValueClassView].
+   * [ForwardValueClassView]. A generic value class over a collection of its own type parameter
+   * (`Bundle<T>(val items: List<T>)`, a nullable collection included) is WIRE too: one
+   * `readonly record struct Bundle<T>(IReadOnlyList<T> Items)`, each use site crossing on its
+   * substituted collection's wire (`List<Int>` for `Bundle<Int>`, the boxed `T` element at an
+   * own `T`).
    */
   WIRE,
 
@@ -60,6 +64,12 @@ internal fun ForwardBridgeTypeClassifier.valueClassUnderlying(
   val underlying: KSType = parameter.type.resolve()
   val role: ForwardValueClassUnderlying = classify(underlying).valueClassUnderlyingRole()
   if (cls.typeParameters.isEmpty()) return role
+  // A collection of its own `T` (`val items: List<T>`) rides the collection wire a non-generic
+  // WIRE value class rides, over the use site's substituted components.
+  val isCollection: Boolean = classify(underlying).unwrapNullable() is BridgeType.Collection
+  if (role == ForwardValueClassUnderlying.WIRE && isCollection) {
+    return ForwardValueClassUnderlying.WIRE
+  }
   // ADR-220: a bare own type parameter, or a phantom `T` over an underlying that already crosses.
   val isOwnTypeParameter: Boolean = underlying.declaration is KSTypeParameter &&
       cls.typeParameters.any { it.name.asString() == underlying.declaration.simpleName.asString() }
@@ -82,6 +92,9 @@ internal fun BridgeType.valueClassUnderlyingRole(): ForwardValueClassUnderlying 
   is BridgeType.Nullable ->
     if (type == BridgeType.String || type is BridgeType.Primitive || type == BridgeType.Char) {
       ForwardValueClassUnderlying.VALUE
+    } else if (type is BridgeType.Collection) {
+      // A nullable collection (`val items: List<T>?`) rides the collection wire, null included.
+      ForwardValueClassUnderlying.WIRE
     } else {
       ForwardValueClassUnderlying.REFUSED
     }
@@ -236,3 +249,50 @@ internal fun BridgeType.ValueClass.wireOrNull(): BridgeType.ValueClass? =
  */
 internal fun BridgeType.isHasValueUnderlying(): Boolean =
   this is BridgeType.Primitive || this is BridgeType.Enum || this == BridgeType.Char
+
+/**
+ * ADR-228: a generic value class as its own declaration spells it, `Sticker<T>` over its own `T`
+ * (or a phantom's plain underlying, or `Bundle<T>` over its `List<T>`): the one type its box/unbox
+ * pair and its members' receiver carry for every instantiation, since Kotlin boxes them all as one
+ * runtime class. A non-generic value class is its star-projected type.
+ */
+internal fun ForwardBridgeTypeClassifier.valueClassSelf(cls: KSClassDeclaration): BridgeType? {
+  if (cls.typeParameters.isEmpty()) return classify(cls.asStarProjectedType())
+  val owner: String = cls.qualifiedName?.asString() ?: return null
+  val underlyingParam: KSValueParameter = cls.primaryConstructor?.parameters?.firstOrNull()
+    ?: return null
+  val name: String = underlyingParam.name?.asString() ?: return null
+  val underlying: BridgeType = classify(underlyingParam.type.resolve())
+  val parameters: List<String> = cls.typeParameters.map { it.simpleName.asString() }
+  return BridgeType.ValueClass(
+    qualifiedName = owner,
+    underlying = underlying,
+    underlyingPropertyName = name,
+    csharpType = "${cls.simpleName.asString()}${parameters.joinToString(", ", "<", ">")}",
+    typeArguments = parameters.map { BridgeType.TypeParameter(it) },
+  )
+}
+
+/**
+ * The value class's own type parameters its underlying mentions (`T` in `T`, `T?` and `List<T>`):
+ * the ones a re-wrap infers. Any other is a phantom, spelled `Nothing`.
+ */
+internal fun KSClassDeclaration.underlyingTypeParameterNames(): Set<String> {
+  val underlying: KSType = primaryConstructor?.parameters?.singleOrNull()?.type?.resolve()
+    ?: return emptySet()
+  return typeParameters.map { it.simpleName.asString() }
+    .filter { name -> underlying.mentionsTypeParameter(name) }
+    .toSet()
+}
+
+/**
+ * A value class over a nullable collection (`MaybeBundle<T>(val items: List<T>?)`) with a box pair:
+ * as a nullable collection element it crosses as its box (ADR-226), so `null` and `V(null)` stay
+ * apart, and no projection to the nullable collection is ever written.
+ */
+internal fun BridgeType.isNullableCollectionValueClass(): Boolean {
+  val valueClass: BridgeType.ValueClass = this as? BridgeType.ValueClass ?: return false
+  val underlying: BridgeType.Nullable =
+    valueClass.underlying as? BridgeType.Nullable ?: return false
+  return underlying.type is BridgeType.Collection && valueClass.hasErasedCrossing()
+}
