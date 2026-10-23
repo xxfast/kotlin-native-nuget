@@ -207,6 +207,8 @@ internal fun requireUnescaped(name: String) {
 
 internal data class CirClass(
   val name: String,
+  /** ADR-237: the Kotlin qualified name a boxed instance reports, keying the `object` read. */
+  val kotlinName: String? = null,
   /**
    * ADR-147: the class's own declared type parameters, empty for an ordinary class. A generic
    * class is an ordinary [CirClass] with this list filled: it renders `Crate<T>` plus a `where`
@@ -300,6 +302,8 @@ internal data class CirClass(
 
 internal data class CirValueClass(
   val name: String,
+  /** ADR-237: the Kotlin qualified name a boxed instance reports, keying the `object` read. */
+  val kotlinName: String? = null,
   val libraryName: String,
   val nativePrefix: String,
   val underlyingType: String,
@@ -357,6 +361,12 @@ internal data class CirValueClassBoxing(
   val boxParameter: String,
   val boxArguments: List<String>,
   val unboxResult: String,
+  /**
+   * ADR-237: a generic value class's own type parameter underlying as C# spells it (`T`, `T?`):
+   * the box passes a `NugetMarshal.Wrap<T>` box and the unbox reads `FromHandle<T>`. Null for a
+   * non-generic value class, which crosses on its own underlying wire.
+   */
+  val ownUnderlying: String? = null,
 )
 
 internal data class CirValueClassConstructor(
@@ -413,6 +423,8 @@ internal data class CirEnum(
    * `{Enum}Extensions` class, which exists only for an enum with members of its own.
    */
   val boxImport: CirDllImport? = null,
+  /** ADR-237: the Kotlin qualified name a boxed instance reports, keying the `object` read. */
+  val kotlinName: String? = null,
 ) : CirDeclaration
 
 internal data class CirSealedClass(
@@ -495,6 +507,8 @@ internal data class CirSealedClass(
 
 internal data class CirSealedSubclass(
   val name: String,
+  /** ADR-237: the Kotlin qualified name a boxed instance reports, keying the `object` read. */
+  val kotlinName: String? = null,
   val nativePrefix: String,
   val properties: List<CirProperty>,
   /**
@@ -761,6 +775,8 @@ internal data class CirEnumBoxer(
 // the root namespace and cannot see child-namespace types unqualified.
 internal data class CirFactoryEntry(
   val qualifiedTypeName: String,
+  /** ADR-237: the Kotlin class this entry materialises, keying `NugetMarshal.KotlinTypes`. */
+  val kotlinName: String? = null,
   // ADR-094 / issue #40: a sealed BASE is abstract, so `new Base(handle)` will not compile, but it
   // is still materialisable -- its generated `internal static Base FromHandle(IntPtr)` reads the
   // Kotlin-side discriminator and news up the right subclass. Entries flagged here render as a call

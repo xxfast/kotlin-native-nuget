@@ -104,3 +104,10 @@ as the class route does. C# cannot call `impl.Map<R>` with an `R` Kotlin erased.
 - `LeakTests`: `GenericInterfaceOutput_ReturnedKeepsakes_ReturnToBaseline`,
   `GenericInterfaceOutput_ErasedInputs_ReturnToBaseline` and
   `CSharpGenericKeepsake_StoredThenDropped_ReleasedAfterKotlinGc`.
+
+## Amendment (2026-10-23): a member's own `<R>` is declared erased
+
+The **Member type parameters** paragraph no longer holds: a generic interface member with its own
+`<R>` is declared on `IKeepsake<T>` with `R` erased to `object?` (`object? Map(Func<T, object?> f)`),
+and the interface can be implemented in C# and passed to Kotlin. Three shapes are
+still refused, named ([ADR-237](237-kotlin-any-as-object.md)).

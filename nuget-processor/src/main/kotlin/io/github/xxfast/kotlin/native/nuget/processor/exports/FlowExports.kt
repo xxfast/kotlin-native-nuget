@@ -1230,7 +1230,8 @@ private fun buildStateFlowCompareAndSetBody(compareAndSet: String): String = bui
  * null used to throw out of `retain(value as Any)` and end the stream in `onError`.
  */
 internal fun KSType?.isFlowElementNullable(): Boolean {
-  if (this == null) return false
+  // ADR-237: no element type is a star projection (`Flow<*>`), whose element is `Any?`.
+  if (this == null) return true
   if (isMarkedNullable) return true
   val parameter: KSTypeParameter = declaration as? KSTypeParameter ?: return false
   return parameter.hasNullableBound()

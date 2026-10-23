@@ -1576,7 +1576,9 @@ internal class ForwardCallablePlanner(
         }
       val structuralReason: ForwardPlanSkipReason? = when {
         method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
-        method.typeParameters.isNotEmpty() -> ForwardPlanSkipReason.GENERIC
+        // ADR-237: a member's own type parameters are erased, unless no one type spells them.
+        method.typeParameters.isNotEmpty() && method.forwardErasedMemberRefusal() != null ->
+          ForwardPlanSkipReason.GENERIC
         // ADR-067 / ADR-026 amendment (2026-10-09): the legacy Flow route binds it.
         method.hasNullableLegacyFlowReturn() -> ForwardPlanSkipReason.FLOW_PROTOCOL
         else -> null
@@ -1606,7 +1608,7 @@ internal class ForwardCallablePlanner(
           // through it here too, so an `actual interface` member widens from its `expect`.
           defaults = declaredDefaults(method.parameters, memberDefaultFlags(method)),
           doc = method.forwardKdoc(expects).forParameters(method.parameters),
-        )
+        ).withMethodTypeParameters(method)
       }
     }.nameUnroutedPositions { skipped ->
       // ADR-064 amendment (2026-09-13): the interface DECLARATION is where a default member's
@@ -2855,10 +2857,12 @@ internal class ForwardCallablePlanner(
     if (this !is ForwardCallableCatalogEntry.Planned) return this
     if (method.typeParameters.isEmpty()) return this
     val signature: ForwardPublicSignature = plan.publicSignature
+    // ADR-237: an interface member's own type parameters are erased.
+    val typeParameters: List<ForwardMethodTypeParameter> =
+      if (method.isErasedInterfaceMember()) method.forwardErasedTypeParameters()
+      else method.forwardMethodTypeParameters()
     return copy(
-      plan = plan.copy(
-        publicSignature = signature.copy(typeParameters = method.forwardMethodTypeParameters()),
-      ),
+      plan = plan.copy(publicSignature = signature.copy(typeParameters = typeParameters)),
     )
   }
 

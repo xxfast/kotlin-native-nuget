@@ -105,7 +105,7 @@ class Tier1UnroutedPositionsTest {
     // pair, now declared on `IManifest` itself). So a Flow *parameter* on an interface default is
     // silent, like everywhere else a Flow sits at a parameter.
     returns("tier1.unrouted.Manifest.genericReturnOnInterface"),
-    structural("tier1.unrouted.Manifest.structuralOnInterface"),
+    // ADR-237: `structuralOnInterface` binds, its own `T` erased to `object?` on `IManifest`.
 
     // --- extension owner (receiver `Depot`) ---------------------------------------------------
     // The extension planner's symbol carries no receiver: `{package}.{function}` (verified in
@@ -354,7 +354,6 @@ class Tier1UnroutedPositionsTest {
       "GenericReturnOnObject(",
       "GenericParamOnObject(",
       "GenericReturnOnInterface(",
-      "StructuralOnInterface(",
       "FlowReturnOnExtension(",
       "GenericReturnOnExtension(",
       "StructuralOnExtension(",

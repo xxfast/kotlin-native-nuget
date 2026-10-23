@@ -252,12 +252,18 @@ class Tier1GenericInstanceMemberPositionTest {
       },
       "expected ShelfOf to bind; got: ${cs.lines().filter { "ShelfOf(" in it }}",
     )
+    // ADR-237: `Box<Any>` is `Box<object>`, and `Box<*>` reads at `Any?`, `Box<object?>`.
+    assertContains(cs, "public global::Interop.Boxes.Box<object> Any()")
+    assertTrue(
+      cs.lines().any { line ->
+        line.trimStart().startsWith("public int Star(") && "Box<object" in line
+      },
+      "expected Star to bind at object; got: ${cs.lines().filter { " Star(" in it }}",
+    )
     mapOf(
       "list" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
-      "any" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
       "bytes" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
       "lambda" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
-      "star" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
       "projected" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
       "latchOf" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
       "pairOf" to ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
@@ -297,8 +303,7 @@ class Tier1GenericInstanceMemberPositionTest {
   fun `a refused instantiation says why the use site has no spelling`() {
     mapOf(
       "list" to "the erased wire cannot read its type argument `List<Int>`",
-      "any" to "the erased wire cannot read its type argument `Any`",
-      "star" to "is a use-site projection, and C# has no projection of a generic class",
+      "projected" to "is a use-site projection, and C# has no projection of a generic class",
     ).forEach { (member, why) ->
       val diagnostic: String = result.kspWarnings.single { it.contains("$member: ") }
       assertContains(
@@ -503,9 +508,14 @@ class Tier1GenericInstanceMemberPositionTest {
     val cs: String = crates.generatedCSharp.withoutDocComments()
     assertContains(cs, "public readonly record struct Crate<T>(T Item)")
     assertFalse(
-      Regex("""Crate<[^>]*>\(handle, out _\)|Crate<[^>]*>\)\]""").containsMatchIn(cs),
-      "a generic value class has no Factories or Boxers line",
+      Regex("""Crate<[^>]*>\(handle, out _\)""").containsMatchIn(cs),
+      "a generic value class is never constructed over a handle",
     )
+    // ADR-237: its one `Factories` and `Boxers` key is the `object?` instantiation, read and
+    // written through its own box pair.
+    val factoryLine: String = """Crate<object\?>\)\] = static handle => """ +
+      """global::[\w.]+\.Crate<object\?>\.NugetUnbox\(handle\)"""
+    assertTrue(Regex(factoryLine).containsMatchIn(cs), "expected the object? Factories line")
     assertFalse(
       Regex("""asStableRef<tier1\.crates\.Crate""").containsMatchIn(crates.generated),
       "expected no Kotlin export reading a Crate as a handle",

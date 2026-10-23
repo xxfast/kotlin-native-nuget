@@ -77,6 +77,8 @@ internal fun StringBuilder.renderBridgeHelper(helper: CirBridgeHelper) {
     appendLine("                return ${plan.stateClassName}.Create($implVariable).KotlinHandle;")
     appendLine("            }")
   }
+  // ADR-237: a managed object at `object` (a Kotlin `Any`) with no bridge crosses as a GCHandle.
+  appendLine("            if (declared == typeof(object)) return NugetMarshal.BoxManaged(impl);")
   appendLine("            throw new NotSupportedException(")
   // ADR-084: names the declared interface and where the build said why, never only the C# type.
   appendLine("                $\"{impl.GetType().Name} is not a Kotlin-backed object, \" +")

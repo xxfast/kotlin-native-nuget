@@ -14,12 +14,14 @@ import com.google.devtools.ksp.symbol.KSAnnotated
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
+import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSTypeAlias
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
+import com.google.devtools.ksp.symbol.Variance
 import com.squareup.kotlinpoet.AnnotationSpec
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
@@ -100,6 +102,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.staticFlowCandidat
 import io.github.xxfast.kotlin.native.nuget.processor.forward.staticFlowRouteMembers
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addStaticFlowExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addValueClassExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addGenericValueBoxExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedDeclaration
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.COMPANION_OWNER_INTERFACE
@@ -152,6 +155,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.unwrapNullable
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardReachabilityBucket
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isArmOfIneligibleSealedInterface
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isErasedInterfaceMember
+import io.github.xxfast.kotlin.native.nuget.processor.forward.mentionsAny
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedInterfaceOverDeclaredArms
 import io.github.xxfast.kotlin.native.nuget.processor.forward.declaredArmsIneligibility
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedInterface
@@ -851,6 +856,9 @@ internal fun warnRefusedLegacyRouteMembers(
   staticSuspend: List<ForwardStaticSuspendMember> = emptyList(),
   // ADR-230: the static flow route's candidates, named as the static suspend route's are.
   staticFlow: List<ForwardStaticFlowMember.Function> = emptyList(),
+  // ADR-237: the members the plan route carries. A per-call lambda over `Any` binds there, so the
+  // hand-written routes' refusal of the same shape names nothing that is actually dropped.
+  planned: Set<KSNode> = emptySet(),
 ) {
   // ROADMAP Phase 4 line 23: the plan route's diagnostic for a dependency type the closure
   // refused (reason, `admit(...)` / `exclude(...)` hint, ADR-154 strict escalation), so a suspend
@@ -1406,6 +1414,7 @@ internal fun warnRefusedLegacyRouteMembers(
       cls.getAllFunctions()
         .filter { method -> method.getVisibility() == Visibility.PUBLIC }
         .forEach { method ->
+          if (method in planned) return@forEach
           val refused: LegacyRefusedInterfaceBridgePair =
             method.refusedLegacyLambdaShape(classifier) ?: return@forEach
           add(
@@ -1505,6 +1514,7 @@ internal fun warnRefusedLegacyRouteMembers(
           .filter { method -> method.getVisibility() == Visibility.PUBLIC }
           .filter { method -> subclass.isForwardArmMember(method) }
           .forEach { method ->
+            if (method in planned) return@forEach
             val refused: LegacyRefusedInterfaceBridgePair =
               method.refusedLegacyLambdaShape(classifier) ?: return@forEach
             add(
@@ -2727,6 +2737,32 @@ internal class NugetProcessor(
       genericInstancePositionTypes().forEach { type ->
         erasedInterfaceArguments(type, lambdas = false).forEach(::add)
       }
+      // ADR-237: a module carrying `Any` anywhere can be handed a C# implementation of any of its
+      // interfaces through it, so each one needs its bridge and `NugetBridge` arm.
+      val plansCarryAny: Boolean = ordinaryCatalog.plans.any { plan ->
+        plan.publicSignature.result.mentionsAny() ||
+          plan.publicSignature.parameters.any { it.type.mentionsAny() }
+      }
+      val propertiesCarryAny: Boolean =
+        ordinaryCatalog.propertyPlans.any { plan -> plan.type.mentionsAny() }
+      val legacyCarryAny: Boolean =
+        legacyPositionTypes().any { type -> type?.mentionsAnyType() == true }
+      val carriesAny: Boolean = plansCarryAny || propertiesCarryAny || legacyCarryAny
+      if (carriesAny) {
+        interfaces.filter { iface -> iface.typeParameters.isEmpty() && !iface.isSealedInterface() }
+          .mapNotNull { iface -> iface.qualifiedName?.asString() }
+          .forEach(::add)
+      }
+      // ADR-237: an interface declaring a member whose own `R` is erased, implemented by an
+      // exported class: that class forwards the erased member through the interface's dispatch
+      // export.
+      classes.forEach { cls ->
+        cls.getAllSuperTypes()
+          .mapNotNull { type -> type.declaration as? KSClassDeclaration }
+          .filter { iface -> iface.getDeclaredFunctions().any { it.isErasedInterfaceMember() } }
+          .mapNotNull { iface -> iface.qualifiedName?.asString() }
+          .forEach(::add)
+      }
     }
     // ADR-174 amendment: an async member inherited through a reachable `IDerived` is declared on
     // its super's `IBase`, as the sync route places it, so that super must carry it, i.e. be
@@ -2942,6 +2978,10 @@ internal class NugetProcessor(
       context.excludePackages, context.strictDependencyTypes,
       staticSuspend = callableCatalog.staticSuspendCandidates(),
       staticFlow = callableCatalog.staticFlowCandidates(),
+      planned = callableCatalog.entries
+        .filterIsInstance<ForwardCallableCatalogEntry.Planned>()
+        .mapNotNull { entry -> entry.node }
+        .toSet(),
     )
     // ADR-064 amendment (2026-09-13): the structural generic functions, which never reach the
     // planner (see the function's own KDoc).
@@ -3450,7 +3490,11 @@ internal class NugetProcessor(
       guardDeclaration(obj) { builder.addObjectExports(obj, callableCatalog) }
     }
     valueClasses.forEach { cls ->
-      guardDeclaration(cls) { builder.addValueClassExports(cls, callableCatalog, forwardClassifier) }
+      guardDeclaration(cls) {
+        builder.addValueClassExports(cls, callableCatalog, forwardClassifier)
+        // ADR-237: a generic value class's `object` box pair.
+        builder.addGenericValueBoxExports(cls, cls.nativePrefix(context.symbols))
+      }
     }
     reachableInterfaces.forEach { iface ->
       guardDeclaration(iface) {
@@ -4072,3 +4116,12 @@ internal class NugetProcessor(
  */
 private fun KSFunctionDeclaration.isPlannedTopLevelFunction(): Boolean =
   typeParameters.isEmpty() || !isReifiedWithUnspellableBound()
+
+/** ADR-237: whether this type is `kotlin.Any` or a star projection, at any depth. */
+private fun KSType.mentionsAnyType(): Boolean {
+  val isAny: Boolean = declaration.qualifiedName?.asString() == "kotlin.Any"
+  val argumentsMentionAny: Boolean = arguments.any { argument ->
+    argument.variance == Variance.STAR || argument.type?.resolve()?.mentionsAnyType() == true
+  }
+  return isAny || argumentsMentionAny
+}

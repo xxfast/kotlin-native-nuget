@@ -812,7 +812,8 @@ private fun StringBuilder.renderMethodBody(method: CirMethod, className: String)
     return
   }
 
-  val visibility: String = if (method.visibility == CirVisibility.PRIVATE) "private" else "public"
+  val visibility: String =
+    method.memberHead(if (method.visibility == CirVisibility.PRIVATE) "private" else "public")
   val static: String = if (method.isStatic) "static " else ""
   val override: String = when {
     method.isOverride -> "override "
@@ -847,24 +848,24 @@ private fun StringBuilder.renderMethodBody(method: CirMethod, className: String)
   val whereStr: String = method.whereClauses()
 
   if (method.isAbstract) {
-    appendLine("        $visibility ${abstract}${method.returnType} ${method.identifier}$genericDecl($paramStr)$whereStr;")
+    appendLine("        $visibility ${abstract}${method.returnType} ${method.explicitName}$genericDecl($paramStr)$whereStr;")
   } else {
     val isMultiLine: Boolean = method.body.contains('\n')
 
     if (isMultiLine) {
       if (method.returnType == "void") {
-        appendLine("        $visibility ${static}${override}void ${method.identifier}$genericDecl($paramStr)$whereStr")
+        appendLine("        $visibility ${static}${override}void ${method.explicitName}$genericDecl($paramStr)$whereStr")
       } else {
-        appendLine("        $visibility $static$override${method.returnType} ${method.identifier}$genericDecl($paramStr)$whereStr")
+        appendLine("        $visibility $static$override${method.returnType} ${method.explicitName}$genericDecl($paramStr)$whereStr")
       }
       appendLine("        {${method.body}")
       appendLine("        }")
     } else {
       if (method.returnType == "void") {
-        appendLine("        $visibility $static$override void ${method.identifier}$genericDecl($paramStr)$whereStr")
+        appendLine("        $visibility $static$override void ${method.explicitName}$genericDecl($paramStr)$whereStr")
         appendLine("            => ${method.body};")
       } else {
-        appendLine("        $visibility $static$override${method.returnType} ${method.identifier}$genericDecl($paramStr)$whereStr")
+        appendLine("        $visibility $static$override${method.returnType} ${method.explicitName}$genericDecl($paramStr)$whereStr")
         appendLine("            => ${method.body};")
       }
     }

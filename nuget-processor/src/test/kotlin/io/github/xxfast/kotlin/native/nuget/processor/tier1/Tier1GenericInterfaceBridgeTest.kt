@@ -164,7 +164,7 @@ class Tier1GenericInterfaceBridgeTest {
   }
 
   @Test
-  fun `a member's own type parameter still refuses the bridge, by name`() {
+  fun `a member's own type parameter is erased, so the bridge plans (ADR-237)`() {
     val result: Tier1Result = Tier1Harness.run(
       """
       package tier1.gibrefused
@@ -175,10 +175,9 @@ class Tier1GenericInterfaceBridgeTest {
       """.trimIndent(),
     )
     assertTrue(result.compiledClean, "compileErrors=${result.compileErrors}")
-    assertFalse("mapper_bridge_create" in result.generated, result.generated)
-    assertFalse("MapperHandleOf" in result.generatedCSharp, "no entry for a refused bridge")
-    val warning: String = result.kspWarnings.single { "tier1.gibrefused" in it && "use" in it }
-    assertTrue("`fun map`" in warning && "type parameter" in warning, warning)
+    assertTrue("mapper_bridge_create" in result.generated, result.generated)
+    assertTrue(result.kspWarnings.none { "tier1.gibrefused" in it }, "${result.kspWarnings}")
+    assertContains(result.generatedCSharp, "object? Map(T item);")
   }
 
   @Test
@@ -294,12 +293,17 @@ class Tier1GenericInterfaceBridgeTest {
       """
       package tier1.gibrefusedin
 
-      interface Mapper<T> { fun <R> map(item: T): R }
+      interface Mapper<T> {
+        fun <R> map(item: T): R
+        // A `Unit` property carries no value, so the bridge is refused.
+        val reading: Unit
+      }
 
       class Box<T>(val value: T)
 
       class Plain<T>(private val item: T) : Mapper<T> {
         override fun <R> map(item: T): R = TODO()
+        override val reading: Unit get() = Unit
       }
 
       fun mapperOf(): Mapper<String> = Plain("Oreo")
@@ -318,11 +322,11 @@ class Tier1GenericInterfaceBridgeTest {
     listOf("all", "boxed", "visit").forEach { member ->
       val warning: String = result.kspWarnings.singleOrNull { "gibrefusedin.$member:" in it }
         ?: error("expected one named skip for $member; got ${result.kspWarnings}")
-      assertTrue("`fun map`" in warning, warning)
+      assertTrue("`val reading: Unit`" in warning, warning)
     }
     val setter: String = result.kspWarnings.singleOrNull { "Shelf.mapper" in it }
       ?: error("expected the setter named; got ${result.kspWarnings}")
-    assertTrue("`fun map`" in setter, setter)
+    assertTrue("`val reading: Unit`" in setter, setter)
     listOf("mapperOf", "mappers", "peek").forEach { member ->
       val warned: Boolean = result.kspWarnings.any { "gibrefusedin.$member:" in it }
       assertFalse(warned, "expected $member to bind")

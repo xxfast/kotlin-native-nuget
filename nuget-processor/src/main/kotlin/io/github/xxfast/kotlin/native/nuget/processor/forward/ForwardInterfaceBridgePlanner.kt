@@ -138,6 +138,11 @@ internal data class ForwardBridgeSlot(
   val async: ForwardBridgeAsync = ForwardBridgeAsync.SYNC,
   /** ADR-232: a [ForwardBridgeAsync.FLOW] slot's element type, null for every other slot. */
   val element: ForwardBridgeType? = null,
+  /**
+   * ADR-237: the member's own type parameters as its Kotlin `override` restates them (`R`,
+   * `R : Pet`), erased in C#. Empty for every member that declares none.
+   */
+  val typeParameters: List<String> = emptyList(),
 ) {
   /** A getter or a setter slot: forwards to a property, not a member function. */
   val isProperty: Boolean = kind != ForwardBridgeSlotKind.FUNCTION
@@ -493,11 +498,10 @@ internal object ForwardInterfaceBridgePlanner {
     if (!function.hasBridgeableName()) {
       return refuse("has no C# member name to implement", "give it a `@CSharpName`")
     }
-    if (function.typeParameters.isNotEmpty()) {
-      return refuse(
-        "declares type parameters, and a bridge slot carries no type argument",
-        "give it concrete parameter and result types",
-      )
+    // ADR-237: a member's own type parameters are erased, `object?` (or the one bound) in C#.
+    val erasedRefusal: String? = function.forwardErasedMemberRefusal()
+    if (function.typeParameters.isNotEmpty() && erasedRefusal != null) {
+      return refuse(erasedRefusal, "give it one bound or none")
     }
     // ADR-233: any arity: each parameter is one more slot argument, on its own wire.
     val substituted: KSFunction? =
@@ -567,6 +571,10 @@ internal object ForwardInterfaceBridgePlanner {
           else -> ForwardBridgeAsync.SYNC
         },
         element = flow,
+        typeParameters = function.typeParameters.map { parameter ->
+          val bound: String? = parameter.forwardBoundSpellings().firstOrNull()
+          parameter.name.asString() + (bound?.let { ": $it" } ?: "")
+        },
       ),
     )
   }
@@ -774,6 +782,10 @@ internal object ForwardInterfaceBridgePlanner {
     parameter: Boolean = false,
   ): ForwardBridgeType? {
     if (parameter) lambdaParameterOrNull(type, classifier)?.let { lambda -> return lambda }
+    // ADR-237: a member's own erased `R` boxes as `object?`, or as its one bound.
+    if ((type.declaration as? KSTypeParameter)?.parentDeclaration is KSFunctionDeclaration) {
+      return boxedOrNull(type, classifier)
+    }
     // ADR-222: the planned interface's OWN type parameter rides lane A's box. An inherited
     // super-interface `T` is not substituted, so it stays out of the vocabulary as before.
     val typeParameter: KSTypeParameter? = type.declaration as? KSTypeParameter
@@ -876,7 +888,7 @@ internal object ForwardInterfaceBridgePlanner {
       ForwardBridgeWire.OBJECT,
       type.forwardKotlinDeclaredSpelling(),
       classified.forwardPublicCsharpType(),
-      nullable = type.isMarkedNullable,
+      nullable = type.isMarkedNullable || classified is BridgeType.Nullable,
       boxed = classified,
     )
   }
@@ -1107,13 +1119,17 @@ internal fun BridgeType.isSlotBoxable(): Boolean = when (this) {
   BridgeType.ByteArray,
     -> true
 
-  is BridgeType.Collection -> listOfNotNull(element, key, value).all { component ->
-    component.isSlotBoxable() || component.unwrapNullable() is BridgeType.TypeParameter
-  }
+  // A nullable map key is refused at every position (the plan names it), so no slot carries one.
+  is BridgeType.Collection ->
+    key !is BridgeType.Nullable &&
+      listOfNotNull(element, key, value).all { component ->
+        component.isSlotBoxable() || component.unwrapNullable() is BridgeType.TypeParameter
+      }
+  // ADR-237: `kotlin.Any` boxes as itself; a class's own `T` is boxed by its own wire.
+  is BridgeType.TypeParameter -> isAny
   is BridgeType.Nullable -> type.isSlotBoxable()
   BridgeType.Unit,
   is BridgeType.Throwable,
-  is BridgeType.TypeParameter,
   is BridgeType.Callback,
   is BridgeType.AsyncCallback,
   is BridgeType.FlowSource,

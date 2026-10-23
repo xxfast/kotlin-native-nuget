@@ -58,6 +58,7 @@ using Purrclock = TestLibrary.Purrclock;
 using Feedingtime = TestLibrary.Feedingtime;
 using Catsitter = TestLibrary.Catsitter;
 using Cattery = TestLibrary.Cattery;
+using Hoards = TestLibrary.Hoard;
 
 namespace LeakTests;
 
@@ -1775,13 +1776,12 @@ public class LiveHandleTests
     }
 
     // Row 6d. The fault-injection twin, and the reason ADR-135 asks for a row rather than reusing
-    // Row 6: an interface with a `fun <R>` member plans to null, so `NugetBridge.HandleFor` throws
-    // before any handle is minted. The `finally` still runs, and today it disposes `IntPtr.Zero`
-    // with no zero guard, which kills the process. This row pins that a FAILED mint neither leaks
+    // Row 6: an interface with a `Unit` property plans to null, so `NugetBridge.HandleFor` throws
+    // before any handle is minted. The `finally` still runs, and it used to dispose `IntPtr.Zero`
+    // with no zero guard, which killed the process. This row pins that a FAILED mint neither leaks
     // nor disposes anything. The throw is asserted inside `AssertNoLeak`, not around it.
-    private sealed class ClawMarks : IScratchLog
+    private sealed class SnappedGauge : IClawGauge
     {
-        public int Scratches { get; set; } = 7;
         public void Dispose() { }
     }
 
@@ -1790,8 +1790,27 @@ public class LiveHandleTests
     {
         AssertNoLeak(() =>
         {
+            var gauge = new SnappedGauge();
+            Assert.Throws<NotSupportedException>(() => CatteryDesk.GaugeClaws(gauge));
+        });
+    }
+
+    // Row 6d2. ADR-237: an interface whose member has its own `R` bridges, erased to `object?`, so
+    // the C# implementation crosses and its bridge is released with the call.
+    private sealed class ClawMarks : IScratchLog
+    {
+        public int Scratches { get; set; } = 7;
+        public object? Tally(object? entry) => entry;
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void ErasedTypeParameterInterface_Argument_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
             var log = new ClawMarks();
-            Assert.Throws<NotSupportedException>(() => CatteryDesk.CountScratches(log));
+            Assert.Equal(7, CatteryDesk.CountScratches(log));
         });
     }
 
@@ -7780,6 +7799,8 @@ public class LiveHandleTests
         public KotlinFlow<Catsitter.Whisker> Whiskers() => KotlinFlow<Catsitter.Whisker>.From(Each(new Catsitter.Whisker(2)));
         public KotlinFlow<string> Feed { get; set; } = KotlinFlow<string>.From(Each("kibble"));
         public KotlinFlow<string>? Maybe() => KotlinFlow<string>.From(Each("tuna"));
+        public KotlinFlow<object?> Anything() =>
+            KotlinFlow<object?>.From(Each<object?>(new Catsitter.Kitten("Mylo"), 5, null));
         public KotlinMutableStateFlow<int> MoodFlow { get; } = KotlinMutableStateFlow<int>.Create(7);
         public KotlinStateFlow<int>? Mood => MoodFlow;
         public Task<KotlinStateFlow<int>> LevelAsync(CancellationToken cancellationToken = default) =>
@@ -7982,5 +8003,146 @@ public class LiveHandleTests
             Assert.Equal("3 -> 7", await Cattery.Catteries.RetraceAsync(new LeakPorch(), 7));
             Assert.Equal("Oreo at 3am", await Cattery.Catteries.InspectAsync(new LeakFurball()));
         });
+    }
+
+    // ADR-237: a C# catnip toy, so an `object` crossing into Kotlin carries a C#-implemented
+    // interface through its bridge and comes back as the same object.
+    internal sealed class LeakCatnip : Hoards.ICatnip
+    {
+        public string Sniff() => "Oreo catnip";
+        public void Dispose() { }
+    }
+
+    // ADR-237: a C# cache whose `Any` slots echo, and a sniffer and pouncer with the member-level
+    // `R` erased to `object`.
+    internal sealed class LeakCache : Hoards.ICache
+    {
+        public object Favourite_ = "Mylo";
+        public object? Hide(object? value) => value;
+        public object Favourite() => Favourite_;
+        public void Dispose() { }
+    }
+
+    internal sealed class LeakSniffer : Hoards.ISniffer<string>
+    {
+        public string Item => "Mylo";
+        public object? Sniff(Func<string, object?> f) => f(Item);
+        public void Dispose() { }
+    }
+
+    internal sealed class LeakPouncer : Hoards.IPouncer
+    {
+        public object? Pounce(Func<string, object?> f) => f("Oreo");
+        public void Dispose() { }
+    }
+
+    // Row 21a. ADR-237: every handle-backed value on the `Any` wire, in both directions. An
+    // exported class wrapper passed in (borrowed) and minted out (owned), a C#-implemented
+    // interface's bridge, a list holding a handle, a class owner's `var` and member, a
+    // Kotlin-backed interface, and a star-projected generic class result. A handle the wire minted
+    // for an `object` and never released is a positive delta.
+    [Fact]
+    public void AnyWire_HandleBackedValues_ReturnToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using (var mouse = new Hoards.Mouse("Oreo"))
+            {
+                Assert.Equal("Mouse Oreo", Hoards.Hoarding.Kind(mouse));
+                using var back = Assert.IsType<Hoards.Mouse>(Hoards.Hoarding.Stash(mouse));
+            }
+
+            using (var minted = Assert.IsType<Hoards.Mouse>(Hoards.Hoarding.Fetch("mouse")))
+                Assert.Equal("Mylo squeaks", minted.Squeak());
+
+            var catnip = new LeakCatnip();
+            Assert.Same(catnip, Hoards.Hoarding.StashOrNull(catnip));
+            Assert.Equal("Catnip Oreo catnip", Hoards.Hoarding.Kind(catnip));
+
+            var listed = Assert.IsAssignableFrom<IReadOnlyList<object?>>(Hoards.Hoarding.Fetch("list"));
+            Assert.Equal(3, listed.Count);
+
+            using (var hoard = new Hoards.Hoard(new Hoards.Mouse("Mylo")))
+            {
+                (hoard.Last as IDisposable)?.Dispose();
+                hoard.Last = catnip;
+                Assert.Same(catnip, hoard.Keep(catnip));
+                Assert.Single(hoard.All());
+                using Hoards.Satchel<object?> bag = hoard.Bag;
+                Assert.Same(catnip, bag.Item);
+            }
+
+            using (Hoards.ILoot thief = Hoards.Hoarding.Thief())
+                Assert.IsAssignableFrom<IReadOnlyList<object?>>(thief.Grab(catnip));
+
+            using (Hoards.Satchel<object?> satchel = Hoards.Hoarding.Rummage())
+            using (var item = Assert.IsType<Hoards.Mouse>(satchel.Item))
+                Assert.Equal("Oreo squeaks", item.Squeak());
+
+            var cache = new LeakCache { Favourite_ = catnip };
+            Assert.Equal("Catnip Oreo catnip", Hoards.Hoarding.Hiding(cache, catnip));
+            Assert.Same(catnip, Hoards.Hoarding.Favourite(cache));
+            Assert.Equal("5 MYLO", Hoards.Hoarding.Sniffing(new LeakSniffer()));
+            Assert.Equal("Oreo squeaks", Hoards.Hoarding.Pouncing(new LeakPouncer()));
+        });
+    }
+
+    // Row 21c. ADR-237: a generic value class on the `Any` wire. Each crossing mints a Kotlin box
+    // of the struct and one of its underlying, both released by the call; a Kotlin-made one around
+    // a handle hands C# that handle's wrapper inside the struct, released by its `using`.
+    [Fact]
+    public void AnyWire_GenericValueClass_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using (var mouse = new Hoards.Mouse("Oreo"))
+            {
+                Assert.Equal("Bow Mouse Oreo", Hoards.Hoarding.Kind(new Hoards.Bow<Hoards.Mouse>(mouse)));
+                var back = Assert.IsType<Hoards.Bow<object?>>(Hoards.Hoarding.Stash(new Hoards.Bow<Hoards.Mouse>(mouse)));
+                using var held = Assert.IsType<Hoards.Mouse>(back.Ribbon);
+            }
+
+            Assert.Equal("red", Assert.IsType<Hoards.Bow<object?>>(Hoards.Hoarding.Tie("red")).Ribbon);
+            var tied = Assert.IsType<Hoards.Bow<object?>>(Hoards.Hoarding.TieMouse("Mylo"));
+            using (var mylo = Assert.IsType<Hoards.Mouse>(tied.Ribbon))
+                Assert.Equal("Mylo squeaks", mylo.Squeak());
+
+            using (var box = new TestLibrary.Cat.Box<object>(new Hoards.Bow<string>("red")))
+                Assert.Equal("red", Assert.IsType<Hoards.Bow<object?>>(box.Value).Ribbon);
+
+            Assert.ThrowsAny<ArgumentException>(() => Hoards.Hoarding.Kind(new Hoards.Bow<string>("torn")));
+        });
+    }
+
+    // Row 21b. ADR-237: star-projected flows whose elements are handles, read from Kotlin to C#
+    // and handed from C# to Kotlin. Each element's wrapper, and each flow, is released.
+    [Fact]
+    public async Task AnyWire_StarProjectedFlows_ReturnToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using (var hoard = new Hoards.Hoard(null))
+            using (KotlinFlow<object?> spoils = hoard.Spoils())
+            {
+                await foreach (object? item in spoils) (item as IDisposable)?.Dispose();
+            }
+
+            using (Hoards.ILoot thief = Hoards.Hoarding.Thief())
+            using (KotlinFlow<object?> everything = thief.Everything())
+            {
+                await foreach (object? _ in everything) { }
+            }
+
+            Assert.Equal("Mouse Mylo", await Hoards.Hoarding.SiftAsync(OneMouse()));
+
+            using var lookout = new LeakLookout();
+            Assert.Equal("Kitten Mylo, Int 5, null", await Catsitter.Sitters.AnythingsAsync(lookout));
+        });
+    }
+
+    private static async IAsyncEnumerable<object?> OneMouse()
+    {
+        await Task.Yield();
+        yield return new Hoards.Mouse("Mylo");
     }
 }

@@ -118,10 +118,11 @@ class Tier1CallbackParameterPlanTest {
       enum class Mood { CALM, BRISK }
 
       class Refusals(private val beats: Int) {
-        // An `Any` payload, which no callback route carries (a `Char` one binds since ADR-239),
+        // A `Pair` payload, which no callback route carries (a `Char` one binds since ADR-239, an
+        // `Any` one since ADR-237),
         // plus a scalar METHOD return, the shape a callback refusal sits beside.
-        fun countInitials(listener: (Any) -> Unit): Int {
-          listener(beats)
+        fun countInitials(listener: (Pair<Int, Int>) -> Unit): Int {
+          listener(beats to beats)
           return beats
         }
 
@@ -133,8 +134,8 @@ class Tier1CallbackParameterPlanTest {
 
         // A non-lambda parameter beside a lambda the plan declines: the legacy route drops `min`
         // from both halves and the generated Kotlin then fails to compile.
-        fun countInitialsAbove(min: Int, listener: (Any) -> Unit): Int {
-          listener(beats)
+        fun countInitialsAbove(min: Int, listener: (Pair<Int, Int>) -> Unit): Int {
+          listener(beats to beats)
           return min
         }
       }

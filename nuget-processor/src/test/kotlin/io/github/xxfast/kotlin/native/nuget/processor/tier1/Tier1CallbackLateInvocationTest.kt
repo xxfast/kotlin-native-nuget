@@ -134,8 +134,10 @@ class Tier1CallbackLateInvocationTest {
     // and async families keep their own GCHandle ctx too, but this fixture reaches neither, so they
     // are pinned by Tier1CallbackFaultContainmentTest instead.
     assertEquals(
+      // ADR-237: and the `object` wire's `FreeManaged`, which frees a boxed managed object's token.
       listOf(
         "GCHandle gcHandle = GCHandle.FromIntPtr(handle);",
+        "GCHandle.FromIntPtr(token).Free();",
         "original = (T)GCHandle.FromIntPtr(token).Target!;",
       ),
       csharpLinesFor(result, "GCHandle.FromIntPtr"),

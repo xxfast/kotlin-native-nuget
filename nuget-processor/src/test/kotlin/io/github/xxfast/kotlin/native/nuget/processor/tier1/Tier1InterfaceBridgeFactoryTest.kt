@@ -239,14 +239,14 @@ class Tier1InterfaceBridgeFactoryTest {
 
       interface Pet {
         val name: String
-        // A member type parameter has no slot (a slot carries no type argument): the whole
-        // interface plans to null rather than shipping a partial ABI.
-        fun <R> pick(item: R): R
+        // A `Unit` property carries no value, so it has no slot: the whole interface plans to
+        // null rather than shipping a partial ABI.
+        val reading: Unit
       }
 
       class Cat(val title: String) : Pet {
         override val name: String = title
-        override fun <R> pick(item: R): R = item
+        override val reading: Unit get() = Unit
 
         fun befriend(pet: Pet) = Unit
         fun closestFriend(): Pet = this
@@ -269,7 +269,7 @@ class Tier1InterfaceBridgeFactoryTest {
     val skip: String =
       result.kspWarnings.single { it.contains("SKIPPED_UNIMPLEMENTABLE_INTERFACE") }
     assertContains(skip, "Skipping tier1.bridgefactoryskip.Pet:")
-    assertContains(skip, "`fun pick` declares type parameters")
+    assertContains(skip, "`val reading: Unit` is `Unit`, which carries no value")
   }
 
   /**

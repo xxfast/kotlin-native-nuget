@@ -18,6 +18,7 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlin.experimental.ExperimentalNativeApi
 import kotlin.native.CName
 import kotlin.native.runtime.GC
+import kotlin.native.ref.createCleaner
 import kotlin.native.runtime.NativeRuntimeApi
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -944,6 +945,108 @@ public interface NugetCSharpBridge {
 @CName("nuget_csharp_token")
 public fun export_nuget_csharp_token(handle: COpaquePointer): COpaquePointer? =
   (handle.asStableRef<Any>().get() as? NugetCSharpBridge)?.nugetToken
+
+/**
+ * ADR-237: the runtime kind of the value a box handle holds, which the C# `object` read
+ * dispatches on. [OBJECT] is any other Kotlin object; C# then asks [export_nuget_box_type_name]
+ * for its class and constructs the generated wrapper registered under that name, or an opaque
+ * wrapper that hands the same object back.
+ */
+@NugetRuntimeApi
+public object NugetBoxKind {
+  public const val OBJECT: Int = 0
+  public const val STRING: Int = 1
+  public const val BOOL: Int = 2
+  public const val BYTE: Int = 3
+  public const val UBYTE: Int = 4
+  public const val SHORT: Int = 5
+  public const val USHORT: Int = 6
+  public const val INT: Int = 7
+  public const val UINT: Int = 8
+  public const val LONG: Int = 9
+  public const val ULONG: Int = 10
+  public const val FLOAT: Int = 11
+  public const val DOUBLE: Int = 12
+  public const val CHAR: Int = 13
+  public const val LIST: Int = 14
+  public const val SET: Int = 15
+  public const val MAP: Int = 16
+  public const val CSHARP: Int = 17
+  public const val BYTES: Int = 18
+
+  public fun of(value: Any): Int = when (value) {
+    is NugetCSharpBridge -> CSHARP
+    is String -> STRING
+    is Boolean -> BOOL
+    is Byte -> BYTE
+    is UByte -> UBYTE
+    is Short -> SHORT
+    is UShort -> USHORT
+    is Int -> INT
+    is UInt -> UINT
+    is Long -> LONG
+    is ULong -> ULONG
+    is Float -> FLOAT
+    is Double -> DOUBLE
+    is Char -> CHAR
+    is ByteArray -> BYTES
+    is List<*> -> LIST
+    is Set<*> -> SET
+    is Map<*, *> -> MAP
+    else -> OBJECT
+  }
+}
+
+/** ADR-237: `int32_t nuget_box_kind(void* handle)`, a [NugetBoxKind] tag for the boxed value. */
+@NugetRuntimeApi
+@CName("nuget_box_kind")
+public fun export_nuget_box_kind(handle: COpaquePointer): Int =
+  NugetBoxKind.of(handle.asStableRef<Any>().get())
+
+/**
+ * ADR-237: `int32_t nuget_box_type_name(void* handle, uint8_t* buffer, int32_t capacity)`, the
+ * UTF-8 Kotlin qualified name of the boxed value's class, the key the generated C# wrapper table is
+ * registered under. Copies it into [buffer] when it fits in [capacity] bytes and returns its byte
+ * length either way, so the caller retries with a larger buffer; -1 for a class with no qualified
+ * name (a local or anonymous one). The caller owns the buffer, so nothing is allocated per read.
+ */
+@NugetRuntimeApi
+@CName("nuget_box_type_name")
+public fun export_nuget_box_type_name(
+  handle: COpaquePointer,
+  buffer: CPointer<ByteVar>?,
+  capacity: Int,
+): Int {
+  val name: ByteArray = handle.asStableRef<Any>().get()::class.qualifiedName?.encodeToByteArray()
+    ?: return -1
+  if (buffer != null && name.size <= capacity && name.isNotEmpty()) {
+    name.usePinned { pinned -> memcpy(buffer, pinned.addressOf(0), name.size.convert()) }
+  }
+  return name.size
+}
+
+/**
+ * ADR-237: a C# object with no Kotlin counterpart, held as a `GCHandle` [nugetToken]. It reads back
+ * in C# as the same instance through `nuget_csharp_token`, and the C# [release] function frees the
+ * `GCHandle` once Kotlin collects the box.
+ */
+@NugetRuntimeApi
+public class NugetManagedObject(
+  override val nugetToken: COpaquePointer,
+  release: CPointer<CFunction<(COpaquePointer) -> Unit>>,
+) : NugetCSharpBridge {
+  @Suppress("unused")
+  private val cleaner = createCleaner(release to nugetToken) { (free, token) -> free.invoke(token) }
+}
+
+/** ADR-237: boxes a C# `GCHandle` [token] as a [NugetManagedObject], freed by [release]. */
+@NugetRuntimeApi
+@CName("nuget_box_managed")
+public fun export_nuget_box_managed(
+  token: COpaquePointer,
+  release: COpaquePointer,
+): COpaquePointer =
+  NugetHandles.retain(NugetManagedObject(token, release.reinterpret()))
 
 /**
  * `void nuget_gc_collect(void)`: frozen 1.0 `nuget_*` ABI (ADR-186).

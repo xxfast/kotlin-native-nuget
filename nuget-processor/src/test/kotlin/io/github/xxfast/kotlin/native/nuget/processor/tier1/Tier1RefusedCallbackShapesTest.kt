@@ -9,9 +9,10 @@ import kotlin.test.assertTrue
  * The callback shapes ADR-239 leaves refused, each pinned to its current diagnostic so the
  * function-type spelling keeps a stable home:
  *  - a lambda of four or more parameters, past the shipped arity 0 to 3 rule;
- *  - a `Pair` or `IntArray` payload, which the bridge maps at no position;
- *  - an `Any` payload, whose wire is a separate change.
- * Each is named exactly once, spelled as the source wrote it, and absent from both halves.
+ *  - a `Pair` or `IntArray` payload, which the bridge maps at no position.
+ * Each is named exactly once, spelled as the source wrote it, and absent from both halves. An
+ * `Any` payload is not among them: ADR-237 crosses it as `object`, on the per-call lambda and the
+ * stored pair alike.
  */
 class Tier1RefusedCallbackShapesTest {
 
@@ -25,6 +26,8 @@ class Tier1RefusedCallbackShapesTest {
         fun pairs(cb: (Pair<Int, Int>) -> Unit) = cb(1 to 2)
         fun ints(cb: (IntArray) -> Unit) = cb(IntArray(0))
         fun anything(cb: (Any) -> Unit) = cb(1)
+        fun addAny(listener: (Any) -> Unit) {}
+        fun removeAny(listener: (Any) -> Unit) {}
       }
       """.trimIndent(),
     )
@@ -41,7 +44,6 @@ class Tier1RefusedCallbackShapesTest {
         "most 3 on every callback route. Group the rest into a class, or split the lambda",
       "pairs" to "(Pair<Int, Int>) -> Unit",
       "ints" to "(IntArray) -> Unit",
-      "anything" to "(Any) -> Unit",
     ).forEach { (member, spelling) ->
       val warnings: List<String> = named(member)
       assertEquals(1, warnings.size, "expected `$member` named once; got: ${result.kspWarnings}")
@@ -57,5 +59,18 @@ class Tier1RefusedCallbackShapesTest {
       )
       assertFalse("kennel_$member\"" in result.generated, "expected no Kotlin export for $member")
     }
+  }
+
+  /** ADR-237: an `Any` payload is `object`, per call and on a stored pair, and named nowhere. */
+  @Test
+  fun `an Any payload binds as object on the per-call and stored routes`() {
+    val csharp: String = result.generatedCSharp
+    listOf("Anything(Action<object>", "AddAny(Action<object>").forEach { member ->
+      assertTrue(member in csharp, "expected `$member` to bind")
+    }
+    listOf("anything", "addAny", "removeAny").forEach { member ->
+      assertEquals(emptyList(), named(member), "$member binds, so it is named nowhere")
+    }
+    Tier1CSharpCompile.assertCompiles(result, "class Consumer {}", allowUnsafe = true)
   }
 }

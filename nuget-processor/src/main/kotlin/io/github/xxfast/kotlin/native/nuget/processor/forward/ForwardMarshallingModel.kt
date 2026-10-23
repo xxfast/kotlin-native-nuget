@@ -497,7 +497,18 @@ internal sealed interface BridgeType {
      * back as the enum's first entry.
      */
     val valueType: kotlin.Boolean = false,
-  ) : BridgeType
+  ) : BridgeType {
+    /** ADR-237: `kotlin.Any` crosses on this wire as C# `object`, at every position. */
+    val isAny: kotlin.Boolean get() = kotlinName == ANY.kotlinName
+
+    companion object {
+      /**
+       * ADR-237: `kotlin.Any`, the box wire of an unconstrained `T` instantiated at `object`. In
+       * scope everywhere, since `object` is not a type parameter any C# type declares.
+       */
+      val ANY: TypeParameter = TypeParameter(name = "object", kotlinName = "kotlin.Any")
+    }
+  }
 }
 
 /**
@@ -965,6 +976,9 @@ internal data class ForwardPublicSignature(
  * @param trampolineBounds ADR-198: the declared bounds (`kotlin.Enum<T>`) of a parameter whose
  *   bound has no closed spelling, re-declared on the export's trampoline, where
  *   [kotlinTypeArgument] is the trampoline's own type variable. Empty for every other parameter.
+ * @param erased ADR-237: an interface member's own parameter, erased to [kotlinTypeArgument] on
+ *   both halves. C# declares no type parameter for it (a C# implementation could not be handed
+ *   one), so every position it appears at is `object`, or its one bound.
  */
 internal data class ForwardMethodTypeParameter(
   val name: String,
@@ -972,6 +986,7 @@ internal data class ForwardMethodTypeParameter(
   val kotlinTypeArgument: String,
   val constraints: List<String> = emptyList(),
   val trampolineBounds: List<String> = emptyList(),
+  val erased: Boolean = false,
 )
 
 /** Symbol-level invocation information. Renderers decide syntax later. */
@@ -1592,3 +1607,24 @@ internal fun ForwardConversion.helper(): ForwardHelperRequirement = when (this) 
  */
 internal fun String.withOpenSlotFills(fills: String): String =
   if (fills.isEmpty()) this else "\n" + fills + removePrefix("\n")
+
+/**
+ * ADR-237: whether this type carries a Kotlin `Any` (C# `object`) at any depth, a position through
+ * which a C# implementation of any exported interface can reach Kotlin.
+ */
+internal fun BridgeType.mentionsAny(): Boolean = when (this) {
+  is BridgeType.TypeParameter -> isAny
+  is BridgeType.Nullable -> type.mentionsAny()
+  is BridgeType.Collection -> listOfNotNull(element, key, value).any { it.mentionsAny() }
+  is BridgeType.Callback -> (parameters + result).any { it.mentionsAny() }
+  is BridgeType.AsyncCallback -> (parameters + result).any { it.mentionsAny() }
+  is BridgeType.FlowSource -> element.mentionsAny()
+  is BridgeType.ReturnedLambda -> typeArguments.any { it.mentionsAny() }
+  BridgeType.Unit, is BridgeType.Primitive, is BridgeType.ObjectHandle, BridgeType.Char,
+  BridgeType.String, BridgeType.Instant, BridgeType.Duration, is BridgeType.Throwable,
+  BridgeType.Uuid,
+  is BridgeType.Enum, is BridgeType.Interface, is BridgeType.BoundInterface,
+  is BridgeType.ValueClass, BridgeType.ByteArray, is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType, is BridgeType.Unsupported, is BridgeType.RawCollection,
+    -> false
+}

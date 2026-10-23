@@ -257,7 +257,8 @@ internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
 }
 
 internal fun StringBuilder.renderSyncErrorCheckMethod(method: CirMethod, className: String = "") {
-  val visibility: String = if (method.visibility == CirVisibility.PRIVATE) "private" else "public"
+  val visibility: String =
+    method.memberHead(if (method.visibility == CirVisibility.PRIVATE) "private" else "public")
   val static: String = if (method.isStatic) "static " else ""
   val override: String = if (method.isOverride) "override " else if (method.isVirtual) "virtual " else ""
   val paramStr: String = method.parameters.mapIndexed { index, param ->
@@ -295,7 +296,7 @@ internal fun StringBuilder.renderSyncErrorCheckMethod(method: CirMethod, classNa
   val where: String = method.whereClauses()
   appendLine(
     "        $visibility ${static}${override}${method.returnType} " +
-        "${method.identifier}$generic($paramStr)$where"
+        "${method.explicitName}$generic($paramStr)$where"
   )
   appendLine("        {")
 

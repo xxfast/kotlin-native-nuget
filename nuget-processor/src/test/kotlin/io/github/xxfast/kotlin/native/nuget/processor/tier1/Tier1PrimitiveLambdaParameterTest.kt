@@ -244,6 +244,9 @@ class Tier1PrimitiveLambdaParameterTest {
     val handleTypes: List<String> = listOf("Int", "Boolean", "Double", "int", "double", "bool")
     val offending: List<String> = result.generatedCSharp.lines()
       .filter { line -> handleTypes.any { line.contains("FromHandle<$it>") } }
+      // ADR-237: `NugetMarshal.ReadAny`'s `case <kind>: return FromHandle<int>(handle);` reads a
+      // boxed Kotlin `Any` that really is a handle, not a callback payload.
+      .filterNot { line -> line.trimStart().startsWith("case ") }
     assertTrue(
       offending.isEmpty(),
       "a by-value primitive payload has no handle to unmarshal; got: $offending",

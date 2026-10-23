@@ -48,17 +48,16 @@ class Tier1LegacyCallbackBuiltinPayloadTest {
     assertTrue(result.compiledClean, "expected compilable Kotlin; got: ${result.compileErrors}")
 
     val cs: String = result.generatedCSharp
+    // ADR-237: `(Any) -> Unit` binds on the plan's per-call lambda, its payload read as `object`.
     listOf(
       "OnBatch(Action<IReadOnlyList<int>>", "MakeCat(", "OnInitial(Action<char>", "OnCount(",
       "AddBatch(Action<IReadOnlyList<int>>", "AddCounter(Func<int>", "AddTick(Action<int>",
+      "OnAny(Action<object>",
     ).forEach { member -> assertTrue(member in cs, "expected `$member` to bind") }
-    assertFalse("OnAny(" in cs, "OnAny must not bind")
     assertFalse("Action<Any>" in cs, "no unresolvable Action<Any>")
-    assertFalse("export_walker_onAny" in result.generated, "the Kotlin half of onAny is gone too")
-    assertNamed(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT, "onAny", "Any")
     listOf(
       "onBatch", "makeCat", "onInitial", "onCount", "addBatch", "removeBatch", "addCounter",
-      "removeCounter", "addTick", "removeTick",
+      "removeCounter", "addTick", "removeTick", "onAny",
     ).forEach { member ->
       assertFalse(
         result.kspWarnings.any { warning -> "Walker.$member" in warning },

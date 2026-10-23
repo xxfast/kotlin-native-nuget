@@ -94,17 +94,27 @@ fun Sitter.checkIn(): String = "checked in at ${house()}"
 val Sitter.address: String get() = "at ${house()}"
 
 /**
- * The residual, **plans-to-null** case: a member with its own type parameter (`fun <R>`) has no
- * bridge slot, since a slot carries no type argument, so `ForwardInterfaceBridgePlanner.plan`
- * returns null for this interface however reachable it is.
- * The contract is a managed `NotSupportedException` naming the C# implementation, which is what
- * the throw-safety half of ADR-135 buys; today the throw is overwritten by a
- * `NugetMarshal.Dispose(IntPtr.Zero)` in the `finally`.
+ * ADR-237: a member with its own type parameter (`fun <R>`) is erased to `object?` in C#, so this
+ * interface bridges: a C# implementation crosses and Kotlin calls it at `R = Any?`.
  */
 interface ScratchLog {
   var scratches: Int
   fun <R> tally(entry: R): R
 }
+
+/**
+ * The residual, **plans-to-null** case: a `Unit` property carries no value, so
+ * `ForwardInterfaceBridgePlanner.plan` refuses this interface however reachable it is. The contract
+ * is a managed `NotSupportedException` naming the C# implementation, the throw-safety half of
+ * ADR-135, rather than a throw overwritten by a `NugetMarshal.Dispose(IntPtr.Zero)` in the
+ * `finally`.
+ */
+interface ClawGauge {
+  val reading: Unit
+}
+
+/** The only position [ClawGauge] appears in. */
+fun gaugeClaws(gauge: ClawGauge): Int = if (gauge.reading == Unit) 1 else 0
 
 /** The only position [ScratchLog] appears in. */
 fun countScratches(log: ScratchLog): Int = log.scratches
