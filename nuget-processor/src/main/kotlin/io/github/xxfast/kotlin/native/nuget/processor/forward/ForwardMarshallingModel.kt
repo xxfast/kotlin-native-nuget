@@ -295,8 +295,11 @@ internal sealed interface BridgeType {
    * parameter-independent thunks once per export.
    *
    * [element] is a primitive or `String`, the v1 set a suspend lambda's result admits.
+   *
+   * [nullable] (ADR-210 amendment): a `Flow<T>?` parameter, an `IAsyncEnumerable<T>?` in C#. The
+   * slots are the same; a C# `null` passes a zero key, which Kotlin reads as a `null` flow.
    */
-  data class FlowSource(val element: BridgeType) : BridgeType
+  data class FlowSource(val element: BridgeType, val nullable: Boolean = false) : BridgeType
 
   /**
    * ADR-160 amendment: a Kotlin function type (`() -> Pet`, `(Int) -> Int`) handed OUT of Kotlin

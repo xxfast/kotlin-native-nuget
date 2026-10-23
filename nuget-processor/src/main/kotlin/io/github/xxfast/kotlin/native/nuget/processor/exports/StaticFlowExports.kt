@@ -7,6 +7,10 @@ import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.INT
 import com.squareup.kotlinpoet.ParameterSpec
+import com.squareup.kotlinpoet.TypeName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParameterShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isNullableFlowSource
 import io.github.xxfast.kotlin.native.nuget.processor.freshName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
@@ -141,4 +145,15 @@ internal fun FileSpec.Builder.addStaticFlowExports(
     function, qualifiedName = "", prefix = "", classifier, callableCatalog, owner = null,
     static = call,
   )
+}
+
+/**
+ * ADR-210 amendment: the Kotlin type of one slot of the asynchronous parameter at [index]. Every
+ * slot is a pointer; the key of a `Flow<T>?` is nullable, since a C# `null` passes a zero key.
+ */
+internal fun ForwardLegacyNames.asyncSlotType(index: Int, slot: String): TypeName {
+  val type: BridgeType? = (shapes[index] as? ForwardLegacyParameterShape.Async)?.type
+  val key: Boolean = asyncSlots[index]?.key == slot
+  return if (key && type?.isNullableFlowSource() == true) cOpaquePointer.copy(nullable = true)
+  else cOpaquePointer
 }

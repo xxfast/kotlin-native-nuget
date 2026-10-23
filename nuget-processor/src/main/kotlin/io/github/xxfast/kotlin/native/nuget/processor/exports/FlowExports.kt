@@ -396,7 +396,7 @@ internal fun FileSpec.Builder.addFlowMethodExports(
       val paramName: String = param.name?.asString() ?: "_"
       // ADR-210: a `Flow<T>` parameter's flat thunk and key slots, in the planner's order.
       names.asyncSlots[index]?.let { slots ->
-        slots.declared.forEach { slot -> addParameter(slot, cOpaquePointer) }
+        slots.declared.forEach { slot -> addParameter(slot, names.asyncSlotType(index, slot)) }
         return@forEachIndexed
       }
       // ADR-114: the wire container is a handle to MutableList<Any?>/MutableSet<Any?>, never the

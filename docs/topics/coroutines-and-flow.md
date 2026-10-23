@@ -715,7 +715,8 @@ unaffected.
   <name>: Flow<Int>`, which is about that host and not about `Flow` parameters in general.
 - **Other elements.** Only the primitives, `String` and a method's or class's own
   [type parameter](#flow-and-suspend-lambda-type-parameter) bind. `Char`, `Throwable`, an enum, an
-  object, a collection or a nullable element is refused, and so is a nullable `Flow<T>?`.
+  object, a collection or a nullable element is refused. A nullable `Flow<T>?` parameter binds as
+  `IAsyncEnumerable<T>?`, and a C# `null` reaches Kotlin as `null`.
 - **Enum and value class members, and a data class `copy`.** A member of an enum or value class
   that takes a `Flow` is not generated, and a data class `copy` omits a `Flow` component.
 - **Implementing the interface in C#.** A Kotlin interface member that takes a `Flow` binds for
@@ -991,8 +992,17 @@ KotlinFlow<Cat>? visitors = feeder.VisitorsAfter(0); // null
 ```
 
 A `suspend fun` returning `Flow<T>?` awaits to `Task<KotlinFlow<T>?>`, on a class or at top level;
-dispose the acquired holder when it is not `null`. `SharedFlow<T>?` members behave the same way. A
-top-level non-`suspend` `fun f(): Flow<T>?` still has no binding.
+dispose the acquired holder when it is not `null`. `SharedFlow<T>?` members behave the same way.
+The same holds on every owner: a class, the top level, an `object`, a companion (named or not), an
+enum body and its companion, and a value class, generic `T` included:
+
+```kotlin
+fun purrsIfHome(home: Boolean): Flow<Int>? = if (home) flowOf(1, 2) else null
+```
+
+```C#
+KotlinFlow<int>? purrs = Absences.PurrsIfHome(false); // null
+```
 
 A method is called once to decide presence and again when you enumerate, so it must return the same
 answer both times. Keep a nullable-returning member free of side effects.

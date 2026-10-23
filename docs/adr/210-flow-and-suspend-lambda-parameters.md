@@ -474,4 +474,22 @@ the human raised no objection.
 - Deferred: every result, element and payload type outside the v1 list, a `Throwable` suspend lambda
   result and a `Throwable` flow element included; nullable `Flow<T>?` and
   nullable suspend lambda parameters; arity above 3; batch pull; a plain `(T) -> R` parameter on a
-  `suspend fun` (refused today by the same legacy gate).
+  `suspend fun` (refused today by the same legacy gate). Amended 2026-10-22: the nullable
+  `Flow<T>?` parameter binds; see the amendment below.
+
+## Amendment (2026-10-22): a nullable `Flow<T>?` parameter
+
+A `Flow<T>?` parameter binds as `IAsyncEnumerable<T>?` wherever the non-null `Flow<T>` parameter
+does: the ADR-062 plan (top level, object, companion, class, enum, value class) and the legacy
+`suspend` and Flow-returning hosts, generic `T` included. The slots are unchanged. C# registers the
+source only when it is not `null` (`flap is null ? IntPtr.Zero : NugetTasks.Register(...)`), so a
+`null` passes a zero key and registers nothing. Kotlin declares that key slot `COpaquePointer?`,
+builds no holder for a zero key, and hands the member `null`; a non-zero key is the ordinary cold
+flow. The other slots are thunk addresses C# always passes. `StateFlow<T>?` is not in scope: the
+input route takes no `StateFlow` at all (C# has no source for its current value).
+
+Verified by the fixture `purrclock/Doorways.kt` with `IntegrationTests/NullableFlowParameterTests.cs`
+(each owner, a `suspend` member, a generic `T`, `null` and present), the leak row
+`NullableFlowParameter_NullAndPresent_ReturnToBaseline`, and `Tier1NullableFlowParameterTest`.
+`Tier1FlowParameterTest`'s `maybe` cell flipped to binding, and `Tier1NullableParameterDiagnosticTest`
+names its unwired nullable parameter with a nullable suspend lambda instead.

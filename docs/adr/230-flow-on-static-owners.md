@@ -97,3 +97,22 @@ Alternatives rejected:
 - Collectability rows in `LeakTests/CollectabilityTests.cs`:
   `StaticFlow_CollectedToCompletion_TheFlowAndTokenAreCollected` and
   `StaticFlow_CancelledByTheToken_TheFlowAndTokenAreCollected`.
+
+## Amendment (2026-10-22): nullable flow members
+
+A nullable flow return or property (`Flow<T>?`, `StateFlow<T>?`, `SharedFlow<T>?`) on any of these
+owners binds as the nullable holder (`KotlinFlow<T>?`), `null` when Kotlin returns null, generic or
+not. It reuses ADR-026's 2026-10-09 shape: a `_has_value` probe export with the member's own
+parameters, then the ordinary lazy holder. The planner gives a nullable flow return the
+`FLOW_PROTOCOL` skip on every static walk (it used to be a `NULLABLE` drop), and a value class's
+nullable flow property the same, so the static flow route owns them. A `suspend` member with a
+nullable flow result already bound through the acquired route.
+
+Verified by the fixture `purrclock/Absences.kt` with `IntegrationTests/NullableStaticFlowTests.cs`
+(a present and an absent member per owner, a property, a function, a generic `T`, a `StateFlow?`, a
+`SharedFlow?` and a `suspend` result), the leak row
+`NullableStaticFlow_PresentAndAbsent_ReturnToBaseline`, and the Tier 1 cell
+`Tier1StaticFlowTest` "a nullable flow on every static owner binds as a nullable holder".
+`Tier1NullableParameterDiagnosticTest` now names an unwired nullable return with a nullable suspend
+lambda, since `Flow<Int>?` binds. The forward `NugetDiagnostics.json` named the named companion's
+member `NapBlanket.Fold.creases` while it was still skipped.

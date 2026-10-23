@@ -463,19 +463,26 @@ class Tier1FlowParameterTest {
   }
 
   @Test
-  fun `a nullable flow and an element outside the v1 set stay refused by name`() {
+  fun `an element outside the v1 set stays refused by name and a nullable flow binds`() {
     val result: Tier1Result = run()
 
-    listOf("maybe", "letters").forEach { member ->
-      assertEquals(
-        1,
-        result.kspWarnings.count { warning -> warning.contains("WaterFountain.$member:") },
-        "$member is refused and must be named once; kspWarnings=${result.kspWarnings}",
-      )
-    }
-    listOf("MaybeAsync(", "LettersAsync(").forEach { member ->
-      assertFalse(result.generatedCSharp.contains(member), "$member must not be declared")
-    }
+    assertEquals(
+      1,
+      result.kspWarnings.count { warning -> warning.contains("WaterFountain.letters:") },
+      "letters is refused and must be named once; kspWarnings=${result.kspWarnings}",
+    )
+    assertFalse(result.generatedCSharp.contains("LettersAsync("), "LettersAsync must not be declared")
+    // ADR-210 amendment: a `Flow<T>?` parameter is an `IAsyncEnumerable<T>?`.
+    assertTrue(
+      result.kspWarnings.none { warning -> warning.contains("WaterFountain.maybe:") },
+      "kspWarnings=${result.kspWarnings}",
+    )
+    assertTrue(
+      result.generatedCSharp.contains(
+        "MaybeAsync(global::System.Collections.Generic.IAsyncEnumerable<int>? drops",
+      ),
+      result.generatedCSharp.lines().filter { "MaybeAsync" in it }.toString(),
+    )
   }
 
   /**

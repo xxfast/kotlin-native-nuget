@@ -6691,6 +6691,56 @@ public class LiveHandleTests
         }, iterations: 200);
     }
 
+    // ADR-230 amendment
+    // A nullable flow member on every static owner: an absent one mints nothing (the probe is a
+    // bool), a present cold one only its collection job, a present hot one its holder, which the
+    // `using` releases. Ledger per iteration: each present collection job +1/-1, Pillow and Snores
+    // holders +1/-1, LaterIfHome suspend job +1/-1 and acquired flow +1/-1. Net zero.
+    [Fact]
+    public async Task NullableStaticFlow_PresentAndAbsent_ReturnToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            Assert.Equal([1, 2], await DrainFlow(Purrclock.Absences.PurrsIfHome(true)!));
+            Assert.Null(Purrclock.Absences.PurrsIfHome(false));
+            Assert.Null(Purrclock.Absences.CatFlap);
+            Assert.Equal([3], await DrainFlow(Purrclock.Snoozer.Naps(true)!));
+            Assert.Null(Purrclock.Snoozer.Naps(false));
+            using (KotlinStateFlow<int>? pillow = Purrclock.Snoozer.Pillow) Assert.Equal(4, pillow!.Value);
+            using (KotlinSharedFlow<int>? snores = Purrclock.Snoozer.Snores(true)) Assert.Single(snores!.ReplayCache);
+            Assert.Null(Purrclock.NapBlanket.Creases(false));
+            Assert.Equal([1], await DrainFlow(Purrclock.HumourExtensions.Purr(Purrclock.Humour.Content)!));
+            Assert.Null(new Purrclock.Feeler(0).Sway);
+            using (KotlinFlow<int>? later = await Purrclock.Absences.LaterIfHomeAsync(true)) Assert.Equal([7], await DrainFlow(later!));
+        }, iterations: 200);
+    }
+
+    // ADR-210 amendment
+    // A nullable `Flow<T>?` parameter: a null source registers nothing and mints nothing; a present
+    // one registers its key, which the Kotlin holder's cleaner releases once the flow is collected
+    // and dropped. Ledger per iteration: each suspend job +1/-1, each present key +1/-1. Net zero.
+    [Fact]
+    public async Task NullableFlowParameter_NullAndPresent_ReturnToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            Assert.Equal(-1, await Purrclock.Doorways.CountVisitorsAsync(null));
+            Assert.Equal(3, await Purrclock.Doorways.CountVisitorsAsync(Yield(1, 2)));
+            Assert.False(Purrclock.Doorways.HasFlap(null));
+            Assert.Equal("nobody", await Purrclock.Doorman.GreetAsync(null));
+            Assert.Equal("Oreo", await Purrclock.Doorman.GreetAsync(Yield("Oreo")));
+        }, iterations: 200);
+    }
+
+    private static async IAsyncEnumerable<T> Yield<T>(params T[] items)
+    {
+        foreach (T item in items)
+        {
+            await Task.Yield();
+            yield return item;
+        }
+    }
+
     private static async Task<List<T>> DrainFlow<T>(IAsyncEnumerable<T> flow)
     {
         var seen = new List<T>();

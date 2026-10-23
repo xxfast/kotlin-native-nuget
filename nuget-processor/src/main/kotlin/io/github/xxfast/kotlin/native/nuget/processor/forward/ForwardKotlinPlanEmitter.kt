@@ -57,10 +57,12 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(
       cNameAnnotation(call.exportName, ForwardExportOwnerTag(symbol = plan.invocation.symbol)),
     )
 
+  val nullableKeys: Set<String> = plan.nullableFlowKeys()
   call.parameters.forEach { parameter ->
     // ADR-132 amendment: by role, not index; a fan-out receiver's flag is slot 0.
     val isReceiverSlot: Boolean = parameter.role == ForwardAbiRole.RECEIVER
-    builder.addParameter(parameter.name, kotlinType(parameter, isReceiverSlot))
+    val type: TypeName = kotlinType(parameter, isReceiverSlot)
+    builder.addParameter(parameter.name, if (parameter.name in nullableKeys) type.copy(nullable = true) else type)
   }
 
   // ADR-108: a `Result<T>` return was lowered to `T` by the planner; unwrap it here, inside the
@@ -88,7 +90,10 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(
   // key the moment this call returns, so nothing may be able to throw before Kotlin owns it.
   plan.publicSignature.parameters.forEach { parameter ->
     val slots: ForwardAsyncSlots = parameter.asyncSlots ?: return@forEach
-    builder.addStatement("val %L = %L", slots.holder, asyncCallbackHolderConstruction(slots))
+    builder.addStatement(
+      "val %L = %L", slots.holder,
+      asyncCallbackHolderConstruction(slots, nullable = parameter.type.isNullableFlowSource()),
+    )
   }
 
   when (val result: BridgeType = plan.publicSignature.result) {
@@ -369,11 +374,13 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
       cNameAnnotation(call.exportName, ForwardExportOwnerTag(symbol = plan.invocation.symbol)),
     )
 
+  val nullableKeys: Set<String> = plan.nullableFlowKeys()
   call.parameters.forEach { parameter ->
     // A RECEIVER role already implies index 0 on any plan that has one (ADR-062 validateRoles),
     // including ADR-141's inner-class constructor.
     val isReceiverSlot: Boolean = parameter.role == ForwardAbiRole.RECEIVER
-    builder.addParameter(parameter.name, valueClassKotlinType(parameter, isReceiverSlot))
+    val type: TypeName = valueClassKotlinType(parameter, isReceiverSlot)
+    builder.addParameter(parameter.name, if (parameter.name in nullableKeys) type.copy(nullable = true) else type)
   }
 
   val arguments: String = plan.publicSignature.parameters.joinToString(", ") { parameter ->
@@ -591,6 +598,12 @@ internal fun ForwardCallablePlanCatalog.planFor(symbol: String): ForwardCallable
   }
   return matches.singleOrNull()
 }
+
+/** ADR-210 amendment: the key slots of this plan's `Flow<T>?` parameters, which may be zero. */
+private fun ForwardCallablePlan.nullableFlowKeys(): Set<String> = publicSignature.parameters
+  .filter { parameter -> parameter.type.isNullableFlowSource() }
+  .mapNotNull { parameter -> parameter.asyncSlots?.key }
+  .toSet()
 
 private fun kotlinType(parameter: ForwardAbiParameter, isReceiver: Boolean): TypeName {
   if (isReceiver && parameter.transfer.type is BridgeType.ObjectHandle) return cOpaquePointer

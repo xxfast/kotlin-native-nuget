@@ -340,7 +340,7 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
       val paramName: String = param.name?.asString() ?: "_"
       // ADR-210: a suspend lambda's flat thunk and key slots, in the planner's order.
       names.asyncSlots[index]?.let { slots ->
-        slots.declared.forEach { slot -> builder.addParameter(slot, cOpaquePointer) }
+        slots.declared.forEach { slot -> builder.addParameter(slot, names.asyncSlotType(index, slot)) }
         return@forEachIndexed
       }
       // ADR-114: a collection crosses as a handle to its boxed wire container.
@@ -526,7 +526,7 @@ private fun FunSpec.Builder.addLegacySuspendParameters(
     val name: String = param.name?.asString() ?: "_"
     // ADR-210: a suspend lambda's flat thunk and key slots, in the planner's order.
     names.asyncSlots[index]?.let { slots ->
-      slots.declared.forEach { slot -> addParameter(slot, cOpaquePointer) }
+      slots.declared.forEach { slot -> addParameter(slot, names.asyncSlotType(index, slot)) }
       return@forEachIndexed
     }
     if (shapes[index].isLegacyLowered()) {

@@ -71,7 +71,8 @@ internal fun BridgeType.forwardPublicCsharpType(): String = when (this) {
   is BridgeType.AsyncCallback -> forwardAsyncCallbackCsharpType()
   // ADR-210: the consumer's own asynchronous sequence.
   is BridgeType.FlowSource ->
-    "global::System.Collections.Generic.IAsyncEnumerable<${element.forwardPublicCsharpType()}>"
+    "global::System.Collections.Generic.IAsyncEnumerable<${element.forwardPublicCsharpType()}>" +
+      if (nullable) "?" else ""
   // ADR-160 amendment: ADR-012's consumer type, `KotlinFunc<...>`, or `KotlinAction<...>` for a
   // `Unit` result (issue #114). Only reached once [unnameableTypeArgument] found nothing.
   is BridgeType.ReturnedLambda ->

@@ -1177,7 +1177,7 @@ internal fun translate(
         .flatMap { plan -> plan.publicSignature.parameters }
         .mapNotNull { parameter -> parameter.type as? BridgeType.FlowSource } +
         tracker.flowSources
-      ).distinct()
+      ).map { flow -> flow.copy(nullable = false) }.distinct()
   // ADR-215 lane C: a `suspend` lambda's `T` result or a `Flow<T>` element is an owned box too.
   val boxesAsync: Boolean = (asyncCallbacks + flowSources).any { type -> type.boxesIntoKotlin() }
   val helpers: MutableList<CirDeclaration> = mutableListOf(

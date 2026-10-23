@@ -431,8 +431,14 @@ internal fun forwardAsyncRegistration(name: String, type: BridgeType): String =
     ForwardAsyncKind.LAMBDA ->
       forwardAsyncCallbackRegistration(name, type as BridgeType.AsyncCallback)
 
-    ForwardAsyncKind.FLOW -> "NugetTasks.Register($name, nameof($name), " +
-        "(Func<IntPtr>)(() => NugetAsyncEnumeration.Enumerate($name)))"
+    ForwardAsyncKind.FLOW -> {
+      // The lambda runs later, outside the null check's flow state, hence the `!`.
+      val bang: String = if (type.isNullableFlowSource()) "!" else ""
+      val register: String = "NugetTasks.Register($name, nameof($name), " +
+          "(Func<IntPtr>)(() => NugetAsyncEnumeration.Enumerate($name$bang)))"
+      // ADR-210 amendment: a `null` source registers nothing; the zero key is Kotlin's `null`.
+      if (type.isNullableFlowSource()) "$name is null ? IntPtr.Zero : $register" else register
+    }
 
     null -> error("Forward CIR projection has no asynchronous registration for $type")
   }
