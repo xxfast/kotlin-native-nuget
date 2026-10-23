@@ -104,8 +104,8 @@ public Task<IReadOnlyDictionary<string, int>> AgesAsync(CancellationToken cancel
 `List<T>`, `Set<T>`, and `Map<K, V>` returns are spelled the same way a [property](collections.md)
 of that type is. A closed instantiation of your own generic class (`Box<String>`) is a handle and
 binds ([Generics](generics.md#returning-an-instantiated-generic-class)). Any other generic return
-(`Pair<A, B>`, `Result<T>`, `Flow<T>`) has no C# binding and is skipped with a diagnostic naming the
-member; expose the values through separate `suspend` functions instead.
+(`Pair<A, B>`, `Flow<T>`) has no C# binding and is skipped with a diagnostic naming the
+member; expose the values through separate `suspend` functions instead. A `Result<T>` return is the exception, see [below](#suspend-result).
 
 A nullable collection completes with `null`, never an empty collection, and an element that is a
 sealed base binds as the base type, each element arriving as its concrete arm. Both work on a
@@ -388,10 +388,27 @@ string claim = await NapSpot.Box.ClaimAsync("Mylo");
 |---|---|
 | `object` | static method on the object's `static class` |
 | companion (default or named) | static method on the owning class |
-| extension (class, nullable class, `String`, primitive or enum receiver) | `this` extension method in `{Receiver}Extensions` |
+| extension on any receiver a parameter binds as | `this` extension method in `{Receiver}Extensions` |
 | enum body member | `this` extension method in `{Enum}Extensions` |
 | enum companion member | static method in `{Enum}Extensions` |
 | value class | instance method on the struct |
+
+A `suspend` extension binds on every receiver a parameter of that type binds as: a generic class
+or bare `T` (`await bindle.UnpackLaterAsync()`), a collection, an interface, a bound C# interface,
+a value class, an enum, `Uuid`, `Instant`, `Duration`, `ByteArray`, and the nullable form of each.
+See [Extensions](extensions.md#supported-receivers) for how each looks in C#.
+
+```kotlin
+suspend fun List<Int>.total(): Int
+suspend fun <T> Bindle<T>.unpackLater(): T
+suspend fun Loafer.watch(count: Int): Flow<Int>
+```
+
+```C#
+int total = await new List<int> { 1, 2 }.TotalAsync();
+int top = await bindle.UnpackLaterAsync();
+using KotlinFlow<int> ticks = await mylo.WatchAsync(3); // a Flow result awaits to the wrapper
+```
 
 A companion member and an instance member can share a C# name when their parameters differ
 (`Swing.SwayAsync(3)` and `swing.SwayAsync()`). With identical parameters the build fails with
@@ -408,6 +425,29 @@ public static Task<T> RateLaterAsync<T>(T medal, CancellationToken cancellationT
 ```
 
 An out-of-bound value faults the `Task` instead of throwing at the call.
+
+## `suspend fun` returning `Result<T>` {id="suspend-result"}
+
+A `suspend fun` returning `Result<T>` binds as `Task<T>` on every `suspend` owner: a class, the top
+level, an `object`, a companion, an enum, a value class and an extension. A success completes the
+task with the payload. A failure faults the task with the exception C# would see for a thrown one,
+so catch it around the `await`. There is no `TryXAsync` twin, because the `Task` already carries the
+failure.
+
+```kotlin
+suspend fun fetchKibble(ok: Boolean): Result<String> =
+  if (ok) Result.success("kibble") else Result.failure(IllegalArgumentException("the bowl is empty"))
+
+suspend fun Dozer.wakeOrFail(ok: Boolean): Result<String> = /* ... */
+```
+
+```C#
+string kibble = await Bindles.FetchKibbleAsync(true);               // "kibble"
+await Bindles.FetchKibbleAsync(false); // throws ArgumentException: "the bowl is empty"
+```
+
+A `suspend inline fun <reified T> ...: Result<T>` binds the same way, with `T` reified at its bound.
+`Result<T>` at a `suspend` parameter or inside another type is still unsupported.
 
 ## `Flow` on an object, companion, top level, enum or value class {id="flow-static-owners"}
 
@@ -459,6 +499,9 @@ Differences from a class member:
   owner has no receiver to set the flow on.
 - A `suspend` member with a flow result awaits to the same wrapper
   (`await PurrClock.WinderAsync()` is a settable `KotlinMutableStateFlow<int>`, the top level included).
+- A sync extension returning a `Flow`, `StateFlow` or `SharedFlow` (`fun Loafer.ticks(count: Int): Flow<Int>`) binds
+  the same way as `mylo.Ticks(3)`, on a class, generic, nullable, collection or nullable enum receiver. See
+  [Extensions](extensions.md#supported-receivers).
 
 ## `suspend` members of a generic class {id="suspend-generic-owner"}
 
@@ -1805,9 +1848,6 @@ print.Value = new PostPrint(new byte[] { 1, 2, 3, 4 });                   // re-
   skipped with a diagnostic, like their non-null forms.
 - A `Pair` or a nullable collection (`List<T>?`) as a `Flow`/`StateFlow` element is not supported.
 - `Boolean?` / `Char?` value elements on a nullable `StateFlow` are not supported.
-- A `suspend inline fun <reified T> Receiver.f(...): Result<T>` extension has no bridge at all:
-  `inline` plus `reified` erase at the native boundary, and `suspend` needs a concrete
-  continuation type. It is skipped with a diagnostic naming the extension.
 - `suspend fun (): StateFlow<Throwable>` and any `MutableStateFlow<Throwable>` have no binding, for
   the same shared-export reason. A read-only `StateFlow<Throwable>` property or method binds; see
   [Throwable values](exceptions.md#throwable-values).

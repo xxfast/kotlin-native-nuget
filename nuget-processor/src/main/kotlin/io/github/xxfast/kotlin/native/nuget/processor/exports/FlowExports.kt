@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardMemberExtensionAccessor
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isMemberExtension
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticFlowGetter
 import com.google.devtools.ksp.getAllSuperTypes
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardKotlinDeclaredSpelling
@@ -75,6 +77,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyInvocation
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyKotlinNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyParameterShapes
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyPrelude
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyArgument
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyParameterShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedFlowElement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedReturn
@@ -448,7 +452,22 @@ internal fun FileSpec.Builder.addFlowMethodExports(
   val paramShapes: List<ForwardLegacyParameterShape> = classifier.legacyParameterShapes(
     method.parameters, callableCatalog.legacyDefaultFlags(method),
   )
-  val names: ForwardLegacyNames = legacyKotlinNames(method.parameters, paramShapes)
+  // ADR-238: a class member extension's receiver is the leading slot of one shared name set, as
+  // on the class suspend route; a static owner's receiver crosses on its own slot instead.
+  val extensionType: KSType? =
+    method.extensionReceiver?.resolve()?.expandAliases()?.takeIf { static == null }
+  val extensionShape: ForwardLegacyParameterShape? =
+    extensionType?.let { type -> classifier.legacyParameterShape(type) }
+  val declaredNames: List<String> = method.legacyParameterNames()
+  val extensionSlot: String? =
+    extensionShape?.let { freshName("receiver", declaredNames.toSet() + "handle") }
+  val slotNames: List<String> = listOfNotNull(extensionSlot) + declaredNames
+  val offset: Int = if (extensionShape == null) 0 else 1
+  val names: ForwardLegacyNames = if (extensionShape == null) {
+    legacyKotlinNames(method.parameters, paramShapes)
+  } else {
+    ForwardLegacyNames(slotNames, listOf(extensionShape) + paramShapes)
+  }
   // ADR-215: the trampoline (ADR-198) a `T` parameter needs: a trampolined own `T`, or a
   // multi-bound owner `T`, which the erased receiver (`Pride<*>`) cannot be called with.
   val declared: ForwardFlowTrampoline? = flowTrampoline(method, owner, paramShapes)
@@ -470,18 +489,39 @@ internal fun FileSpec.Builder.addFlowMethodExports(
   // ADR-230: a static member is called through its owner, or its receiver slot's read.
   val slots: ForwardStaticFlowSlots? = static?.slots(qualifiedName, names, method)
   val callee: String = slots?.callee ?: "${names.obj}."
-  val call: String = if (method is ForwardStaticFlowGetter) {
-    "$callee${methodName.kotlinIdentifier()}"
-  } else {
-    names.legacyInvocation(
-      "$callee${methodName.kotlinIdentifier()}${method.legacyTypeArguments()}",
+  // ADR-238: an extension is called through its import alias.
+  val called: String = static?.name ?: methodName.kotlinIdentifier()
+  val call: String = when {
+    method is ForwardStaticFlowGetter -> "$callee$called"
+    // ADR-238: a member extension is called on its receiver inside the owner's scope.
+    extensionSlot != null -> {
+      val extension: String = names.legacyArgument(0, extensionSlot.kotlinIdentifier())
+      // A member extension property is read, not called.
+      val accessor: ForwardMemberExtensionAccessor? = method as? ForwardMemberExtensionAccessor
+      if (accessor != null) {
+        "${names.obj}.run { ($extension).${accessor.propertyName.kotlinIdentifier()} }"
+      } else {
+        val member: String = "$called${method.legacyTypeArguments()}"
+        val call: String = names.legacyInvocation("($extension).$member", slotNames, from = 1)
+        "${names.obj}.run { $call }"
+      }
+    }
+    else -> names.legacyInvocation(
+      "$callee$called${method.legacyTypeArguments()}",
       method.legacyParameterNames(),
     )
   }
-  val paramPrelude: String = names.legacyPrelude(method.legacyParameterNames())
+  val paramPrelude: String = names.legacyPrelude(slotNames)
 
   fun FunSpec.Builder.addFlowParameters() {
-    method.parameters.forEachIndexed { index, param ->
+    if (extensionSlot != null && extensionShape != null && extensionType != null) {
+      addLegacySlots(extensionSlot, 0, extensionShape, names) {
+        extensionType.legacyScalarTypeName()
+      }
+    }
+    method.parameters.forEachIndexed { declaredIndex, param ->
+      val index: Int = declaredIndex + offset
+      val shapeIndex: Int = declaredIndex
       val paramName: String = param.name?.asString() ?: "_"
       // ADR-210: a `Flow<T>` parameter's flat thunk and key slots, in the planner's order.
       names.asyncSlots[index]?.let { slots ->
@@ -493,13 +533,13 @@ internal fun FileSpec.Builder.addFlowMethodExports(
       // ADR-122: so is a class/object/sealed parameter, which used to declare its real Kotlin
       // type here and cross as a pinned `kref` struct against C#'s `IntPtr` (issue #126).
       // ADR-240: a type riding its ordinary-route wire.
-      val wire = paramShapes[index] as? ForwardLegacyParameterShape.Wire
+      val wire = paramShapes[shapeIndex] as? ForwardLegacyParameterShape.Wire
       if (wire != null) {
         addLegacyWireParameter(paramName, wire, names.hasValueSlots[index])
         return@forEachIndexed
       }
-      if (paramShapes[index].isLegacyLowered()) {
-        val nullable: Boolean = paramShapes[index].isLegacyNullableSlot
+      if (paramShapes[shapeIndex].isLegacyLowered()) {
+        val nullable: Boolean = paramShapes[shapeIndex].isLegacyNullableSlot
         // ADR-164 rule 2: an optional handle's leading `IsSet` slot.
         names.isSetSlots[index]?.let { isSet -> addParameter(isSet, BOOLEAN) }
         addParameter(paramName, cOpaquePointer.copy(nullable = nullable))
@@ -509,7 +549,7 @@ internal fun FileSpec.Builder.addFlowMethodExports(
       val type: String = resolved.declaration.qualifiedName?.asString()
         ?: resolved.declaration.simpleName.asString()
       addLegacyScalarParameter(
-        paramName, paramShapes[index], ClassName.bestGuess(type), names.hasValueSlots[index],
+        paramName, paramShapes[shapeIndex], ClassName.bestGuess(type), names.hasValueSlots[index],
         names.isSetSlots[index],
       )
     }

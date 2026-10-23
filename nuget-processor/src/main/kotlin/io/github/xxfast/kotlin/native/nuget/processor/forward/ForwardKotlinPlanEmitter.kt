@@ -1799,11 +1799,17 @@ private val KOTLIN_HARD_KEYWORDS: Set<String> = setOf(
  * the single positional call it always was.
  */
 private fun dispatchedInvocation(plan: ForwardCallablePlan, receiver: ForwardAbiParameter?): String {
-  val parameters: List<ForwardPublicParameter> = plan.publicSignature.parameters
+  // ADR-238: a member extension's receiver is its first parameter, called on, never passed.
+  val declared: List<ForwardPublicParameter> = plan.publicSignature.parameters
+  val extension: String? =
+    if (plan.invocation.memberExtension) loweredArgument(declared.first()) else null
+  val parameters: List<ForwardPublicParameter> =
+    if (extension != null) declared.drop(1) else declared
   val defaulted: List<ForwardPublicParameter> = parameters.filter { it.default != null }
   if (defaulted.isEmpty()) {
     return invocationExpression(
       plan, receiver, parameters.joinToString(", ") { parameter -> loweredArgument(parameter) },
+      extension,
     )
   }
   // The planner minted these apart from every ABI slot of this export, so neither can shadow a
@@ -1824,7 +1830,7 @@ private fun dispatchedInvocation(plan: ForwardCallablePlan, receiver: ForwardAbi
     )
   }
   val arms: List<String> = forwardMaskArms(arguments) { call ->
-    invocationExpression(plan, receiver, call)
+    invocationExpression(plan, receiver, call, extension)
   }
   return buildString {
     appendLine("run {")
@@ -1902,8 +1908,10 @@ private fun invocationExpression(
   plan: ForwardCallablePlan,
   receiver: ForwardAbiParameter?,
   arguments: String,
+  // ADR-238: a member extension's lowered receiver.
+  extension: String? = null,
 ): String {
-  val call: String = declaredInvocationExpression(plan, receiver, arguments)
+  val call: String = declaredInvocationExpression(plan, receiver, arguments, extension)
   return plan.publicSignature.resultView?.kotlinUnwrap(call) ?: call
 }
 
@@ -1911,6 +1919,7 @@ private fun declaredInvocationExpression(
   plan: ForwardCallablePlan,
   receiver: ForwardAbiParameter?,
   arguments: String,
+  extension: String?,
 ): String {
   // ADR-090: an overload's symbol carries the `_2` suffix so catalog keys stay unique; the Kotlin
   // call site must say the declared name. `member` is null for every unnumbered callable.
@@ -1925,13 +1934,25 @@ private fun declaredInvocationExpression(
   val functionName: String =
     if (typeArguments.isEmpty()) declaredName
     else declaredName + typeArguments.joinToString(", ", "<", ">")
+  // ADR-238: a member extension is called on its receiver inside its owner's scope, and a member
+  // extension property is read or written there rather than called.
+  val scoped: String? = extension?.let { receiverRead ->
+    val property: String? = plan.invocation.memberExtensionProperty?.kotlinIdentifier()
+    val body: String = when {
+      property == null -> "$receiverRead.$functionName($arguments)"
+      plan.invocation.memberExtensionSetter -> "($receiverRead).$property = $arguments"
+      else -> "($receiverRead).$property"
+    }
+    "run { $body }"
+  }
   return when (plan.invocation.origin) {
-    ForwardCallableOrigin.CLASS -> ownerCall(plan, "$functionName($arguments)")
+    ForwardCallableOrigin.CLASS -> ownerCall(plan, scoped ?: "$functionName($arguments)")
 
     // ADR-006 amendment: an enum member is called exactly like an extension on the enum value,
     // which is also how Kotlin spells a member call, so per-entry `abstract fun` bodies dispatch.
     ForwardCallableOrigin.ENUM_MEMBER ->
-      "${receiverExpression(plan, requireNotNull(receiver))}.$functionName($arguments)"
+      "${receiverExpression(plan, requireNotNull(receiver))}." +
+        (scoped ?: "$functionName($arguments)")
     // Called through the alias `addForwardExtensionImport` imports it under: the declared name
     // resolves to an applicable member of the same name first (exact, defaulted, vararg, generic,
     // `invoke` property, supertype parameter), which would silently run the member instead.
@@ -1955,7 +1976,7 @@ private fun declaredInvocationExpression(
       "${kotlinPackageReference(packageName)}$functionName($arguments)"
     }
     ForwardCallableOrigin.OBJECT, ForwardCallableOrigin.COMPANION ->
-      "${requireNotNull(plan.invocation.target)}.$functionName($arguments)"
+      "${requireNotNull(plan.invocation.target)}.${scoped ?: "$functionName($arguments)"}"
 
     // ADR-147: a generic owner is constructed fully applied (`Crate<Any?>(item)`), so the handle
     // the caller gets back is the type `asStableRef<Crate<Any?>>()` reads.
@@ -2018,7 +2039,7 @@ private fun declaredInvocationExpression(
           "$construction(${valueClassUnderlyingLowering(self.ref, type.underlying)})"
         }
         if (plan.invocation.target?.endsWith("#property") == true) "$rewrapped.$declaredName"
-        else "$rewrapped.$functionName($arguments)"
+        else "$rewrapped.${scoped ?: "$functionName($arguments)"}"
       }
     }
   }
@@ -2052,7 +2073,9 @@ private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): Typ
     BridgeType.String, BridgeType.Uuid, is BridgeType.Throwable ->
       kotlinType("String").copy(nullable = true)
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
-    BridgeType.ByteArray, is BridgeType.TypeParameter -> cOpaquePointer.copy(nullable = true)
+    BridgeType.ByteArray, is BridgeType.TypeParameter,
+    // ADR-238: the transfer GCHandle, or the null pointer for a null `IFeedable?`.
+    is BridgeType.BoundInterface -> cOpaquePointer.copy(nullable = true)
 
     // ADR-077 sub-item 3: the underlying (String today) with the outer nullability re-applied.
     is BridgeType.ValueClass ->
@@ -2064,7 +2087,6 @@ private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): Typ
     BridgeType.Instant,
     BridgeType.Duration,
     is BridgeType.Enum,
-    is BridgeType.BoundInterface,
     is BridgeType.Nullable,
     is BridgeType.Callback,
     is BridgeType.AsyncCallback,
@@ -2379,8 +2401,10 @@ private fun underlyingArgument(parameter: ForwardPublicParameter): String =
           "${parameter.ref}?.let { ${inner.qualifiedName}($lowered) }"
         }
 
+      // ADR-238: a C# null arrives as the null pointer; a value resolves like the non-null arm.
+      is BridgeType.BoundInterface -> "${parameter.ref}?.let { ${inner.valueHelper()}(it) }"
+
       BridgeType.Unit,
-      is BridgeType.BoundInterface,
       is BridgeType.Nullable,
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,

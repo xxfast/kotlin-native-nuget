@@ -218,6 +218,12 @@ internal data class ForwardPropertyPlan(
   val doc: ForwardKdoc? = null,
   /** ADR-235: set when the declared type is a WIRE value class; [type] is then its underlying. */
   val view: ForwardValueClassView? = null,
+  /**
+   * ADR-238: an extension property's C# block type parameters: its own (`val <T> Bindle<T>.peek`)
+   * then one per star of a star-projected receiver (`val Bindle<*>.packed`). Constraints are
+   * spelled by the C# translator, which holds the declaration.
+   */
+  val typeParameters: List<ForwardMethodTypeParameter> = emptyList(),
 ) {
   fun validate(): ForwardPropertyPlan {
     require(symbol.isNotBlank()) { "Forward property plan symbol must not be blank" }

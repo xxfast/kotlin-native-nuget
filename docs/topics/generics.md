@@ -494,7 +494,8 @@ These are skipped, named, instead of generating C# that fails to compile:
 - A use-site `out` projection (`Box<out Cat>`), since C# has none for a generic class. A star
   projection binds: `Box<*>` is `Box<object?>`, read at the parameter's bound (see [Any](primitives-and-strings.md#any)).
   A star-projected generic value class result is a type parameter instead; see
-  [A star-projected result](value-classes.md#a-star-projected-result).
+  [A star-projected result](value-classes.md#a-star-projected-result). So is a star-projected
+  extension receiver; see [Projection receivers](extensions.md#projection-receivers).
 - An inner class of a generic owner (`Tin<Int>.Latch`). A generic interface (`Shelf<String>`) binds at every position; see
   [A generic interface](interfaces-abstract-sealed.md#implementing-a-generic-interface-in-c).
 - An outer type that is not an exported class (`Pair<Int, Int>`).
@@ -653,7 +654,7 @@ What differs from a generic class:
   prefix (`THold`).
 
 These stay a named skip, with the specific reason in the warning: a generic method on an interface,
-an `enum class`, or a value class (a top-level extension `fun <T> X.f()` binds); a `reified` type parameter on a member (a top-level `fun <T>` binds one); a bound that
+an `enum class`, or a value class (an extension `fun <T> X.f()`, sync or `suspend`, binds, see [Generic and bare `T` receivers](extensions.md#generic-receivers)); a `reified` type parameter on a member (a top-level `fun <T>` binds one); a bound that
 is itself a type parameter; a `T` nested in a type that is not an exported generic class or
 [generic value class](value-classes.md#a-generic-value-class) (`List`, `Set`, `Map` and `Result` aside); a multi-bound `T` that no parameter mentions; and a
 `T` that shadows a type parameter in scope (the owner's, or one an `inner` class captures). A

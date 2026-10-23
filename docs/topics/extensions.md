@@ -68,34 +68,145 @@ TestLibrary.Reserved.StringExtensions.Tag("Oreo", "Mylo"); // a different packag
 
 ## Supported receivers
 
-| Kotlin receiver | Extension function | Extension property |
-|---|---|---|
-| Exported class, nested class, or eligible sealed base | yes | yes |
-| Bare interface, bound C# interface (from a NuGet dependency) | yes | yes |
-| Nullable class or nullable interface | yes | yes |
-| `String`, a primitive, `Uuid`, `Instant`, `Duration` | yes | yes |
-| Value class over `String`, a primitive, an enum, or an object handle | yes | yes |
-| Nullable value class over `String`, an object handle, or a nullable underlying (`Nick?`) | yes | yes |
-| Bare enum | yes | yes |
-| `Collection` (`List`/`Map`/`Set`) | yes | yes |
-| Nullable `String`, nullable `Uuid` | yes | yes |
-| `Int?`, `Enum?`, `Instant?`, `Duration?`, or a nullable primitive/enum-underlying value class | yes | yes |
-| `Char`, `Char?` | yes | yes |
-| Nullable collection, nullable bound C# interface | yes | no |
-| Generic type, unexported (non-stdlib, non-dependency) type, `ByteArray` | no | no |
+An extension, function or property, sync or `suspend`, binds on every receiver the bridge can pass
+as a parameter, nullable or not, and the receiver crosses on the same wire that parameter would.
 
-A `suspend` extension is the exception for `ByteArray`: it binds on a `ByteArray` receiver, nullable
-too, as `this byte[]?` (see
-[Coroutines and Flow](coroutines-and-flow.md#async-wire-types)).
+| Kotlin receiver | C# receiver |
+|---|---|
+| Exported class, nested class, eligible sealed base | `this Cat` |
+| Exported generic class | `this Bindle<T>` on a generic method, or `this Bindle<int>` for `Bindle<Int>` |
+| Bare type parameter `T` | `this T` on a generic method, see [Generic and bare `T` receivers](#generic-receivers) |
+| Star projection (`Bindle<*>`, `List<*>`) | `this Bindle<TBindle>`, see [Projection receivers](#projection-receivers) |
+| Plain interface, bound C# interface | `this IPet`, `this IFeedable` |
+| `List`, `Set`, `Map` | `this IReadOnlyList<int>` and the other read-only interfaces |
+| Value class over any underlying | `this CatId`, `this Paws` |
+| Enum | `this Mood` |
+| `String`, primitive, `Char` | `this string`, `this int` |
+| `Uuid`, `Instant`, `Duration` | `this Guid`, `this DateTimeOffset`, `this TimeSpan` |
+| `ByteArray` | `this byte[]` |
+| The nullable form of any of these | `this Cat?`, `this int?`, `this byte[]?`, see [Nullable receivers](#nullable-receivers) |
 
-A closed instantiation of an exported generic class (`Box<Int>`) is the exception to the generic
-row for a property: `val Box<Int>.doubled: Int` binds as an extension on `Box<int>`.
-
-A receiver in a "no" cell is dropped with a named diagnostic: `SKIPPED_UNSUPPORTED_INPUT` for a
-function, `SKIPPED_UNSUPPORTED_PROPERTY` for a property
+A receiver that is an unexported, non-stdlib type has no C# type to extend and is dropped with a
+named diagnostic: `SKIPPED_UNSUPPORTED_INPUT` for a function, `SKIPPED_UNSUPPORTED_PROPERTY` for a
+property
 (see [Publishing Kotlin to C#: Diagnostics](forward-overview.md#diagnostics)).
 An extension property typed `Flow`, `StateFlow`, or a lambda is skipped the same way, even on an
 otherwise-supported receiver.
+
+### Generic and bare `T` receivers {id="generic-receivers"}
+
+An extension on a generic class, or on a bare `T`, binds as a generic C# extension method, and an
+extension property binds as a C# 14 `extension<T>(...)` block. `T` is inferred from the receiver.
+
+```kotlin
+class Bindle<T>(var top: T)
+interface Dozer { val name: String }
+
+fun <T> Bindle<T>.unpack(): T = top
+var <T> Bindle<T>.lid: T
+  get() = top
+  set(value) { top = value }
+
+fun <T : Dozer> T.introduce(): String = "I am $name"
+fun <T> T.tag(): String = "tag:$this"
+val <T> T.label: String get() = "label:$this"
+```
+
+```C#
+using var bindle = new Bindle<string>("kibble");
+bindle.Unpack();           // "kibble"
+bindle.Lid = "Mylo";
+new Loafer("Oreo").Introduce(); // "I am Oreo", Loafer implements Dozer
+42.Tag();                  // "tag:42", an unbounded T extends every type
+"x".Label;
+```
+
+A bare `T` needs a class to live in. A bounded one (`T : Dozer`) goes on the bound's own extension
+class, `DozerExtensions`, in the bound's namespace, with `where T : IDozer`. With several bounds
+(`where T : Dozer, T : Preener`) it goes on the first declared bound. An unbounded `T`
+(including `T : Any`) goes on `ObjectExtensions` in the namespace of the package that declares the
+extension. It is visible on every C# type wherever that namespace is imported, which is what a
+Kotlin `fun <T> T.tag()` does too.
+
+A receiver that nests `T` in a shape the bridge cannot carry as a parameter is a named `GENERIC` skip.
+
+### Projection receivers {id="projection-receivers"}
+
+C# has no projection of a generic class, so a receiver whose type arguments are all `*` gets a
+generic method with a type parameter the bridge names after the class (`TBindle`, `TList`). Several
+stars are numbered (`TMap1`, `TMap2`).
+
+```kotlin
+fun Bindle<*>.isPacked(): Boolean = top != null
+fun List<*>.headcount(): Int = size
+```
+
+```C#
+public static bool IsPacked<TBindle>(this Bindle<TBindle> receiver)
+public static int Headcount<TList>(this IReadOnlyList<TList> receiver)
+
+new Bindle<string?>(null).IsPacked(); // false
+new[] { 1, 2, 3 }.Headcount();        // 3
+```
+
+This works for a function, a property and a `suspend` function. A projection is still not
+supported for a generic class as a parameter, a result or a property type (a star-projected generic
+value class is the exception, see [A star-projected result](value-classes.md#a-star-projected-result)). A receiver with only some arguments
+starred (`Map<String, *>`) is not covered.
+
+### Member extensions {id="member-extensions"}
+
+An extension declared inside a class binds as an instance method of that class, with the receiver
+as its first parameter named `receiver`. C# cannot declare an extension method in a non-static
+class, so `loafer.Brush(...)` is not available. Kotlin/JVM lowers it the same way. A member
+extension property becomes accessor methods, `GetX(receiver)` and, for a `var`, `SetX(receiver, value)`.
+
+```kotlin
+class Groomhand(val name: String) {
+  fun Loafer.brush(strokes: Int): String = "${this@Groomhand.name} brushes $name $strokes times"
+  suspend fun Loafer.brushLater(): String = /* ... */
+
+  val Loafer.nick: String get() = "${this@Groomhand.name}'s $name"
+  var Loafer.mood: Int /* get() and set(value) */
+  val <T> Bindle<T>.peekInside: T get() = top
+  val Loafer.stream: Flow<String> get() = flowOf(this@Groomhand.name, name)
+}
+```
+
+```C#
+using var hand = new Groomhand("Oreo");
+using var mylo = new Loafer("Mylo");
+hand.Brush(mylo, 3);            // "Oreo brushes Mylo 3 times"
+await hand.BrushLaterAsync(mylo);
+hand.GetNick(mylo);             // "Oreo's Mylo"
+hand.SetMood(mylo, 2);          // GetMood(Loafer receiver) reads it back
+hand.GetPeekInside(bindle);     // GetPeekInside<T>(Bindle<T> receiver)
+KotlinFlow<string> stream = hand.Stream(mylo); // a Flow typed property is a flow method
+```
+
+A nullable receiver keeps its `?` (`GetNickOrNone(Loafer? receiver)`). A member extension function
+declared in an `object`, companion, sealed base or arm, interface, enum or value class also takes the
+receiver first (`Hold.InHold(Loafer receiver, int n)`, `mood.InMood(Loafer receiver, int n)`).
+
+### `suspend` and `Flow` extensions {id="suspend-and-flow-extensions"}
+
+A `suspend` extension is a `...Async` extension method on the same receivers. A `suspend` function
+returning `Result<T>` binds as `Task<T>` and a failure faults the task (see
+[Coroutines and Flow](coroutines-and-flow.md#suspend-result)).
+
+A sync extension returning `Flow`, `StateFlow` or `SharedFlow` returns the matching wrapper, on a
+class, generic, nullable, collection or nullable enum receiver. A `Flow<T>` parameter binds on a
+generic and a nullable receiver too.
+
+```kotlin
+fun Loafer.ticks(count: Int): Flow<Int>
+fun <T> Bindle<T>.relay(events: Flow<T>): Flow<T>
+```
+
+```C#
+using KotlinFlow<int> ticks = mylo.Ticks(3);
+using KotlinFlow<int> relay = bindle.Relay(events);
+```
 
 An extension property is also skipped, named `SHADOWED_BY_MEMBER`, when the receiver already has a
 visible member property of the same name (declared or inherited):
@@ -159,12 +270,10 @@ differ in nullability (`fun Int.label()` beside `val Int?.label`); the same null
 `SHADOWED_BY_EXTENSION_FUNCTION`.
 
 `Instant`, `Duration`, and `Uuid` map to `DateTimeOffset`, `TimeSpan`, and `Guid` at a receiver the
-same way they do everywhere else (see
-[Primitives and strings](primitives-and-strings.md#instant)). A nullable collection or a nullable
+same way they do everywhere else (see [Primitives and strings](primitives-and-strings.md#instant)). A
 bound C# interface (see
-[The bridgeable subset](bridgeable-subset.md#exposing-a-c-interface-in-your-own-kotlin-api)) still
-works as a function *parameter*, just not as a receiver at either position. A has-value shape such
-as `Int?` binds as a receiver at both (see [Nullable receivers](#nullable-receivers)).
+[The bridgeable subset](bridgeable-subset.md#exposing-a-c-interface-in-your-own-kotlin-api)) is a
+receiver too, nullable included.
 
 ### Nullable receivers
 
@@ -299,8 +408,7 @@ shape.Footprint(); // works on the base type, no cast needed
 
 ### Value-class receivers
 
-A value class works as a receiver over any of its four supported underlyings (`String`, a
-primitive, an enum, or an object handle; see
+A value class works as a receiver over any supported underlying (see
 [Value classes](value-classes.md#as-an-extension-receiver)):
 
 ```kotlin

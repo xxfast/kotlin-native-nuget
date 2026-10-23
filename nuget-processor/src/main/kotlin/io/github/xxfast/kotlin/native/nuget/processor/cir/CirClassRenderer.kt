@@ -686,7 +686,15 @@ internal fun StringBuilder.renderMember(member: CirMember, className: String = "
  * column 16, so each body moves in two levels.
  */
 internal fun StringBuilder.renderExtensionProperty(prop: CirExtensionProperty) {
-  appendLine("        extension(${prop.receiverType} receiver)")
+  // ADR-238: a generic block, its constraints after the receiver.
+  val typeParameters: String = if (prop.typeParameters.isEmpty()) "" else
+    prop.typeParameters.joinToString(", ", "<", ">") { parameter -> parameter.name }
+  val constraints: String = prop.typeParameters
+    .filter { parameter -> parameter.bounds.isNotEmpty() }
+    .joinToString("") { parameter ->
+      " where ${parameter.name} : ${parameter.bounds.joinToString(", ")}"
+    }
+  appendLine("        extension$typeParameters(${prop.receiverType} receiver)$constraints")
   appendLine("        {")
   renderDoc(prop.doc, "            ")
   appendLine("            public ${prop.type} ${prop.identifier}")

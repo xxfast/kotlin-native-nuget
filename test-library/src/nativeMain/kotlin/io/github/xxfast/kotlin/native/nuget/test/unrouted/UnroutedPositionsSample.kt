@@ -146,10 +146,10 @@ fun <T> structuralOnTopLevel(value: T): T = value
  */
 fun <T, U : T> structuralRefusedOnTopLevel(item: U): T = item
 
-/** row 6: FLOW_PROTOCOL return on an extension. Predicted NONE. */
+/** row 6: FLOW_PROTOCOL return on an extension. Binds since ADR-238, on the static flow route. */
 fun Depot.flowReturnOnExtension(): Flow<Int> = flowOf(1)
 
-/** row 6: FLOW_PROTOCOL parameter on an extension. Predicted NONE. */
+/** row 6: FLOW_PROTOCOL parameter on an extension. Binds since ADR-210, on the plan. */
 fun Depot.flowParamOnExtension(events: Flow<Int>): Int = 0
 
 /**

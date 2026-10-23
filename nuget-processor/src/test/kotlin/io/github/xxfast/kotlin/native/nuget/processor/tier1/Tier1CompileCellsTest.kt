@@ -488,31 +488,13 @@ class Tier1CompileCellsTest {
   }
 
   /**
-   * Cell 23 · obs K, migrating to ADR-064's **diagnostic** assertion mode. Extension function ×
-   * generic + `inline` + `reified` + `suspend` + `Result<T>`. `NugetProcessor.kt`'s
-   * suspend/generic filter only partitions top-level `allFunctions`; `extensionFunctions` are
-   * never filtered at all, so this shape reaches `ExtensionFunctionExports.kt` unchanged and
-   * fails Kotlin type-checking four different ways at once (raw `Result<T>`, an unresolved
-   * reified `T`, a suspend call outside a coroutine, and more) — matches BUG-010 from the
-   * NYTimes report exactly.
-   *
-   * Per ADR-064 (ROADMAP.md "Forward unsupported-declaration diagnostics", MVP.md P1) this
-   * cell's correct end state is a **named skip with a diagnostic**, the same shape of thing as
-   * cell 21 (see [Tier1DiagnosticCellsTest]). Phase 10 already closed the "no broken source"
-   * half — the planner classifies this shape `Skipped(reason = SUSPEND, droppedFromCSharp =
-   * false)` (a *legacy-route deferral*, silent by design, on the assumption a named legacy route
-   * re-emits it) and `addExtensionFunctionExports` only emits from the plan catalog, so nothing
-   * invalid reaches the compiler today (verified through this same harness). But no legacy route
-   * actually handles *this* combination, so the "deferred, therefore fine" assumption is false
-   * for it specifically, and the callable is dropped with **zero** diagnostic of any kind
-   * (`kspWarnings` is empty) — a silent gap, not yet the honest "skip + named reason" ADR-064
-   * asks for. This test asserts both halves of the fix: the (already-true) absence of broken
-   * source, and the (not-yet-true) `SKIPPED_UNSUPPORTED_COMBINATION` diagnostic.
-   *
-   * Once ADR-064 lands, this cell moves to [Tier1DiagnosticCellsTest] alongside cell 21.
+   * Cell 23 · obs K. Extension function × generic + `inline` + `reified` + `suspend` +
+   * `Result<T>` (BUG-010 from the NYTimes report). ADR-238: it binds. A suspend `Result<T>` is a
+   * `Task<T>` that Kotlin unwraps with `getOrThrow()` inside the coroutine, and a top-level
+   * extension's `reified T` reifies at its bound (ADR-213), so the C# method is generic.
    */
   @Test
-  fun `cell 23 - suspend inline reified extension function returning Result is a named skip`() {
+  fun `cell 23 - suspend inline reified extension function returning Result binds`() {
     val result = Tier1Harness.run(
       """
       package tier1.cell23
@@ -523,24 +505,15 @@ class Tier1CompileCellsTest {
       """.trimIndent()
     )
 
+    assertTrue(result.compiledClean, "compileErrors=${result.compileErrors}")
     assertTrue(
-      result.compiledClean,
-      "expected no broken source for chartEntry (already fixed by Phase 10's plan-only " +
-          "extension emitter); got: ${result.compileErrors}",
+      result.kspWarnings.none { "chartEntry" in it },
+      "expected chartEntry to bind with no diagnostic; kspWarnings=${result.kspWarnings}",
     )
     assertTrue(
-      "export_library_tier1_cell23__patient_chartEntry" !in result.generated,
-      "expected chartEntry to be entirely absent from the generated CNameExports.kt (a named " +
-          "skip is never emitted, not even partially); generated=${result.generated}",
-    )
-    assertTrue(
-      result.kspWarnings.any { it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_COMBINATION.name) },
-      "expected a SKIPPED_UNSUPPORTED_COMBINATION diagnostic naming Patient.chartEntry as an " +
-          "unbridgeable generic+suspend+inline+reified extension returning Result<T>; today " +
-          "this dropped callable is entirely silent (kspWarnings=${result.kspWarnings}) because " +
-          "the planner's SUSPEND skip reason is droppedFromCSharp=false (a legacy-route " +
-          "deferral), which is wrong for this specific combination since no legacy route " +
-          "handles it",
+      "public static Task<T> ChartEntryAsync<T>(this global::Interop.Patient receiver, T entry" in
+        result.generatedCSharp,
+      "expected the generic Task<T> extension; generatedCSharp=${result.generatedCSharp}",
     )
   }
 

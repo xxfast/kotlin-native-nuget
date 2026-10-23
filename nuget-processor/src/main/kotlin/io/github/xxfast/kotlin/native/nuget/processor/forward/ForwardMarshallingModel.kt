@@ -151,6 +151,11 @@ internal sealed interface BridgeType {
     val typeVariables: List<kotlin.String> = emptyList(),
     /** ADR-217: set by the Kotlin emitter inside a trampoline, never by the classifier. */
     val readsAsTypeVariable: kotlin.Boolean = false,
+    /**
+     * ADR-238: a star-projected extension receiver (`Bindle<*>`), the C# method type parameters
+     * [csharpType] is spelled over (`Bindle<TBindle>`), which the plan declares on the method.
+     */
+    val starTypeParameters: List<kotlin.String> = emptyList(),
   ) : BridgeType
 
   /**
@@ -1131,6 +1136,19 @@ internal data class ForwardInvocation(
    * the erased arguments for a secondary constructor no parameter witnesses (`pkg.Sticker<Any?>`).
    */
   val valueClassConstruction: String? = null,
+  /**
+   * ADR-238: a [ForwardCallableOrigin.CLASS] member declared with an extension receiver
+   * (`class Groomhand { fun Loafer.brush() }`). The receiver is the plan's first public parameter
+   * (`hand.Brush(loafer, 3)`, Kotlin/JVM's own lowering), and Kotlin calls it in the owner's scope:
+   * `owner.run { receiver.brush(strokes) }`.
+   */
+  val memberExtension: Boolean = false,
+  /**
+   * ADR-238: a member extension PROPERTY's Kotlin name (`nick`), read (`receiver.nick`) or, when
+   * [memberExtensionSetter], written (`receiver.mood = value`) instead of called.
+   */
+  val memberExtensionProperty: String? = null,
+  val memberExtensionSetter: Boolean = false,
 )
 
 /**

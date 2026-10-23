@@ -401,6 +401,8 @@ internal fun legacyWireShape(classified: BridgeType): ForwardLegacyParameterShap
   val admitted: Boolean = when (inner) {
     BridgeType.Instant, BridgeType.Duration, BridgeType.Uuid, BridgeType.ByteArray -> true
     is BridgeType.Interface -> true
+    // ADR-238: a bound C# interface, on the plan route's fresh transfer GCHandle.
+    is BridgeType.BoundInterface -> true
     is BridgeType.ValueClass -> inner.qualifiedName != "kotlin.Result" &&
       ForwardValueClassView(classified).planned.isLegacyWireUnderlying()
     BridgeType.Unit,
@@ -410,7 +412,6 @@ internal fun legacyWireShape(classified: BridgeType): ForwardLegacyParameterShap
     is BridgeType.Throwable,
     is BridgeType.Enum,
     is BridgeType.ObjectHandle,
-    is BridgeType.BoundInterface,
     is BridgeType.Collection,
     is BridgeType.Nullable,
     is BridgeType.Callback,
@@ -833,6 +834,60 @@ internal fun ForwardBridgeTypeClassifier.legacyRefusedParameter(
 ): String? = legacyRefusedParameterShape(parameters)?.let { (name, shape) ->
   "$name: ${shape.description}"
 }
+
+/**
+ * ADR-238: a member extension's receiver, when no legacy parameter shape carries it, named
+ * `receiver` with its refused shape; null when it binds or the member has none.
+ */
+internal fun ForwardBridgeTypeClassifier.legacyRefusedExtensionReceiver(
+  function: KSFunctionDeclaration,
+): Pair<String, ForwardLegacyParameterShape.Refused>? {
+  val receiver: KSType = function.extensionReceiver?.resolve() ?: return null
+  val shape: ForwardLegacyParameterShape = legacyReceiverShape(receiver)
+  return if (shape is ForwardLegacyParameterShape.Refused) "receiver" to shape else null
+}
+
+/**
+ * ADR-238: an extension receiver's legacy shape. A star-projected generic class receiver
+ * (`Bindle<*>`) is a borrowed handle spelled over its synthesized method type parameter
+ * (`Bindle<TBindle>`) and read back as `Bindle<*>`; every other receiver is a leading parameter.
+ */
+internal fun ForwardBridgeTypeClassifier.legacyReceiverShape(
+  type: KSType,
+): ForwardLegacyParameterShape {
+  val starred: BridgeType = classifyReceiver(type)
+  val handle: BridgeType.ObjectHandle? = (starred.unwrapNullable() as? BridgeType.ObjectHandle)
+    ?.takeIf { handle -> handle.starTypeParameters.isNotEmpty() }
+  if (handle != null) {
+    return ForwardLegacyParameterShape.Handle(handle, nullable = starred is BridgeType.Nullable)
+  }
+  // A star-projected collection (`List<*>`) crosses as the marshalled container of its boxed
+  // synthesized element (`IReadOnlyList<TList>`), as a `List<T>` parameter does (ADR-212).
+  val collection: BridgeType.Collection? = starred.unwrapNullable() as? BridgeType.Collection
+  if (collection != null && collection.starTypeParameters().isNotEmpty() &&
+    collection.isLegacyMarshallableInput()
+  ) {
+    return ForwardLegacyParameterShape.Marshalled(
+      collection,
+      nullable = starred is BridgeType.Nullable,
+    )
+  }
+  return legacyParameterShape(type)
+}
+
+/** ADR-238: the synthesized C# method type parameters a star-projected receiver shape needs. */
+internal fun ForwardLegacyParameterShape.starTypeParameters(): List<String> = when (this) {
+  is ForwardLegacyParameterShape.Handle -> type.starTypeParameters
+  is ForwardLegacyParameterShape.Marshalled -> type.starTypeParameters()
+  else -> emptyList()
+}
+
+private fun BridgeType.Collection.starTypeParameters(): List<String> =
+  listOfNotNull(element, key, value)
+    .mapNotNull { component -> component.unwrapNullable() as? BridgeType.TypeParameter }
+    .filter { component -> component.kotlinName == STAR_KOTLIN_NAME }
+    .map { component -> component.name }
+    .distinct()
 
 /** [legacyRefusedParameter] with the refused shape itself, for the diagnostic walk. */
 internal fun ForwardBridgeTypeClassifier.legacyRefusedParameterShape(
@@ -1280,6 +1335,27 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
 }
 
 /**
+ * ADR-238: the type a `suspend` member's `Task` awaits, alias-expanded: a non-null
+ * `kotlin.Result<T>` result awaits its `T` (the call appends [suspendResultUnwrap], so a failure
+ * faults the `Task` with the ADR-032 mapped exception); every other result awaits itself.
+ */
+internal fun KSFunctionDeclaration.suspendAwaitedType(): KSType? {
+  val returned: KSType = returnType?.resolve()?.expandAliases() ?: return null
+  return returned.suspendResultPayload() ?: returned
+}
+
+/** ADR-238: `.getOrThrow()` when [suspendAwaitedType] unwrapped a `Result`, empty otherwise. */
+internal fun KSFunctionDeclaration.suspendResultUnwrap(): String {
+  val returned: KSType? = returnType?.resolve()?.expandAliases()
+  return if (returned?.suspendResultPayload() != null) ".getOrThrow()" else ""
+}
+
+private fun KSType.suspendResultPayload(): KSType? {
+  if (declaration.qualifiedName?.asString() != "kotlin.Result" || isMarkedNullable) return null
+  return arguments.singleOrNull()?.type?.resolve()?.expandAliases()
+}
+
+/**
  * A legacy-route member's refused return as the author spelled it, or null when it binds.
  *
  * ADR-123 widens this from `suspend`-only to every legacy async route, so a `Flow`-returning
@@ -1298,7 +1374,7 @@ internal fun ForwardBridgeTypeClassifier.legacyRefusedReturnShape(
 ): Pair<String, BridgeType.Unsupported?>? {
   val returnType: KSType? = func.returnType?.resolve()
   if (!func.modifiers.contains(Modifier.SUSPEND)) return legacyRefusedFlowElementShape(returnType)
-  val shape: ForwardLegacyReturnShape = legacyReturnShape(returnType)
+  val shape: ForwardLegacyReturnShape = legacyReturnShape(func.suspendAwaitedType())
   return if (shape is ForwardLegacyReturnShape.Refused) shape.description to shape.refusal else null
 }
 
@@ -2037,8 +2113,14 @@ private fun ForwardLegacyNames.legacyPresence(index: Int, parameter: String): St
  * calls (the plan route's [forwardMaskArms]), parenthesized so a caller can hang `.collect`,
  * `.value` or `?.` off it; [mask] is bound by [legacyPrelude], before any coroutine launches.
  */
-internal fun ForwardLegacyNames.legacyInvocation(target: String, parameters: List<String>): String {
-  val arguments: List<ForwardDispatchArgument> = parameters.mapIndexed { index, parameter ->
+internal fun ForwardLegacyNames.legacyInvocation(
+  target: String,
+  parameters: List<String>,
+  // ADR-238: the leading slots that are not arguments (an extension receiver the target reads).
+  from: Int = 0,
+): String {
+  val arguments: List<ForwardDispatchArgument> = parameters.mapIndexedNotNull { index, parameter ->
+    if (index < from) return@mapIndexedNotNull null
     ForwardDispatchArgument(
       label = parameter,
       defaulted = shapes[index].isLegacyDefaulted,

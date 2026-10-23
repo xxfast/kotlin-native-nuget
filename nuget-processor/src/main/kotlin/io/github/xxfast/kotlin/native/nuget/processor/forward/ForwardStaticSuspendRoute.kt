@@ -33,6 +33,18 @@ internal sealed interface ForwardStaticSuspendReceiver {
   data class Wire(val shape: ForwardLegacyParameterShape.Wire, override val kotlinType: String) :
     ForwardStaticSuspendReceiver
 
+  /**
+   * ADR-238: an extension receiver none of the arms above carries (a collection, a generic or
+   * closed generic class, a bare `T`, a nullable scalar or enum, a bound C# interface), crossing
+   * exactly as a leading parameter of [shape] does: both halves lower it through the legacy
+   * parameter path, so a receiver and a parameter of one type share one wire.
+   */
+  data class Parameter(
+    val shape: ForwardLegacyParameterShape,
+    val type: KSType,
+    override val kotlinType: String,
+  ) : ForwardStaticSuspendReceiver
+
   /** An exported enum, crossing by ordinal (ADR-080). */
   data class Enum(val type: BridgeType.Enum, override val kotlinType: String) :
     ForwardStaticSuspendReceiver
@@ -107,13 +119,30 @@ internal data class ForwardStaticSuspendMember(
 )
 
 /**
- * ADR-229: the receiver slot [type] crosses on, or null when the route has none for it (a
- * collection, an interface, a value class, a generic receiver). Null keeps the member a named skip.
+ * ADR-229: the receiver slot [type] crosses on, or null when the route has none for it. ADR-238: an
+ * [extension] receiver falls back to its legacy parameter shape, so only a refused one is null.
  */
 internal fun ForwardBridgeTypeClassifier.staticSuspendReceiver(
   type: KSType,
   // ADR-240: a value class member's receiver, its underlying, which may be a bare collection.
   valueClassUnderlying: Boolean = false,
+  // ADR-238: an extension receiver, which every legacy parameter shape may carry.
+  extension: Boolean = false,
+): ForwardStaticSuspendReceiver? {
+  val direct: ForwardStaticSuspendReceiver? =
+    directStaticSuspendReceiver(type, valueClassUnderlying)
+  if (direct != null || !extension) return direct
+  val shape: ForwardLegacyParameterShape = legacyReceiverShape(type)
+  if (shape is ForwardLegacyParameterShape.Refused) return null
+  val expanded: KSType = type.expandAliases()
+  val kotlinType: String = expanded.declaration.qualifiedName?.asString()
+    ?: expanded.declaration.simpleName.asString()
+  return ForwardStaticSuspendReceiver.Parameter(shape, expanded, kotlinType)
+}
+
+private fun ForwardBridgeTypeClassifier.directStaticSuspendReceiver(
+  type: KSType,
+  valueClassUnderlying: Boolean,
 ): ForwardStaticSuspendReceiver? {
   val expanded: KSType = type.expandAliases()
   val kotlinType: String = expanded.declaration.qualifiedName?.asString() ?: return null

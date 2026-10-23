@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedExtensionReceiver
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.ClassKind
@@ -75,6 +76,8 @@ internal fun KSClassDeclaration.forwardSuspendRouteMethods(
     // ADR-114 / ADR-119: a parameter or return this route cannot marshal drops the member on both
     // halves, named once by `warnRefusedLegacyRouteMembers`.
     .filter { method -> classifier.legacyRefusedParameter(method.parameters) == null }
+    // ADR-238: and a member extension's receiver, lowered as the leading parameter.
+    .filter { method -> classifier.legacyRefusedExtensionReceiver(method) == null }
     // ADR-214: a member's own type parameters route under ADR-197's rules; a refusal is named once
     // by `warnRefusedLegacyRouteMembers`, never emitted as a C# method missing its `<T>`.
     .filter { method -> method.forwardMemberGenericRefusal() == null }
@@ -109,6 +112,9 @@ internal fun KSClassDeclaration.forwardClassFlowMethods(
     .filter { method -> method.forwardMemberGenericRefusal() == null }
     .filter { method -> method.isForwardMemberOf(this, superClass) }
     .filter { method -> !method.reProjectsKeptBaseMember(this, superClass) }
+    // ADR-238: a member extension property typed as a `Flow` binds as a flow method too.
+    .plus(forwardMemberExtensionAccessors(flow = true))
+    .filter { method -> classifier.legacyRefusedExtensionReceiver(method) == null }
     .toList()
 }
 
@@ -126,6 +132,8 @@ internal fun KSClassDeclaration.forwardClassFlowProperties(
   .filter { prop -> !prop.isOptInRefused(classifier.exportMarkers) }
   .filter { prop -> classifier.legacyRefusedFlowElement(prop.type.resolve()) == null }
   .filter { prop -> prop.isForwardMemberOf(this, superClass) }
+  // ADR-238: a member extension one is a flow method (`Stream(Loafer receiver)`).
+  .filter { prop -> !prop.isMemberExtension() }
   .toList()
 
 /**

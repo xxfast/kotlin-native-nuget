@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMemberExtensionAccessors
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isMemberExtension
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinIdentifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMemberGenericRefusal
 import io.github.xxfast.kotlin.native.nuget.processor.forward.takesGenericFlowRoute
@@ -359,6 +361,8 @@ internal fun KSClassDeclaration.forwardClassLegacyMembers(
     .filter { !it.modifiers.contains(Modifier.SUSPEND) }
     .filter { method -> method.isForwardMemberOf(cls, superClass) }
     .toList()
+    // ADR-238: a `Flow` typed member extension property, as the flow method it lowers to.
+    .plus(cls.forwardMemberExtensionAccessors(flow = true))
   val legacyPairMembers: Set<KSFunctionDeclaration> = forwardLegacyPairMembers(memberMethods)
   // ADR-147: every specialized legacy route spells the receiver as the bare owner name
   // (`asStableRef<Crate>()`), which does not compile for a generic class. Refused on a generic
@@ -495,6 +499,8 @@ internal fun FileSpec.Builder.addClassExports(
 
   val properties: List<KSPropertyDeclaration> = cls.getAllProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
+    // ADR-238: a member extension property binds as accessor methods on the method route.
+    .filter { prop -> !prop.isMemberExtension() }
     .filter { prop -> prop.isForwardMemberOf(cls, superClass) }
     .toList()
 
