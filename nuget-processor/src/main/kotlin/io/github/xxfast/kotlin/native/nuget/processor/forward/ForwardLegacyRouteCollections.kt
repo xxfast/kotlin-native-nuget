@@ -446,7 +446,7 @@ internal fun BridgeType.asyncTypeParameterNames(): Set<String> {
  * [ForwardLegacyParameterShape.Plain] may cover: anything outside it rendered `IntPtr`, which is
  * issue #126.
  */
-private fun BridgeType.isLegacyScalar(): Boolean =
+internal fun BridgeType.isLegacyScalar(): Boolean =
   this is BridgeType.Primitive || this is BridgeType.Char || this is BridgeType.String
 
 /**

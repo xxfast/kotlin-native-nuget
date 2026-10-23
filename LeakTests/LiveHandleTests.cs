@@ -50,6 +50,7 @@ using TestLibrary.Petlist;
 using TestLibrary.Routes;
 using TestLibrary.Workshop;
 using Suspendgeneric = TestLibrary.Suspendgeneric;
+using TestLibrary.Catnap;
 
 namespace LeakTests;
 
@@ -6439,5 +6440,124 @@ public class LiveHandleTests
             Assert.Equal(1, book.Pages.Value);
             Assert.Equal(3, book.Peel(book.Stick(3)));
         });
+    }
+
+    // ADR-229
+    // The static suspend route: an `object`, a default-named and a named companion, suspend
+    // extensions, an enum body and companion, and value-class members, each on an ad-hoc root
+    // scope per call. Every completed call releases its job handle; a generic `T` argument is an
+    // owned `Wrap<T>` box the C# `finally` disposes once the extern returns, and each `T` result is
+    // one handle `FromHandle<T>` consumes. Class arguments and receivers are borrowed across the
+    // suspension. Ledger per iteration: Siesta MinutesFor job +1/-1; Echo(i) box +1/-1, result
+    // +1/-1, job +1/-1; Echo(oreo) result wrapper +1/-1, job +1/-1; Wake(oreo) job +1/-1;
+    // Settle job +1/-1; Swing.Hang wrapper +1/-1, job +1/-1; Swing.Carry("Mylo") box +1/-1, result
+    // +1/-1; Quilt.Knit wrapper +1/-1; Rock, Occupant (null and not), Yawn, NapMinutes, Stirring jobs +1/-1
+    // each;
+    // Tuck(oreo) wrapper +1/-1; NapSpot Claim, Next, Stash("treat") box/result +1/-1, Favourite;
+    // NapLength Doubled, Label("Mylo") box +1/-1; NapTag Read job +1/-1. oreo outlives the loop.
+    // Net zero.
+    [Fact]
+    public async Task StaticSuspend_EveryOwner_Completion_ReturnsToBaseline()
+    {
+        await using var oreo = new Swing("Oreo");
+        int i = 0;
+        await AssertNoLeakAsync(async () =>
+        {
+            i++;
+            Assert.Equal(40, await Siesta.MinutesForAsync("Mylo"));
+            Assert.Equal(i, await Siesta.EchoAsync(i));
+            await using (Swing same = await Siesta.EchoAsync(oreo)) Assert.Equal("Oreo", same.Sleeper);
+            Assert.Equal("Oreo is up", await Siesta.WakeAsync(oreo));
+            await Siesta.SettleAsync();
+            await using (Swing hung = await Swing.HangAsync("Mylo")) Assert.Equal("Mylo", hung.Sleeper);
+            Assert.Equal("Mylo", await Swing.CarryAsync("Mylo"));
+            Assert.Equal("swayed 2 times", await Swing.SwayAsync(2));
+            using (Quilt quilt = await Quilt.KnitAsync("black")) Assert.Equal("black", quilt.Colour);
+            Assert.Equal("Oreo rocked 1 times", await oreo.RockAsync(1));
+            Assert.Equal("Oreo", await oreo.OccupantAsync());
+            Swing? none = null;
+            Assert.Equal("empty", await none.OccupantAsync());
+            Assert.Equal("Mylo yawns", await "Mylo".YawnAsync());
+            Assert.Equal("Oreo naps for 3 minutes", await 3.NapMinutesAsync("Oreo"));
+            Assert.Equal("Mylo is stirring", await true.StirringAsync());
+            await using (Swing tucked = await oreo.TuckAsync(oreo)) Assert.Equal("Oreo", tucked.Sleeper);
+            Assert.Equal("Oreo claims a cardboard box", await NapSpot.Box.ClaimAsync("Oreo"));
+            Assert.Equal(NapSpot.Laundry, await NapSpot.Windowsill.NextAsync());
+            Assert.Equal("treat", await NapSpot.Box.StashAsync("treat"));
+            Assert.Equal(NapSpot.Box, await NapSpotExtensions.FavouriteAsync());
+            Assert.Equal(new NapLength(20), await new NapLength(10).DoubledAsync());
+            Assert.Equal("Mylo: 10", await new NapLength(10).LabelAsync("Mylo"));
+            Assert.Equal("tag: Oreo", await new NapTag(oreo).ReadAsync());
+        }, iterations: 200);
+    }
+
+    // ADR-229
+    // A fault on every static suspend owner. The job handle is released on the faulted arm and the
+    // Kotlin throwable crosses as one ADR-107 envelope the C# exception owns and disposes.
+    // Ledger per iteration: each of Alarm, Snap, Fray, Evict, Cut: job +1/-1, envelope +1/-1.
+    // oreo outlives the loop. Net zero.
+    [Fact]
+    public async Task StaticSuspend_Fault_ReturnsToBaseline()
+    {
+        await using var oreo = new Swing("Oreo");
+        await AssertNoLeakAsync(async () =>
+        {
+            await Assert.ThrowsAnyAsync<InvalidOperationException>(() => Siesta.AlarmAsync());
+            await Assert.ThrowsAnyAsync<ArgumentException>(() => Swing.SnapAsync());
+            await Assert.ThrowsAnyAsync<InvalidOperationException>(() => oreo.FrayAsync());
+            await Assert.ThrowsAnyAsync<InvalidOperationException>(() => NapSpot.Laundry.EvictAsync());
+            await Assert.ThrowsAnyAsync<InvalidOperationException>(() => new NapLength(5).CutAsync());
+        }, iterations: 200);
+    }
+
+    // ADR-229
+    // Cancellation on every static suspend owner, two ways: a pre-cancelled token (the job may be
+    // cancelled before it ever runs) and a token that fires while Kotlin is parked in
+    // `awaitCancellation`. Each call is awaited to completion before the count, so the job handle
+    // and the completion `GCHandle` are both released on the cancelled arm, and LingerWith's owned
+    // box goes in the C# `finally` though the job never completes normally.
+    // Ledger per iteration: Linger, LingerWith (box +1/-1), Creak, Dangle, Guard, Oversleep: job
+    // +1/-1 each, on both tokens. oreo outlives the loop. Net zero.
+    [Fact]
+    public async Task StaticSuspend_Cancellation_ReturnsToBaseline()
+    {
+        await using var oreo = new Swing("Oreo");
+        await AssertNoLeakAsync(async () =>
+        {
+            using (var cancelled = new CancellationTokenSource())
+            {
+                cancelled.Cancel();
+                await CancelEveryOwner(oreo, cancelled.Token);
+            }
+            using (var later = new CancellationTokenSource(TimeSpan.FromMilliseconds(1)))
+            {
+                await CancelEveryOwner(oreo, later.Token);
+            }
+        }, iterations: 50);
+    }
+
+    private static async Task CancelEveryOwner(Swing swing, CancellationToken token)
+    {
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Siesta.LingerAsync(token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Siesta.LingerWithAsync("Mylo", token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Swing.CreakAsync(token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => swing.DangleAsync(token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => NapSpot.Box.GuardAsync(token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new NapLength(60).OversleepAsync(token));
+    }
+
+    // ADR-229
+    // `Siesta.now()` and `Swing.ready()` never suspend, so `launchForCSharp`'s completion callback
+    // often runs on a Kotlin worker before the `_async` P/Invoke has returned its job handle to C#.
+    // ADR-019's job cell has to release the job handle and the completion `GCHandle` on either
+    // ordering. Ledger per iteration: two jobs +1/-1. Net zero over 1000 iterations.
+    [Fact]
+    public async Task StaticSuspend_TightLoop_CompletionBeforeReturn_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            Assert.Equal(1, await Siesta.NowAsync());
+            Assert.Equal(2, await Swing.ReadyAsync());
+        }, iterations: 1000);
     }
 }

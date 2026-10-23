@@ -326,6 +326,8 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
   val locals: CirAsyncLocals = CirAsyncLocals.of(method.parameters)
   val visibility: String = if (method.visibility == CirVisibility.PRIVATE) "private" else "public"
   val static: String = if (method.isStatic) "static " else ""
+  // ADR-229: a value-class member takes the static route's call shape from an instance method.
+  val staticCall: Boolean = method.isStatic || method.asyncReceiver != null
   val isUnit: Boolean = method.asyncReturnType.isEmpty()
   // ADR-026 amendment (2026-10-09): a nullable acquired `Flow<T>?` completes as `KotlinFlow<T>?`.
   val innerType: String = when {
@@ -346,8 +348,10 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
   val methodParams: String = if (method.parameters.isEmpty()) {
     "CancellationToken $token$tokenDefault"
   } else {
-    method.parameters.joinToString(", ") { it.declaration } +
-        ", CancellationToken $token$tokenDefault"
+    // ADR-229: an extension's receiver is its `this` parameter.
+    method.parameters.mapIndexed { index, parameter ->
+      if (method.isExtension && index == 0) "this ${parameter.declaration}" else parameter.declaration
+    }.joinToString(", ") + ", CancellationToken $token$tokenDefault"
   }
 
   // ADR-102: the thunk address plus the completion closure's own GCHandle as the echoed ctx.
@@ -367,9 +371,12 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
     Regex("\\bh[0-9]*\\b").replace(read) { replacements.getValue(it.value) }
   } else null
   val instanceScope = if (acquiredFlow) locals.collectScope else "GetOrCreateScope()"
-  val nativeCallArgs: String = if (method.isStatic) {
-    if (paramNames.isEmpty()) callbackArgs
-    else "$paramNames, $callbackArgs"
+  val nativeCallArgs: String = if (staticCall) {
+    val leading: String = listOfNotNull(method.asyncReceiver?.nativeArgument)
+      .plus(paramNames.takeIf { it.isNotEmpty() }.let(::listOfNotNull))
+      .joinToString(", ")
+    if (leading.isEmpty()) callbackArgs
+    else "$leading, $callbackArgs"
   } else {
     if (paramNames.isEmpty()) "_handle, $instanceScope, $callbackArgs"
     else "_handle, $instanceScope, $paramNames, $callbackArgs"
@@ -525,7 +532,7 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
         method.whereClauses(),
   )
   appendLine("        {")
-  if (!method.isStatic && className.isNotEmpty()) {
+  if (!staticCall && className.isNotEmpty()) {
     appendLine("            if (_handle.IsInvalid)")
     appendLine("                throw new ObjectDisposedException(nameof($className));")
   }
@@ -540,7 +547,7 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
   appendLine("            var $job = new NugetJobCell();")
   // ADR-187: an instance member's closure roots its wrapper until the call completes, so a wrapper
   // dropped mid-flight is never finalized, and its scope never cancelled, under the coroutine.
-  val keepAlive: List<String> = if (method.isStatic) emptyList() else listOf("GC.KeepAlive(this);")
+  val keepAlive: List<String> = if (staticCall) emptyList() else listOf("GC.KeepAlive(this);")
   appendAsyncCompletionClosure(
     tcsType, resultExtraction, cancellationArgument = token, prelude = keepAlive, locals = locals,
   )

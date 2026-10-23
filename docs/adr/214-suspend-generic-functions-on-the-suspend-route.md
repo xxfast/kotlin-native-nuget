@@ -196,3 +196,10 @@ and a ROADMAP Phase 6 line.)
 - Leak row: `TopLevelSuspendGeneric_BoxedTypeParameter_ReturnsToBaseline` in
   `LeakTests/LiveHandleTests.cs`, a 200-iteration loop over an `int`, a `string` and a wrapper
   argument plus one pre-canceled call, at the end of the class under an `// ADR-214` banner.
+
+## Amendment (2026-10-22): static owners bind
+
+The statements above that an `object`'s or companion's suspend members have no route
+(`SKIPPED_UNSUPPORTED_COMBINATION`, generic or not), and the parenthetical on the `GENERIC`
+sentence, are superseded: both owners bind, with their own `T`, as
+[ADR-229](229-suspend-on-static-owners.md) records.

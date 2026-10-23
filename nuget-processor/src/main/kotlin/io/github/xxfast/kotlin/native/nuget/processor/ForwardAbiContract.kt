@@ -225,7 +225,9 @@ internal object ForwardAbiContract {
             declaration.companionMembers.filterIsInstance<CirDllImport>() +
             declaration.backing()?.nativeImports().orEmpty()
 
-        is CirValueClass -> declaration.ordinaryNativeImports()
+        // ADR-229: plus its members on the static suspend route.
+        is CirValueClass -> declaration.ordinaryNativeImports() +
+            declaration.asyncMembers.filterIsInstance<CirDllImport>()
         // ADR-006 amendment: a top-level enum's member-property imports are projected plan nodes.
         // A nested enum's render at namespace level (ADR-133) and are read by `csharpLegacy`.
         // ADR-094 (write side): its box import is a plan node too, rendered in `NugetMarshal`.

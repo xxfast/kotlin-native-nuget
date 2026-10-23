@@ -13,6 +13,7 @@ import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.Origin
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.symbol.KSTypeParameter
 import com.google.devtools.ksp.symbol.KSValueParameter
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.symbol.KSAnnotated
@@ -394,6 +395,12 @@ internal sealed interface ForwardCallableCatalogEntry {
     val defaultFlags: List<Boolean>? = null,
     /** ADR-164 rule 6 on the legacy routes: the defaulted parameters the cap leaves required. */
     val cappedDefaults: List<String> = emptyList(),
+    /**
+     * ADR-229: the static owner a SUSPEND skip binds through on the static suspend route, read
+     * back by [staticSuspendCandidates]. Null on every other skip, a class's suspend member
+     * included (that one rides the class's own scope).
+     */
+    val staticSuspend: ForwardStaticSuspendOwner? = null,
   ) : ForwardCallableCatalogEntry {
 
     /** The Kotlin simple name of the dropped member, never the overload-suffixed [symbol]. */
@@ -1473,9 +1480,20 @@ internal class ForwardCallablePlanner(
           )
         }
       }
-      // ADR-064 amendment: no legacy route takes a value class (not the suspend, Flow, callback or
-      // generic one), so every deferral here is a drop and is named.
-      .map { entry -> entry.namedSuspend() }
+      // ADR-064 amendment: no legacy route takes a value class (not the Flow, callback or generic
+      // one), so every deferral here is a drop and is named. ADR-229: a suspend member binds on the
+      // static suspend route, the underlying crossing as the receiver slot.
+      .map { entry ->
+        val function: KSFunctionDeclaration? = entry.node as? KSFunctionDeclaration
+        val stem: String = function
+          ?.let { "${prefix}_${it.simpleName.asString()}${entry.overloadTail(it)}" }.orEmpty()
+        val underlying: ForwardStaticSuspendReceiver? = cls.primaryConstructor?.parameters
+          ?.firstOrNull()?.type?.resolve()?.let(classifier::staticSuspendReceiver)
+          ?.takeIf { cls.typeParameters.isEmpty() }
+        entry.onStaticSuspendRoute(
+          underlying?.let { ForwardStaticSuspendOwner.ValueClass(stem, cls, it) },
+        )
+      }
       .toList()
       .nameUnroutedPositions()
   }
@@ -2503,9 +2521,14 @@ internal class ForwardCallablePlanner(
       )
     }
     // ADR-064 amendment (2026-09-13): no legacy route is keyed to an object owner at all,
-    // measured, cells 3a/13a/18a/22a, so every deferral here is a drop, with no exemption. The
-    // audit amendment: SUSPEND included (the suspend route walks classes, never an object).
-    return members.map { member -> entryFor(member).namedSuspend() }.nameUnroutedPositions()
+    // measured, cells 3a/13a/18a/22a, so every deferral here is a drop, with no exemption. ADR-229:
+    // but a SUSPEND deferral binds on the static suspend route, through the object.
+    return members.map { member ->
+      val entry: ForwardCallableCatalogEntry = entryFor(member)
+      val stem: String =
+        "${prefix}_${toCName(member.simpleName.asString())}${entry.overloadTail(member)}"
+      entry.onStaticSuspendRoute(ForwardStaticSuspendOwner.Object(stem, obj))
+    }.nameUnroutedPositions()
   }
 
   /**
@@ -2571,9 +2594,15 @@ internal class ForwardCallablePlanner(
         else -> null
       }
       if (structural != null) {
+        // ADR-229: a suspend member binds on the static suspend route, by ordinal.
         return ForwardCallableCatalogEntry
           .Skipped(symbol, structural, node = function)
-          .namedSuspend()
+          .onStaticSuspendRoute(
+            ForwardStaticSuspendOwner.EnumMember(
+              "${prefix}_${toCName(name)}$suffix", enum,
+              ForwardStaticSuspendReceiver.Enum(type, owner),
+            ),
+          )
       }
       return planOrSkip(
         symbol = symbol,
@@ -2601,6 +2630,31 @@ internal class ForwardCallablePlanner(
    * has nothing to defer to, so it becomes the named structural drop `extensionEntry` already uses
    * for a suspend extension.
    */
+  /**
+   * ADR-229: a SUSPEND deferral on a static [owner] stays a SUSPEND skip carrying that owner, which
+   * the static suspend route binds. A null [owner] (a receiver the route has no slot for) and a
+   * `Flow`-returning member keep the named drop of [namedSuspend].
+   */
+  private fun ForwardCallableCatalogEntry.onStaticSuspendRoute(
+    owner: ForwardStaticSuspendOwner?,
+  ): ForwardCallableCatalogEntry {
+    if (this !is ForwardCallableCatalogEntry.Skipped || reason != ForwardPlanSkipReason.SUSPEND) {
+      return this
+    }
+    val function: KSFunctionDeclaration? = node as? KSFunctionDeclaration
+    if (owner == null || function == null || function.returnsStaticSuspendFlow()) {
+      return namedSuspend()
+    }
+    return copy(staticSuspend = owner)
+  }
+
+  /** The `_n` overload tail of [this] entry's symbol, empty for the first of a name. */
+  private fun ForwardCallableCatalogEntry.overloadTail(function: KSFunctionDeclaration): String {
+    val name: String = function.simpleName.asString()
+    val tail: String = symbol.substringAfterLast('.')
+    return if (tail.startsWith(name)) tail.substring(name.length) else ""
+  }
+
   private fun ForwardCallableCatalogEntry.namedSuspend(): ForwardCallableCatalogEntry =
     if (this is ForwardCallableCatalogEntry.Skipped && reason == ForwardPlanSkipReason.SUSPEND) {
       ForwardCallableCatalogEntry.Skipped(
@@ -2644,8 +2698,14 @@ internal class ForwardCallablePlanner(
     // legacy routes are keyed to instance members; unmeasured, so a companion member appearing
     // in the diagnostic diff is worth checking against `Interop.cs` before it is believed. The
     // audit amendment: no suspend route reads a companion either (an enum's or a class's), so a
-    // SUSPEND deferral here is a named drop too.
-    return members.map { member -> entryFor(member).namedSuspend() }.nameUnroutedPositions()
+    // SUSPEND deferral here is a named drop too. ADR-229: no longer; it binds on the static suspend
+    // route, reached through the owner as the plan route spells the call.
+    return members.map { member ->
+      val entry: ForwardCallableCatalogEntry = entryFor(member)
+      val stem: String =
+        "${prefix}_companion_${toCName(member.simpleName.asString())}${entry.overloadTail(member)}"
+      entry.onStaticSuspendRoute(ForwardStaticSuspendOwner.Companion(stem, cls))
+    }.nameUnroutedPositions()
   }
 
   private fun staticEntry(
@@ -2819,11 +2879,21 @@ internal class ForwardCallablePlanner(
       // here: no route emits a suspend EXTENSION at all (ROADMAP Phase 4 line 23 fold-in, verified
       // silent by the memo's spike), so it is named directly rather than through the candidate
       // set the other owners share.
+      // ADR-229: a suspend extension binds on the static suspend route, the receiver crossing as
+      // the leading slot. A receiver that route has no slot for stays the named drop.
       if (structuralReason == ForwardPlanSkipReason.SUSPEND) {
-        return ForwardCallableCatalogEntry.Skipped(
-          symbol, ForwardPlanSkipReason.UNROUTED_POSITION, node = function,
-          detail = ForwardPlanSkipReason.SUSPEND.name, structural = true,
-        )
+        val slot: ForwardStaticSuspendReceiver? = classifier.staticSuspendReceiver(receiver)
+          .takeIf { receiver.declaration !is KSTypeParameter }
+        return ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = function)
+          .onStaticSuspendRoute(
+            slot?.let { receiverSlot ->
+              ForwardStaticSuspendOwner.Extension(
+                symbols.extension(function, receiverPrefix, "${toCName(functionName)}$suffix", taken),
+                receiverSlot,
+                receiver,
+              )
+            },
+          )
       }
       return ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = function)
         .nameUnroutedPosition { false }

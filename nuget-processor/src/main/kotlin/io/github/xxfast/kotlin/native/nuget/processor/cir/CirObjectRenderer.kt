@@ -242,6 +242,8 @@ private fun StringBuilder.renderValueClassMembers(cls: CirValueClass) {
     }
     appendLine()
   }
+  // ADR-229: the static suspend route's members, rendered as any class's async members are.
+  cls.asyncMembers.forEach { member -> renderMember(member) }
 }
 
 /**

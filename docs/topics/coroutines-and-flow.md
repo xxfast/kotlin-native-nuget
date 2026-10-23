@@ -58,10 +58,10 @@ await AsyncFunctions.FetchTreatAsync();  // "one treat for Oreo"
 await AsyncFunctions.FetchTreatAsync(3); // "3 treats for Mylo"
 ```
 
-A `suspend fun` binds at the top level, on a class or sealed type, and on an interface that some
-function returns. On an `object`, a companion object, a value class, an enum, an interface nothing
-returns, or as an extension, it is not bound: the member is skipped with a
-`SKIPPED_UNSUPPORTED_COMBINATION` warning naming it.
+A `suspend fun` binds at the top level, on a class or sealed type, on an `object`, a companion, an
+enum, a value class, as an extension, and on an interface that some function returns (see
+[below](#suspend-static-owners) for the static owners). On an interface nothing returns it is not
+bound: the member is skipped with a `SKIPPED_UNSUPPORTED_COMBINATION` warning naming it.
 
 ## `suspend fun` returning a nullable type {id="suspend-fun-returning-a-nullable-type"}
 
@@ -356,8 +356,43 @@ using Toy back = await SuspendGenericSample.FetchLaterAsync(toy);   // the same 
   suspension. A wrapper you pass is borrowed and must stay alive until the `Task` completes.
 - Cancelling the token cancels the `Task`, as on any other `suspend fun`.
 
-A `suspend` member of an `object` or companion has no route, generic or not. It is named in the
-build output.
+## `suspend` on an object, companion, extension, enum or value class {id="suspend-static-owners"}
+
+A `suspend` member of an `object`, a companion, an enum, a value class or a suspend extension binds
+as a `Task`-returning method with a trailing `CancellationToken`, the same as a top-level function.
+These owners have nothing to dispose, so each call runs on its own scope and the token is the only
+way to cancel it. A member's own `T` binds as on a top-level function.
+
+```kotlin
+object Siesta { suspend fun minutesFor(name: String): Int }
+class Swing(val sleeper: String) {
+  companion object { suspend fun hang(sleeper: String): Swing }
+}
+suspend fun Swing.rock(times: Int): String
+suspend fun String.yawn(): String
+enum class NapSpot { WINDOWSILL, BOX; suspend fun claim(cat: String): String }
+```
+
+```C#
+int minutes = await Siesta.MinutesForAsync("Oreo");
+await using Swing swing = await Swing.HangAsync("Oreo");
+string rocked = await swing.RockAsync(2);
+string yawn = await "Mylo".YawnAsync();
+string claim = await NapSpot.Box.ClaimAsync("Mylo");
+```
+
+| Kotlin owner | C# placement |
+|---|---|
+| `object` | static method on the object's `static class` |
+| companion (default or named) | static method on the owning class |
+| extension (class, nullable class, `String`, primitive or enum receiver) | `this` extension method in `{Receiver}Extensions` |
+| enum body member | `this` extension method in `{Enum}Extensions` |
+| enum companion member | static method in `{Enum}Extensions` |
+| non-generic value class | instance method on the struct |
+
+A companion member and an instance member can share a C# name when their parameters differ
+(`Swing.SwayAsync(3)` and `swing.SwayAsync()`). With identical parameters the build fails with
+`ERROR_CSHARP_SIGNATURE_COLLISION`: rename one in Kotlin.
 
 A trampolined bound (`T : Enum<T>`, which C# cannot spell for Kotlin) binds on the parameter too:
 

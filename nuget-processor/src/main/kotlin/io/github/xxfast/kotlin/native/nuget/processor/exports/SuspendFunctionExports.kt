@@ -45,6 +45,13 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuspendRout
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedReturn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnShape
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
+import io.github.xxfast.kotlin.native.nuget.processor.freshName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticSuspendMember
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticSuspendOwner
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticSuspendReceiver
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardExtensionImportAlias
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyHandleStatement
+import com.squareup.kotlinpoet.MemberName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMemberGenericRefusal
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMethodTypeParameters
@@ -75,19 +82,103 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(
   // with its ordinary top-level namesakes. `translateSuspendFunction` reads the same catalog.
   callableCatalog: ForwardCallablePlanCatalog,
 ) {
-  if (classifier.legacyRefusedParameter(func.parameters) != null) return
-  // ADR-119: a generic return that is not a marshallable collection skips on both halves too.
-  if (classifier.legacyRefusedReturn(func) != null) return
-  // ADR-214: a function's own type parameters route under ADR-197/211's rules, named otherwise.
-  if (func.forwardMemberGenericRefusal() != null) return
+  if (!classifier.admitsStaticSuspend(func)) return
   // ADR-163: library- and package-qualified, and the Kotlin call fully qualified rather than
   // imported by simple name (two same-named suspend functions in two packages both export now).
   // ROADMAP line 29: plus the overload number, so two top-level `suspend` overloads take two C
   // symbols. The Kotlin call below stays bare -- the suffix names the export, not the function.
   val cname: String = symbols.topLevel(func) + callableCatalog.overloadSuffix(func)
-  val funcName: String =
+  val callee: String =
     kotlinPackageReference(func.packageName.asString()) +
       func.simpleName.asString().kotlinIdentifier()
+  // ADR-163: the default package has no qualifier to spell, so the bare call needs this import.
+  importIfDefaultPackage(func)
+  addStaticSuspendExport(func, cname, { callee }, receiver = null, classifier, callableCatalog)
+}
+
+/**
+ * ADR-229: a `suspend` member of an owner with no C# instance scope, on the top-level route with a
+ * static receiver expression: an `object`'s or a companion's member is called through its owner, an
+ * extension's, an enum member's and a value-class member's receiver crosses as the export's
+ * leading slot. Same ad-hoc root scope per call as a top-level function.
+ */
+internal fun FileSpec.Builder.addStaticSuspendExports(
+  member: ForwardStaticSuspendMember,
+  classifier: ForwardBridgeTypeClassifier,
+  callableCatalog: ForwardCallablePlanCatalog,
+) {
+  val func: KSFunctionDeclaration = member.function
+  if (!classifier.admitsStaticSuspend(func)) return
+  val name: String = func.simpleName.asString().kotlinIdentifier()
+  val owner: ForwardStaticSuspendOwner = member.owner
+  val receiver: ForwardStaticSuspendReceiver? = when (owner) {
+    is ForwardStaticSuspendOwner.Object -> null
+    is ForwardStaticSuspendOwner.Companion -> null
+    is ForwardStaticSuspendOwner.Extension -> owner.receiver
+    is ForwardStaticSuspendOwner.EnumMember -> owner.receiver
+    is ForwardStaticSuspendOwner.ValueClass -> owner.underlying
+  }
+  val callee: (String) -> String = when (owner) {
+    is ForwardStaticSuspendOwner.Object -> {
+      importIfDefaultPackage(owner.obj)
+      val qualified: String = owner.obj.kotlinQualifiedReference()
+      ({ "$qualified.$name" })
+    }
+    is ForwardStaticSuspendOwner.Companion -> {
+      importIfDefaultPackage(owner.owner)
+      val qualified: String = owner.owner.kotlinQualifiedReference()
+      ({ "$qualified.$name" })
+    }
+    is ForwardStaticSuspendOwner.Extension -> {
+      val alias: String =
+        forwardExtensionImportAlias(func.packageName.asString(), func.simpleName.asString())
+      addAliasedImport(MemberName(func.packageName.asString(), func.simpleName.asString()), alias)
+      ({ read -> "$read.$alias" })
+    }
+    is ForwardStaticSuspendOwner.EnumMember -> {
+      importIfDefaultPackage(owner.enum)
+      val qualified: String = owner.enum.kotlinQualifiedReference()
+      ({ read -> "$qualified.entries[$read].$name" })
+    }
+    is ForwardStaticSuspendOwner.ValueClass -> {
+      importIfDefaultPackage(owner.valueClass)
+      val qualified: String = owner.valueClass.kotlinQualifiedReference()
+      ({ read -> "$qualified($read).$name" })
+    }
+  }
+  addStaticSuspendExport(func, owner.stem, callee, receiver, classifier, callableCatalog)
+}
+
+/**
+ * The legacy refusals both halves apply before any export (or import) is emitted: ADR-114's
+ * parameter, ADR-119's return and ADR-214's own-`T` rule. A refused member is named once by
+ * `warnRefusedLegacyRouteMembers`.
+ */
+private fun ForwardBridgeTypeClassifier.admitsStaticSuspend(func: KSFunctionDeclaration): Boolean =
+  legacyRefusedParameter(func.parameters) == null && legacyRefusedReturn(func) == null &&
+    func.forwardMemberGenericRefusal() == null
+
+/** ADR-229: [this] declaration's fully qualified Kotlin spelling, each segment escaped. */
+private fun KSClassDeclaration.kotlinQualifiedReference(): String {
+  val packageName: String = packageName.asString()
+  val qualified: String = qualifiedName?.asString() ?: simpleName.asString()
+  val local: String = if (packageName.isEmpty()) qualified else qualified.removePrefix("$packageName.")
+  return kotlinPackageReference(packageName) +
+    local.split(".").joinToString(".") { segment -> segment.kotlinIdentifier() }
+}
+
+/**
+ * The `_async` export of one statically reached `suspend` function. [callee] spells the called
+ * function from the receiver local's name (unused when [receiver] is null).
+ */
+private fun FileSpec.Builder.addStaticSuspendExport(
+  func: KSFunctionDeclaration,
+  cname: String,
+  callee: (String) -> String,
+  receiver: ForwardStaticSuspendReceiver?,
+  classifier: ForwardBridgeTypeClassifier,
+  callableCatalog: ForwardCallablePlanCatalog,
+) {
   val returnType = func.returnType?.resolve()?.expandAliases()
   val qualifiedReturn: String = returnType?.declaration?.qualifiedName?.asString() ?: "kotlin.Unit"
   val isUnit: Boolean =
@@ -102,12 +193,31 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(
   val paramShapes: List<ForwardLegacyParameterShape> =
     classifier.legacyParameterShapes(func.parameters, callableCatalog.legacyDefaultFlags(func))
   val names: ForwardLegacyNames = legacyKotlinNames(func.parameters, paramShapes)
+  // ADR-229: the receiver slot, named apart from every parameter and generated slot.
+  val receiverSlot: String = freshName(
+    "receiver",
+    func.legacyParameterNames().toSet() +
+      setOf(names.callback, names.userData, names.obj, names.scope, names.scopeHandle),
+  )
+  // A handle receiver is read before the launch, as a borrowed handle parameter is (ADR-122).
+  val receiverPrelude: String = when (receiver) {
+    is ForwardStaticSuspendReceiver.Handle ->
+      legacyHandleStatement(receiverSlot, names.obj, receiver.type, receiver.nullable) + "\n"
+    is ForwardStaticSuspendReceiver.Scalar, is ForwardStaticSuspendReceiver.Enum, null -> ""
+  }
+  val receiverRead: String = when (receiver) {
+    is ForwardStaticSuspendReceiver.Handle -> names.obj
+    is ForwardStaticSuspendReceiver.Scalar, is ForwardStaticSuspendReceiver.Enum, null ->
+      receiverSlot
+  }
   // ADR-219: a trampolined `T` (ADR-198) needs the type variable the launch lambda reads, so the
   // whole export, launch included, runs inside the trampoline.
   val trampoline: ForwardFlowTrampoline? = flowTrampoline(func, owner = null, paramShapes)
-  val call: String =
-    names.legacyInvocation(funcName + func.legacyTypeArguments(), func.legacyParameterNames())
-  val paramPrelude: String = names.legacyPrelude(func.legacyParameterNames())
+  val call: String = names.legacyInvocation(
+    callee(receiverRead) + func.legacyTypeArguments(),
+    func.legacyParameterNames(),
+  )
+  val paramPrelude: String = receiverPrelude + names.legacyPrelude(func.legacyParameterNames())
   val boxed: String = legacyBoxedResult(returnShape)
 
   val body: String = buildSuspendFunctionBody(
@@ -119,6 +229,15 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(
     // ADR-117: names the function as the owner, so a collision this numbering does not cover
     // (for example across routes) still reports which declarations share the symbol.
     .addAnnotation(cNameAnnotation("${cname}_async", ownedBy(func)))
+  when (receiver) {
+    is ForwardStaticSuspendReceiver.Handle ->
+      builder.addParameter(receiverSlot, cOpaquePointer.copy(nullable = receiver.nullable))
+    is ForwardStaticSuspendReceiver.Scalar ->
+      builder.addParameter(receiverSlot, ClassName.bestGuess(receiver.kotlinType))
+    is ForwardStaticSuspendReceiver.Enum -> builder.addParameter(receiverSlot, INT)
+    null -> Unit
+  }
+  builder
     .addLegacySuspendParameters(func, paramShapes, names)
     .addParameter(names.callback, cOpaquePointer)
     .addParameter(names.userData, cOpaquePointer)
@@ -127,9 +246,6 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(
   if (paramShapes.legacyCastsGenericBound()) {
     builder.addAnnotation(forwardUncheckedCastSuppression)
   }
-
-  // ADR-163: the default package has no qualifier to spell, so the bare call needs this import.
-  importIfDefaultPackage(func)
 
   addFunction(builder.build().flowTrampolined(trampoline, qualifiedName = ""))
   addAcquiredFlowCollectExport(func, cname, returnType, classifier)

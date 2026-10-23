@@ -87,6 +87,11 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addSealedClassExpo
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addSealedDiscriminatorExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addSuspendClassMethodExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addSuspendFunctionExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addStaticSuspendExports
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticSuspendMember
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticSuspendOwner
+import io.github.xxfast.kotlin.native.nuget.processor.forward.staticSuspendRouteMembers
+import io.github.xxfast.kotlin.native.nuget.processor.forward.staticSuspendCandidates
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addValueClassExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedDeclaration
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
@@ -834,6 +839,8 @@ internal fun warnRefusedLegacyRouteMembers(
   // plan route's own `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` wording, so it needs the same two inputs.
   excludeEntries: List<String> = emptyList(),
   strictDependencyTypes: Boolean = false,
+  // ADR-229: every member the planner handed the static suspend route, refused or not.
+  staticSuspend: List<ForwardStaticSuspendMember> = emptyList(),
 ) {
   // ROADMAP Phase 4 line 23: the plan route's diagnostic for a dependency type the closure
   // refused (reason, `admit(...)` / `exclude(...)` hint, ADR-154 strict escalation), so a suspend
@@ -1557,6 +1564,18 @@ internal fun warnRefusedLegacyRouteMembers(
       nameRefused(func, func.simpleName.asString(), func.forwardFileClassOwner())
       nameRefusedSharedFlowWrite(func, func.simpleName.asString(), func.forwardFileClassOwner())
       nameReadOnlyRouteWrite(func, func.simpleName.asString(), topLevel = true)
+    }
+    // ADR-229: the static suspend route's refusals, named as the top-level route's are.
+    staticSuspend.forEach { member ->
+      val func: KSFunctionDeclaration = member.function
+      val owner: ForwardDiagnosticOwner? = when (val static = member.owner) {
+        is ForwardStaticSuspendOwner.Object -> static.obj.forwardDiagnosticOwner()
+        is ForwardStaticSuspendOwner.Companion -> static.owner.forwardDiagnosticOwner()
+        is ForwardStaticSuspendOwner.EnumMember -> static.enum.forwardDiagnosticOwner()
+        is ForwardStaticSuspendOwner.ValueClass -> static.valueClass.forwardDiagnosticOwner()
+        is ForwardStaticSuspendOwner.Extension -> func.forwardFileClassOwner()
+      }
+      nameRefused(func, func.simpleName.asString(), owner)
     }
   }
   ForwardDiagnosticSink.emit(diagnostics, logger)
@@ -2955,6 +2974,7 @@ internal class NugetProcessor(
     warnRefusedLegacyRouteMembers(
       classes, sealedClasses, suspendFunctions, forwardClassifier, logger, reachableInterfaces,
       context.excludePackages, context.strictDependencyTypes,
+      staticSuspend = callableCatalog.staticSuspendCandidates(),
     )
     // ADR-064 amendment (2026-09-13): the structural generic functions, which never reach the
     // planner (see the function's own KDoc).
@@ -3585,7 +3605,11 @@ internal class NugetProcessor(
       iface.forwardInterfaceSuspendMethods(forwardClassifier).isNotEmpty()
     }
 
+    // ADR-229: the static owners' suspend members ride the top-level route's coroutine surface.
+    val staticSuspendMembers: List<ForwardStaticSuspendMember> =
+      callableCatalog.staticSuspendRouteMembers(forwardClassifier)
     val hasSuspendFunctions: Boolean = suspendFunctions.isNotEmpty() ||
+        staticSuspendMembers.isNotEmpty() ||
         needsSuspendLambdaSupport ||
         classesHaveSuspendFunctions ||
         armsHaveSuspendMethods ||
@@ -3779,6 +3803,13 @@ internal class NugetProcessor(
       // (ADR-064): a refused suspend function used to leave a dead import behind.
       guardDeclaration(func) {
         builder.addSuspendFunctionExports(func, context.symbols, forwardClassifier, callableCatalog)
+      }
+    }
+
+    // ADR-229: the static suspend route's members, read through the selector the C# half reads.
+    staticSuspendMembers.forEach { member ->
+      guardDeclaration(member.function) {
+        builder.addStaticSuspendExports(member, forwardClassifier, callableCatalog)
       }
     }
 

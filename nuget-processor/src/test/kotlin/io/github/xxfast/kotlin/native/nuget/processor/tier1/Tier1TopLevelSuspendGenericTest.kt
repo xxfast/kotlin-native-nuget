@@ -239,10 +239,9 @@ class Tier1TopLevelSuspendGenericTest {
     assertContains(nest, "SKIPPED_UNSUPPORTED_COMBINATION")
     assertContains(nest, "(here, its type parameter `U` is bounded by another type parameter)")
     assertFalse(nest.contains("but not value: U"), "named as an input: $nest")
-    // An object has no suspend route at all, generic or not (ROADMAP Phase 6).
-    val kennel: String = warnings.single { it.contains("holdLater") }
-    assertContains(kennel, "SKIPPED_UNSUPPORTED_COMBINATION")
-    assertFalse(result.generatedCSharp.contains("HoldLaterAsync"), "object member bound")
+    // ADR-229: an object's own `T` binds on the static suspend route, as a top-level one does.
+    assertTrue(warnings.none { it.contains("holdLater") }, "object member named: $warnings")
+    assertContains(result.generatedCSharp, "public static Task<T> HoldLaterAsync<T>(T value")
   }
 
   /**

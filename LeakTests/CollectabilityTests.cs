@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using TestLibrary;
 using TestLibrary.Cat;
+using TestLibrary.Catnap;
 using TestLibrary.Roster;
 using Playroom = TestLibrary.Playroom;
 using Stamps = TestLibrary.Stamps;
@@ -1116,5 +1117,95 @@ public class CollectabilityTests
             NugetBridgeState.ReleasedCount > before,
             $"expected the Kotlin cleaner to release the generic Keepsake bridge; ReleasedCount stayed at {before}");
         Assert.False(diary.IsAlive, "the C# Diary stayed reachable after Kotlin collected its bridge");
+    }
+
+    // ADR-229: the static suspend route. An `object`'s member and a suspend extension allocate the
+    // same completion `GCHandle` as the top-level route, and only the completion (or the catch
+    // around the P/Invoke) frees it. The marker is the `CancellationTokenSource` the closure
+    // captures; on the extension row the borrowed receiver is watched too, because the C# wrapper
+    // passes its handle and must not be kept alive by the finished call.
+    // Oreo naps on the swing; Mylo yawns at the alarm.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (Task<int> Napping, WeakReference Leash) StartSiesta()
+    {
+        var leash = new CancellationTokenSource();
+        Task<int> napping = Siesta.MinutesForAsync("Oreo", leash.Token);
+        return (napping, new WeakReference(leash));
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference> NapAndDrop()
+    {
+        (Task<int> napping, WeakReference leash) = StartSiesta();
+
+        Assert.Equal(40, await napping);
+        await Task.Yield();
+        return leash;
+    }
+
+    [Fact]
+    public async Task StaticSuspend_ObjectCallCompletes_ItsStateIsCollected()
+    {
+        WeakReference leash = await NapAndDrop();
+
+        Assert.True(
+            MarkerCollectedWithin(leash, TimeSpan.FromSeconds(5)),
+            "the CancellationTokenSource passed to Siesta.MinutesForAsync stayed reachable after the call completed");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (Task<string> Rocking, WeakReference Leash, WeakReference Swing) StartRocking()
+    {
+        var leash = new CancellationTokenSource();
+        var swing = new Swing("Oreo");
+        Task<string> rocking = swing.RockAsync(2, leash.Token);
+        return (rocking, new WeakReference(leash), new WeakReference(swing));
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<(WeakReference Leash, WeakReference Swing)> RockAndDrop()
+    {
+        (Task<string> rocking, WeakReference leash, WeakReference swing) = StartRocking();
+
+        Assert.Equal("Oreo rocked 2 times", await rocking);
+        await Task.Yield();
+        return (leash, swing);
+    }
+
+    [Fact]
+    public async Task StaticSuspend_ExtensionCallCompletes_ItsStateAndReceiverAreCollected()
+    {
+        (WeakReference leash, WeakReference swing) = await RockAndDrop();
+
+        Assert.True(
+            MarkerCollectedWithin(leash, TimeSpan.FromSeconds(5)),
+            "the CancellationTokenSource passed to RockAsync stayed reachable after the call completed");
+        Assert.True(
+            MarkerCollectedWithin(swing, TimeSpan.FromSeconds(5)),
+            "the Swing receiver of RockAsync stayed reachable after the call completed");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference MinutesForANullName()
+    {
+        using var leash = new CancellationTokenSource();
+
+        ArgumentNullException refused = Assert.Throws<ArgumentNullException>(() =>
+        {
+            _ = Siesta.MinutesForAsync(null!, leash.Token);
+        });
+
+        Assert.Equal("name", refused.ParamName);
+        return new WeakReference(leash);
+    }
+
+    [Fact]
+    public void StaticSuspend_ArgumentFailsItsNullGuard_ItsStateIsCollected()
+    {
+        WeakReference leash = MinutesForANullName();
+
+        Assert.True(
+            MarkerCollectedWithin(leash, TimeSpan.FromSeconds(5)),
+            "the CancellationTokenSource passed to Siesta.MinutesForAsync stayed reachable after the call threw ArgumentNullException: the completion callback's GCHandle was never freed");
     }
 }
