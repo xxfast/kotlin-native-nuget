@@ -51,7 +51,7 @@ Then:
 
 ## Windows notes
 
-- Scripts here are bash and perl, so run them from Git Bash. They hard-code macOS paths (`/Users/xxfast/Developer/XXFAST/KMP/...`, worktrees `kn-p4f-{a,b,c,d}`), so fix the paths first.
+- Scripts here are bash and perl, so run them from Git Bash. They hard-code macOS paths (`/c/Users/isuru/Developer/KMP/...`, worktrees `kn-p4f-{a,b,c,d}`), so fix the paths first.
 - `push-ref.sh` and `open-pr.sh` use `gh auth token --user xxfast`. On a single-account machine plain `gh` works; check with `gh auth status`.
 - `verify-lane.sh` wraps `scripts/verify.sh`. NativeAOT on Windows is `scripts/verify-aot.ps1`. Keep the per-worktree `NUGET_PACKAGES` (CLAUDE.md, cache race).
 - `featlint.pl` exists only because macOS awk can't run `scripts/verify-features.sh`. On Git Bash's gawk the real script should work.
