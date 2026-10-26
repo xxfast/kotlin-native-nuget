@@ -209,6 +209,15 @@ public class GenericValueClassErasedTests
         Assert.ThrowsAny<ArgumentException>(() => courier.Relay(new Sticker<int>(2), _ => new Sticker<int>(-1)));
     }
 
+    [Fact]
+    public void OwnTypeParameter_ReturnedLambdaResult_CrossesBoxed()
+    {
+        using var courier = new StickerCourier("Oreo's desk");
+        Func<string, Sticker<string>> wrapper = courier.Wrapper<string>();
+
+        Assert.Equal(new Sticker<string>("Oreo"), wrapper.Invoke("Oreo"));
+    }
+
     // --- flows --------------------------------------------------------------------------------
 
     [Fact]

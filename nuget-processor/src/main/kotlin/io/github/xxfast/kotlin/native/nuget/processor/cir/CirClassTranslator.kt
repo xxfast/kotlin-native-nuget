@@ -8,6 +8,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.suspendAwaitedType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isValueClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.mentionsAnyTypeParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticFlowGetter
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticFlowMember
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticFlowOwner
 import io.github.xxfast.kotlin.native.nuget.processor.exports.takesFlowSetter
 import io.github.xxfast.kotlin.native.nuget.processor.exports.flowSetterSource
 import io.github.xxfast.kotlin.native.nuget.processor.exports.mintsFlowHandle
@@ -2227,32 +2229,44 @@ internal fun flowProperty(
  * ([source]), and a hot one, which only `Create` makes and which then owns its flow, cannot reach
  * the last branch.
  */
-private fun flowSetterBody(
+internal fun flowSetterBody(
   native: String,
   member: String,
   nullable: Boolean,
   source: BridgeType.FlowSource?,
+  // ADR-230 amendment: the owner slots every call starts with: `_handle` for an instance member,
+  // none or an enum body's ordinal for a static one, whose calls also check ADR-030's error slot.
+  owner: List<String> = listOf("_handle"),
+  errorSlot: Boolean = false,
 ): String = buildString {
   val indent = "                "
+  fun call(name: String, arguments: List<String>): String {
+    val errorOut: List<String> = listOfNotNull("out IntPtr error".takeIf { errorSlot })
+    val slots: List<String> = owner + arguments + errorOut
+    val invocation = "$name(${slots.joinToString(", ")});"
+    if (!errorSlot) return invocation
+    return "$invocation if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error); " +
+      "NugetErrorNative.ClearManagedFault();"
+  }
   appendLine()
   if (nullable) {
     appendLine("${indent}if (value is null)")
     appendLine("$indent{")
-    appendLine("$indent    $native(_handle, IntPtr.Zero);")
+    appendLine("$indent    ${call(native, listOf("IntPtr.Zero"))}")
     appendLine("$indent    return;")
     appendLine("$indent}")
   }
   appendLine("${indent}IntPtr nugetFlow = value.KotlinHandle;")
   appendLine("${indent}if (nugetFlow != IntPtr.Zero)")
   appendLine("$indent{")
-  appendLine("$indent    $native(_handle, nugetFlow);")
+  appendLine("$indent    ${call(native, listOf("nugetFlow"))}")
   appendLine("$indent    GC.KeepAlive(value);")
   appendLine("$indent    return;")
   appendLine("$indent}")
   appendLine("${indent}if (value.MintHandle != null)")
   appendLine("$indent{")
   appendLine("$indent    using var nugetMinted = new NugetKotlinHandle(value.MintHandle());")
-  appendLine("$indent    $native(_handle, nugetMinted.DangerousGetHandle());")
+  appendLine("$indent    ${call(native, listOf("nugetMinted.DangerousGetHandle()"))}")
   appendLine("$indent    return;")
   appendLine("$indent}")
   if (source == null) {
@@ -2267,20 +2281,88 @@ private fun flowSetterBody(
     "${indent}IntPtr valueAsyncKey = NugetTasks.Register(value, nameof(value), " +
       "(Func<IntPtr>)(() => NugetAsyncEnumeration.Enumerate(value)));",
   )
+  val slots: List<String> = owner + listOf(
+    "NugetThunks.NugetAsyncEnumeratePtr", current, "valueAsyncKey",
+    "NugetThunks.NugetAsyncReleaseTaskPtr", "NugetThunks.NugetAsyncMoveNextBeginPtr",
+    "NugetThunks.NugetAsyncMoveNextEndPtr", "NugetThunks.NugetAsyncDisposeEnumerationPtr",
+    "NugetThunks.NugetAsyncReleaseContextPtr",
+  ) + listOfNotNull("out IntPtr error".takeIf { errorSlot })
   appendLine("${indent}try")
   appendLine("$indent{")
-  appendLine(
-    "$indent    ${native}Source(_handle, NugetThunks.NugetAsyncEnumeratePtr, $current, valueAsyncKey, " +
-      "NugetThunks.NugetAsyncReleaseTaskPtr, NugetThunks.NugetAsyncMoveNextBeginPtr, " +
-      "NugetThunks.NugetAsyncMoveNextEndPtr, NugetThunks.NugetAsyncDisposeEnumerationPtr, " +
-      "NugetThunks.NugetAsyncReleaseContextPtr);",
-  )
+  appendLine("$indent    ${native}Source(${slots.joinToString(", ")});")
+  // Kotlin owns the key once the call returns, thrown or not, as on ADR-210's parameter path.
   appendLine("$indent    valueAsyncKey = IntPtr.Zero;")
+  if (errorSlot) {
+    appendLine("$indent    if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
+    appendLine("$indent    NugetErrorNative.ClearManagedFault();")
+  }
   appendLine("$indent}")
   appendLine("${indent}finally")
   appendLine("$indent{")
   appendLine("$indent    NugetThunks.UnregisterCtx(valueAsyncKey);")
   append("$indent}")
+}
+
+/**
+ * ADR-230 amendment: one static flow property's [members] with its `var`'s setter: the
+ * `_set_<p>` import, a cold flow's `_set_<p>_source` import, and the setter on the property, a
+ * `set` accessor or an enum body member's `Set<P>` method. [members] unchanged for a `val`.
+ */
+internal fun staticFlowSetterMembers(
+  members: List<CirMember>,
+  member: ForwardStaticFlowMember.Property,
+  libraryName: String,
+  classifier: ForwardBridgeTypeClassifier,
+  tracker: CollectionHelperTracker,
+): List<CirMember> {
+  val export: String = member.setter ?: return members
+  val prop: KSPropertyDeclaration = member.property
+  val type: KSType = prop.type.resolve().expandAliases()
+  val source: BridgeType.FlowSource? = classifier.flowSourceOrNull(type.makeNotNullable())
+  if (source != null) {
+    tracker.flowSources += source
+    tracker.needsAsync = true
+  }
+  // An enum body's member sets through its entry's ordinal, as its getter reads.
+  val enum: KSClassDeclaration? = (member.owner as? ForwardStaticFlowOwner.EnumMember)?.enum
+  val receiverSlot: List<CirParameter> =
+    listOfNotNull(enum?.let { CirParameter("receiver", "int") })
+  val native = "Native_Set_${prop.simpleName.asString().asCSymbol()}"
+  val setImport = CirDllImport(
+    libraryName = libraryName,
+    entryPoint = export,
+    returnType = "void",
+    name = native,
+    parameters = receiverSlot + CirParameter("value", "IntPtr"),
+    visibility = CirVisibility.PRIVATE,
+    hasSyncErrorOut = true,
+  )
+  val sourceImport: CirDllImport? = source?.let {
+    CirDllImport(
+      libraryName = libraryName,
+      entryPoint = "${export}_source",
+      returnType = "void",
+      name = "${native}Source",
+      parameters = receiverSlot + listOf(
+        "enumerate", "current", "key", "releaseTask", "moveNextBegin", "moveNextEnd",
+        "disposeEnumeration", "releaseContext",
+      ).map { slot -> CirParameter(slot, "IntPtr") },
+      visibility = CirVisibility.PRIVATE,
+      hasSyncErrorOut = true,
+    )
+  }
+  val receiverName: String? = enum?.enumReceiverName()
+  val body: String = flowSetterBody(
+    native, prop.csharpMemberName(), type.isMarkedNullable, source,
+    owner = listOfNotNull(receiverName?.let { name -> "(int)$name" }),
+    errorSlot = true,
+  )
+  val property: CirMethod = members.filterIsInstance<CirMethod>().single { it.isFlowProperty }
+  val receiver: CirParameter? =
+    receiverName?.let { name -> CirParameter(name, property.parameters.first().type) }
+  val setter: CirMethod = property.copy(flowSetter = CirFlowSetter(body, receiver))
+  return listOfNotNull(setImport, sourceImport) +
+    members.map { emitted -> if (emitted === property) setter else emitted }
 }
 
 /**

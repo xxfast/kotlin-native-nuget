@@ -42,22 +42,22 @@ diagnostic walk, so the three cannot disagree.
 - A member's own `T` binds through ADR-215's trampoline with no owner, so `fun <T> echo(...): Flow<T>`
   is a `KotlinFlow<T>` method on an `object`, companion, top level, enum body and value class.
 
-| Kotlin owner | Kotlin call | C# placement |
-|---|---|---|
-| top level | package-qualified | static member of the file facade |
-| `object` | `Clock.ticks()` | static member of `public static class Clock` |
-| companion, default or named | owner-qualified, `Hourglass.Sand.grains()` | static member of the owning class |
-| enum body member | `Chime.entries[ordinal].play()` | `this` extension member in `{Enum}Extensions` |
-| enum companion member | owner-qualified | static member of `{Enum}Extensions` |
-| non-generic value class member | receiver rebuilt from the value class's wire slot | instance member of the record struct |
+| Kotlin owner | Kotlin call | C# placement | Flow `var` setter |
+|---|---|---|---|
+| top level | package-qualified | static member of the file facade | `set` accessor |
+| `object` | `Clock.ticks()` | static member of `public static class Clock` | `set` accessor |
+| companion, default or named | owner-qualified, `Hourglass.Sand.grains()` | static member of the owning class | `set` accessor |
+| enum body member | `Chime.entries[ordinal].play()` | `this` extension member in `{Enum}Extensions` | `Set<P>(this E, value)` method in `{Enum}Extensions` |
+| enum companion member | owner-qualified | static member of `{Enum}Extensions` | `set` accessor |
+| non-generic value class member | receiver rebuilt from the value class's wire slot | instance member of the record struct | none, get-only |
 
 An enum body's flow property renders as a C# 14 `extension(Chime receiver)` property, since an
 extension method cannot be a property.
 
 Each collection runs on its own root scope, and only its enumerator ends it, by completion, the
 token, `break` or `DisposeAsync()`. No owner is disposed, so nothing else cancels it. A `var` flow
-property binds get-only and names its dropped setter, as on a class
-([ADR-026](026-flow-mapping.md) 2026-10-12 amendment).
+property binds its setter on every owner in the table, as on a class
+([ADR-026](026-flow-mapping.md) 2026-10-12 amendment; see the 2026-10-26 amendment below).
 
 ### Diagnostic names of a named companion
 
@@ -146,8 +146,8 @@ overridden in each entry's body) of every flow kind, plain and hot, read-only an
 extension property on `{Enum}Extensions` (`Tail.Oreo.Height`). Each entry keeps its own storage and
 a held holder is settable. A C# 14 extension property is not reachable through a namespace alias,
 so a call site imports the namespace or `using static`s the extensions class. The setter of a `var`
-flow property on an enum stays a named `SKIPPED_UNSUPPORTED_INPUT`, as on an `object`, a companion and
-a value class: ADR-233's setter export reads a handle receiver, and the static route has no setter.
+flow property on an enum was a named `SKIPPED_UNSUPPORTED_INPUT` here, as on an `object`, a companion and
+a value class. The 2026-10-26 amendment binds it.
 
 **Verification.** Fixtures `purrclock/SockDrawers.kt`, `purrclock/Tails.kt` and
 `issue127/Issue127Sample.kt`. `IntegrationTests/NullableCollectionFlowTests.cs`,
@@ -156,3 +156,38 @@ a value class: ADR-233's setter export reads a handle receiver, and the static r
 `NullableCollectionFlows_SettableHolders_ReturnToBaseline` and
 `EnumFlowProperties_EveryKind_ReturnToBaseline` (which `using static`s `TailExtensions`). Tier 1:
 `Tier1MutableFlowNullableCollectionElementTest`, `Tier1EnumFlowPropertyTest`.
+
+## Amendment 2026-10-26: a flow `var` setter on every static owner
+
+A `var` flow property on the top level, an `object`, a default or named companion, an enum body
+member and an enum companion binds its setter, where it used to bind get-only and name the dropped
+setter `SKIPPED_UNSUPPORTED_INPUT`. This covers `Flow`, `StateFlow`, `SharedFlow`,
+`MutableStateFlow` and `MutableSharedFlow`, nullable included, and completes the setter
+[ADR-233](233-interface-slot-vocabulary.md) gave a class, an interface, a sealed base and a sealed
+arm. A flow `var` on a sealed `object` arm binds its setter too, through the arm's singleton handle.
+
+**Exports.** `<prefix>_set_<p>` takes the flow, plus a sibling `_set_<p>_source` for a cold flow
+made in C# (`KotlinFlow<T>.From`), which crosses through [ADR-210](210-flow-and-suspend-lambda-parameters.md)'s
+seam. A static setter also carries ADR-030's error slot (`out IntPtr error`), because assigning an
+object's or a file's property can run its initialiser, and a Kotlin throw there surfaces as the
+usual bridged exception. The instance `_set_<p>` has no error slot, since its receiver is already
+initialised.
+
+**C# placement.** A `set` accessor on the existing static property for the top level, an `object`,
+a companion and an enum companion:
+
+```C#
+Pantry.Dial = KotlinMutableStateFlow<int>.Create(9);
+Feedings.FeedingTimes = KotlinFlow<int>.From(Each(6, 18));
+```
+
+An enum body member is a C# 14 extension property, and an extension property cannot be settable. Its
+setter is the `Set<P>` method [ADR-006](006-enum-mapping.md) gives an ordinary enum `var`, in
+`{Enum}Extensions`:
+
+```C#
+Meal.Dinner.SetMenu(KotlinFlow<string>.From(Each("chicken")));   // Meal.Breakfast.Menu is untouched
+```
+
+**Verification.** Fixture `cattery/Feedings.kt`. `IntegrationTests/FlowVarSetterOwnerTests.cs`.
+Leak row 20h in `LeakTests/LiveHandleTests.cs`. Tier 1: `Tier1FlowVarPropertySetterTest`.

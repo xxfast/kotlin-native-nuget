@@ -14,9 +14,10 @@ import kotlin.test.assertTrue
  * `Flow` on a non-generic, non-sealed owner had one, and every other setter was a named
  * `SKIPPED_UNSUPPORTED_INPUT` partial skip (ADR-075).
  *
- * An object, a companion, an enum and a top-level property serve their flows on ADR-230's static
- * route: the getter binds and the setter stays the named skip, since that route has no receiver
- * to set through.
+ * ADR-230 amendment: an object, a companion (default or named, an enum's too), an enum body and a
+ * top-level property serve their flows on the static route, which binds the setter the same way
+ * over its receiver: a static C# `set` accessor, or an enum body member's `Set<P>` extension
+ * method, each on the position's own `_set_<p>` export and a cold flow's `_set_<p>_source`.
  *
  * `libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore)` is load-bearing: without `Flow` on
  * the KSP libraries path the property is an error type and every cell proves nothing.
@@ -76,7 +77,9 @@ class Tier1FlowVarPropertySetterTest {
         var source: Flow<Int> = flowOf(1)
       }
 
-      object None : Meal()
+      object None : Meal() {
+        var leftovers: Flow<Int> = flowOf(0)
+      }
     }
 
     open class Trough {
@@ -87,6 +90,11 @@ class Tier1FlowVarPropertySetterTest {
 
     object Kennel {
       var source: Flow<Int> = flowOf(1)
+      var level: MutableStateFlow<Int> = MutableStateFlow(0)
+      var gauge: StateFlow<Int> = MutableStateFlow(0)
+      var shared: SharedFlow<Int> = MutableSharedFlow()
+      var calls: MutableSharedFlow<Int> = MutableSharedFlow()
+      var maybe: Flow<Int>? = null
     }
 
     class Yard {
@@ -96,6 +104,12 @@ class Tier1FlowVarPropertySetterTest {
     }
 
     var topSource: Flow<Int> = flowOf(1)
+
+    class Porch {
+      companion object Mat {
+        var source: Flow<Int> = flowOf(1)
+      }
+    }
 
     class Crate<T>(val item: T) {
       var source: Flow<Int> = flowOf(1)
@@ -111,6 +125,10 @@ class Tier1FlowVarPropertySetterTest {
       RED;
 
       var glow: Flow<Int> = flowOf(1)
+
+      companion object {
+        var dim: Flow<Int> = flowOf(1)
+      }
     }
 
     fun light(): Light = Light.RED
@@ -313,6 +331,9 @@ class Tier1FlowVarPropertySetterTest {
     assertEquals(emptyList(), diagnostics.filter { line -> "portions" in line || "Wet.source" in line })
     assertContains(result.generated, "library_tier1_flowvar__meal_set_portions_source")
     assertContains(result.generated, "library_tier1_flowvar__meal_wet_set_source_source")
+    // A sealed `object` arm sets through its singleton's handle, as any arm does.
+    assertEquals(emptyList(), skips(setterCode, "tier1.flowvar.Meal.None.leftovers"))
+    assertContains(result.generated, "library_tier1_flowvar__meal_none_set_leftovers_source")
   }
 
 
@@ -324,28 +345,76 @@ class Tier1FlowVarPropertySetterTest {
   }
 
   /**
-   * ADR-230: the static flow route serves these owners, so each binds its getter and names
-   * its dropped setter once, like every other owner the flow route serves.
+   * ADR-230 amendment: the static flow route binds each owner's setter as it binds the getter,
+   * under the position's own `_set_<p>` export, and a cold flow's `_set_<p>_source` beside it.
    */
   @Test
-  fun `an object, a companion and a top-level flow var bind get-only and name the setter`() {
-    // ADR-230: the static flow route binds the getter, so the setter is the one named skip.
+  fun `every static owner's flow var binds its setter`() {
     listOf(
-      "tier1.flowvar.Kennel.source",
-      "tier1.flowvar.Yard.Companion.source",
-      "tier1.flowvar.Light.glow",
-      "tier1.flowvar.topSource",
-    ).forEach { declaration ->
-      val lines: List<String> = diagnostics.filter { line -> "Skipping $declaration: " in line }
-      assertEquals(1, lines.size, "$declaration: $lines")
-      assertTrue(lines.single().startsWith("[nuget:$setterCode] "), lines.single())
+      "tier1.flowvar.Kennel.source" to "library_tier1_flowvar__kennel_set_source",
+      "tier1.flowvar.Yard.Companion.source" to "library_tier1_flowvar__yard_companion_set_source",
+      "tier1.flowvar.Porch.Mat.source" to "library_tier1_flowvar__porch_companion_set_source",
+      "tier1.flowvar.Light.glow" to "library_tier1_flowvar__light_set_glow",
+      "tier1.flowvar.Light.Companion.dim" to "library_tier1_flowvar__light_companion_set_dim",
+      "tier1.flowvar.topSource" to "library_tier1_flowvar__set_topSource",
+    ).forEach { (declaration, export) ->
+      assertEquals(listOf(export, "${export}_source"), exports(export), declaration)
+      assertEquals(emptyList(), skips(setterCode, declaration))
     }
+    // The owner qualifies the assignment; an enum body's member sets through its entry's ordinal.
+    assertContains(result.generated, "tier1.flowvar.Kennel.source = nugetFlow")
+    assertContains(result.generated, "tier1.flowvar.Light.entries[receiver].glow = nugetFlow")
+  }
+
+  /** A hot static flow `var` has no C#-made source, so its setter is the handle half alone. */
+  @Test
+  fun `every hot static flow var binds its setter, and a nullable one its source too`() {
+    listOf("level", "gauge", "shared", "calls").forEach { name ->
+      assertEquals(
+        listOf("library_tier1_flowvar__kennel_set_$name"),
+        exports("kennel_set_$name"),
+        name,
+      )
+    }
+    assertEquals(
+      listOf(
+        "library_tier1_flowvar__kennel_set_maybe",
+        "library_tier1_flowvar__kennel_set_maybe_source",
+      ),
+      exports("kennel_set_maybe"),
+    )
+  }
+
+  /**
+   * A static property takes a `set` accessor beside its `get`. An enum body's flow property is a
+   * C# 14 extension property, so its setter is the `Set<P>` method ADR-006 gives an ordinary enum
+   * `var`, over the same receiver parameter name.
+   */
+  @Test
+  fun `a static flow setter is a set accessor, and an enum body's a SetX method`() {
+    val kennel: String = result.generatedCSharp
+      .substringAfter("public static class Kennel")
+      .substringBefore("public static KotlinMutableStateFlow<int> Level")
+    assertContains(kennel, "        set {")
+    assertContains(kennel, "Native_Set_source(nugetFlow, out IntPtr error);")
+    assertContains(kennel, "Native_Set_sourceSource(NugetThunks.NugetAsyncEnumeratePtr")
+    val facade: String = result.generatedCSharp
+      .substringAfter("public static partial class FlowVarSample")
+    assertContains(facade, "Native_Set_topSource(nugetFlow, out IntPtr error);")
+    assertContains(
+      result.generatedCSharp,
+      "public static void SetGlow(this global::Interop.Light light, KotlinFlow<int> value)",
+    )
+    assertContains(
+      result.generatedCSharp,
+      "Native_Set_glow((int)light, nugetFlow, out IntPtr error);",
+    )
   }
 
   /**
    * ADR-215 (ROADMAP "generic class flow property dropped whole", closed): a generic class's own
    * flow property binds over the erased receiver (`asStableRef<Crate<Any?>>()`), so `source` and
-   * `fixed` are on both halves, and the `var`'s dropped setter is named like any other owner's.
+   * `fixed` are on both halves, and the `var` binds its setter like any other owner's.
    */
   @Test
   fun `a generic class flow property binds over the erased receiver`() {
@@ -396,12 +465,7 @@ class Tier1FlowVarPropertySetterTest {
   @Test
   fun `no flow var setter is skipped`() {
     assertEquals(
-      listOf(
-        "tier1.flowvar.Kennel.source",
-        "tier1.flowvar.Light.glow",
-        "tier1.flowvar.Yard.Companion.source",
-        "tier1.flowvar.topSource",
-      ),
+      emptyList(),
       diagnostics
         .filter { line -> line.startsWith("[nuget:$setterCode] ") }
         .map { line -> line.substringAfter("Skipping ").substringBefore(": ") }
