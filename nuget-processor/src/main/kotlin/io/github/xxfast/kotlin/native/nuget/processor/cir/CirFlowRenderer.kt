@@ -602,11 +602,33 @@ private fun StringBuilder.openFlowBody(method: CirMethod) {
   method.flowRegistrations.forEach { struct -> appendLine("            $struct.NugetRegister();") }
 }
 
-/** ADR-230: the [openFlowBody] twin. */
+/** ADR-230: the [openFlowBody] twin, and (amended) a static flow `var`'s setter after it. */
 private fun StringBuilder.closeFlowBody(method: CirMethod) {
   if (method.isFlowProperty) appendLine("        }")
+  val setter: CirFlowSetter? = method.flowSetter
+  if (setter != null && setter.receiver == null) {
+    appendLine(method.flowSetterHead())
+    appendLine(setter.body)
+    appendLine("        }")
+  }
   appendLine("        }")
   if (method.isFlowProperty && method.isExtension) appendLine("        }")
+  if (setter != null && setter.receiver != null) {
+    appendLine()
+    appendLine(method.flowSetterHead())
+    appendLine("        {")
+    appendLine(setter.body)
+    appendLine("        }")
+  }
+}
+
+/**
+ * ADR-230 amendment: the first line of a static flow `var`'s setter: a `set` accessor, or an enum
+ * body member's `Set<P>(this E receiver, ...)` method, which ADR-006 gives an ordinary enum `var`.
+ */
+private fun CirMethod.flowSetterHead(): String {
+  val receiver: CirParameter = flowSetter?.receiver ?: return "        set {"
+  return "        public static void Set$name(this ${receiver.declaration}, $returnType value)"
 }
 
 /** The owner's disposed check ahead of the body; a static flow member has no owner to check. */
@@ -641,7 +663,12 @@ internal fun StringBuilder.renderFlowMethod(method: CirMethod, className: String
     val plain = StringBuilder()
     plain.renderFlowMethod(method.copy(flowMintNativeName = ""), className)
     val rendered: String = plain.toString()
-    val close: Int = rendered.lastIndexOf(");")
+    // The getter's construction is the last `);` ahead of a static flow `var`'s setter.
+    val getterEnd: Int = method.flowSetter
+      ?.let { rendered.indexOf(method.flowSetterHead()) }
+      ?.takeIf { index -> index >= 0 }
+      ?: rendered.length
+    val close: Int = rendered.lastIndexOf(");", getterEnd)
     val mint: String = reinvokedReplayArgument(
       method, method.flowMintNativeName, "                ", method.flowOwnerGuard(className),
     ).trimStart()

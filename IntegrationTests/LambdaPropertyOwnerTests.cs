@@ -355,6 +355,7 @@ public class LambdaPropertyOwnerTests
         Assert.NotNull(wand.Cue);
         Assert.Equal("Oreo: dinner", wand.Cue!.Invoke("dinner"));
         Assert.Equal("Oreo: dinner", ZoomrunSample.Cue(wand, "dinner"));
+        Assert.Equal(30, await ZoomrunSample.LeapAsync(wand, 3));
     }
 
     // (8) A lambda property carrying a nested generic class (generic type arguments on the

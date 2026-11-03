@@ -1112,6 +1112,16 @@ internal data class CirCallbackMethod(
   val identifier: String get() = toCSharpName(csMethodName)
 }
 
+/**
+ * ADR-230 amendment: the setter of a static flow `var` ([CirMethod.flowSetter]). [body] is the
+ * statements, written against `value`; [receiver] is the `this` parameter of an enum body's
+ * `Set<P>` method, null for a `set` accessor.
+ */
+internal data class CirFlowSetter(
+  val body: String,
+  val receiver: CirParameter? = null,
+)
+
 internal data class CirMethod(
   val name: String,
   val returnType: String,
@@ -1208,6 +1218,12 @@ internal data class CirMethod(
   // ADR-233 amendment: the `_flow` extern a re-invoked flow method return mints its own Kotlin handle
   // through (`MintHandle`) when C# hands the wrapper back to Kotlin; empty when it has none.
   val flowMintNativeName: String = "",
+  /**
+   * ADR-230 amendment: a static flow `var`'s setter: a `set` accessor on the static property, or
+   * for an enum body's member (an extension property) the `Set<P>` extension method ADR-006 gives
+   * an ordinary enum `var`. Null for a get-only member.
+   */
+  val flowSetter: CirFlowSetter? = null,
   // ADR-026 amendment (2026-10-09): the acquired Flow is a nullable member (`Flow<T>?`), so the
   // task yields `KotlinFlow<T>?` and a zero `resultPtr` completes with null. A flag, never a `?`
   // on [asyncReturnType], which the completion reuses inside `new ...(`.

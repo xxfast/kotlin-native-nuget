@@ -70,8 +70,8 @@ flow is `Task<KotlinStateFlow<T>>`.
   `GetAsyncEnumerator` per Kotlin `collect`. C# makes a hot flow only through `Create`, which owns
   its Kotlin flow, so a hot setter needs no seam. An object, a companion, an enum and a top-level
   flow property serve the getter on the static route
-  ([ADR-230](230-flow-on-static-owners.md)), which has no receiver to set through, so the setter
-  stays a named skip there.
+  ([ADR-230](230-flow-on-static-owners.md)); its 2026-10-26 amendment binds the setter there too,
+  as a `set` accessor (an enum body's is a `Set<P>` extension method) with ADR-030's error slot.
 - Every Kotlin-backed member flow wrapper (a property of any flow type, and a re-invoked flow
   function return: `Flow`, `StateFlow`, `SharedFlow`) mints its own Kotlin handle when asked
   (`_get_<p>_flow`, `_<f>_flow`), so it can be handed back through a C# implementation or assigned
@@ -132,8 +132,8 @@ Leak rows 20a to 20g in `LeakTests/LiveHandleTests.cs`
 in `LeakTests/CollectabilityTests.cs`. Row 20f verifies that the GC releases the `KotlinFunc` a
 class member's returned delegate wraps, and row 20g the amendment's flow slots. Tier 1: `Tier1InterfaceSlotVocabularyTest`, which also
 compiles the generated C# against an implementation; `Tier1FlowVarPropertySetterTest` (every flow
-`var` setter, its `_flow` and `_source` exports, and the named setter skip on the static and enum
-owners); `Tier1BridgeBacktickedNameTest` (a keyword member is `In` on both routes; a spaced member
+`var` setter, its `_flow` and `_source` exports, on every owner including the static and enum
+ones); `Tier1BridgeBacktickedNameTest` (a keyword member is `In` on both routes; a spaced member
 is skipped and named on both, which no runtime fixture can carry because Kotlin/Native links no
 symbol with a space).
 

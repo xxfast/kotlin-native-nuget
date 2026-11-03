@@ -401,12 +401,18 @@ internal fun translate(
     val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
     val members: List<CirMember> = funcs.flatMap { function ->
       val member: ForwardStaticFlowMember = topLevelFlow.first { it.function === function }
-      flowMembers(
+      val getter: List<CirMember> = flowMembers(
         listOf(function), prefix = "", context.libraryName, classifier, tracker, callableCatalog,
         context, logger, staticFlow = true, staticStem = member.owner.stem,
-      ).also { emitted ->
-        recordStatic(namespace, finalClassName, emitted, function, function.spelling("fun"))
+      )
+      // ADR-230 amendment: a top-level flow `var` binds its setter beside the getter.
+      val emitted: List<CirMember> = if (member is ForwardStaticFlowMember.Property) {
+        staticFlowSetterMembers(getter, member, context.libraryName, classifier, tracker)
+      } else {
+        getter
       }
+      recordStatic(namespace, finalClassName, emitted, function, function.spelling("fun"))
+      emitted
     }
     namespaces.mergeStaticClass(namespace, finalClassName, members)
   }
@@ -454,12 +460,15 @@ internal fun translate(
       is ForwardStaticFlowOwner.Companion, is ForwardStaticFlowOwner.ValueClass,
         -> null
     }?.cirReceiverParameter(freshName("receiver", taken), tracker)
-    return flowMembers(
+    val members: List<CirMember> = flowMembers(
       listOf(member.function), prefix = "", context.libraryName, classifier, tracker,
       callableCatalog, context, logger,
       staticFlow = true, staticReceiver = receiver, staticStem = member.owner.stem,
       extensionReceiver = extension,
     )
+    // ADR-230 amendment: a flow `var` binds its setter beside the getter.
+    if (member !is ForwardStaticFlowMember.Property) return members
+    return staticFlowSetterMembers(members, member, context.libraryName, classifier, tracker)
   }
   fun objectFlow(obj: KSClassDeclaration): List<CirMember> = staticFlow
     .filter { member ->

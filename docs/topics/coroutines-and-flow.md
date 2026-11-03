@@ -500,8 +500,16 @@ Differences from a class member:
   setting `PurrClock.Hour` is visible through `PurrClock.Alarm()`.
 - A property read mints a new holder each time, so `Chimes.Bedtime` read twice gives two holders over
   one flow.
-- A `var` flow property binds get-only and its setter is skipped, named: unlike a class, a static
-  owner has no receiver to set the flow on. That holds on an enum too.
+- A `var` flow property is settable, as on a class. It takes a Kotlin flow, a `KotlinFlow<T>.From`
+  source for a cold one, or a `Create`d hot holder. Assigning can run the owner's or file's
+  initialiser, so unlike an instance setter it can throw the Kotlin exception. An enum body's
+  property is an extension property, which C# cannot make settable, so its setter is a `Set<P>`
+  method:
+
+  ```C#
+  Pantry.Dial = KotlinMutableStateFlow<int>.Create(9);         // object (or top level, companion)
+  Meal.Dinner.SetMenu(KotlinFlow<string>.From(Each("chicken"))); // Meal.Breakfast.Menu is untouched
+  ```
 - An enum's flow property (a body `val`, a constructor `val`, or an `abstract val` each entry
   overrides) is an extension property on `{Enum}Extensions` of every flow kind. Each entry keeps its
   own storage, so `Tail.Oreo.Height` and `Tail.Mylo.Height` are two different `MutableStateFlow`s,
@@ -1048,7 +1056,7 @@ A hot property takes a Kotlin flow, or one you made with `KotlinMutableStateFlow
 `KotlinMutableSharedFlow<T>.Create`. A `val`, a `private set` and an `internal set` bind get-only.
 
 On an `object`, a companion, an enum and the top level ([static owners](#flow-static-owners)) a `var`
-flow binds get-only, and the build names the dropped setter with `SKIPPED_UNSUPPORTED_INPUT`.
+flow is settable the same way, and an enum body's setter is a `Set<P>` method.
 
 A hot flow cannot be taken as a parameter, so a `Flow<T>` parameter plus `stateIn(scope)` or
 `shareIn` in Kotlin is the way to turn a cold C# source into a hot one.
@@ -1647,7 +1655,7 @@ await foreach (int n in creek.Stream(4)) { /* 4 */ }
 
 Not every shape binds:
 
-- A `var` flow property's setter is skipped, named, as on any class.
+- A `var` flow property is settable, as on any class.
 - A `Flow<T>` or `suspend` lambda *parameter* that mentions `T` [binds too](#flow-and-suspend-lambda-type-parameter).
 
 ## A type parameter in a `Flow` or `suspend` lambda parameter {id="flow-and-suspend-lambda-type-parameter"}

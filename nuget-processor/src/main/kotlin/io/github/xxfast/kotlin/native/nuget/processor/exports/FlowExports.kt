@@ -4,6 +4,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMemberExten
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardMemberExtensionAccessor
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isMemberExtension
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardStaticFlowGetter
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedArm
 import com.google.devtools.ksp.getAllSuperTypes
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardKotlinDeclaredSpelling
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementEnvelope
@@ -1447,10 +1448,21 @@ private fun List<ForwardLegacyParameterShape>.castsGenericBound(): Boolean =
  */
 internal fun KSPropertyDeclaration.takesFlowSetter(): Boolean {
   val owner: KSClassDeclaration = parentDeclaration as? KSClassDeclaration ?: return false
-  // ADR-230: an object, a companion, an enum and a value class serve their flows on the static
-  // route, which has no receiver to set through, so their setter stays the named skip.
-  if (owner.classKind == ClassKind.OBJECT || owner.classKind == ClassKind.ENUM_CLASS) return false
+  // ADR-230: an object, a companion and an enum serve their flows on the static route, which
+  // binds the setter itself ([hasPublicFlowSetter]); a value class binds every property get-only.
+  // A sealed `object` arm is the arm route's, through its singleton's handle, like any arm.
+  val static: Boolean = owner.classKind == ClassKind.OBJECT && !owner.isSealedArm()
+  if (static || owner.classKind == ClassKind.ENUM_CLASS) return false
   if (Modifier.VALUE in owner.modifiers || Modifier.INLINE in owner.modifiers) return false
+  return hasPublicFlowSetter()
+}
+
+/**
+ * ADR-233: a public `var` of any flow type, whatever its owner. The instance route reads it
+ * through [takesFlowSetter]; ADR-230's static route reads it directly, for a top-level property,
+ * an object's, a companion's and an enum body's.
+ */
+internal fun KSPropertyDeclaration.hasPublicFlowSetter(): Boolean {
   val flow: String? = type.resolve().expandAliases().declaration.qualifiedName?.asString()
   val hidden: Set<Modifier> = setOf(
     Modifier.PRIVATE,
@@ -1459,6 +1471,88 @@ internal fun KSPropertyDeclaration.takesFlowSetter(): Boolean {
   )
   return isMutable && setter?.modifiers.orEmpty().none { modifier -> modifier in hidden } &&
     (flow in FLOW_TYPES || flow in STATE_FLOW_TYPES)
+}
+
+/**
+ * ADR-230 amendment: a static flow `var`'s setter, the instance one's ([addFlowPropertyExports])
+ * over the static route's receiver: no `handle`, an enum body's ordinal first, and the owner
+ * qualifying the assignment (`pkg.Kennel.source = ...`). [export] is the position's `_set_<p>`;
+ * a cold flow also takes a C#-made one on `[export]_source`, through ADR-210's seam. Each carries
+ * ADR-030's error slot, as the static getter's `_flow` mint does: the assignment can run an
+ * object's or a file's initialiser.
+ */
+internal fun FileSpec.Builder.addStaticFlowSetterExports(
+  prop: KSPropertyDeclaration,
+  export: String,
+  call: ForwardStaticFlowCall,
+  classifier: ForwardBridgeTypeClassifier,
+) {
+  val type: KSType = prop.type.resolve().expandAliases()
+  val flowType: String = type.forwardKotlinDeclaredSpelling()
+  val read: String = if (type.isMarkedNullable) {
+    "value?.asStableRef<Any>()?.get() as $flowType"
+  } else {
+    "value!!.asStableRef<Any>().get() as $flowType"
+  }
+  // An enum body's member is the one owner here with a receiver slot: its ordinal.
+  val receiver: ForwardStaticSuspendReceiver.Enum? = when (val slot = call.receiver) {
+    null -> null
+    is ForwardStaticSuspendReceiver.Enum -> slot
+    else -> error("ADR-230: no static flow setter binds over a ${slot::class.simpleName} receiver")
+  }
+  val receiverRead: String = receiver
+    ?.let { enum -> "${enum.kotlinType}.entries[receiver]" }
+    .orEmpty()
+  val target: String = call.qualifier(receiverRead) + prop.simpleName.asString().kotlinIdentifier()
+
+  // The flow is read before the owner is: a C#-made one's holder takes its key first, so an
+  // initialiser that throws on the assignment still leaves the key to the holder's release.
+  fun guarded(flow: String): CodeBlock = CodeBlock.of(
+    buildString {
+      appendLine("try {")
+      appendLine("  val nugetFlow = %L")
+      appendLine("  $target = nugetFlow")
+      appendLine("} catch (e: Throwable) {")
+      appendLine("  if (errorOut != null) {")
+      appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.retain(")
+      appendLine("      buildError(e, ::nugetMappedType)")
+      appendLine("    )")
+      appendLine("  }")
+      appendLine("}")
+    },
+    flow,
+    cOpaquePointerVar,
+    nugetHandles,
+  )
+
+  val setter: FunSpec.Builder = FunSpec.builder("export_$export")
+    .addAnnotation(cNameAnnotation(export, ownedBy(prop)))
+  if (receiver != null) setter.addParameter("receiver", INT)
+  addFunction(
+    setter
+      .addParameter("value", cOpaquePointer.copy(nullable = true))
+      .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+      .addCode(guarded(read))
+      .build(),
+  )
+
+  // ADR-233 amendment: a flow made in C# wraps no Kotlin flow, so a cold `var` takes it through
+  // ADR-210's `flowForKotlin` seam instead, one `GetAsyncEnumerator` per Kotlin `collect`.
+  val source: BridgeType.FlowSource = classifier.flowSourceOrNull(type.makeNotNullable()) ?: return
+  val taken: MutableSet<String> = mutableSetOf("receiver", "errorOut")
+  val slots: ForwardAsyncSlots = mintAsyncSlots(listOf("value" to ForwardAsyncKind.FLOW)) { base ->
+    freshName(base, taken).also { taken += it }
+  }.single()!!
+  val sourced: FunSpec.Builder = FunSpec.builder("export_${export}_source")
+    .addAnnotation(cNameAnnotation("${export}_source", ownedBy(prop)))
+  if (receiver != null) sourced.addParameter("receiver", INT)
+  slots.declared.forEach { slot -> sourced.addParameter(slot, cOpaquePointer) }
+  addFunction(
+    sourced
+      .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+      .addCode(guarded(flowSourceExpression("value", source, slots)))
+      .build(),
+  )
 }
 
 /**

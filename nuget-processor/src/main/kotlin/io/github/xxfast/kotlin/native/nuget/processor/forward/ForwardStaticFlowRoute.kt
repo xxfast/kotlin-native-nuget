@@ -83,6 +83,11 @@ internal sealed interface ForwardStaticFlowMember {
   data class Property(
     val property: KSPropertyDeclaration,
     override val owner: ForwardStaticFlowOwner,
+    /**
+     * ADR-230 amendment: the `_set_<p>` export a public flow `var` binds its setter under, and
+     * `_set_<p>_source` for a cold one; null for a `val` and for a value class's property.
+     */
+    val setter: String? = null,
   ) : ForwardStaticFlowMember {
     override val function: KSFunctionDeclaration = ForwardStaticFlowGetter(property)
   }

@@ -63,6 +63,8 @@ using Cattery = TestLibrary.Cattery;
 using Hoards = TestLibrary.Hoard;
 // The enum extension properties on `TailExtensions`, without importing the whole namespace.
 using static TestLibrary.Purrclock.TailExtensions;
+// The enum extension members on `MealExtensions`, the same way.
+using static TestLibrary.Cattery.MealExtensions;
 using Furcoat = TestLibrary.Furcoat;
 using Pawpost = TestLibrary.Pawpost;
 using TestLibrary.Pawpost;
@@ -8105,6 +8107,31 @@ public class LiveHandleTests
 
             Assert.Equal("3 -> 7", await Cattery.Catteries.RetraceAsync(new LeakPorch(), 7));
             Assert.Equal("Oreo at 3am", await Cattery.Catteries.InspectAsync(new LeakFurball()));
+        });
+    }
+
+    // Row 20h. ADR-230 amendment: a static flow `var` set to a C#-made flow, to a Kotlin-made one
+    // re-read from its owner (minted), and to a held hot flow's own handle, on an object, a
+    // companion, the top level and an enum body.
+    [Fact]
+    public async Task StaticFlowVarSetters_ReturnToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            Cattery.Pantry.Stock = KotlinFlow<string>.From(Drip("salmon"));
+            Assert.StartsWith("stock=salmon ", await Cattery.Pantry.ReadAsync());
+            using (KotlinMutableStateFlow<int> dial = KotlinMutableStateFlow<int>.Create(4))
+            {
+                Cattery.Pantry.Dial = dial;
+            }
+
+            Cattery.Feedings.FeedingTimes = KotlinFlow<int>.From(Drip<int>(8));
+            Cattery.Bowlful.Refills = Cattery.Feedings.FeedingTimes;
+            Assert.Equal(8, await Cattery.Bowlful.TotalAsync());
+
+            Cattery.Meal.Dinner.SetMenu(KotlinFlow<string>.From(Drip("tuna")));
+            Cattery.Meal.Breakfast.SetMenu(Cattery.Meal.Dinner.Menu);
+            Assert.Equal("tuna", await Cattery.Meal.Breakfast.DishAsync());
         });
     }
 

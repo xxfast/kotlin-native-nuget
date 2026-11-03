@@ -33,6 +33,9 @@ fun zoomOut(who: String): String = onZoomOut?.invoke(who) ?: "$who stayed in"
 /** Reads a [Pouncer]'s plain lambda property from Kotlin, so a C# implementation is called. */
 fun pounce(pouncer: Pouncer, times: Int): String = pouncer.onPounce(times)
 
+/** Awaits a [Pouncer]'s suspend lambda property. */
+suspend fun leap(pouncer: Pouncer, height: Int): Int = pouncer.onLeap(height)
+
 /** Reads a [Pouncer]'s nullable `var`, or names its absence. */
 fun cue(pouncer: Pouncer, word: String): String = pouncer.cue?.invoke(word) ?: "no cue for $word"
 

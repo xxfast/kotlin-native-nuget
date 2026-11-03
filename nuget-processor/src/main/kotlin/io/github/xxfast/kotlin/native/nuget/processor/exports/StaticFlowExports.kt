@@ -211,6 +211,10 @@ internal fun FileSpec.Builder.addStaticFlowExports(
     function, qualifiedName = "", prefix = "", classifier, callableCatalog, owner = null,
     static = call,
   )
+  // ADR-230 amendment: a flow `var` sets through the same receiver its getter reads.
+  if (member is ForwardStaticFlowMember.Property && member.setter != null) {
+    addStaticFlowSetterExports(member.property, member.setter, call, classifier)
+  }
 }
 
 /**

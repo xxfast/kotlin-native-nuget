@@ -105,6 +105,9 @@ class StickerCourier(val desk: String) {
   fun relayNick(through: (Nick) -> Nick?): String =
     through(Nick(null)).let { if (it == null) "no nick" else it.name ?: "nameless" }
 
+  /** A member's own `T` inside the struct as a returned lambda's result. */
+  fun <T> wrapper(): (T) -> Sticker<T> = { Sticker(it) }
+
   /** A `Flow` element over an object-handle instantiation. */
   fun stream(): Flow<Sticker<Cat>> = flowOf(Sticker(Cat("Oreo")), Sticker(Cat("Mylo")))
 
