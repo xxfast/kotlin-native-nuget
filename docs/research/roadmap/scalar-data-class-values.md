@@ -89,3 +89,8 @@ Generic data classes; sealed arms; a data class with a superclass or an exported
 3. Admit value class, `Instant`, `Duration`, `Uuid` and nested scalar data class components (acyclic type graph only) in v1? Recommendation: yes, so `Order(val toy: Toy)` does not keep a `Dispose` that `Toy` lost. Human decision: pending.
 4. A side-effecting `init` re-runs per member call and per crossing into Kotlin. Accept and document (value class precedent, ADR-235), or exclude any data class with an `init` block (which also excludes the `require` validation the issue wants kept)? Recommendation: accept and document. Human decision: pending.
 5. Strike the ROADMAP "record class if a safe `with`" line? Recommendation: strike, pointing at ADR-242; no safe modifying `with` exists, because an `init` accessor cannot run a cross-field `require`. Human decision: pending.
+
+### Decided at the gate (2026-11-09, human)
+
+- Q1: on by default in the next minor, with a Breaking changes entry. Strike the Future Improvements line about `record class` and point it at ADR-242.
+- The remaining questions keep the memo's recommendations.
