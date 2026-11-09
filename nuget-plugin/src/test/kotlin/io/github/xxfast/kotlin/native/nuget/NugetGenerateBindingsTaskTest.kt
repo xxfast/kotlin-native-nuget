@@ -2292,13 +2292,13 @@ class NugetGenerateBindingsTaskTest {
       )
       assertContains(
         file.content,
-        "StableRef.create(buildError(t, ::nugetMappedType)).asCPointer()",
+        "StableRef.create(buildError(t, ::nugetRowType)).asCPointer()",
       )
       // ADR-203: the module's own KSP-generated classifier, so a reverse slot maps the optional
       // rows (kotlinx-io) exactly as a forward call does, not the runtime's stdlib rows only.
       assertContains(
         file.content,
-        "import io.github.xxfast.kotlin.native.nuget.generated.nugetMappedType",
+        "import io.github.xxfast.kotlin.native.nuget.generated.nugetRowType",
       )
       assertFalse(file.content.contains("nugetStdlibMappedType"), file.content)
       // ...and the C# side reads the matched row back, top node at index 0.

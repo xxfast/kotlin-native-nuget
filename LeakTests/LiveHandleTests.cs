@@ -68,6 +68,7 @@ using static TestLibrary.Cattery.MealExtensions;
 using Furcoat = TestLibrary.Furcoat;
 using Pawpost = TestLibrary.Pawpost;
 using TestLibrary.Pawpost;
+using TestLibrary.Store;
 using Bindle = TestLibrary.Bindle;
 
 namespace LeakTests;
@@ -9173,5 +9174,50 @@ public class LiveHandleTests
 
         await Crossing();
         await AssertNoLeakAsync(Crossing);
+    }
+
+    // ADR-241: a thrown exported exception owns a handle now (the handle class IS the exception),
+    // minted by `nuget_error_cause_throwable` inside `BuildException`'s exported arm. Nobody
+    // disposes a caught exception, so the SafeHandle finalizer is the only thing that releases it.
+    // Oreo knocks ten treats off the shelf ten times and walks away from every one.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void DropTenUndisposedNotFounds()
+    {
+        using var store = new TreatStore();
+        for (int i = 0; i < 10; i++)
+        {
+            var e = Assert.Throws<StoreException.NotFound>(() => store.Fetch($"treat-{i}"));
+            Assert.Equal($"treat-{i}", e.Key);
+        }
+    }
+
+    [Fact]
+    public void ExportedException_ThrownAndDropped_ReturnsToBaseline() =>
+        AssertReleasedByTheGc("thrown StoreException.NotFound exceptions", DropTenUndisposedNotFounds);
+
+    // ADR-241, the explicit-Dispose twin: a consumer that does dispose the caught exception releases
+    // its handle on the spot, and a later finalizer must not release it a second time. The cause
+    // loop's exported arm and the sealed base's private backing mint the same way.
+    // Mylo tidies up after every raid.
+    [Fact]
+    public void ExportedException_ThrownAndDisposed_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var store = new TreatStore();
+
+            using (var notFound = Assert.Throws<StoreException.NotFound>(() => store.Fetch("tuna")))
+                Assert.Equal("tuna", notFound.Key);
+
+            using (var expired = Assert.ThrowsAny<StoreException.Locked>(() => store.SignIn()))
+                Assert.EndsWith(".TokenExpired", expired.KotlinType);
+
+            using (var stale = Assert.Throws<StaleCache>(() => store.Stale()))
+                Assert.Equal("the kibble cache is stale", stale.Message);
+
+            var collapsed = Assert.Throws<KotlinInvalidOperationException>(() => store.Collapse("salmon"));
+            using (var cause = Assert.IsType<StoreException.NotFound>(collapsed.InnerException))
+                Assert.Equal("salmon", cause.Key);
+        });
     }
 }

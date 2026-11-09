@@ -1,6 +1,6 @@
 namespace Kotlin.Native.Interop;
 
-public sealed class KotlinInvalidCastException : InvalidCastException, IKotlinException
+public class KotlinInvalidCastException : InvalidCastException, IKotlinException
 {
     public string KotlinType { get; }
     public string KotlinStackTrace { get; }

@@ -263,7 +263,9 @@ private fun StringBuilder.renderClassDeclaration(
     " : " + (listOf(cls.superClass) + cls.interfaces + asyncDisposable).joinToString(", ")
   } else {
     val disposables: List<String> = listOf("IDisposable") + asyncDisposable
-    " : " + (cls.interfaces + disposables + "INugetHandle").distinct().joinToString(", ")
+    // ADR-241: a root exported exception class derives from its shared-contract exception base.
+    " : " + (listOfNotNull(cls.exceptionBase) + cls.interfaces + disposables + "INugetHandle")
+      .distinct().joinToString(", ")
   }
 
   // ADR-147: the generic carrier. `Crate<T>` plus one `where T : Bound` per bounded parameter,
@@ -329,6 +331,8 @@ private fun StringBuilder.renderClassDeclaration(
     )
     appendLine("        {")
     appendLine("        }")
+  } else if (cls.exceptionBase != null) {
+    renderExceptionRootConstructors(cls.name, cls.kotlinName ?: cls.name, "        ")
   } else {
     appendLine("        internal ${cls.name}(NugetKotlinHandle handle, out NugetHandleTag tag)")
     appendLine("        {")
@@ -421,7 +425,7 @@ private fun StringBuilder.renderClassDeclaration(
   }
 
   if (cls.isDataClass) {
-    renderDataClassMethods(cls, externs)
+    renderDataClassMethods(cls, externs, withToString = !cls.isException)
   }
 
   renderDispose(
@@ -578,7 +582,38 @@ private fun StringBuilder.renderClassConstructor(
     ctor = ctor,
     hasSuperClass = cls.superClass != null,
     externs = externs,
+    chainsToHandle = cls.exceptionBase != null,
   )
+}
+
+/**
+ * ADR-241: the handle constructor of a root exported exception class. The exception base is
+ * immutable, so its message, Kotlin type, Kotlin stack trace and cause chain are read once, from
+ * the handle's ADR-107 envelope ([NugetErrorNative.Snapshot]); an invalid handle (a C#-side
+ * constructor, before it creates the Kotlin object) reads an empty snapshot of [kotlinType].
+ */
+internal fun StringBuilder.renderExceptionRootConstructors(
+  name: String,
+  kotlinType: String,
+  indent: String,
+) {
+  appendLine(
+    "${indent}internal $name(NugetKotlinHandle handle, out NugetHandleTag tag) : " +
+      "this(handle, NugetErrorNative.Snapshot(handle, \"$kotlinType\"), out tag)",
+  )
+  appendLine("$indent{")
+  appendLine("$indent}")
+  appendLine()
+  appendLine(
+    "${indent}private $name(NugetKotlinHandle handle, NugetErrorSnapshot snapshot, out NugetHandleTag tag)",
+  )
+  appendLine(
+    "$indent    : base(snapshot.KotlinType, snapshot.Message, snapshot.KotlinStackTrace, snapshot.Inner)",
+  )
+  appendLine("$indent{")
+  appendLine("$indent    tag = default;")
+  appendLine("$indent    _handle = handle;")
+  appendLine("$indent}")
 }
 
 /**
@@ -595,15 +630,19 @@ internal fun StringBuilder.renderConstructorMember(
   ctor: CirConstructor,
   hasSuperClass: Boolean,
   externs: CirExternScope? = null,
+  chainsToHandle: Boolean = false,
 ) {
   renderDllImport(constructorNativeImport(libraryName, nativePrefix, ctor), externs)
-  renderConstructor(className, ctor, hasSuperClass)
+  renderConstructor(className, ctor, hasSuperClass, chainsToHandle)
 }
 
 internal fun StringBuilder.renderConstructor(
   className: String,
   ctor: CirConstructor,
   hasSuperClass: Boolean = false,
+  // ADR-241: a root exception class has no parameterless base constructor, so a public constructor
+  // chains to its own handle constructor over a null handle, as an arm chains to its base's.
+  chainsToHandle: Boolean = false,
 ) {
   renderDoc(ctor.doc, "        ")
   val paramStr: String = ctor.parameters.joinToString(", ") { it.declaration }
@@ -613,6 +652,8 @@ internal fun StringBuilder.renderConstructor(
 
   if (hasSuperClass) {
     appendLine("        public $className($paramStr) : base(IntPtr.Zero, out _)")
+  } else if (chainsToHandle) {
+    appendLine("        public $className($paramStr) : this(IntPtr.Zero, out _)")
   } else {
     appendLine("        public $className($paramStr)")
   }
@@ -962,7 +1003,11 @@ internal fun CirMethod.whereClauses(): String = typeParameters
     " where ${parameter.name} : ${parameter.bounds.joinToString(", ")}"
   }
 
-internal fun StringBuilder.renderDataClassMethods(cls: CirClass, externs: CirExternScope? = null) {
+internal fun StringBuilder.renderDataClassMethods(
+  cls: CirClass,
+  externs: CirExternScope? = null,
+  withToString: Boolean = true,
+) {
   cls.dataClassNativeImports().forEach { nativeImport -> renderDllImport(nativeImport, externs) }
 
   if (cls.copyMethod != null) renderMethod(cls.copyMethod, cls.name)
@@ -975,7 +1020,10 @@ internal fun StringBuilder.renderDataClassMethods(cls: CirClass, externs: CirExt
   appendLine()
   appendLine("        public override int GetHashCode() => Native_HashCode(_handle);")
   appendLine()
-  appendLine("        public override string ToString() => Marshal.PtrToStringUTF8(Native_ToString(_handle))!;")
+  // ADR-241: an exception keeps `KotlinException.ToString`, which carries the Kotlin trace.
+  if (withToString) {
+    appendLine("        public override string ToString() => Marshal.PtrToStringUTF8(Native_ToString(_handle))!;")
+  }
   appendLine()
 }
 

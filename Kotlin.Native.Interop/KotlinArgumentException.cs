@@ -1,6 +1,6 @@
 namespace Kotlin.Native.Interop;
 
-public sealed class KotlinArgumentException : ArgumentException, IKotlinException
+public class KotlinArgumentException : ArgumentException, IKotlinException
 {
     public string KotlinType { get; }
     public string KotlinStackTrace { get; }

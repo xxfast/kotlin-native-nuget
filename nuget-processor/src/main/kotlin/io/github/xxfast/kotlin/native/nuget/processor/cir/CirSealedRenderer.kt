@@ -50,7 +50,9 @@ internal fun StringBuilder.renderSealedBase(sealed: CirSealedClass) {
   val baseList: List<String> = if (superClass != null) {
     listOf(superClass) + sealed.interfaces + asyncDisposable
   } else {
-    sealed.interfaces + listOf("IDisposable") + asyncDisposable + listOf("INugetHandle")
+    // ADR-241: a root exported exception hierarchy derives from its shared-contract base.
+    listOfNotNull(sealed.exceptionBase) + sealed.interfaces + listOf("IDisposable") +
+      asyncDisposable + listOf("INugetHandle")
   }
   appendLine(
     "    public abstract class ${sealed.name}$typeArguments : ${baseList.joinToString(", ")}" +
@@ -69,11 +71,15 @@ internal fun StringBuilder.renderSealedBase(sealed: CirSealedClass) {
     appendLine()
     appendLine("        IntPtr INugetHandle.Handle => _handle.DangerousGetHandle();")
     appendLine()
-    appendLine("        internal ${sealed.name}(NugetKotlinHandle handle, out NugetHandleTag tag)")
-    appendLine("        {")
-    appendLine("            tag = default;")
-    appendLine("            _handle = handle;")
-    appendLine("        }")
+    if (sealed.exceptionBase != null) {
+      renderExceptionRootConstructors(sealed.name, sealed.exceptionKotlinType ?: sealed.name, "        ")
+    } else {
+      appendLine("        internal ${sealed.name}(NugetKotlinHandle handle, out NugetHandleTag tag)")
+      appendLine("        {")
+      appendLine("            tag = default;")
+      appendLine("            _handle = handle;")
+      appendLine("        }")
+    }
   } else {
     appendLine(
       "        internal ${sealed.name}(NugetKotlinHandle handle, out NugetHandleTag tag) : " +
@@ -386,6 +392,7 @@ internal fun sealedSubclassBlock(
   if (subclass.isDataClass) {
     renderSealedSubclassDataMethods(
       sealed.libraryName, subclass.nativePrefix, sealed.name, "${subclass.name}$armArguments",
+      withToString = !subclass.isException,
     )
   }
 
@@ -549,7 +556,9 @@ internal fun StringBuilder.renderSealedSubclassDataMethods(
   libraryName: String,
   nativePrefix: String,
   sealedName: String,
-  subclassName: String
+  subclassName: String,
+  // ADR-241: an exception keeps `KotlinException.ToString`, which carries the Kotlin trace.
+  withToString: Boolean = true,
 ) {
   appendLine("            [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${nativePrefix}_equals\")]")
   appendLine("            [return: MarshalAs(UnmanagedType.I1)]")
@@ -569,8 +578,10 @@ internal fun StringBuilder.renderSealedSubclassDataMethods(
   appendLine()
   appendLine("            public override int GetHashCode() => Native_HashCode(_handle);")
   appendLine()
-  appendLine("            public override string ToString() => Marshal.PtrToStringUTF8(Native_ToString(_handle))!;")
-  appendLine()
+  if (withToString) {
+    appendLine("            public override string ToString() => Marshal.PtrToStringUTF8(Native_ToString(_handle))!;")
+    appendLine()
+  }
 }
 
 /**

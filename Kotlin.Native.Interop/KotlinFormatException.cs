@@ -1,6 +1,6 @@
 namespace Kotlin.Native.Interop;
 
-public sealed class KotlinFormatException : FormatException, IKotlinException
+public class KotlinFormatException : FormatException, IKotlinException
 {
     public string KotlinType { get; }
     public string KotlinStackTrace { get; }

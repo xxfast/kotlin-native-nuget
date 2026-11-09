@@ -1,6 +1,6 @@
 namespace Kotlin.Native.Interop;
 
-public sealed class KotlinNotSupportedException : NotSupportedException, IKotlinException
+public class KotlinNotSupportedException : NotSupportedException, IKotlinException
 {
     public string KotlinType { get; }
     public string KotlinStackTrace { get; }

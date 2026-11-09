@@ -1,6 +1,6 @@
 namespace Kotlin.Native.Interop;
 
-public sealed class KotlinArithmeticException : ArithmeticException, IKotlinException
+public class KotlinArithmeticException : ArithmeticException, IKotlinException
 {
     public string KotlinType { get; }
     public string KotlinStackTrace { get; }
