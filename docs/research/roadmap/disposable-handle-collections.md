@@ -135,3 +135,8 @@ Red first: before the change the first row's delta is +100 (two element wrappers
 5. Should a list of strings or primitives also become `KotlinList<T>` for uniformity? Recommendation: no; the type marks that the collection owns something.
 6. Set/Map in v1 or deferred? Recommendation: deferred, but it is cheap (same helper shape) if the human wants consistency in one pass.
 7. Binary-compatibility note: is a version bump with a migration note enough, given the return type is part of the member signature for prebuilt consumers? Recommendation: yes, documented on the collections topic page.
+
+### Decided at the gate (2026-11-09, human)
+
+- Scope: read-only `List` only in v1. `Set`, `Map`, `suspend` and `Flow` are deferred, each to a ROADMAP line.
+- The remaining questions keep the memo's recommendations (`KotlinList<T>`, `Keep(T)`, the red use-after-dispose test first).
