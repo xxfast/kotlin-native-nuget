@@ -955,6 +955,6 @@ The sealed-arm and backing-wrapper sets (`CirSealedRenderer`'s `baseExternNames`
 Evidence: `Tier1NestedOpenSubclassHidingTest` (verified) covers a same-shape constructor, a
 different-shape constructor (an overload, plain), an overriding property, method and lambda-parameter
 method, two-level nesting, a sibling nested under a nested base, and a top-level subclass (plain).
-The `test/orchard` fixture and `OrchardTests` have not yet been run green through `scripts/verify.sh`: both 2026-11-09 attempts were OOM-killed during the native link, before `packNuget`. An overriding `Flow`
+The `test/orchard` fixture, including the warnings-as-errors `GeneratedBindingsCheck` in `packNuget`, and `OrchardTests` pass through a full `scripts/verify.sh` (verified 2026-11-09). That run had 4500 of 4500 IntegrationTests green under both JIT and NativeAOT, and 432 of 432 LeakTests. An overriding `Flow`
 property could not be added as a raw-route row. Its C# *property* renders without `override` on
 every subclass, top-level included (CS0108 on `Quince.Ticks`, verified), which is a separate bug.
