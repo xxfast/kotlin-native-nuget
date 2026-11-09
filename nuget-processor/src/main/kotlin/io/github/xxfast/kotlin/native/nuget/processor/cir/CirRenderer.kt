@@ -213,6 +213,8 @@ internal fun StringBuilder.renderDeclaration(
   declaration: CirDeclaration,
   nested: Boolean = false,
   held: CirBacking? = null,
+  // ADR-116 amendment (2026-11-09): the enclosing classes' externs, for a nested subclass to hide.
+  enclosing: List<CirEnclosingExterns> = emptyList(),
 ) {
   when (declaration) {
     is CirMarshalHelper -> renderMarshalHelper(declaration)
@@ -236,7 +238,7 @@ internal fun StringBuilder.renderDeclaration(
     is CirBridgeHelper -> renderBridgeHelper(declaration)
     is CirStaticClass -> renderStaticClass(declaration)
     is CirInterface -> renderInterface(declaration)
-    is CirClass -> renderClass(declaration)
+    is CirClass -> renderClass(declaration, enclosing)
     is CirEnum -> renderEnum(declaration, nested = nested)
     is CirSealedClass -> renderSealedClass(declaration)
     is CirObject -> renderObject(declaration, held)
@@ -248,11 +250,14 @@ internal fun StringBuilder.renderDeclaration(
  * ADR-133: renders each nested declaration one level in, through the same `indentNestedBody()`
  * re-indent ADR-009 uses for a sealed arm. Called from the owner's own block.
  */
-internal fun StringBuilder.renderNestedDeclarations(declarations: List<CirDeclaration>) {
+internal fun StringBuilder.renderNestedDeclarations(
+  declarations: List<CirDeclaration>,
+  enclosing: List<CirEnclosingExterns> = emptyList(),
+) {
   declarations.forEach { declaration ->
     appendLine()
     val held: CirBacking? = declarations.heldBacking(declaration)
-    append(buildString { renderDeclaration(declaration, nested = true, held) }.indentNestedBody())
+    append(buildString { renderDeclaration(declaration, nested = true, held, enclosing) }.indentNestedBody())
   }
 }
 
