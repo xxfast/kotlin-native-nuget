@@ -2381,4 +2381,54 @@ public class CollectabilityTests
             MarkerCollectedWithin(list, TimeSpan.FromSeconds(5)),
             "the List<int> receiver of TotalAsync stayed reachable after the call completed");
     }
+
+    // ADR-241, the async twin of LiveHandleTests' ExportedException_ThrownAndDropped row: a thrown
+    // exported exception holds a handle to its Kotlin Throwable. Once the consumer drops the caught
+    // exception undisposed, both the C# exception and the Kotlin object behind it must go: the
+    // SafeHandle finalizer releases the StableRef, then Kotlin's GC collects the Throwable, which
+    // the store watches weakly. The catch lives in an `async` helper, so the yield is load-bearing
+    // under NativeAOT (see ManagedFault_NotCaughtByKotlin_IsCollectedOnceTheFaultedTaskIsDropped).
+    // Oreo naps, wakes up unauthorized, and forgets all about it.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference> FetchUnauthorizedAndDrop(TestLibrary.Store.TreatStore store)
+    {
+        WeakReference? caught = null;
+        try
+        {
+            await store.FetchAsync("kibble");
+        }
+        catch (TestLibrary.Store.StoreException.Unauthorized e)
+        {
+            Assert.EndsWith("StoreException.Unauthorized", e.KotlinType);
+            caught = new WeakReference(e);
+        }
+        Assert.NotNull(caught);
+        await Task.Yield();
+        return caught;
+    }
+
+    [Fact]
+    public async Task ExportedException_ThrownOnTheAsyncRouteAndDropped_IsCollectedOnBothSides()
+    {
+        using var store = new TestLibrary.Store.TreatStore();
+        WeakReference exception = await FetchUnauthorizedAndDrop(store);
+        // Same reason as the helper's yield: leave the helper's frame behind before polling.
+        await Task.Yield();
+
+        Assert.True(
+            MarkerCollectedWithin(exception, TimeSpan.FromSeconds(5)),
+            "the caught StoreException.Unauthorized stayed reachable after it was dropped");
+
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (store.IsLastThrownAlive() && DateTime.UtcNow < deadline)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            NugetMarshal.GcCollect();
+            Thread.Sleep(25);
+        }
+        Assert.False(
+            store.IsLastThrownAlive(),
+            "Kotlin's Unauthorized stayed reachable after its C# exception was collected: the exception's handle was never released");
+    }
 }
