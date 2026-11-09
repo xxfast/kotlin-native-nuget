@@ -1751,6 +1751,7 @@ internal fun translateClass(
     interfaceBridgeMethods = interfaceBridgeMembers,
     interfaces = interfaces,
     handleInterfaces = forwardHandleInterfaces(cls, exportedTypes, classifier),
+    hidesExternsOf = cls.enclosingKeptBases(superClassDeclaration, exportedTypes),
     superClass = superClass,
     isDataClass = isDataClass,
     isAbstract = isAbstract,

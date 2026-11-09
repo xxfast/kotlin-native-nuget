@@ -325,6 +325,7 @@ internal fun StringBuilder.renderSharedFlowPropertyNativeImports(
   libraryName: String,
   nativePrefix: String,
   prop: CirProperty,
+  externs: CirExternScope? = null,
 ) {
   val shared: CirSharedFlow = prop.sharedFlow ?: return
   val handle = CirParameter("handle", KOTLIN_HANDLE)
@@ -338,6 +339,7 @@ internal fun StringBuilder.renderSharedFlowPropertyNativeImports(
       visibility = CirVisibility.PRIVATE,
       hasSyncErrorOut = true,
     ),
+    externs,
   )
   val mutable: CirMutableSharedFlow = shared.mutable ?: return
   sharedFlowWriteImports(
@@ -348,7 +350,7 @@ internal fun StringBuilder.renderSharedFlowPropertyNativeImports(
     emit = "${nativePrefix}_emit_${prop.nativeName}" to "Native_Emit${prop.nativeStem}",
     tryEmit = "${nativePrefix}_try_emit_${prop.nativeName}" to "Native_TryEmit${prop.nativeStem}",
     write = mutable.write,
-  ).forEach { import -> renderDllImport(import) }
+  ).forEach { import -> renderDllImport(import, externs) }
 }
 
 /** ADR-209: [renderSharedFlowPropertyNativeImports]' extern names, prefixed by [carrier]. */

@@ -298,6 +298,10 @@ internal data class CirClass(
   // ADR-204: the sealed interfaces over declared arms this class is an arm of, spelled as its base
   // list spells them. Each takes an explicit `NugetKotlinHandle I<Name>._handle => _handle;`.
   val handleInterfaces: List<String> = emptyList(),
+  // ADR-116 amendment (2026-11-09, issue #613): the Kotlin names of the enclosing exported bases
+  // whose `private static extern`s this nested subclass sees, so each extern it redeclares with the
+  // same signature renders `new` (CS0108 otherwise). Empty for a top-level or generic class.
+  val hidesExternsOf: Set<String> = emptySet(),
 ) : CirDeclaration
 
 internal data class CirValueClass(

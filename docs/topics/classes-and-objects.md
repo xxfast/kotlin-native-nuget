@@ -420,6 +420,24 @@ Assert.Equal("perch@5", perch.Describe());
 Assert.Equal(5, aviary.HeightOf(perch));
 ```
 
+A subclass can be nested in its own `open` base. It keeps its nesting and compiles under
+warnings as errors with no extra step:
+
+```kotlin
+open class Fruit(val name: String? = null) {
+  open fun ripen(): String = "${name ?: "a fruit"} ripens slowly"
+
+  class Apple(name: String? = "apple") : Fruit(name) {
+    override fun ripen(): String = "Oreo bats the $name off the counter"
+  }
+}
+```
+
+```C#
+using var apple = new Fruit.Apple();
+Assert.Same(typeof(Fruit), typeof(Fruit.Apple).BaseType);
+```
+
 An `enum class` owner stays a named skip (`SKIPPED_NESTED_DECLARATION`); see
 [Inner classes](#inner-classes) for what an `inner class` declares. Kotlin allows a nested type named exactly like its owner, or like a member of its owner
 (a companion's members included, since they fold into the owner's C# type as statics); C# does not,

@@ -53,6 +53,10 @@ Complete.
 
 Complete.
 
+- [ ] An overriding `Flow` property on any subclass of an open class, top-level included, renders its C# property without `override`: CS0108 `'Quince.Ticks' hides inherited member 'Fruit.Ticks'`. Verified in Tier 1; site is the flow branch of the property loop in `cir/CirClassRenderer.kt` ([details](docs/backlog/flow-property-override-drops-override-modifier.md)).
+- [ ] A `private` direct subclass of an exported sealed class breaks the generated Kotlin (`CNameExports.kt: Cannot access ... it is private in file`) because the sealed discriminator lists arms regardless of visibility. Verified by compile ([details](docs/backlog/private-subclass-of-exported-sealed-class.md)).
+- [ ] The nested-subclass `new` rule ([ADR-116](docs/adr/116-sealed-subclass-methods-on-the-callable-plan.md) 2026-11-09 amendment) has no Tier 1 row for the raw-string extern routes (flow, callback, bridge); inferred, blocked by the `Flow` override bug above ([details](docs/backlog/nested-subclass-new-rule-raw-string-extern-tier1.md)).
+
 ## Phase 4: Rich type support
 
 

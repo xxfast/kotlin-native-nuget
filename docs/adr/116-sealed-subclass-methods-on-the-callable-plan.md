@@ -907,3 +907,54 @@ What an arm still names as `SEALED_SUBCLASS_UNROUTED`:
 
 Evidence, verified: `Tier1SealedArmResidualSkipTest` pins `pick` as bound and a `sort(values:
 List<T>)` member as named once; the native pipeline round-trips `Chore.Fetch.Pick(7)`.
+
+## Amendment (2026-11-09, issue #613): a nested `open`-class subclass hides by signature
+
+The 2026-09-11 sealed-arm rule (a nested arm marks an extern `new` when the base declares one with
+the same name) had no twin on the ordinary class route. `open class Fruit { class Apple : Fruit() }`
+generated `Fruit.Apple` redeclaring `private static extern Native_Create` / `Native_Dispose` /
+`Native_Get_colour` / `Native_Ripen`, all of which `Fruit` also declares. A nested C# class can see
+its enclosing class's `private` members, so each one is CS0108, and the warnings-as-errors
+`GeneratedBindingsCheck` failed the pack.
+
+The rule for an ordinary class:
+
+- **Which ancestors count.** The translator records `CirClass.hidesExternsOf`. These are the kept
+  bases in the class's exported base chain that are also its lexical parents. Only their privates are
+  accessible inside the nested body. A top-level subclass records none, since `new` there is CS0109.
+  A generic class or generic base is excluded, mirroring the sealed route's `!generic`, because
+  ADR-147 hoists its externs into a carrier.
+- **Multi-level nesting.** `Fruit.Stone.Plum : Stone` hides through both `Stone` and `Fruit`.
+  `Fruit.Pear2 : Stone` is nested in `Fruit` but not in `Stone`, so it hides only `Fruit`'s externs.
+  The research memo inferred that Roslyn skips an inaccessible base private when it looks for a
+  hidden member. **Verified** by `Tier1NestedOpenSubclassHidingTest`, which compiles both shapes
+  under `TreatWarningsAsErrors` with no CS0108 and no CS0109.
+- **Hiding is by signature, not name.** This corrects the memo, which proposed a name set, and it is
+  where this route departs from the sealed rule above. C# hides by name plus parameter types.
+  `Fruit.Pear(ripeness: Int)`'s `Native_Create(int, out IntPtr)` beside `Fruit`'s
+  `Native_Create(bool, string?, out IntPtr)` is an overload, and `new` on it is CS0109. The same
+  goes for `OrchardException.BlightException`'s create against its base's four-slot one. A
+  `CirExternSignature` is the extern name plus its parameter types, with `[MarshalAs]` stripped and
+  `out` kept; the return type is not part of it. **Verified** by the RED fixture run, whose CS0108
+  list named neither of those two creates. The CS0109 on a `new` overload is the C# rule, not a
+  separate run.
+- **Where it is decided.** It is decided in the model and the renderer, not by a text pass over the
+  rendered body. `renderClassDeclaration` opens a `CirExternScope` holding the hidden signatures.
+  That scope is the union of the enclosing stack's entries named by `hidesExternsOf`. Every
+  extern-emitting site of the class body takes it: the structural `renderDllImport` routes
+  (constructors, properties, methods, companion members, data-class members, dispose, shared flows)
+  and the raw-string routes (flow property, legacy property, callback, stored-callback,
+  interface-bridge, StateFlow CAS), which now go through `appendExtern`. The scope records each
+  signature it sees. `renderNestedDeclarations` then passes the class's recorded set down as the
+  next `CirEnclosingExterns` entry, keyed by the Kotlin name.
+
+The sealed-arm and backing-wrapper sets (`CirSealedRenderer`'s `baseExternNames`,
+`CirBacking.inheritedExternNames`) are unchanged. They still compare names over
+`ordinaryNativeImports()`, and no Tier 1 row has shown that gap biting.
+
+Evidence: `Tier1NestedOpenSubclassHidingTest` (verified) covers a same-shape constructor, a
+different-shape constructor (an overload, plain), an overriding property, method and lambda-parameter
+method, two-level nesting, a sibling nested under a nested base, and a top-level subclass (plain).
+The `test/orchard` fixture, including the warnings-as-errors `GeneratedBindingsCheck` in `packNuget`, and `OrchardTests` pass through a full `scripts/verify.sh` (verified 2026-11-09). That run had 4500 of 4500 IntegrationTests green under both JIT and NativeAOT, and 432 of 432 LeakTests. An overriding `Flow`
+property could not be added as a raw-route row. Its C# *property* renders without `override` on
+every subclass, top-level included (CS0108 on `Quince.Ticks`, verified), which is a separate bug.
