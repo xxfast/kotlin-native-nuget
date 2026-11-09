@@ -37,7 +37,9 @@ internal class CirExternScope(private val hidden: Set<CirExternSignature>) {
 internal class CirEnclosingExterns(val kotlinName: String?, val externs: Set<CirExternSignature>)
 
 /** The signature set a class keyed by [hidesExternsOf] must hide, out of the [enclosing] stack. */
-internal fun List<CirEnclosingExterns>.hiddenBy(hidesExternsOf: Set<String>): Set<CirExternSignature> =
+internal fun List<CirEnclosingExterns>.hiddenBy(
+  hidesExternsOf: Set<String>,
+): Set<CirExternSignature> =
   filter { enclosing -> enclosing.kotlinName in hidesExternsOf }
     .flatMap { enclosing -> enclosing.externs }
     .toSet()
@@ -77,7 +79,7 @@ internal fun KSClassDeclaration.enclosingKeptBases(
   exportedTypes: Set<String>,
 ): Set<String> {
   if (typeParameters.isNotEmpty()) return emptySet()
-  val parents: Set<String> = generateSequence(parentDeclaration) { parent -> parent.parentDeclaration }
+  val parents: Set<String> = generateSequence(parentDeclaration) { it.parentDeclaration }
     .mapNotNull { parent -> parent.qualifiedName?.asString() }
     .toSet()
   if (parents.isEmpty()) return emptySet()

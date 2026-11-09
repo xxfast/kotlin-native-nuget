@@ -257,7 +257,10 @@ internal fun StringBuilder.renderNestedDeclarations(
   declarations.forEach { declaration ->
     appendLine()
     val held: CirBacking? = declarations.heldBacking(declaration)
-    append(buildString { renderDeclaration(declaration, nested = true, held, enclosing) }.indentNestedBody())
+    append(
+      buildString { renderDeclaration(declaration, nested = true, held, enclosing) }
+        .indentNestedBody(),
+    )
   }
 }
 

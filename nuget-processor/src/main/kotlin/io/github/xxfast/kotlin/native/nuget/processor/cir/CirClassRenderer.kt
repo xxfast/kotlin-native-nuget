@@ -377,7 +377,8 @@ private fun StringBuilder.renderClassDeclaration(
       renderLegacyPropertyNativeImports(cls, prop, externs)
       renderProperty(prop)
     } else {
-      cls.propertyNativeImports(prop).forEach { nativeImport -> renderDllImport(nativeImport, externs) }
+      cls.propertyNativeImports(prop)
+        .forEach { nativeImport -> renderDllImport(nativeImport, externs) }
       renderProperty(prop)
     }
   }
@@ -479,13 +480,16 @@ internal fun StringBuilder.renderFlowPropertyNativeImports(
   appendLine()
   // ADR-233: a flow's own Kotlin handle, minted when C# hands the wrapper back to Kotlin.
   appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${nativePrefix}_get_${prop.nativeName}_flow\")]")
-  appendExtern(externs, "IntPtr", "Native_Get${prop.nativeStem}Flow", listOf("NugetKotlinHandle handle"))
+  appendExtern(
+    externs, "IntPtr", "Native_Get${prop.nativeStem}Flow", listOf("NugetKotlinHandle handle"),
+  )
   appendLine()
   // ADR-233: a flow `var`'s setter, handed the Kotlin flow its `KotlinFlow<T>` wraps or mints.
   if (prop.setter != null) {
     appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${nativePrefix}_set_${prop.nativeName}\")]")
     appendExtern(
-      externs, "void", "Native_Set_${prop.nativeName}", listOf("NugetKotlinHandle handle", "IntPtr value"),
+      externs, "void", "Native_Set_${prop.nativeName}",
+      listOf("NugetKotlinHandle handle", "IntPtr value"),
     )
     appendLine()
   }
@@ -506,7 +510,9 @@ internal fun StringBuilder.renderFlowPropertyNativeImports(
     // ADR-065: synchronous `_value` sibling export -- handle only, no scope/callbacks/errorOut.
     val valueEntryPoint = "${nativePrefix}_get_${prop.nativeName}_value"
     appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$valueEntryPoint\")]")
-    appendExtern(externs, "IntPtr", "Native_Get${prop.nativeStem}Value", listOf("NugetKotlinHandle handle"))
+    appendExtern(
+      externs, "IntPtr", "Native_Get${prop.nativeStem}Value", listOf("NugetKotlinHandle handle"),
+    )
     appendLine()
   }
   if (prop.isNullableMember) {
@@ -515,7 +521,9 @@ internal fun StringBuilder.renderFlowPropertyNativeImports(
     val hasValueEntryPoint = "${nativePrefix}_get_${prop.nativeName}_has_value"
     appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$hasValueEntryPoint\")]")
     appendLine("        [return: MarshalAs(UnmanagedType.I1)]")
-    appendExtern(externs, "bool", "Native_Get${prop.nativeStem}HasValue", listOf("NugetKotlinHandle handle"))
+    appendExtern(
+      externs, "bool", "Native_Get${prop.nativeStem}HasValue", listOf("NugetKotlinHandle handle"),
+    )
     appendLine()
   }
   if (prop.isStateFlow) {
@@ -545,7 +553,8 @@ private fun StringBuilder.renderLegacyPropertyNativeImports(
   prop: CirProperty,
   externs: CirExternScope,
 ) {
-  val getterErrorParam: List<String> = if (prop.hasSyncErrorOut) listOf("out IntPtr error") else emptyList()
+  val getterErrorParam: List<String> =
+    if (prop.hasSyncErrorOut) listOf("out IntPtr error") else emptyList()
   appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_get_${prop.nativeName}\")]")
   narrowReturnMarshal(prop.nativeReturnType)?.let { appendLine(it) }
   appendExtern(
@@ -1126,7 +1135,8 @@ private fun StringBuilder.renderStoredCallbackMethod(
   appendLine()
   appendLine("        [DllImport(\"${method.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${method.removeEntryPoint}\")]")
   appendExtern(
-    externs, "void", method.csRemoveNativeName, listOf("IntPtr handle", "IntPtr subscriptionHandle"),
+    externs, "void", method.csRemoveNativeName,
+    listOf("IntPtr handle", "IntPtr subscriptionHandle"),
   )
   appendLine()
   appendLine("        public IDisposable ${method.identifier}(${method.csParamType} listener)")
@@ -1204,7 +1214,8 @@ private fun StringBuilder.renderInterfaceBridgeMethod(
         "EntryPoint = \"${method.removeEntryPoint}\")]"
   )
   appendExtern(
-    externs, "void", method.csRemoveNativeName, listOf("IntPtr handle", "IntPtr subscriptionHandle"),
+    externs, "void", method.csRemoveNativeName,
+    listOf("IntPtr handle", "IntPtr subscriptionHandle"),
   )
   appendLine()
 
