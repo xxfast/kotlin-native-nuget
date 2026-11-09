@@ -1,6 +1,6 @@
 namespace Kotlin.Native.Interop;
 
-public sealed class KotlinNullReferenceException : NullReferenceException, IKotlinException
+public class KotlinNullReferenceException : NullReferenceException, IKotlinException
 {
     public string KotlinType { get; }
     public string KotlinStackTrace { get; }

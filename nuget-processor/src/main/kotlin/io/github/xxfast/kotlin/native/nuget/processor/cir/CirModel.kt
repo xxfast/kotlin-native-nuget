@@ -230,6 +230,12 @@ internal data class CirClass(
   val interfaceBridgeMethods: List<CirInterfaceBridgeMethod> = emptyList(),
   val interfaces: List<String> = emptyList(),
   val superClass: String? = null,
+  // ADR-241: the shared-contract exception type a ROOT exported `Throwable` class derives from
+  // (only when [superClass] is null). Null for every other class.
+  val exceptionBase: String? = null,
+  // ADR-241: a `Throwable` class at any depth: its data-class `ToString` is not rendered, because
+  // `KotlinException.ToString` carries the Kotlin trace.
+  val isException: Boolean = false,
   val isDataClass: Boolean = false,
   val isAbstract: Boolean = false,
   // ADR-101 amendment (2026-09-10): a non-abstract Kotlin `open class`, i.e. one an exported
@@ -483,6 +489,10 @@ internal data class CirSealedClass(
    * `_handle`, `INugetHandle` and `IDisposable` from it rather than declaring them.
    */
   val superClass: String? = null,
+  // ADR-241: as [CirClass.exceptionBase], for a sealed exception hierarchy root, and the root's
+  // Kotlin FQN, the `KotlinType` a C#-constructed (handle-less) instance reports.
+  val exceptionBase: String? = null,
+  val exceptionKotlinType: String? = null,
   /**
    * ADR-101 amendment (2026-09-27): the exported interfaces the sealed base lists, spelled for C#,
    * so `is`/`as` against them hold. An unexported one is dropped with
@@ -551,6 +561,8 @@ internal data class CirSealedClass(
 ) : CirDeclaration
 
 internal data class CirSealedSubclass(
+  // ADR-241: as [CirClass.isException].
+  val isException: Boolean = false,
   val name: String,
   /** ADR-237: the Kotlin qualified name a boxed instance reports, keying the `object` read. */
   val kotlinName: String? = null,
@@ -928,7 +940,21 @@ internal data class CirRuntimeHelper(
 
 internal data class CirErrorHelper(
   val libraryName: String,
+  // ADR-241: this library's exported `Throwable` classes, deepest first, and the export that turns
+  // a Kotlin handle over one into its ADR-107 envelope (null when [exported] is empty).
+  val exported: List<CirExportedException> = emptyList(),
+  val envelopeEntry: String? = null,
 ) : CirDeclaration
+
+/**
+ * ADR-241: one arm of the generated `MapExported` switch: the key the Kotlin `nugetMappedType`
+ * classified with `is`, and the C# type constructed over a handle to the thrown instance (an
+ * abstract class's private concrete backing).
+ */
+internal data class CirExportedException(
+  val key: String,
+  val constructed: String,
+)
 
 
 

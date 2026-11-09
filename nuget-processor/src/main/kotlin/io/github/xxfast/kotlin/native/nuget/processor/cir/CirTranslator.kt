@@ -41,6 +41,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardCallbackDel
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeContext
 import com.google.devtools.ksp.symbol.KSClassDeclaration
+import io.github.xxfast.kotlin.native.nuget.processor.ExportedExceptionType
+import io.github.xxfast.kotlin.native.nuget.processor.exportedExceptionTypes
+import io.github.xxfast.kotlin.native.nuget.processor.forward.abstractBackingName
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSTypeParameter
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
@@ -1352,7 +1355,33 @@ internal fun translate(
   if (tracker.needsAsync) helpers.add(CirAsyncHelper(context.libraryName))
   if (tracker.needsAsync) helpers.add(CirScopeHelper(context.libraryName))
   if (tracker.needsAsync) helpers.add(CirJobHelper(context.libraryName))
-  helpers.add(CirErrorHelper(context.libraryName))
+  // ADR-241: the exported exception arms; a sealed root (no backing) falls through to the rows.
+  val exceptionTypes: List<ExportedExceptionType> = exportedExceptionTypes(classes, sealedClasses)
+  val exportedExceptions: List<CirExportedException> =
+    exceptionTypes.mapNotNull { type ->
+      val declaration: KSClassDeclaration = type.declaration
+      val namespace: String = mapPackageToNamespace(
+        declaration.packageName.asString(), context.rootPackage, context.rootNamespace,
+      )
+      val name: String = "global::$namespace.${declaration.nestedCsName()}"
+      val isAbstract: Boolean = Modifier.ABSTRACT in declaration.modifiers ||
+          Modifier.SEALED in declaration.modifiers
+      val constructed: String = if (isAbstract) {
+        val backing: String = declaration.abstractBackingName() ?: return@mapNotNull null
+        "$name.$backing"
+      } else {
+        name
+      }
+      CirExportedException(type.kotlinType, constructed)
+    }
+  helpers.add(
+    CirErrorHelper(
+      context.libraryName,
+      exported = exportedExceptions,
+      // Every exception root's handle constructor reads a snapshot, arms or not.
+      envelopeEntry = context.symbols.throwableEnvelopeExport().takeIf { exceptionTypes.isNotEmpty() },
+    ),
+  )
   if (tracker.needsFlow || hotFlows) {
     helpers.add(
       CirFlowHelper(

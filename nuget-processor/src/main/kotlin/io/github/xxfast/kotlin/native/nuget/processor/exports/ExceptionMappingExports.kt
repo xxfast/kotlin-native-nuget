@@ -30,7 +30,39 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.KotlinExceptionRow
  */
 internal const val INSTALL_MODULE_MAPPED_TYPE: String = "nugetInstallMappedType(::nugetMappedType)"
 
-internal fun nugetMappedTypeFunction(present: List<KotlinExceptionRow>): FunSpec {
+/**
+ * ADR-241: the forward classifier. This library's exported `Throwable` classes ([exported], FQNs
+ * ordered deepest first so the first `is` that matches is the nearest exported ancestor) are
+ * tested ahead of the rows; anything else falls through to [nugetRowTypeFunction]. The key the
+ * C# `NugetErrorNative.MapExported` switches on is the FQN this same run emitted here.
+ */
+internal fun nugetMappedTypeFunction(exported: List<String>): FunSpec {
+  val body: CodeBlock = if (exported.isEmpty()) {
+    CodeBlock.of("return nugetRowType(t)\n")
+  } else {
+    val arms: CodeBlock.Builder = CodeBlock.builder()
+      .add("return when {\n")
+      .indent()
+    exported.forEach { fqn -> arms.add("t is %L -> %S\n", fqn, fqn) }
+    arms.add("else -> nugetRowType(t)\n")
+      .unindent()
+      .add("}\n")
+      .build()
+  }
+  return FunSpec.builder("nugetMappedType")
+    .addModifiers(KModifier.INTERNAL)
+    .addParameter("t", THROWABLE)
+    .returns(STRING.copy(nullable = true))
+    .addCode(body)
+    .build()
+}
+
+/**
+ * ADR-177/203: the row-only classifier, the body `nugetMappedType` had before ADR-241. The reverse
+ * envelope classifies with it, because its C# half calls `CreateMapped` directly, which does not
+ * know this library's exported keys.
+ */
+internal fun nugetRowTypeFunction(present: List<KotlinExceptionRow>): FunSpec {
   val body: CodeBlock = if (present.isEmpty()) {
     CodeBlock.of("return nugetStdlibMappedType(t)\n")
   } else {
@@ -51,7 +83,7 @@ internal fun nugetMappedTypeFunction(present: List<KotlinExceptionRow>): FunSpec
       .add("}\n")
       .build()
   }
-  return FunSpec.builder("nugetMappedType")
+  return FunSpec.builder("nugetRowType")
     .addModifiers(KModifier.INTERNAL)
     .addParameter("t", THROWABLE)
     .returns(STRING.copy(nullable = true))

@@ -1,6 +1,6 @@
 namespace Kotlin.Native.Interop;
 
-public sealed class KotlinInvalidOperationException : InvalidOperationException, IKotlinException
+public class KotlinInvalidOperationException : InvalidOperationException, IKotlinException
 {
     public string KotlinType { get; }
     public string KotlinStackTrace { get; }

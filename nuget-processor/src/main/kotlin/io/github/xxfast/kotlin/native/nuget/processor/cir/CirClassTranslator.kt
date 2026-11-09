@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import io.github.xxfast.kotlin.native.nuget.processor.EXCEPTION_MEMBER_COLLISIONS
+import io.github.xxfast.kotlin.native.nuget.processor.exceptionCsharpBase
 import io.github.xxfast.kotlin.native.nuget.processor.forward.getAllPlainProperties
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMemberExtensionAccessors
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isMemberExtension
@@ -1743,8 +1745,8 @@ internal fun translateClass(
     nativePrefix = prefix,
     constructor = cirConstructor,
     secondaryConstructors = secondaryConstructors,
-    properties = properties + interfaceForwards.properties,
-    methods = methods,
+    properties = (properties + interfaceForwards.properties).withoutExceptionCollisions(cls),
+    methods = methods.withoutExceptionMethodCollisions(cls),
     copyMethod = copyMethod,
     callbackMethods = callbackMembers,
     storedCallbackMethods = storedCallbackMembers,
@@ -1753,6 +1755,8 @@ internal fun translateClass(
     handleInterfaces = forwardHandleInterfaces(cls, exportedTypes, classifier),
     hidesExternsOf = cls.enclosingKeptBases(superClassDeclaration, exportedTypes),
     superClass = superClass,
+    exceptionBase = cls.exceptionCsharpBase().takeIf { superClass == null },
+    isException = cls.exceptionCsharpBase() != null,
     isDataClass = isDataClass,
     isAbstract = isAbstract,
     isOpen = isOpen,
@@ -3800,7 +3804,7 @@ internal fun translateSealedClass(
         doc = subclass.forwardKdoc(expects)?.toCirDoc(),
         name = subName,
         nativePrefix = subPrefix,
-        properties = properties,
+        properties = properties.withoutExceptionCollisions(subclass),
         constructors = armConstructors,
         remarks = listOfNotNull(armRemarks),
         methods = methods,
@@ -3820,6 +3824,7 @@ internal fun translateSealedClass(
             flowMembers.isNotEmpty() || properties.any { property -> property.isFlow }),
         overridesDisposeAsync = armsOverrideDisposeAsync,
         isDataClass = isDataClass,
+        isException = subclass.exceptionCsharpBase() != null,
         isNested = isNested,
         isOpen = isOpenArm,
         backingName = backingName,
@@ -3856,9 +3861,11 @@ internal fun translateSealedClass(
     nativePrefix = prefix,
     subclasses = subclasses,
     superClass = superClass,
+    exceptionBase = cls.exceptionCsharpBase().takeIf { superClass == null },
+    exceptionKotlinType = cls.qualifiedName?.asString(),
     interfaces = interfaces,
-    properties = baseProperties + baseFlowProperties,
-    methods = baseMethods,
+    properties = (baseProperties + baseFlowProperties).withoutExceptionCollisions(cls),
+    methods = baseMethods.withoutExceptionMethodCollisions(cls),
     asyncMembers = baseAsyncMembers,
     flowMembers = baseFlowMembers,
     ownsScope = baseOwnsScope,
@@ -6774,3 +6781,11 @@ private fun ForwardLegacyFlowElementShape.Wire.trackWire(tracker: CollectionHelp
   if (inner == BridgeType.ByteArray) tracker.needsBytes = true
   if (inner is BridgeType.Collection) tracker.trackCollection(inner)
 }
+
+/** ADR-241: drops the members of a `Throwable` class that collide with an `Exception` member. */
+internal fun List<CirProperty>.withoutExceptionCollisions(cls: KSClassDeclaration): List<CirProperty> =
+  if (cls.exceptionCsharpBase() == null) this else filterNot { it.name in EXCEPTION_MEMBER_COLLISIONS }
+
+/** ADR-241: as [withoutExceptionCollisions], for methods. */
+internal fun List<CirMethod>.withoutExceptionMethodCollisions(cls: KSClassDeclaration): List<CirMethod> =
+  if (cls.exceptionCsharpBase() == null) this else filterNot { it.name in EXCEPTION_MEMBER_COLLISIONS }

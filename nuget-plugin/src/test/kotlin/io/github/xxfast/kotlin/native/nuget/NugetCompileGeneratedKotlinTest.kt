@@ -111,7 +111,7 @@ class NugetCompileGeneratedKotlinTest {
     val written: WrittenSources = writeSources(files, dir, actual)
     check(written.common.isNotEmpty()) { "generator emitted no nativeMain files" }
     check(written.platform.isNotEmpty()) { "generator emitted no $actual files" }
-    // ADR-203: the reverse envelope classifies with the module's KSP-generated `nugetMappedType`.
+    // ADR-203: the reverse envelope classifies with the module's KSP-generated `nugetRowType` (ADR-241).
     // This compile has no KSP, so a stand-in occupies the processor's place in the leaf source set
     // (the real reference is proved by `:test-library`'s build in scripts/verify.sh).
     val classifier: File = File(dir, "$actual/NugetMappedTypeStandIn.kt")
@@ -121,7 +121,7 @@ class NugetCompileGeneratedKotlinTest {
         "\n" +
         "package io.github.xxfast.kotlin.native.nuget.generated\n" +
         "\n" +
-        "internal fun nugetMappedType(t: Throwable): String? =\n" +
+        "internal fun nugetRowType(t: Throwable): String? =\n" +
         "  io.github.xxfast.kotlin.native.nuget.runtime.nugetStdlibMappedType(t)\n",
     )
 

@@ -53,10 +53,15 @@ class Tier1ExceptionHierarchyMappingTest {
       "expected the classifier to compile; got: ${result.compileErrors}",
     )
     assertFalse("kotlinx.io.IOException" in result.generated, result.generated)
+    // ADR-241: no exported exception class, so the forward classifier is the row-only one.
     assertTrue(
-      "internal fun nugetMappedType(t: Throwable): String? = nugetStdlibMappedType(t)" in
+      "internal fun nugetRowType(t: Throwable): String? = nugetStdlibMappedType(t)" in
         result.generated,
       "expected the stdlib-only classifier; generated=${result.generated}",
+    )
+    assertTrue(
+      "internal fun nugetMappedType(t: Throwable): String? = nugetRowType(t)" in result.generated,
+      "expected the forward classifier to fall through to the rows; generated=${result.generated}",
     )
   }
 

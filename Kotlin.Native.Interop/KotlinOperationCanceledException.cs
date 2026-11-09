@@ -1,6 +1,6 @@
 namespace Kotlin.Native.Interop;
 
-public sealed class KotlinOperationCanceledException : OperationCanceledException, IKotlinException
+public class KotlinOperationCanceledException : OperationCanceledException, IKotlinException
 {
     public string KotlinType { get; }
     public string KotlinStackTrace { get; }

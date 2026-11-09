@@ -660,6 +660,8 @@ internal val NUGET_RUNTIME_EXPORTS: Set<String> = setOf(
   "nuget_error_cause_mapped_type",
   "nuget_error_cause_message",
   "nuget_error_cause_stacktrace",
+  // ADR-241: a counted handle to an error node's Throwable, for a generated exception type.
+  "nuget_error_cause_throwable",
   "nuget_error_cause_type",
   "nuget_error_message",
   "nuget_error_stacktrace",

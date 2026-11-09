@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import io.github.xxfast.kotlin.native.nuget.processor.EXCEPTION_MEMBER_COLLISIONS
+import io.github.xxfast.kotlin.native.nuget.processor.exceptionCsharpBase
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.getDeclaredFunctions
 import com.google.devtools.ksp.getDeclaredProperties
@@ -461,7 +463,7 @@ internal fun KSClassDeclaration.droppedBaseChain(
 internal fun KSDeclaration.isForwardMemberOf(
   cls: KSClassDeclaration,
   superClass: KSClassDeclaration?,
-): Boolean = hasBridgeableName() && (
+): Boolean = hasBridgeableName() && !collidesWithExceptionMember(cls) && (
   isDeclaredBy(cls) ||
     superClass == null ||
     isFromInterfaceBeside(superClass) ||
@@ -485,7 +487,7 @@ internal fun KSDeclaration.isForwardMemberOf(
 internal fun KSDeclaration.isForwardPlannableMemberOf(
   cls: KSClassDeclaration,
   superClass: KSClassDeclaration?,
-): Boolean = hasBridgeableName() && (
+): Boolean = hasBridgeableName() && !collidesWithExceptionMember(cls) && (
   isDeclaredBy(cls) ||
     ((superClass == null ||
         isFromInterfaceBeside(superClass) ||
@@ -494,6 +496,14 @@ internal fun KSDeclaration.isForwardPlannableMemberOf(
         // behind the handle implements the member, and the wrapper must override it.
         (hasImplementation() || cls.hasAbstractBacking()))
   )
+
+/**
+ * ADR-241: a member of an exported `Throwable` class whose C# name an `Exception` member already
+ * carries (`Message`, `InnerException` for `cause`) or would hide (`Data`, `StackTrace`, ...). Not
+ * planned on either side, so the two halves agree it is absent.
+ */
+private fun KSDeclaration.collidesWithExceptionMember(cls: KSClassDeclaration): Boolean =
+  csharpMemberName() in EXCEPTION_MEMBER_COLLISIONS && cls.exceptionCsharpBase() != null
 
 /**
  * ADR-101 amendment (2026-09-11): whether this member is inherited from an interface the class

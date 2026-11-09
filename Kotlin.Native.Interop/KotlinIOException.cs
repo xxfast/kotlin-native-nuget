@@ -1,6 +1,6 @@
 namespace Kotlin.Native.Interop;
 
-public sealed class KotlinIOException : System.IO.IOException, IKotlinException
+public class KotlinIOException : System.IO.IOException, IKotlinException
 {
     public string KotlinType { get; }
     public string KotlinStackTrace { get; }

@@ -622,7 +622,15 @@ public data class NugetError(
   public val message: String,
   public val stackTrace: String,
   public val cause: NugetError? = null,
-)
+) {
+  /**
+   * ADR-241: the node's own `Throwable`, outside the constructor so the data-class equality of the
+   * fields above is unchanged. `nuget_error_cause_throwable` mints a counted handle to it for a
+   * library's generated exception type; null for an envelope not built by [buildError].
+   */
+  public var throwable: Throwable? = null
+    internal set
+}
 
 /**
  * ADR-177: [mappedType] is required, with no default, so a call site that has not been converted
@@ -648,7 +656,7 @@ public fun buildError(e: Throwable, mappedType: (Throwable) -> String?): NugetEr
         }
       },
       cause = t.cause?.let(::build),
-    )
+    ).also { node -> node.throwable = t }
   }
   return build(e)!!
 }
@@ -868,6 +876,20 @@ public fun export_nuget_error_cause_stacktrace(handle: COpaquePointer, index: In
  * Additive: no `NugetRuntimeAbi` bump, a new generator against an old runtime already fails to
  * compile on the `buildError` call.
  */
+/**
+ * ADR-241: a counted handle to node [index]'s `Throwable` (0 is the top), which the caller owns.
+ * C# calls it only inside an exported-class arm of its generated `MapExported`, so a stdlib or
+ * unexported-only exception mints no handle. Additive, as `nuget_error_cause_mapped_type`.
+ */
+@NugetRuntimeApi
+@CName("nuget_error_cause_throwable")
+public fun export_nuget_error_cause_throwable(handle: COpaquePointer, index: Int): COpaquePointer {
+  val throwable: Throwable = requireNotNull(handle.asStableRef<NugetError>().get().at(index).throwable) {
+    "nuget_error_cause_throwable: node $index of this envelope carries no Throwable"
+  }
+  return NugetHandles.retain(throwable)
+}
+
 @NugetRuntimeApi
 @CName("nuget_error_cause_mapped_type")
 public fun export_nuget_error_cause_mapped_type(handle: COpaquePointer, index: Int): String =

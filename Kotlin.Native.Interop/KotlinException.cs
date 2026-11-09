@@ -13,7 +13,7 @@ public class KotlinException : Exception, IKotlinException
     public string KotlinType { get; }
     public string KotlinStackTrace { get; }
 
-    internal KotlinException(string kotlinType, string message, string kotlinStackTrace,
+    protected internal KotlinException(string kotlinType, string message, string kotlinStackTrace,
         Exception? innerException = null) : base(message, innerException)
     {
         KotlinType = kotlinType;

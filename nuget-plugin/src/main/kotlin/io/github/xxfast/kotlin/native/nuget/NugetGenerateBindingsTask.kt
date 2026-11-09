@@ -5260,7 +5260,7 @@ private fun nugetKotlinErrorsActual(): String = """
   |import io.github.xxfast.kotlin.native.nuget.runtime.awaitForKotlin
   |import io.github.xxfast.kotlin.native.nuget.runtime.NugetHandles
   |import io.github.xxfast.kotlin.native.nuget.runtime.buildError
-  |import io.github.xxfast.kotlin.native.nuget.generated.nugetMappedType
+  |import io.github.xxfast.kotlin.native.nuget.generated.nugetRowType
   |import io.github.xxfast.kotlin.native.nuget.runtime.flowForKotlin
   |import kotlinx.coroutines.flow.Flow
   |import kotlin.experimental.ExperimentalNativeApi
@@ -5269,10 +5269,12 @@ private fun nugetKotlinErrorsActual(): String = """
   |import kotlinx.cinterop.asStableRef
   |import kotlinx.cinterop.invoke
   |
-  |// ADR-203: classified with the module's own KSP-generated nugetMappedType (same compilation,
+  |// ADR-203: classified with the module's own KSP-generated row classifier (same compilation,
   |// leaf source set), so a reverse slot maps the optional rows exactly as a forward call does.
+  |// ADR-241: the row-only twin of nugetMappedType, because the C# half calls CreateMapped, which
+  |// does not know this library's exported exception keys.
   |internal actual fun nugetKotlinError(t: Throwable): COpaquePointer =
-  |  StableRef.create(buildError(t, ::nugetMappedType)).asCPointer()
+  |  StableRef.create(buildError(t, ::nugetRowType)).asCPointer()
   |
   |// ADR-158: the counted half of a bridge/delegate ctx (see the `expect` for why it is counted and
   |// why it must stay paired with the release inside nuget_kotlin_release below).

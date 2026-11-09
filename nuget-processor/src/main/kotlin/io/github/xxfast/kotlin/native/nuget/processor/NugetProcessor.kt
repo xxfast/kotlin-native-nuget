@@ -39,6 +39,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addBoundInterfaceB
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addThrowableBoxExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addRetainHandleExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.nugetMappedTypeFunction
+import io.github.xxfast.kotlin.native.nuget.processor.exports.nugetRowTypeFunction
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirRenderer
 import io.github.xxfast.kotlin.native.nuget.processor.cir.resolveDocLinks
@@ -2322,6 +2323,10 @@ internal class NugetProcessor(
         row.optional && expects.classByName(row.kotlinType) != null
       }
 
+    // ADR-241: the exported `Throwable` classes, deepest first, with their C# exception base.
+    val exportedExceptionTypes: List<ExportedExceptionType> =
+      exportedExceptionTypes(allClasses, sealedClasses)
+
     if (hasNothingToProcess) {
       // Issue #55: the diagnostics file is what `nugetReportDiagnostics` re-emits, so the
       // SKIPPED_ALL_DECLARATIONS warning above has to reach it even though nothing else is written.
@@ -2337,7 +2342,8 @@ internal class NugetProcessor(
             .addMember("%T::class", ClassName(NUGET_RUNTIME_PACKAGE, "NugetRuntimeApi"))
             .build()
         )
-        .addFunction(nugetMappedTypeFunction(presentOptionalExceptionRows))
+        .addFunction(nugetMappedTypeFunction(emptyList()))
+        .addFunction(nugetRowTypeFunction(presentOptionalExceptionRows))
         .build()
         .writeTo(codeGenerator, Dependencies.ALL_FILES)
       return emptyList()
@@ -3046,6 +3052,7 @@ internal class NugetProcessor(
       valueClasses, suspendFunctions, callableCatalog, deps, reachableInterfaces,
       exportedObjectHandles, forwardClassifier,
       presentOptionalExceptionRows,
+      exportedExceptionTypes.map { it.kotlinType },
       candidateDeclarations
         .filter { declaration -> declaration is KSClassDeclaration || declaration is KSTypeAlias }
         .filter { declaration -> declaration.packageName.asString().isEmpty() }
@@ -3381,6 +3388,8 @@ internal class NugetProcessor(
     forwardClassifier: ForwardBridgeTypeClassifier,
     // ADR-177: the optional mapping rows (kotlinx-io) whose class KSP resolved on the classpath.
     presentOptionalExceptionRows: List<KotlinExceptionRow>,
+    // ADR-241: this module's exported `Throwable` classes, FQNs deepest first.
+    exportedExceptions: List<String>,
     // ROADMAP Phase 4: the simple names of the DEFAULT-package class-like declarations (and
     // typealiases) in this module, which the generated file can only reference through an import.
     rootPackageTypes: Set<String>,
@@ -3421,7 +3430,8 @@ internal class NugetProcessor(
         .build()
     )
 
-    builder.addFunction(nugetMappedTypeFunction(presentOptionalExceptionRows))
+    builder.addFunction(nugetMappedTypeFunction(exportedExceptions))
+    builder.addFunction(nugetRowTypeFunction(presentOptionalExceptionRows))
 
     // ADR-162: the Kotlin half's containment seam. One guard per declaration per adder call, which
     // is exactly the granularity the `exports/*` builders iterate at: an emitter invariant that a
@@ -4055,7 +4065,7 @@ internal class NugetProcessor(
     )
     // ADR-239: a bound C# interface at an erased position, once the routes above recorded it.
     builder.addBoundInterfaceBoxExports(forwardClassifier.boundInterfaces, context.symbols)
-    if (forwardClassifier.boxesThrowable) builder.addThrowableBoxExports(context.symbols)
+    if (forwardClassifier.boxesThrowable || exportedExceptions.isNotEmpty()) builder.addThrowableBoxExports(context.symbols)
     // ADR-210: the holder a generated `suspend` lambda captures, and the two cinterop extensions
     // its lambda and cleaner call. Last for the same reason as the line above: the legacy suspend
     // routes record their sightings on the classifier as they emit. Everything else the lambda
