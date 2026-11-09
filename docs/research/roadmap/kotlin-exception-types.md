@@ -157,3 +157,9 @@ Each of these needs a ROADMAP line:
 - Q4. Members whose C# name collides with an `Exception` member (`Data`, `Source`, `HelpLink`, `HResult`, `StackTrace`, `TargetSite`). Recommendation: a named skip in v1; renaming is deferred. Human decision: pending.
 - Q5. A data-class exception's `ToString`. Recommendation: keep `KotlinException.ToString` (it carries the Kotlin trace) and drop the data-class override. `Equals` and `GetHashCode` stay. Human decision: pending.
 - Q6. An unexported subclass of an abstract or sealed exported base needs a concrete C# instance. Recommendation: reuse or emit a private concrete backing of the abstract class. The implementing agent must confirm the class and sealed renderers provide one (ADR-216's `backingName` is for generics; inferred). Human decision: pending.
+
+### Decided at the gate (2026-11-09, human)
+
+- Q2: unify. The exported handle class is the C# exception type, so its members still bind.
+- Q1: the C# base is the matched mapped `Kotlin*` type when the Kotlin class extends a mapped stdlib exception, otherwise `KotlinException`.
+- Q3 to Q6: the memo's recommendations stand (fold into `mappedType`, named skip for members colliding with `Exception` members, keep `KotlinException.ToString`, private concrete backing for abstract and sealed bases).
