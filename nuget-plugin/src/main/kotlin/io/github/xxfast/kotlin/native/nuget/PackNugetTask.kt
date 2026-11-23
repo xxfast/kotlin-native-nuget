@@ -19,10 +19,10 @@ import java.util.zip.ZipOutputStream
 
 private val NATIVE_EXTENSIONS = setOf("dll", "dylib", "so")
 
-// #618: the directory under outputDir where packNuget writes every producer of the pack in the
+// #618: the directory (a sibling of outputDir, build/nuget-runtimes) where packNuget writes every producer of the pack in the
 // layout prebuiltRuntimes reads (<rid>/native/<lib>, <rid>/ForwardAbi.json, <rid>/Interop.cs).
 // It is what one host uploads for the next; the package itself carries only <rid>/native/.
-internal const val PREBUILT_RUNTIMES_DIR = "prebuilt-runtimes"
+internal const val RUNTIMES_OUTPUT_DIR = "nuget-runtimes"
 
 private val CONTRACT_FILES = listOf("ForwardAbi.json", "Interop.cs")
 
@@ -71,7 +71,7 @@ public abstract class PackNugetTask : DefaultTask() {
   @get:Input
   public abstract val dependencyVersions: MapProperty<String, String>
 
-  // ADR-093 / ADR-189: another host's prebuiltRuntimesOutputDir, laid out as
+  // ADR-093 / ADR-189: another host's runtimesOutputDir, laid out as
   // <dir>/<rid>/native/<lib> plus <dir>/<rid>/ForwardAbi.json and <dir>/<rid>/Interop.cs. Only the
   // native libraries are staged into the package's runtimes/ tree, after the locally linked RIDs,
   // so one pack produces one package covering more RIDs than this host can link.
@@ -91,12 +91,11 @@ public abstract class PackNugetTask : DefaultTask() {
   // so the next host can chain it. Kept out of the package staging dir: no consumer reads the
   // ADR-189 sidecars, they exist only for the cross-target contract check.
   @get:OutputDirectory
-  public abstract val prebuiltRuntimesOutputDir: DirectoryProperty
+  public abstract val runtimesOutputDir: DirectoryProperty
 
   init {
     targetFramework.convention(DEFAULT_TARGET_FRAMEWORK)
     localContractDirs.convention(emptyMap())
-    prebuiltRuntimesOutputDir.convention(outputDir.dir(PREBUILT_RUNTIMES_DIR))
   }
 
   // ADR-180: whether any native target maps to a supported RID, linkable here or not. False means no
@@ -139,7 +138,7 @@ public abstract class PackNugetTask : DefaultTask() {
         "disabled on this host and no prebuiltRuntimes is set. Build on a host that can link " +
         "one, or set nuget { publish { prebuiltRuntimes = ... } }."
     }
-    val transferDir: File = prebuiltRuntimesOutputDir.get().asFile
+    val transferDir: File = runtimesOutputDir.get().asFile
     requireDistinctPrebuiltInput(transferDir)
     nativeLibDirs.get().forEach { (rid, path) -> linkedNativeLib(id, rid, File(path)) }
     val producers: List<ForwardPackageProducer> = forwardPackageProducers(
@@ -283,8 +282,8 @@ public abstract class PackNugetTask : DefaultTask() {
     val output: File = transferDir.canonicalFile
     require(!input.startsWith(output)) {
       "[nuget] prebuiltRuntimes ${input.path} is inside ${output.path}, the " +
-        "$PREBUILT_RUNTIMES_DIR tree ${NugetTaskNames.PACK} rewrites on every run. Download " +
-        "the other host's $PREBUILT_RUNTIMES_DIR artifact to a separate directory and point " +
+        "$RUNTIMES_OUTPUT_DIR tree ${NugetTaskNames.PACK} rewrites on every run. Download " +
+        "the other host's $RUNTIMES_OUTPUT_DIR artifact to a separate directory and point " +
         "prebuiltRuntimes there."
     }
   }
@@ -317,7 +316,7 @@ public abstract class PackNugetTask : DefaultTask() {
     }
   }
 
-  // ADR-093: merges the native libraries of another host's prebuilt-runtimes tree into this
+  // ADR-093: merges the native libraries of another host's nuget-runtimes tree into this
   // pack's runtimes/ tree. Only <rid>/native/ is staged; the ADR-189 sidecars beside it are read
   // by validateForwardPackageContracts and never shipped (#618). Every failure here is a CI
   // misconfiguration (an artifact download that fetched nothing, or two hosts producing the same
@@ -333,7 +332,7 @@ public abstract class PackNugetTask : DefaultTask() {
     require(ridDirs.isNotEmpty()) {
       "prebuiltRuntimes directory ${root.absolutePath} has no RID subdirectory. Expected layout: " +
           "<prebuiltRuntimes>/<rid>/native/ containing at least one .dll, .dylib or .so file, " +
-          "as written to the $PREBUILT_RUNTIMES_DIR directory by another host's " +
+          "as written to the $RUNTIMES_OUTPUT_DIR directory by another host's " +
           "${NugetTaskNames.PACK}."
     }
 
@@ -436,7 +435,7 @@ public abstract class PackNugetTask : DefaultTask() {
   // `package/services/metadata/core-properties/{guid}.psmdcp` part, alongside the staged payload
   // (the .nuspec, contentFiles/, runtimes/<rid>/native/, lib/, build/). The staging dir holds
   // exactly the package contents, so everything in it is zipped; the ADR-189 sidecars live in
-  // prebuiltRuntimesOutputDir instead (#618). Pure java.util.zip, no external dependency.
+  // runtimesOutputDir instead (#618). Pure java.util.zip, no external dependency.
   private fun writeNupkgZip(stagedDir: File, nupkgFile: File, id: String) {
     nupkgFile.delete()
 

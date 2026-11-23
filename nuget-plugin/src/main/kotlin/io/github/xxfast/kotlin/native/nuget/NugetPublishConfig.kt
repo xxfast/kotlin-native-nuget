@@ -28,7 +28,7 @@ public abstract class NugetPublishConfig @Inject constructor(objects: ObjectFact
   public abstract val versionPropsFile: RegularFileProperty
 
   // ADR-093 / ADR-189: a directory of native libraries built on another host, laid out exactly
-  // like the build/nuget/prebuilt-runtimes tree that host's packNuget writes: <dir>/<rid>/native/
+  // like the build/nuget-runtimes tree that host's packNuget writes: <dir>/<rid>/native/
   // holding the dll, dylib or so file, with ForwardAbi.json and Interop.cs beside native/. Merged
   // into this host's own linked output so one pack produces one multi-RID package (#618).
   public abstract val prebuiltRuntimes: DirectoryProperty

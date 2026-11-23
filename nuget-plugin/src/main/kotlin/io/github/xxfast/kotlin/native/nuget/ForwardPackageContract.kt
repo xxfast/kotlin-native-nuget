@@ -26,7 +26,7 @@ internal fun forwardPackageProducers(
   require(dirs.isNotEmpty()) {
     "prebuiltRuntimes directory $prebuilt has no RID subdirectory. " +
       "Expected <rid>/native/<lib>, <rid>/ForwardAbi.json and <rid>/Interop.cs, as written to " +
-      "build/nuget/$PREBUILT_RUNTIMES_DIR by another host's ${NugetTaskNames.PACK}."
+      "build/$RUNTIMES_OUTPUT_DIR by another host's ${NugetTaskNames.PACK}."
   }
   dirs.forEach { dir ->
     require(dir.name !in locals) {
@@ -45,7 +45,7 @@ internal fun validateForwardPackageContracts(producers: List<ForwardPackageProdu
       require(file.isFile) {
         "[nuget] RID '${producer.rid}' is missing producer contract ${file.absolutePath}. " +
           "Rebuild the original producer with the updated plugin and transfer the complete " +
-          "build/nuget/$PREBUILT_RUNTIMES_DIR tree written by the producing host's " +
+          "build/$RUNTIMES_OUTPUT_DIR tree written by the producing host's " +
           "${NugetTaskNames.PACK}, with ForwardAbi.json and Interop.cs beside each native/. " +
           "The staged package's runtimes/ folder no longer carries them."
       }

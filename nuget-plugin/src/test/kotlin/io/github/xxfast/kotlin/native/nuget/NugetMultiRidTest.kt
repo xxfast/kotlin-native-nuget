@@ -28,6 +28,7 @@ class NugetMultiRidTest {
     task.nativeLibDirs.set(emptyMap())
     task.dependencyVersions.set(emptyMap())
     task.outputDir.set(outputDir)
+    task.runtimesOutputDir.set(Files.createTempDirectory("runtimes-out").toFile())
   }
 
   private fun nativeDir(name: String, libName: String): File {
@@ -293,9 +294,11 @@ class NugetMultiRidTest {
   fun `pack writes a transferable prebuilt runtimes tree for every producer`() {
     val outputDir: File = Files.createTempDirectory("pack-out").toFile()
 
-    packLocalAndPrebuilt(outputDir).pack()
+    val task: PackNugetTask = packLocalAndPrebuilt(outputDir)
+    task.pack()
 
-    val tree = File(outputDir, "prebuilt-runtimes")
+    val tree = task.runtimesOutputDir.get().asFile
+    assertTrue(!tree.canonicalPath.startsWith(outputDir.canonicalPath), "the tree must not be under outputDir")
     assertTransferable(tree, "osx-arm64", "libkn_testlibrary.dylib")
     assertTransferable(tree, "win-x64", "kn_testlibrary.dll")
   }
@@ -303,8 +306,9 @@ class NugetMultiRidTest {
   @Test
   fun `a second host chains the first host's prebuilt runtimes tree`() {
     val firstOut: File = Files.createTempDirectory("pack-out-a").toFile()
-    packLocalAndPrebuilt(firstOut).pack()
-    val firstTree = File(firstOut, "prebuilt-runtimes")
+    val first: PackNugetTask = packLocalAndPrebuilt(firstOut)
+    first.pack()
+    val firstTree = first.runtimesOutputDir.get().asFile
     assertTransferable(firstTree, "osx-arm64", "libkn_testlibrary.dylib")
     assertTransferable(firstTree, "win-x64", "kn_testlibrary.dll")
 
@@ -318,7 +322,7 @@ class NugetMultiRidTest {
 
     second.pack()
 
-    val secondTree = File(secondOut, "prebuilt-runtimes")
+    val secondTree = second.runtimesOutputDir.get().asFile
     assertEquals(
       listOf("osx-arm64", "win-arm64", "win-x64"),
       secondTree.listFiles()?.map { it.name }?.sorted(),
@@ -337,7 +341,7 @@ class NugetMultiRidTest {
     val outputDir: File = Files.createTempDirectory("pack-out").toFile()
     val task: PackNugetTask = packLocalAndPrebuilt(outputDir)
     task.pack()
-    val tree = File(outputDir, "prebuilt-runtimes")
+    val tree = task.runtimesOutputDir.get().asFile
     assertTrue(File(tree, "win-x64").isDirectory, "the first pack must write win-x64 to $tree")
 
     task.prebuiltRuntimesDir.unset()

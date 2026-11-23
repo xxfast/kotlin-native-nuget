@@ -750,6 +750,7 @@ private fun registerPublish(
 
       task.generatedCsDirs.from(kspOutputDir)
       task.outputDir.set(project.layout.buildDirectory.dir("nuget"))
+      task.runtimesOutputDir.set(project.layout.buildDirectory.dir(RUNTIMES_OUTPUT_DIR))
       task.targetFramework.set(extension.validatedTargetFramework)
 
       task.dependsOn(kspTask)
