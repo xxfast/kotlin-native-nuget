@@ -5266,22 +5266,25 @@ public class LiveHandleTests
         AssertReleasedByTheGc("Cat wrappers", DropUndisposedCat);
 
     // Row 16a. The callback-payload leak ADR-187 closed:
-    // the per-call lambda-parameter route of Row 8i, with a callback body that reads each `Toy` and
-    // does NOT dispose it. The payload wrapper is the only owner of its handle (ADR-036's 2026-09-11
-    // amendment), so without a finalizer two handles per call stay live for the process. The
-    // receiver is disposed, so the payloads are the only thing that can still be counted.
+    // the per-call lambda-parameter route of Row 8i, with a callback body that reads each payload
+    // and does NOT dispose it. The payload wrapper is the only owner of its handle (ADR-036's
+    // 2026-09-11 amendment), so without a finalizer two handles per call stay live for the process.
+    // The receiver is disposed, so the payloads are the only thing that can still be counted.
+    // ADR-242 made Row 8i's `Toy` a value, which mints no handle here, so the row moved to
+    // `Bandstand.EachDrummer`: the same `NugetObjectVoidCallback` lowering, with an interface
+    // wrapper (`IDrummer`) as the handle-carrying payload.
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void DropUndisposedToyPayloads()
+    private static void DropUndisposedDrummerPayloads()
     {
-        using var mylo = new Cat("Mylo", 9);
-        var toyNames = new List<string>();
-        mylo.ForEachToy(toy => toyNames.Add(toy.Name));
-        Assert.Equal(new List<string> { "Mouse", "Ball" }, toyNames);
+        using var bandstand = new Bandstand();
+        var drummerNames = new List<string>();
+        bandstand.EachDrummer(drummer => drummerNames.Add(drummer.Name));
+        Assert.Equal(new List<string> { "Oreo", "Mylo" }, drummerNames);
     }
 
     [Fact]
     public void UndisposedCallbackObjectPayload_LambdaParameterRoute_IsReleasedByTheGc() =>
-        AssertReleasedByTheGc("Toy callback payloads", DropUndisposedToyPayloads);
+        AssertReleasedByTheGc("Drummer callback payloads", DropUndisposedDrummerPayloads);
 
     // Row 16b. The same payload residual on ADR-160's route (Row 13 without its `using (c)`): every
     // `Chime` candidate handed to the predicate is read and dropped. The member's returned chime is
