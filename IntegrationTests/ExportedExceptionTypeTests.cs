@@ -5,8 +5,9 @@ namespace IntegrationTests;
 /// <summary>
 /// ADR-241: an exported Kotlin exception class binds as a C# exception type. The handle class IS
 /// the exception (unified), so it is caught by its own generated type, by its exported base, and as
-/// a <see cref="KotlinException"/>, and its members (<c>NotFound.Key</c>) still read through the
-/// live handle. <c>KotlinType</c> and <c>KotlinStackTrace</c> are unchanged.
+/// a <see cref="KotlinException"/> (or, for a subclass of a mapped stdlib row like <c>StaleCache</c>,
+/// as that row's <c>Kotlin*Exception</c> and its BCL base), and its members (<c>NotFound.Key</c>)
+/// still read through the live handle. <c>KotlinType</c> and <c>KotlinStackTrace</c> are unchanged.
 ///
 /// Oreo raids the treat cupboard at 3am; Mylo left the door open and gets the blame.
 /// </summary>
@@ -81,7 +82,8 @@ public class ExportedExceptionTypeTests
         var e = Assert.Throws<StaleCache>(() => store.Stale());
         Assert.IsAssignableFrom<InvalidOperationException>(e);
         Assert.IsAssignableFrom<KotlinInvalidOperationException>(e);
-        Assert.IsAssignableFrom<KotlinException>(e);
+        // Row-derived: its base is KotlinInvalidOperationException, so it is not a KotlinException.
+        Assert.IsAssignableFrom<IKotlinException>(e);
         Assert.Equal($"{Package}.StaleCache", e.KotlinType);
         Assert.Equal("the kibble cache is stale", e.Message);
     }
