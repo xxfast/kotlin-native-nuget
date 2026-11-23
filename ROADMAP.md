@@ -59,10 +59,18 @@ Complete.
 
 ## Phase 4: Rich type support
 
+- [ ] An unexported subclass of an exported class read at an `Any` position arrives as `KotlinObject` instead of its nearest exported type, because `ReadAny` looks the factory up by Kotlin name only (`cir/CirAnyRenderer.kt:79-86`, ADR-237). Verified by reading, predates ADR-241 ([details](docs/backlog/any-position-unexported-subclass-reads-as-kotlinobject.md)).
 
 ## Phase 5: Exception handling
 
 Complete.
+
+- [ ] The reverse envelope maps by stdlib row only (`nugetRowType`): a Kotlin implementation of a C# slot that throws an exported exception class reaches C# as its row type, not the generated exception type ([ADR-241](docs/adr/241-exported-kotlin-exception-types.md)).
+- [ ] Constructing a generated exception type in C# and throwing it into Kotlin: a `Throwable` parameter still receives a `NugetManagedException` ([ADR-201](docs/adr/201-throwable-beyond-the-property-getter.md), ADR-241).
+- [ ] An exception class exported by a dependency library is not mapped to a generated type in the consuming library's bindings (ADR-241).
+- [ ] Rename, rather than skip, a member of an exported exception class whose C# name hides a `System.Exception` member (`SKIPPED_EXCEPTION_MEMBER_COLLISION`, ADR-241).
+- [ ] An exported exception implementing an exported interface whose member collides with an `Exception` member (`interface Sourced { val source: String }`) leaves `Exception.Source` implicitly implementing `ISourced.Source`: CS8766 under warnings-as-errors and the wrong value. Verified in a Tier 1 compile; the fix is an explicit interface implementation ([details](docs/backlog/exported-exception-implementing-exported-interface-collides.md)).
+- [ ] Inherited `Throwable` members bind on every exported exception root (`PrintStackTrace()`), and `getStackTrace` warns `SKIPPED_OPT_IN_MARKER` on each. Binding verified in generated C#, cause read from source; they should be excluded like `message` and `cause` ([details](docs/backlog/exported-exception-inherited-throwable-members-bind.md)).
 
 ## Phase 6: Async support
 

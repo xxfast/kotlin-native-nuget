@@ -597,7 +597,10 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("            if (CollectionWriters.TryGetValue(typeof(T), out Func<object, IntPtr>? writeCollection)) return writeCollection(value!);")
   appendLine("            if (BoundBoxers.TryGetValue(typeof(T), out Func<object, IntPtr>? boxBound)) return boxBound(value!);")
   if (helper.throwableEntries != null) {
-    appendLine("            if (value is Exception exception) return Native_throwable_from_text((exception.GetType().FullName ?? \"System.Exception\") + \": \" + exception.Message);")
+    // ADR-241: an exported exception type is an Exception AND a Kotlin-backed wrapper; its handle
+    // (the `INugetHandle` arm below) keeps the Kotlin object's identity, so only a managed
+    // exception crosses as text.
+    appendLine("            if (value is Exception exception && value is not INugetHandle) return Native_throwable_from_text((exception.GetType().FullName ?? \"System.Exception\") + \": \" + exception.Message);")
   }
   // ADR-239: a `byte[]` at an erased position, copied into a fresh Kotlin `ByteArray`.
   if (helper.includesBytes) {

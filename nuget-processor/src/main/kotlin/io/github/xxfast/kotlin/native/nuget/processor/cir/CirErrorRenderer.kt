@@ -208,13 +208,7 @@ internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
   appendLine("        {")
   appendLine("            int causeCount = CauseCount(errorPtr);")
   val exports: Boolean = helper.exported.isNotEmpty()
-  // ADR-241: an exported top node reads its own cause chain from its handle's snapshot.
-  if (exports) {
-    appendLine("            Exception? exported = MapExported(errorPtr, 0, CauseMappedType(errorPtr, 0));")
-    appendLine("            Exception? inner = exported == null ? BuildCauses(errorPtr, causeCount) : null;")
-  } else {
-    appendLine("            Exception? inner = BuildCauses(errorPtr, causeCount);")
-  }
+  appendLine("            Exception? inner = BuildCauses(errorPtr, causeCount);")
   appendLine("            string kotlinType = Type(errorPtr);")
   appendLine("            string msg = Message(errorPtr);")
   appendLine("            string stackTrace = StackTrace(errorPtr);")
@@ -222,6 +216,11 @@ internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
   appendLine("            bool cancelledCallback = causeCount >= 2 && kotlinType == CancellationType")
   appendLine("                && CauseType(errorPtr, 1) == ManagedExceptionType")
   appendLine("                && CauseMessage(errorPtr, 1) == msg;")
+  // ADR-241: an exported top node is built from this one envelope read, over the cause chain just
+  // built, and its handle is minted before the envelope is released.
+  if (exports) {
+    appendLine("            Exception? exported = MapExported(errorPtr, 0, mappedType, kotlinType, msg, stackTrace, inner);")
+  }
   appendLine("            NugetMarshal.Dispose(errorPtr);")
   // ADR-161: when the escaping Kotlin error IS the managed exception this process threw a moment
   // ago inside a callback thunk, the C# caller gets the ORIGINAL exception back, so
@@ -251,7 +250,8 @@ internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
   appendLine()
   // ADR-203: the one mapper lives in the shared contract; the reverse shim calls the same one.
   // ADR-241: a cause the Kotlin side classified as one of this library's exported classes is
-  // constructed as that class's C# type first.
+  // constructed as that class's C# type first, over the chain built below it, so no exported
+  // instance built for a deeper node is dropped.
   appendLine("        private static Exception? BuildCauses(IntPtr errorPtr, int causeCount)")
   appendLine("        {")
   appendLine("            Exception? inner = null;")
@@ -263,7 +263,9 @@ internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
   appendLine("                string causeMapped = CauseMappedType(errorPtr, i);")
   val causeMapped = "global::Kotlin.Native.Interop.KotlinException.CreateMapped(causeType, causeMapped, causeMsg, causeStack, inner)"
   if (exports) {
-    appendLine("                inner = MapExported(errorPtr, i, causeMapped) ?? $causeMapped;")
+    appendLine(
+      "                inner = MapExported(errorPtr, i, causeMapped, causeType, causeMsg, causeStack, inner) ?? $causeMapped;",
+    )
   } else {
     appendLine("                inner = $causeMapped;")
   }
@@ -362,8 +364,9 @@ internal fun StringBuilder.renderSyncErrorCheckMethod(method: CirMethod, classNa
 /**
  * ADR-241: the exported half of `NugetErrorNative`. [MapExported] dispatches on the key the Kotlin
  * `nugetMappedType` classified with `is` (not a classification by name) and constructs the class's
- * C# type over a counted handle minted from the envelope node, before the envelope is released.
- * `Snapshot` reads a handle's own envelope for the immutable exception base.
+ * C# type over a counted handle minted from the envelope node, before the envelope is released,
+ * with the node's own type, message, trace and the cause chain the caller already built: one
+ * envelope read per node. `Snapshot` reads a handle's own envelope, for a value read only.
  */
 private fun StringBuilder.renderExportedExceptionMapping(helper: CirErrorHelper) {
   val envelope: String = requireNotNull(helper.envelopeEntry) {
@@ -376,10 +379,17 @@ private fun StringBuilder.renderExportedExceptionMapping(helper: CirErrorHelper)
   appendLine("        private static extern IntPtr Native_exceptionEnvelope(IntPtr handle);")
   appendLine()
   if (helper.exported.isNotEmpty()) {
-    appendLine("        private static Exception? MapExported(IntPtr errorPtr, int index, string key) => key switch")
+    appendLine(
+      "        private static Exception? MapExported(IntPtr errorPtr, int index, string key, " +
+        "string kotlinType, string msg, string stackTrace, Exception? inner) => key switch",
+    )
     appendLine("        {")
     helper.exported.forEach { arm ->
-      appendLine("            \"${arm.key}\" => new ${arm.constructed}(Native_causeThrowable(errorPtr, index), out _),")
+      appendLine(
+        "            \"${arm.key}\" => new ${arm.constructed}(" +
+          "new NugetKotlinHandle(Native_causeThrowable(errorPtr, index)), " +
+          "new NugetErrorSnapshot(kotlinType, msg, stackTrace, inner), out _),",
+      )
     }
     appendLine("            _ => null,")
     appendLine("        };")

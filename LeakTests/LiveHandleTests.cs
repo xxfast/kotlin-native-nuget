@@ -9220,4 +9220,162 @@ public class LiveHandleTests
                 Assert.Equal("salmon", cause.Key);
         });
     }
+
+    // ADR-241 risk 9a: an exported exception constructed from C# owns the handle its public ctor
+    // minted, and its snapshot read must not mint (or leak) a second one. Oreo writes his own
+    // complaints and files every one of them.
+    [Fact]
+    public void ExportedException_ConstructedFromCSharpAndDisposed_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using (var miss = new StoreException.NotFound("tuna"))
+                Assert.Equal("tuna", miss.Key);
+
+            using (var unauthorized = new StoreException.Unauthorized())
+                Assert.EndsWith(".StoreException.Unauthorized", unauthorized.KotlinType);
+
+            using (var stale = new StaleCache("the kibble cache is stale"))
+                Assert.EndsWith(".StaleCache", stale.KotlinType);
+        });
+    }
+
+    // ADR-241: an exported exception whose cause is another exported exception. The outer and its
+    // `InnerException` are two generated wrappers, each over its own handle. Nobody disposes
+    // either, so both finalizers have to run. Oreo knocks the bag over ten times and leaves the mess.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void DropTenUndisposedSpillages()
+    {
+        using var store = new TreatStore();
+        for (int i = 0; i < 10; i++)
+        {
+            var e = Assert.Throws<TestLibrary.Store.Spillage>(() => store.Spill($"treat-{i}"));
+            Assert.Equal($"treat-{i}", Assert.IsType<StoreException.NotFound>(e.InnerException).Key);
+        }
+    }
+
+    [Fact]
+    public void ExportedCause_ThrownAndDropped_ReturnsToBaseline() =>
+        AssertReleasedByTheGc("thrown Spillage exceptions with an exported cause", DropTenUndisposedSpillages);
+
+    // The explicit-Dispose twin. `Spillage.Dispose()` releases only the outer's own handle; it does
+    // not reach into `InnerException`, which is a separate `StoreException.NotFound` with its own
+    // handle, so the inner is disposed separately here. Mylo cleans up both the bag and the treat.
+    [Fact]
+    public void ExportedCause_ThrownAndDisposed_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var store = new TreatStore();
+            using var spill = Assert.Throws<TestLibrary.Store.Spillage>(() => store.Spill("salmon"));
+            using var cause = Assert.IsType<StoreException.NotFound>(spill.InnerException);
+            Assert.Equal("salmon", cause.Key);
+        });
+    }
+
+    // ADR-241: the async error routes fault a Task or an async enumerator instead of throwing from
+    // the call, a different release path from the sync `BuildException` the rows above cross. Three
+    // of them build their envelope inside `nuget-runtime` (`nuget_suspend_func1_invoke` for the
+    // lambda property and the returned lambda, `nuget_stateflow_collect` for the suspend StateFlow);
+    // the top-level suspend and the two property collects are generated. The caught exceptions are
+    // dropped undisposed; the helper yields before returning so its continuation frame does not keep
+    // the last one alive (AGENTS.md, NativeAOT). The undisposed lambda wrappers alone would satisfy
+    // the "minted something" guard; the `Key` reads are what prove each exception held a live handle.
+    // Oreo naps through six different alarms and ignores all of them.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task DropUndisposedAsyncRouteErrors()
+    {
+        using var store = new TreatStore();
+        var fromProperty = await Assert.ThrowsAsync<StoreException.NotFound>(
+            () => store.Fetcher("tuna", CancellationToken.None));
+        Assert.Equal("tuna", fromProperty.Key);
+        var fromReturned = await Assert.ThrowsAsync<StoreException.NotFound>(
+            () => store.FetcherLater()("salmon", CancellationToken.None));
+        Assert.Equal("salmon", fromReturned.Key);
+        using (var bowl = await store.BowlLaterAsync())
+        {
+            var fromCollect = await Assert.ThrowsAsync<StoreException.NotFound>(async () =>
+            {
+                await foreach (string _ in bowl) { }
+            });
+            Assert.Equal("bowl-later", fromCollect.Key);
+        }
+        var fromTopLevel = await Assert.ThrowsAsync<StoreException.NotFound>(
+            () => TestLibrary.Store.StoreSample.OpenCupboardLaterAsync("kibble"));
+        Assert.Equal("kibble", fromTopLevel.Key);
+        var fromFeed = await Assert.ThrowsAsync<StoreException.NotFound>(async () =>
+        {
+            await foreach (string _ in store.Feed) { }
+        });
+        Assert.Equal("feed", fromFeed.Key);
+        var fromBowl = await Assert.ThrowsAsync<StoreException.NotFound>(async () =>
+        {
+            await foreach (string _ in store.Bowl) { }
+        });
+        Assert.Equal("bowl", fromBowl.Key);
+        await Task.Yield();
+    }
+
+    [Fact]
+    public async Task ExportedException_ThrownOnTheAsyncRoutesAndDropped_ReturnsToBaseline() =>
+        await AssertReleasedByTheGcAsync(
+            "exported exceptions thrown on the async routes", DropUndisposedAsyncRouteErrors);
+
+    // ADR-241: the remaining sync routes cross the same `BuildException` as `Fetch`, but each from
+    // its own generated C# site (constructor, property getter and setter, companion, object,
+    // extension, Kotlin-held interface, sealed-arm and generic-owner members, the `Result` Try
+    // out-parameter, an open root). Each caught exception is disposed. The `data object` arm is left
+    // out on purpose: it is a separate expectation that has its own test. Mylo tries every door.
+    [Fact]
+    public void ExportedException_RemainingSyncRoutes_ThrownAndDisposed_ReturnToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var store = new TreatStore();
+            using (Assert.Throws<StoreException.NotFound>(() => new TestLibrary.Store.TreatBin("kibble"))) { }
+            using (Assert.Throws<StoreException.NotFound>(() => store.TopShelf)) { }
+            using (Assert.Throws<StoreException.NotFound>(() => store.Label = "catnip")) { }
+            using (Assert.Throws<StoreException.NotFound>(() => TreatStore.Restock("tuna"))) { }
+            using (Assert.Throws<StoreException.NotFound>(() => TestLibrary.Store.Gatekeeper.LetIn("tuna"))) { }
+            using (Assert.Throws<StoreException.NotFound>(() => store.Raid("tuna"))) { }
+            using (TestLibrary.Store.IHidey hidey = store.BackOfTheCupboard())
+            using (Assert.Throws<StoreException.NotFound>(() => hidey.Peek("tuna"))) { }
+            using (var miss = Assert.IsType<StoreException.NotFound>(store.LastMiss()))
+            using (Assert.Throws<StoreException.NotFound>(() => miss.Retry())) { }
+            using (var jar = new TestLibrary.Store.Jar<string>("salmon"))
+            using (Assert.Throws<StoreException.NotFound>(() => jar.Unscrew())) { }
+            Assert.False(store.TryFetchOrFail("salmon", out _, out Exception? failure));
+            using (Assert.IsType<StoreException.NotFound>(failure)) { }
+            using (Assert.Throws<TestLibrary.Store.Spoiled>(() => store.SniffBowl())) { }
+        });
+    }
+
+    // ADR-241, beyond the thrown routes: an exported arm read at a value or erased position
+    // (`FromHandle<T>`, a typed `Throwable` return, a callback argument) is a handle-owning wrapper
+    // too, minted from a box's envelope instead of an error slot. Each is disposed, so every mint
+    // has to come back. Mylo inspects every jar and puts the lid back.
+    [Fact]
+    public void ExportedException_ValueAndErasedPositions_ReturnToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var store = new TreatStore();
+
+            using (TestLibrary.Store.Jar<StoreException> jar = store.MissJar())
+            using (var item = Assert.IsType<StoreException.NotFound>(jar.Item))
+                Assert.Equal("tuna", item.Key);
+
+            using (var returned = Assert.IsType<StoreException.NotFound>(store.MissAsThrowable()))
+                Assert.Equal("tuna", returned.Key);
+
+            Exception? seen = null;
+            Assert.Equal("sniffed", store.Sniff(miss =>
+            {
+                seen = miss;
+                return "sniffed";
+            }));
+            using (var sniffed = Assert.IsType<StoreException.NotFound>(seen))
+                Assert.Equal("tuna", sniffed.Key);
+        });
+    }
 }

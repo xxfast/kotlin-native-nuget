@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
 import io.github.xxfast.kotlin.native.nuget.processor.cir.NUGET_MANAGED_EXCEPTION_TYPE
+import io.github.xxfast.kotlin.native.nuget.processor.exports.INSTALL_MODULE_MAPPED_TYPE
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
@@ -94,6 +95,13 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(
       "val %L = %L", slots.holder,
       asyncCallbackHolderConstruction(slots, nullable = parameter.type.isNullableFlowSource()),
     )
+  }
+  // ADR-202: a returned suspend lambda is invoked through the runtime-owned `nuget_suspend_func*`,
+  // which maps a thrown exception through this module's classifier (ADR-241's exported keys too),
+  // as the suspend-lambda property getter already installs it.
+  val result: BridgeType = plan.publicSignature.result.unwrapNullable()
+  if ((result as? BridgeType.ReturnedLambda)?.suspend == true) {
+    builder.addStatement(INSTALL_MODULE_MAPPED_TYPE)
   }
 
   when (val result: BridgeType = plan.publicSignature.result) {

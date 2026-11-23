@@ -3,6 +3,8 @@
 ## Status
 Accepted
 
+Amended by [ADR-241](241-exported-kotlin-exception-types.md): an exported exception class no longer keeps its ADR-107 decision 3 binding; it is a C# exception type.
+
 Extends [ADR-107](107-throwable-property-mapping.md). Supersedes its decision 4 (a
 `Throwable`-taking constructor and `copy` are skipped): both bind now. Reuses
 [ADR-161](161-csharp-callback-exception-into-kotlin.md)'s `NugetManagedException` as the Kotlin

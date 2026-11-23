@@ -146,7 +146,8 @@ public class CoexistenceTests
         Assert.Equal("custom.Cat", made.KotlinType);
         Assert.Equal("Oreo", made.Message);
         Assert.NotEmpty(typeof(KotlinArgumentException).GetConstructors());
-        Assert.True(typeof(KotlinArgumentException).IsSealed);
+        // ADR-241: the mapped types are open, so a generated exception type can derive from one.
+        Assert.False(typeof(KotlinArgumentException).IsSealed);
         Assert.Equal("Kotlin.Native.Interop", typeof(KotlinException).Assembly.GetName().Name);
         Assert.Equal(typeof(KotlinException).Assembly, typeof(KotlinOptional<>).Assembly);
     }

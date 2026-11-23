@@ -6171,7 +6171,11 @@ internal fun KSDeclaration.forwardKdoc(expects: ExpectIndex): ForwardKdoc? {
   if (doc.throws.isEmpty()) return doc
   return doc.copy(
     throws = doc.throws.map { entry ->
-      entry.copy(resolvedCsharpType = resolveThrownType(entry.type, expects)?.mappedCsharpType())
+      val resolved: KSClassDeclaration? = resolveThrownType(entry.type, expects)
+      entry.copy(
+        resolvedCsharpType = resolved?.mappedCsharpType(),
+        kotlinType = resolved?.qualifiedName?.asString(),
+      )
     },
   )
 }
@@ -6221,7 +6225,8 @@ private fun KSDeclaration.resolveThrownType(
   expects: ExpectIndex,
 ): KSClassDeclaration? {
   val candidates: List<String> = if ('.' in written) {
-    listOf(written)
+    // ADR-241: a nested class is written from its outermost class (`StoreException.NotFound`).
+    listOf(written, "${packageName.asString()}.$written")
   } else {
     listOf(
       "${packageName.asString()}.$written",

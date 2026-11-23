@@ -206,7 +206,9 @@ member, and a compiler plugin's synthesized surface such as kotlinx.serializatio
   `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` below. `SKIPPED_RESULT_TRY_COLLISION` is the mild case: only
   the non-throwing `TryX` twin of a `Result<T>` return is dropped because its name is taken by a
   property, a constant or the type itself, and the throwing member still binds (see
-  [Exceptions](exceptions.md#result-try)).
+  [Exceptions](exceptions.md#result-try)). `SKIPPED_EXCEPTION_MEMBER_COLLISION` drops a member of
+  an exported exception class whose C# name would hide a `System.Exception` member, such as `Source`
+  or `StackTrace` (see [Exceptions](exceptions.md#exported-exception-members)).
 - **`INFO_*`**: the member still binds, under a documented assumption (for example, `out`/`in`
   variance on a class type parameter is dropped, or a stdlib bound such as `Comparable<T>` is
   dropped from the `where` clause as `INFO_DROPPED_BOUND`, but the member still generates).

@@ -331,6 +331,10 @@ private fun StringBuilder.renderClassDeclaration(
     )
     appendLine("        {")
     appendLine("        }")
+    if (cls.isException) {
+      appendLine()
+      renderExceptionSnapshotConstructor(cls.name, "        ", trailingBlank = false)
+    }
   } else if (cls.exceptionBase != null) {
     renderExceptionRootConstructors(cls.name, cls.kotlinName ?: cls.name, "        ")
   } else {
@@ -583,14 +587,17 @@ private fun StringBuilder.renderClassConstructor(
     hasSuperClass = cls.superClass != null,
     externs = externs,
     chainsToHandle = cls.exceptionBase != null,
+    isException = cls.isException,
   )
 }
 
 /**
- * ADR-241: the handle constructor of a root exported exception class. The exception base is
- * immutable, so its message, Kotlin type, Kotlin stack trace and cause chain are read once, from
- * the handle's ADR-107 envelope ([NugetErrorNative.Snapshot]); an invalid handle (a C#-side
- * constructor, before it creates the Kotlin object) reads an empty snapshot of [kotlinType].
+ * ADR-241: the handle constructors of a root exported exception class. The exception base is
+ * immutable, so its message, Kotlin type, Kotlin stack trace and cause chain are fixed at
+ * construction. A thrown instance gets them from the envelope `NugetErrorNative.MapExported` is
+ * already reading (the snapshot constructor, which every class below chains through); a value read
+ * (`fun last(): E`) reads the handle's own ADR-107 envelope ([NugetErrorNative.Snapshot]). An
+ * invalid handle reads an empty snapshot of [kotlinType].
  */
 internal fun StringBuilder.renderExceptionRootConstructors(
   name: String,
@@ -605,7 +612,7 @@ internal fun StringBuilder.renderExceptionRootConstructors(
   appendLine("$indent}")
   appendLine()
   appendLine(
-    "${indent}private $name(NugetKotlinHandle handle, NugetErrorSnapshot snapshot, out NugetHandleTag tag)",
+    "${indent}internal $name(NugetKotlinHandle handle, NugetErrorSnapshot snapshot, out NugetHandleTag tag)",
   )
   appendLine(
     "$indent    : base(snapshot.KotlinType, snapshot.Message, snapshot.KotlinStackTrace, snapshot.Inner)",
@@ -614,6 +621,24 @@ internal fun StringBuilder.renderExceptionRootConstructors(
   appendLine("$indent    tag = default;")
   appendLine("$indent    _handle = handle;")
   appendLine("$indent}")
+}
+
+/**
+ * ADR-241: the snapshot constructor of an exported exception class below the root (an arm, a
+ * subclass, a backing wrapper), chained to its base's, so `MapExported` reaches the root's.
+ */
+internal fun StringBuilder.renderExceptionSnapshotConstructor(
+  name: String,
+  indent: String,
+  trailingBlank: Boolean = true,
+) {
+  appendLine(
+    "${indent}internal $name(NugetKotlinHandle handle, NugetErrorSnapshot snapshot, out NugetHandleTag tag) : " +
+      "base(handle, snapshot, out tag)",
+  )
+  appendLine("$indent{")
+  appendLine("$indent}")
+  if (trailingBlank) appendLine()
 }
 
 /**
@@ -631,9 +656,10 @@ internal fun StringBuilder.renderConstructorMember(
   hasSuperClass: Boolean,
   externs: CirExternScope? = null,
   chainsToHandle: Boolean = false,
+  isException: Boolean = false,
 ) {
   renderDllImport(constructorNativeImport(libraryName, nativePrefix, ctor), externs)
-  renderConstructor(className, ctor, hasSuperClass, chainsToHandle)
+  renderConstructor(className, ctor, hasSuperClass, chainsToHandle, isException)
 }
 
 internal fun StringBuilder.renderConstructor(
@@ -643,12 +669,34 @@ internal fun StringBuilder.renderConstructor(
   // ADR-241: a root exception class has no parameterless base constructor, so a public constructor
   // chains to its own handle constructor over a null handle, as an arm chains to its base's.
   chainsToHandle: Boolean = false,
+  // ADR-241: an exported exception class at any depth (see the factory below).
+  isException: Boolean = false,
 ) {
   renderDoc(ctor.doc, "        ")
   val paramStr: String = ctor.parameters.joinToString(", ") { it.declaration }
   // The native argument, not the bare name: a non-null `string` is read through its null guard.
   val paramNames: String = ctor.parameters.joinToString(", ") { it.nativeArgument }
   val nativeCallArgs: String = if (paramNames.isEmpty()) "out IntPtr error" else "$paramNames, out IntPtr error"
+
+  // ADR-241: an exception's base is immutable and must be built from the Kotlin object's own
+  // envelope, so the handle has to exist before the base constructor runs: the body moves into a
+  // static factory the constructor initializer calls, and the handle constructor reads the
+  // snapshot.
+  val factory: String? = if (isException) exceptionFactoryBody(ctor) else null
+  if (factory != null) {
+    val factoryName = "NugetCreate$className${ctor.nativeSuffix}"
+    val arguments: String = ctor.parameters.joinToString(", ") { it.name }
+    appendLine("        public $className($paramStr) : this($factoryName($arguments), out _)")
+    appendLine("        {")
+    appendLine("        }")
+    appendLine()
+    val factoryParameters: String = ctor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
+    appendLine("        private static NugetKotlinHandle $factoryName($factoryParameters)")
+    appendLine("        {$factory")
+    appendLine("        }")
+    appendLine()
+    return
+  }
 
   if (hasSuperClass) {
     appendLine("        public $className($paramStr) : base(IntPtr.Zero, out _)")
@@ -677,6 +725,39 @@ internal fun StringBuilder.renderConstructor(
   }
 
   appendLine()
+}
+
+/**
+ * ADR-241: the body of an exception constructor's static factory, or null when the constructor's
+ * body cannot move out of the instance: it then keeps the shape every other class has, and the
+ * instance reads an empty snapshot. A planned body ends in the one `_handle` assignment, which the
+ * factory returns instead; anything else touching the instance stays put.
+ */
+private fun exceptionFactoryBody(ctor: CirConstructor): String? {
+  if (ctor.hasErrorCheck) {
+    return buildString {
+      appendLine()
+      appendLine("            IntPtr handle = Native_Create${ctor.nativeSuffix}(${ctor.nativeCallArguments()});")
+      appendLine("            if (error != IntPtr.Zero)")
+      appendLine("            {")
+      appendLine("                throw NugetErrorNative.BuildException(error);")
+      appendLine("            }")
+      appendLine("            NugetErrorNative.ClearManagedFault();")
+      append("            return new NugetKotlinHandle(handle);")
+    }
+  }
+  val assignment = "_handle = new NugetKotlinHandle(handle);"
+  val body: String = ctor.body
+  val rest: String = body.replace(assignment, "")
+  val movable: Boolean = Regex(Regex.escape(assignment)).findAll(body).count() == 1 &&
+    "_handle" !in rest && !Regex("""\bthis\b""").containsMatchIn(rest)
+  if (!movable) return null
+  return body.replace(assignment, "return new NugetKotlinHandle(handle);")
+}
+
+private fun CirConstructor.nativeCallArguments(): String {
+  val names: String = parameters.joinToString(", ") { it.nativeArgument }
+  return if (names.isEmpty()) "out IntPtr error" else "$names, out IntPtr error"
 }
 
 internal fun StringBuilder.renderProperty(prop: CirProperty) {
@@ -1074,6 +1155,9 @@ internal fun StringBuilder.renderDispose(
   ownsScope: Boolean = hasSuspendMethods,
   overridesDisposeAsync: Boolean = false,
   externs: CirExternScope? = null,
+  // ADR-241: a sealed exception root's backing has no `_dispose` export to import; the bodies below
+  // never call `Native_Dispose` anyway (ADR-187).
+  importsDispose: Boolean = true,
 ) {
   val abstract: String = if (isAbstract) "abstract " else ""
   // ADR-101 amendment (2026-09-10): a derived class always spells its Dispose `override`, so a
@@ -1093,10 +1177,12 @@ internal fun StringBuilder.renderDispose(
     // `IAsyncDisposable` and implemented nothing (CS0535).
     if (ownsScope) appendLine("        public ${abstract}ValueTask DisposeAsync();")
   } else {
-    renderDllImport(
-      requireNotNull(nativeImport) { "Concrete disposable classes require a native import" },
-      externs,
-    )
+    if (importsDispose) {
+      renderDllImport(
+        requireNotNull(nativeImport) { "Concrete disposable classes require a native import" },
+        externs,
+      )
+    }
     // ADR-187: the owned handle is swapped for the zero sentinel, so a second `Dispose()` and every
     // disposed check read zero exactly as the raw field did, and the handle object is released once.
     // `Native_Dispose` stays imported for the ABI contract; the shared release is `nuget_dispose`.

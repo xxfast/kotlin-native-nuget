@@ -10,6 +10,11 @@ public class ContractTests
     public void UnmappedFailureHasNoPublicConstructorAndFactoryPreservesMetadata()
     {
         Assert.Empty(typeof(KotlinException).GetConstructors());
+        // ADR-241: generated exported exception types subclass it, so its one ctor is protected internal.
+        Assert.False(typeof(KotlinException).IsSealed);
+        ConstructorInfo hidden = Assert.Single(
+            typeof(KotlinException).GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic));
+        Assert.True(hidden.IsFamilyOrAssembly);
         MethodInfo factory = Assert.Single(typeof(KotlinException).GetMethods(), m => m.Name == "Create");
         Assert.Equal(EditorBrowsableState.Never,
             factory.GetCustomAttribute<EditorBrowsableAttribute>()!.State);
@@ -23,7 +28,7 @@ public class ContractTests
     }
 
     [Fact]
-    public void EveryMappedFailureRetainsItsBclBaseAndPublicSealedContract()
+    public void EveryMappedFailureRetainsItsBclBaseAndPublicSubclassableContract()
     {
         (Type mapped, Type bcl)[] types =
         [
@@ -39,9 +44,12 @@ public class ContractTests
         ];
         foreach ((Type mapped, Type bcl) in types)
         {
-            Assert.True(mapped.IsSealed);
+            // ADR-241: unsealed so a generated exported type can derive from the row it IS-A.
+            Assert.True(mapped.IsPublic);
+            Assert.False(mapped.IsSealed);
             Assert.Equal(bcl, mapped.BaseType);
             ConstructorInfo constructor = Assert.Single(mapped.GetConstructors());
+            Assert.Empty(mapped.GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic));
             var cause = new Exception("empty bowl");
             var error = (Exception)constructor.Invoke(["cats.Failure", "Mylo", "feed:7", cause]);
             Assert.Same(cause, error.InnerException);

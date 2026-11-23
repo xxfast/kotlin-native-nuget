@@ -144,6 +144,10 @@ class Tier1ExceptionHierarchyMappingTest {
     )
   }
 
+  /**
+   * An unexported subclass crefs the row it IS-A. ADR-241: an EXPORTED subclass is a generated
+   * exception type of its own (deriving from that row's type), and the cref names it instead.
+   */
   @Test
   fun `a documented throws of a user subclass crefs the row it IS-A`() {
     val result = Tier1Harness.run(
@@ -151,15 +155,18 @@ class Tier1ExceptionHierarchyMappingTest {
         "Fixture.kt" to """
           package tier1.litterbox
 
-          class LitterBoxJammedException(message: String) : kotlinx.io.IOException(message)
+          internal class LitterBoxJammedException(message: String) : kotlinx.io.IOException(message)
 
-          class LitterBoxGrumble : IllegalStateException()
+          internal class LitterBoxGrumble : IllegalStateException()
+
+          class LitterBoxOverflow : IllegalStateException()
 
           /**
            * Rakes the litter.
            *
            * @throws LitterBoxJammedException when Oreo buried the rake
            * @throws LitterBoxGrumble when Oreo sulks
+           * @throws LitterBoxOverflow when Mylo overfills it
            */
           fun rake(catName: String): String = "${'$'}catName's litter is raked"
         """.trimIndent(),
@@ -174,6 +181,10 @@ class Tier1ExceptionHierarchyMappingTest {
     )
     assertTrue(
       "<exception cref=\"KotlinInvalidOperationException\">when Oreo sulks</exception>" in cs,
+      cs,
+    )
+    assertTrue(
+      "<exception cref=\"global::Interop.LitterBoxOverflow\">when Mylo overfills it</exception>" in cs,
       cs,
     )
   }

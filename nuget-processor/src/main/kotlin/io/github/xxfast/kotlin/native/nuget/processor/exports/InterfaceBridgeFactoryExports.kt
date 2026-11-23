@@ -55,6 +55,15 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.unwrapNullable
 internal fun FileSpec.Builder.addInterfaceBridgeFactoryExport(plan: ForwardBridgeInterfacePlan) {
   if (plan.slots.boxesTicks()) addImport(RUNTIME, "toDotNetTicks")
   val body: String = buildString {
+    // ADR-202 / ADR-241: a slot that hands C# a Kotlin suspend lambda (or, ADR-232, a hot flow)
+    // lets C# invoke it through a runtime-owned route (`nuget_suspend_func*`,
+    // `nuget_stateflow_collect`), which classifies a throw with whatever classifier this module
+    // installed. Every such value is handed over by this bridge, so the bridge's own creation is
+    // the mint site that runs first, on the caller's thread.
+    val handsOutSuspendLambda: Boolean = plan.slots.any { slot ->
+      slot.parameters.any { param -> param.type.lambda?.suspend == true || param.type.hotFlow }
+    }
+    if (handsOutSuspendLambda) appendLine(INSTALL_MODULE_MAPPED_TYPE)
     appendLine("return try {")
     plan.slots.forEach { slot ->
       // ADR-232: a SUSPEND slot's Begin thunk is reinterpreted at its one call, in the override.

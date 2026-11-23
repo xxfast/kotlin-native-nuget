@@ -2395,7 +2395,7 @@ public class CollectabilityTests
         WeakReference? caught = null;
         try
         {
-            await store.FetchAsync("kibble");
+            await store.FetchLaterAsync("kibble");
         }
         catch (TestLibrary.Store.StoreException.Unauthorized e)
         {

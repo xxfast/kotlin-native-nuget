@@ -43,7 +43,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeC
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import io.github.xxfast.kotlin.native.nuget.processor.ExportedExceptionType
 import io.github.xxfast.kotlin.native.nuget.processor.exportedExceptionTypes
-import io.github.xxfast.kotlin.native.nuget.processor.forward.abstractBackingName
+import io.github.xxfast.kotlin.native.nuget.processor.exceptionBackingName
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSTypeParameter
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
@@ -1355,22 +1355,26 @@ internal fun translate(
   if (tracker.needsAsync) helpers.add(CirAsyncHelper(context.libraryName))
   if (tracker.needsAsync) helpers.add(CirScopeHelper(context.libraryName))
   if (tracker.needsAsync) helpers.add(CirJobHelper(context.libraryName))
-  // ADR-241: the exported exception arms; a sealed root (no backing) falls through to the rows.
+  // ADR-241: one `MapExported` arm per key the Kotlin `nugetMappedType` can return (both come off
+  // `exportedExceptionTypes`), so no exported class falls through to the rows. An abstract class
+  // or a sealed root constructs its nested backing.
   val exceptionTypes: List<ExportedExceptionType> = exportedExceptionTypes(classes, sealedClasses)
   val exportedExceptions: List<CirExportedException> =
-    exceptionTypes.mapNotNull { type ->
+    exceptionTypes.map { type ->
       val declaration: KSClassDeclaration = type.declaration
       val namespace: String = mapPackageToNamespace(
         declaration.packageName.asString(), context.rootPackage, context.rootNamespace,
       )
       val name: String = "global::$namespace.${declaration.nestedCsName()}"
-      val isAbstract: Boolean = Modifier.ABSTRACT in declaration.modifiers ||
-          Modifier.SEALED in declaration.modifiers
-      val constructed: String = if (isAbstract) {
-        val backing: String = declaration.abstractBackingName() ?: return@mapNotNull null
-        "$name.$backing"
-      } else {
+      val instantiable: Boolean = Modifier.ABSTRACT !in declaration.modifiers &&
+          Modifier.SEALED !in declaration.modifiers
+      val constructed: String = if (instantiable) {
         name
+      } else {
+        val backing: String = requireNotNull(declaration.exceptionBackingName()) {
+          "ADR-241: exported exception ${type.kotlinType} is not instantiable in C# and has no backing"
+        }
+        "$name.$backing"
       }
       CirExportedException(type.kotlinType, constructed)
     }
@@ -1379,7 +1383,8 @@ internal fun translate(
       context.libraryName,
       exported = exportedExceptions,
       // Every exception root's handle constructor reads a snapshot, arms or not.
-      envelopeEntry = context.symbols.throwableEnvelopeExport().takeIf { exceptionTypes.isNotEmpty() },
+      envelopeEntry = context.symbols.throwableEnvelopeExport()
+        .takeIf { exceptionTypes.isNotEmpty() },
     ),
   )
   if (tracker.needsFlow || hotFlows) {
