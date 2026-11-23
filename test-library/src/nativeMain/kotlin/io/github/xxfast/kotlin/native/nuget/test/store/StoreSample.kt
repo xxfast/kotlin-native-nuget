@@ -69,13 +69,13 @@ class TreatStore {
     throw IllegalStateException("the shelf collapsed", remember(StoreException.NotFound(key)))
 
   /** Suspend route, after a real suspension point. */
-  suspend fun fetchAsync(key: String): String {
+  suspend fun fetchLater(key: String): String {
     yield()
     throw remember(StoreException.Unauthorized())
   }
 
   /** Suspend route, thrown before any suspension, with a member to read back. */
-  suspend fun findAsync(key: String): String = throw remember(StoreException.NotFound(key))
+  suspend fun find(key: String): String = throw remember(StoreException.NotFound(key))
 
   /** Flow route: one emission, then the most-derived arm. */
   fun watch(): Flow<String> = flow {

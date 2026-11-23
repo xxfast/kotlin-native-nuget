@@ -876,6 +876,11 @@ public fun export_nuget_error_cause_stacktrace(handle: COpaquePointer, index: In
  * Additive: no `NugetRuntimeAbi` bump, a new generator against an old runtime already fails to
  * compile on the `buildError` call.
  */
+@NugetRuntimeApi
+@CName("nuget_error_cause_mapped_type")
+public fun export_nuget_error_cause_mapped_type(handle: COpaquePointer, index: Int): String =
+  handle.asStableRef<NugetError>().get().at(index).mappedType.orEmpty()
+
 /**
  * ADR-241: a counted handle to node [index]'s `Throwable` (0 is the top), which the caller owns.
  * C# calls it only inside an exported-class arm of its generated `MapExported`, so a stdlib or
@@ -889,11 +894,6 @@ public fun export_nuget_error_cause_throwable(handle: COpaquePointer, index: Int
   }
   return NugetHandles.retain(throwable)
 }
-
-@NugetRuntimeApi
-@CName("nuget_error_cause_mapped_type")
-public fun export_nuget_error_cause_mapped_type(handle: COpaquePointer, index: Int): String =
-  handle.asStableRef<NugetError>().get().at(index).mappedType.orEmpty()
 
 private const val TICKS_UNIX_EPOCH: Long = 621_355_968_000_000_000L
 

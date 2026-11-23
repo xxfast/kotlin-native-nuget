@@ -146,7 +146,7 @@ public class ExportedExceptionTypeTests
     public async Task Oreo_FetchesAfterANap_Suspend_ThrowsExportedType()
     {
         using var store = new TreatStore();
-        var e = await Assert.ThrowsAsync<StoreException.Unauthorized>(() => store.FetchAsync("kibble"));
+        var e = await Assert.ThrowsAsync<StoreException.Unauthorized>(() => store.FetchLaterAsync("kibble"));
         Assert.Equal($"{Package}.StoreException.Unauthorized", e.KotlinType);
     }
 
