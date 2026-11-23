@@ -123,6 +123,8 @@ internal fun BridgeType.carriesHandle(): Boolean = when (this) {
   BridgeType.ByteArray,
   // ADR-201: read through `NugetErrorNative.BuildException`, a managed exception with no handle.
   is BridgeType.Throwable,
+  // ADR-242: a C# value read component by component, its transient handle released on the read.
+  is BridgeType.DataValue,
     -> false
 
   // False by scope. A bound interface reads back the consumer's own C# original (ADR-088). An

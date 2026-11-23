@@ -43,7 +43,8 @@ class Tier1LegacySuspendCollectionReturnTest {
 
     sealed class Assignment
 
-    data class Member(val id: Int)
+    // Not a data class: a scalar data class is a value (ADR-242), and these lists need handle elements.
+    class Member(val id: Int)
 
     // The issue's shape verbatim: both spellings on one class, for the same element type.
     data class Existing(val members: List<Member>) : Assignment() {

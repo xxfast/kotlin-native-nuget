@@ -16,7 +16,8 @@ class Tier1SealedListPropertyTest {
   private val source: String = """
     package tier1.sealedlistproperty
 
-    data class Item(val name: String)
+    // Not a data class: a scalar data class is a value (ADR-242), and this list needs handle elements.
+    class Item(val name: String)
 
     sealed class State {
       data class Loaded(val items: List<Item>, val refreshing: Boolean) : State()

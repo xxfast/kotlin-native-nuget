@@ -178,11 +178,11 @@ internal fun StringBuilder.renderDataValueClass(
   // Computed members: Kotlin's code on every call, over a transient instance.
   cls.properties.filter { it.name !in components }.forEach { prop ->
     cls.propertyNativeImports(prop).forEach { native -> renderDllImport(native, externs) }
-    renderProperty(if (prop.isStatic) prop else prop.withMintedReceiver())
+    renderProperty(if (prop.isStatic) prop else prop.unguarded().withMintedReceiver())
   }
   cls.methods.forEach { method ->
     if (!method.isAbstract) renderDllImport(cls.methodNativeImport(method), externs)
-    val rendered: String = buildString { renderMethod(method, name) }
+    val rendered: String = buildString { renderMethod(method.unguarded(), name) }
     append(if (method.isStatic) rendered else rendered.withMintedReceiverBody())
   }
   cls.callbackMethods.forEach { member ->
@@ -242,7 +242,7 @@ private fun StringBuilder.renderDataValueEquality(cls: CirClass, externs: CirExt
   val name: String = cls.name
   cls.dataClassNativeImports().forEach { nativeImport -> renderDllImport(nativeImport, externs) }
   if (cls.copyMethod != null) {
-    append(buildString { renderMethod(cls.copyMethod, name) }.withMintedReceiverBody())
+    append(buildString { renderMethod(cls.copyMethod.unguarded(), name) }.withMintedReceiverBody())
   }
   appendLine("        public bool Equals($name? other)")
   appendLine("        {")
@@ -279,6 +279,15 @@ private fun StringBuilder.renderDataValueEquality(cls: CirClass, externs: CirExt
 }
 
 private fun CirProperty.identifierOf(): String = explicitName
+
+/**
+ * Issue #610: a value has no `_handle` field to guard. Each instance member mints its receiver at
+ * the top of its body, so the disposed-receiver guard has nothing to check, and on a property it
+ * would read the minted local before its declaration.
+ */
+private fun CirProperty.unguarded(): CirProperty = copy(guardsReceiver = false)
+
+private fun CirMethod.unguarded(): CirMethod = copy(guardsReceiver = false)
 
 
 private fun CirProperty.withMintedReceiver(): CirProperty {
