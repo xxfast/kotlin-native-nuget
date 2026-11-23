@@ -9521,6 +9521,54 @@ public class LiveHandleTests
         }
     }
 
+    // `Litters()` is `[[Oreo], [Mylo]]`. The `Kitten` factory is swapped for one that disposes its
+    // box and throws on its SECOND call: inner list 0 builds fully (Oreo is call 1, its
+    // `KotlinList<Kitten>` is complete), then inner list 1's element read throws, so the outer read
+    // fails after it already owns a built inner list. The throw-path cleanup must release that
+    // inner list's Oreo through its `Dispose`. Read without `Settle` so no finalizer can release it
+    // instead. Ledger: +1 (Oreo) per crossing, -1 by the cleanup, the thrown box disposed by the
+    // factory; net zero.
+    [Fact]
+    public void HandleListReturn_NestedThrowingElementFactory_ReleasesBuiltInnerLists()
+    {
+        using var centre = new Adoption.AdoptionCentre();
+        using (KotlinList<IReadOnlyList<Adoption.Kitten>> warm = centre.Litters()) Assert.Equal(2, warm.Count);
+
+        Func<NugetKotlinHandle, object> original = NugetMarshal.Factories[typeof(Adoption.Kitten)];
+        int calls = 0;
+        NugetMarshal.Factories[typeof(Adoption.Kitten)] = handle =>
+        {
+            if (++calls == 2)
+            {
+                handle.Dispose();
+                throw new InvalidOperationException("Mylo knocked his litter off the adoption desk");
+            }
+            return new Adoption.Kitten(handle, out _);
+        };
+
+        try
+        {
+            Settle();
+            long before = NugetMarshal.LiveHandles;
+            for (int i = 0; i < ListCrossings; i++)
+            {
+                calls = 0;
+                InvalidOperationException thrown = Assert.Throws<InvalidOperationException>(() => centre.Litters());
+                Assert.Equal("Mylo knocked his litter off the adoption desk", thrown.Message);
+                Assert.Equal(2, calls);
+            }
+            long after = NugetMarshal.LiveHandles;
+
+            Assert.True(
+                after == before,
+                $"expected {before} live handles after {ListCrossings} throwing nested Litters reads, got {after} (delta {after - before})");
+        }
+        finally
+        {
+            NugetMarshal.Factories[typeof(Adoption.Kitten)] = original;
+        }
+    }
+
     // Unchanged behaviour: a caller who never disposes the collection is still covered by the
     // ADR-187 finalizers, so a settled read returns to baseline. Ledger: +2 per read, -2 by GC.
     [Fact]

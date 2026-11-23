@@ -130,7 +130,7 @@ class Tier1FlowCollectionElementTest {
       "read: static h => NugetMarshal.ReadSet<global::Interop.Hub.NodeId>(h",
       "read: static h => NugetMarshal.ReadList<string>(h",
       "read: static h => NugetMarshal.ReadMap<string, int>(h",
-      "read: static h => NugetMarshal.ReadList<global::Interop.Hub.Kind>(h",
+      "read: static h => NugetMarshal.ReadOwnedList<global::Interop.Hub.Kind>(h",
     ).filterNot(result.generatedCSharp::contains)
 
     assertTrue(

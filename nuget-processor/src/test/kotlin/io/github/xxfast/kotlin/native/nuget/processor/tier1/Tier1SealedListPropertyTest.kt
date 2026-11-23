@@ -39,7 +39,7 @@ class Tier1SealedListPropertyTest {
     assertContains(
       result.generatedCSharp,
       """
-      |            public IReadOnlyList<global::Interop.Item> Items
+      |            public KotlinList<global::Interop.Item> Items
       |            {
       |                get
       |                {
@@ -53,7 +53,7 @@ class Tier1SealedListPropertyTest {
     )
     assertContains(
       result.generatedCSharp,
-      "static h1 => NugetMarshal.FromHandle<global::Interop.Item>(h1)).AsReadOnly();",
+      "static h1 => NugetMarshal.FromHandle<global::Interop.Item>(h1));",
     )
   }
 

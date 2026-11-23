@@ -86,7 +86,7 @@ class Tier1OwnTypeParameterInGenericClassTest {
       "public T Groom<T>($ns.Box<T> box) where T : $ns.IFurry",
       "public $ns.Box<T>? Maybe<T>($ns.Box<T>? box)",
       "public $ns.Box<T> Nest<T>($ns.Box<$ns.Box<T>> box)",
-      "public IReadOnlyList<$ns.Box<T>> Boxes<T>(IReadOnlyList<$ns.Box<T>> list)",
+      "public KotlinList<$ns.Box<T>> Boxes<T>(IReadOnlyList<$ns.Box<T>> list)",
       "public IReadOnlyList<T> Listed<T>(IReadOnlyList<T> list)",
       "public bool TryListed<T>(IReadOnlyList<T> list, ",
       "public IReadOnlyDictionary<K, V> Tally<K, V>(IReadOnlyDictionary<K, V> map) " +

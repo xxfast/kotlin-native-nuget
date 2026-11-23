@@ -178,6 +178,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.abstractBackingNam
 import io.github.xxfast.kotlin.native.nuget.processor.forward.hasAbstractBacking
 import io.github.xxfast.kotlin.native.nuget.processor.forward.overridesBaseClassMember
 import io.github.xxfast.kotlin.native.nuget.processor.forward.overridesKeptBaseOf
+import io.github.xxfast.kotlin.native.nuget.processor.forward.overridesNothing
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyMarshalledRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyDiscriminatedRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollection
@@ -1222,6 +1223,8 @@ internal fun translateClass(
           // property as of the 2026-09-11 amendment, so both routes now agree.
           isAbstract = prop.isAbstract(),
           explicitSetterInterfaces = cls.explicitSetterInterfaceSpellings(planned, classifier),
+          // Issue #610: a `val` nothing fixes the type of may narrow to `KotlinList<E>`.
+          overridesNothing = prop.overridesNothing(),
         )
       }
       // ADR-075 amendment (2026-09-11): a property this class inherits from an interface
@@ -3603,6 +3606,7 @@ internal fun translateSealedClass(
               // its setter as an explicit `IFoo.X` member, which the arm's base list now allows.
               explicitSetterInterfaces =
                 subclass.explicitSetterInterfaceSpellings(planned, classifier),
+              overridesNothing = prop.overridesNothing(),
             )
             // ADR-101 amendment (2026-09-27): an override of the kept exported base's own member
             // overrides it in C# too, through the sealed base's base list (CS0114 otherwise).

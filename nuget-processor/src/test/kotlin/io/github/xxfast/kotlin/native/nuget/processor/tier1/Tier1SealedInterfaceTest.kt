@@ -116,7 +116,7 @@ class Tier1SealedInterfaceTest {
 
     listOf(
       "public global::Interop.Pulse Current",
-      "public IReadOnlyList<global::Interop.Pulse> History",
+      "public KotlinList<global::Interop.Pulse> History",
       "public global::Interop.Pulse Latest()",
       "public int Record(global::Interop.Pulse pulse)",
       "public static global::Interop.Pulse AnyPulse()",

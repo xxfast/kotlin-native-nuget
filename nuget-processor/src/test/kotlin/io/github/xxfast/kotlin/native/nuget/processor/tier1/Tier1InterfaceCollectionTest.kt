@@ -45,7 +45,7 @@ class Tier1InterfaceCollectionTest {
       }
       """.trimIndent()
     )
-    assertContains(result.generatedCSharp, "IReadOnlyList<global::Interop.IPet> Residents")
+    assertContains(result.generatedCSharp, "KotlinList<global::Interop.IPet> Residents")
     result.assertPetMaterialises("Shelter.residents")
   }
 
@@ -101,8 +101,8 @@ class Tier1InterfaceCollectionTest {
     val csharp: String = result.generatedCSharp
     assertContains(csharp, "IReadOnlySet<global::Interop.IPet> PetSet()")
     assertContains(csharp, "IReadOnlyDictionary<string, global::Interop.IPet> ByName()")
-    assertContains(csharp, "IReadOnlyList<global::Interop.IPet?> Maybe()")
-    assertContains(csharp, "IReadOnlyList<global::Interop.IPet> Lineup()")
+    assertContains(csharp, "KotlinList<global::Interop.IPet?> Maybe()")
+    assertContains(csharp, "KotlinList<global::Interop.IPet> Lineup()")
     result.assertPetMaterialises("the Set/Map/nullable/top-level cells")
   }
 
@@ -240,7 +240,7 @@ class Tier1InterfaceCollectionTest {
       """.trimIndent()
     )
     val csharp: String = result.generatedCSharp
-    assertContains(csharp, "IReadOnlyList<global::Interop.Aviary.IKeeper> Keepers()")
+    assertContains(csharp, "KotlinList<global::Interop.Aviary.IKeeper> Keepers()")
     assertContains(
       csharp,
       "[typeof(global::Interop.Aviary.IKeeper)] = " +
@@ -265,7 +265,7 @@ class Tier1InterfaceCollectionTest {
       """.trimIndent()
     )
     val csharp: String = result.generatedCSharp
-    assertContains(csharp, "IReadOnlyList<global::Interop.Aviary.Perch> PerchRow()")
+    assertContains(csharp, "KotlinList<global::Interop.Aviary.Perch> PerchRow()")
     assertContains(
       csharp,
       "[typeof(global::Interop.Aviary.Perch)] = " +
@@ -294,7 +294,10 @@ class Tier1InterfaceCollectionTest {
     val start: Int = csharp.indexOf("private static void DisposeMaterialized<T>")
     assertTrue(start >= 0, "expected DisposeMaterialized to be emitted:\n$csharp")
     val body: String = csharp.substring(start, csharp.indexOf("\n        }", start))
-    assertContains(body, "is INugetHandle")
+    // Issue #610: each item goes through `ReleaseAbandoned`, whose ownership test is the same one.
+    assertContains(body, "ReleaseAbandoned(item)")
+    val release: Int = csharp.indexOf("internal static void ReleaseAbandoned(object? value)")
+    assertContains(csharp.substring(release, csharp.indexOf("\n        }", release)), "value is INugetHandle")
     assertFalse("(item as IDisposable)?.Dispose()" in body, "unguarded dispose remains:\n$body")
   }
 

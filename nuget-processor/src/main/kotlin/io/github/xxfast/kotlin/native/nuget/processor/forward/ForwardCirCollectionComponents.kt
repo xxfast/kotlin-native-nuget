@@ -447,15 +447,19 @@ internal fun componentCollectionRead(
       -> {
       val element: BridgeType =
         requireNotNull(component.element) { "Forward CIR nested collection has no element type" }
+      // Issue #610 / ADR-243: a read-only list of handles is a `KotlinList<T>` that owns them.
+      val owned: Boolean = component.isOwnedHandleList()
       val helper: String =
         if (component.kind == CollectionKind.SET || component.kind == CollectionKind.MUTABLE_SET) {
           "ReadSet"
+        } else if (owned) {
+          "ReadOwnedList"
         } else {
           "ReadList"
         }
       val lambda: String =
         componentReadLambda("h$inner", "elementHandle$inner", element, csharpType, inner)
-      val suffix: String = if (component.kind == CollectionKind.LIST) ".AsReadOnly()" else ""
+      val suffix: String = if (component.kind == CollectionKind.LIST && !owned) ".AsReadOnly()" else ""
       "NugetMarshal.$helper<${csharpType(element)}>($handle, $lambda)$suffix"
     }
 

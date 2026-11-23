@@ -638,6 +638,8 @@ internal object ForwardCirPlanProjection {
     val result: CirResultProjection = plan.resultProjection(
       nativeName = nativeName,
       parameters = plan.publicSignature.parameters,
+      // Issue #610: a static member is never implemented or overridden from C#.
+      narrowsReturn = true,
     )
     val method = CirMethod(
       name = plan.publicSignature.name,
@@ -707,6 +709,7 @@ internal object ForwardCirPlanProjection {
       nativeName = externName,
       parameters = plan.publicSignature.parameters,
       receiverArgument = "_handle",
+      narrowsReturn = plan.publicSignature.narrowsMemberReturn(),
     )
     val needsCustomParams: Boolean =
       plan.publicSignature.parameters.any { parameter -> !parameter.isTrivialInput() }
@@ -807,6 +810,8 @@ internal object ForwardCirPlanProjection {
     val result: CirResultProjection = plan.resultProjection(
       nativeName = nativeName,
       parameters = listOf(receiverInput) + plan.publicSignature.parameters,
+      // Issue #610: an extension method is static, so nothing overrides it.
+      narrowsReturn = true,
     )
 
     val nativeImport = CirDllImport(
@@ -1700,6 +1705,9 @@ internal object ForwardCirPlanProjection {
     forceCustomBody: Boolean = false,
     // Set for the `TryX` twin's body: the error check and every exit take the Try spelling.
     tryNames: CirTryNames? = null,
+    // Issue #610: a direct return C# cannot implement or override, spelled `KotlinList<E>` for an
+    // owned handle list ([forwardReturnCsharpType]).
+    narrowsReturn: Boolean = false,
   ): CirResultProjection {
     val nativeCall: ForwardNativeCall = singleNativeImport()
     val exit = CirBodyExit(tryNames, publicSignature.resultView)
@@ -2161,7 +2169,9 @@ internal object ForwardCirPlanProjection {
         exit,
       )
     }
-    return projection.viewing(publicSignature.resultView).fillingOpenSlots(fills)
+    val narrowed: CirResultProjection =
+      if (narrowsReturn) projection.copy(returnType = result.forwardReturnCsharpType()) else projection
+    return narrowed.viewing(publicSignature.resultView).fillingOpenSlots(fills)
   }
 
   /** ADR-235: a WIRE value class result, read as its underlying, then wrapped in its struct. */
@@ -2805,3 +2815,10 @@ internal fun BridgeType.TypeParameter.nullableRead(): String = if (valueType) "$
  */
 internal fun BridgeType.hasValueSlotRead(slot: String): String =
   if ((this as? BridgeType.Nullable)?.type == BridgeType.Char) "(char)$slot" else slot
+
+/**
+ * Issue #610 / ADR-243: whether a class member's return may narrow to `KotlinList<E>`. Not an
+ * `override`, `virtual` or `abstract` C# member, and not one an interface fixes the type of.
+ */
+internal fun ForwardPublicSignature.narrowsMemberReturn(): Boolean =
+  overridesNothing && !isOverride && !isVirtual && !isAbstract

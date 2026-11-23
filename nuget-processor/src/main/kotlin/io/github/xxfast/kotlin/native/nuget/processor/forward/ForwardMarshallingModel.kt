@@ -971,6 +971,12 @@ internal data class ForwardPublicSignature(
    */
   val isAbstract: Boolean = false,
   /**
+   * Issue #610: the declaration overrides nothing in Kotlin (no `override`) and is not an interface
+   * member, so neither a C# base class nor an implemented interface fixes its return type. Not the
+   * same as `!isOverride`: an implementation of an interface member is not a C# `override`.
+   */
+  val overridesNothing: Boolean = false,
+  /**
    * ADR-150: the author's KDoc, parsed once at planning time, with `@param` entries keyed by the
    * *bridge* parameter name and the omitted trailing parameters of a synthesized overload already
    * removed. The planner is the only place that holds both the declaration and the omitted count.

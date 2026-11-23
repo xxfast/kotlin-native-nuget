@@ -117,7 +117,7 @@ class Tier1SealedReturnPlanTest {
           "generatedCSharp=${result.generatedCSharp.lines().filter { it.contains("FromHandle") }}",
     )
     assertTrue(
-      result.generatedCSharp.contains("public IReadOnlyList<global::Interop.Shape> EveryShape()"),
+      result.generatedCSharp.contains("public KotlinList<global::Interop.Shape> EveryShape()"),
       "expected the sealed base as the element spelling; " +
           "generatedCSharp=${result.generatedCSharp.lines().filter { it.contains("EveryShape") }}",
     )

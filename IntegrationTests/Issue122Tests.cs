@@ -75,7 +75,8 @@ public class Issue122Tests
         PropertyInfo members = typeof(Existing).GetProperty("Members")!;
 
         Assert.Equal(typeof(Task<IReadOnlyList<Member>>), fetch.ReturnType);
-        Assert.Equal(typeof(IReadOnlyList<Member>), members.PropertyType);
+        // Issue #610 / ADR-243: a `val` list of handles narrows to the disposable `KotlinList<T>`.
+        Assert.Equal(typeof(TestLibrary.KotlinList<Member>), members.PropertyType);
     }
 
     // ---- The three kinds on an ordinary class. ----

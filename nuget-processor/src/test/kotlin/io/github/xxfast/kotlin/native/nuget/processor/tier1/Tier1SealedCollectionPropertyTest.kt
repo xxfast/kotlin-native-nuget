@@ -87,7 +87,7 @@ class Tier1SealedCollectionPropertyTest {
           "generatedCSharp=${result.generatedCSharp.lines().filter { it.contains("Shape") }}",
     )
     assertTrue(
-      result.generatedCSharp.contains("public IReadOnlyList<global::Interop.Shape> Shapes"),
+      result.generatedCSharp.contains("public KotlinList<global::Interop.Shape> Shapes"),
       "expected the sealed base as the element spelling; " +
           "generatedCSharp=${result.generatedCSharp.lines().filter { it.contains("Shapes") }}",
     )
