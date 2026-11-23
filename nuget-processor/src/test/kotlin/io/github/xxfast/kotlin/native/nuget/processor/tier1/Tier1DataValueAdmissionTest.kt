@@ -304,4 +304,43 @@ class Tier1DataValueAdmissionTest {
     val build: Tier1CSharpBuild = Tier1CSharpCompile.compile(result, consumer)
     assertTrue(build.succeeded, "expected the consumer to compile; log:\n${build.log}")
   }
+  /**
+   * An opt-in-marked component (on the parameter, or through its type) is never rebuilt by a
+   * value: the class must either stay a handle or bind every component, never crash the processor
+   * or render a value whose C# constructor dropped a component.
+   */
+  @Test
+  fun `an opt-in-marked component keeps the class a handle`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.markedvalues
+
+      @RequiresOptIn(level = RequiresOptIn.Level.ERROR)
+      annotation class Fragile
+
+      @Fragile
+      enum class Glaze { Matte, Gloss }
+
+      data class MarkedParameter(val name: String, @property:Fragile val chips: Int = 0)
+
+      @OptIn(Fragile::class)
+      data class MarkedType(val name: String, val glaze: Glaze = Glaze.Matte)
+
+      fun parameter(): MarkedParameter = MarkedParameter("Oreo")
+
+      @OptIn(Fragile::class)
+      fun type(): MarkedType = MarkedType("Mylo")
+      """.trimIndent(),
+      fileName = "Marked.kt",
+      processorOptions = mapOf("nuget.namespace" to "Tier1"),
+    )
+    assertTrue(result.kspErrors.isEmpty(), "kspErrors=${result.kspErrors}")
+    val interop: String = interopOf(result)
+    listOf("MarkedParameter", "MarkedType").forEach { name ->
+      val line: String? = classLine(interop, name)
+      assertTrue(line != null && "IDisposable" in line, "$name should stay a handle: $line")
+    }
+    val build: Tier1CSharpBuild = Tier1CSharpCompile.compile(result, "")
+    assertTrue(build.succeeded, "expected the generated C# to compile; log:\n${build.log}")
+  }
 }

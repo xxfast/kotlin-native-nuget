@@ -50,7 +50,14 @@ private fun BridgeType.defensiveCopy(): String = when (this) {
           "${value.spelled()}>(new global::System.Collections.Generic.Dictionary<" +
           "${key.spelled()}, ${value.spelled()}>({0}))"
   }
-  else -> "{0}"
+  // Every other admitted component is immutable on the C# side already.
+  BridgeType.Unit, is BridgeType.Primitive, BridgeType.Char, BridgeType.String,
+  BridgeType.Instant, BridgeType.Duration, is BridgeType.Throwable, BridgeType.Uuid,
+  is BridgeType.Enum, is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface,
+  is BridgeType.BoundInterface, is BridgeType.ValueClass, BridgeType.ByteArray,
+  is BridgeType.Callback, is BridgeType.AsyncCallback, is BridgeType.FlowSource,
+  is BridgeType.ReturnedLambda, is BridgeType.SpecializedProtocol, is BridgeType.RawKSType,
+  is BridgeType.Unsupported, is BridgeType.RawCollection, is BridgeType.TypeParameter -> "{0}"
 }
 
 private fun BridgeType?.spelled(): String =
