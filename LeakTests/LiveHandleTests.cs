@@ -70,6 +70,7 @@ using Pawpost = TestLibrary.Pawpost;
 using TestLibrary.Pawpost;
 using TestLibrary.Store;
 using Bindle = TestLibrary.Bindle;
+using Adoption = TestLibrary.Adoption;
 
 namespace LeakTests;
 
@@ -9376,6 +9377,160 @@ public class LiveHandleTests
             }));
             using (var sniffed = Assert.IsType<StoreException.NotFound>(seen))
                 Assert.Equal("tuna", sniffed.Key);
+        });
+    }
+
+    // ---- ADR-243: a returned handle list is a disposable `KotlinList<T>` ----
+    //
+    // Since ADR-187 every wrapper has a finalizer, and `Settle()` collects, so an `AssertNoLeak`
+    // row over a list read is green whether or not the collection released anything. The first
+    // three rows below therefore read the count straight after the loop, with no `Settle` in
+    // between and every list still reachable (`GC.KeepAlive`), so only `Dispose` can bring the
+    // count back. Each warms its crossing once before the baseline. No tolerance band.
+
+    private const int ListCrossings = 50;
+
+    // A C#-side `IAdoptable` that counts its Dispose calls: neither the collection nor the
+    // marshaller's throw-path cleanup may ever dispose an object the consumer owns.
+    private sealed class CountingStray(string name) : Adoption.IAdoptable
+    {
+        public int Disposals { get; private set; }
+        public string Name { get; } = name;
+        public string Greet() => $"Hi, I'm {Name}, the stray from next door";
+        public void Dispose() => Disposals++;
+    }
+
+    // Two element handles per read (Oreo, Mylo as `Adoptable` wrappers), each released by the
+    // collection's `Dispose`. Ledger: +2 per read, -2 per dispose, net zero with every list held.
+    [Fact]
+    public void HandleListReturn_DisposedCollection_ReleasesEveryElement_WithoutCollecting()
+    {
+        using var centre = new Adoption.AdoptionCentre();
+        using (KotlinList<Adoption.IAdoptable> warm = centre.Pets) Assert.Equal(2, warm.Count);
+        var held = new List<KotlinList<Adoption.IAdoptable>>();
+
+        Settle();
+        long before = NugetMarshal.LiveHandles;
+        for (int i = 0; i < ListCrossings; i++)
+        {
+            using KotlinList<Adoption.IAdoptable> pets = centre.Pets;
+            Assert.Equal("Oreo", pets[0].Name);
+            held.Add(pets);
+        }
+        long after = NugetMarshal.LiveHandles;
+        GC.KeepAlive(held);
+
+        Assert.True(
+            after == before,
+            $"expected {before} live handles after {ListCrossings} disposed Pets reads, got {after} (delta {after - before})");
+    }
+
+    // `Keep(pets[0])` each read: Oreo survives the collection, Mylo does not. Ledger: +1 per read
+    // while kept (exactly +50), then -1 per kept Oreo the caller disposes, back to zero.
+    [Fact]
+    public void HandleListReturn_KeptElement_SurvivesTheCollection_ThenReturnsToBaseline()
+    {
+        using var centre = new Adoption.AdoptionCentre();
+        using (KotlinList<Adoption.IAdoptable> warm = centre.Pets) warm.Keep(warm[0]).Dispose();
+        var held = new List<KotlinList<Adoption.IAdoptable>>();
+        var kept = new List<Adoption.IAdoptable>();
+
+        Settle();
+        long before = NugetMarshal.LiveHandles;
+        for (int i = 0; i < ListCrossings; i++)
+        {
+            using KotlinList<Adoption.IAdoptable> pets = centre.Pets;
+            kept.Add(pets.Keep(pets[0]));
+            held.Add(pets);
+        }
+        long whileKept = NugetMarshal.LiveHandles;
+        foreach (Adoption.IAdoptable oreo in kept) oreo.Dispose();
+        long after = NugetMarshal.LiveHandles;
+        GC.KeepAlive(held);
+        GC.KeepAlive(kept);
+
+        Assert.True(
+            whileKept == before + ListCrossings,
+            $"expected {before + ListCrossings} live handles while {ListCrossings} Oreos are kept, got {whileKept} (delta {whileKept - before})");
+        Assert.True(
+            after == before,
+            $"expected {before} live handles once the kept Oreos are disposed, got {after} (delta {after - before})");
+    }
+
+    // `List<List<Kitten>>`: two inner lists of one Kitten each. The outer `Dispose` releases the
+    // inner lists through their own `Dispose`. Ledger: +2 element handles per read, -2, net zero.
+    [Fact]
+    public void HandleListReturn_NestedDisposedCollection_ReleasesInnerElements_WithoutCollecting()
+    {
+        using var centre = new Adoption.AdoptionCentre();
+        using (KotlinList<IReadOnlyList<Adoption.Kitten>> warm = centre.Litters()) Assert.Equal(2, warm.Count);
+        var held = new List<KotlinList<IReadOnlyList<Adoption.Kitten>>>();
+
+        Settle();
+        long before = NugetMarshal.LiveHandles;
+        for (int i = 0; i < ListCrossings; i++)
+        {
+            using KotlinList<IReadOnlyList<Adoption.Kitten>> litters = centre.Litters();
+            Assert.Equal("Mylo", litters[1][0].Name);
+            held.Add(litters);
+        }
+        long after = NugetMarshal.LiveHandles;
+        GC.KeepAlive(held);
+
+        Assert.True(
+            after == before,
+            $"expected {before} live handles after {ListCrossings} disposed Litters reads, got {after} (delta {after - before})");
+    }
+
+    // ADR-176 row 4's shape on the new collection. `[biscuit, oreo, oreo]` echoed back with the
+    // `IAdoptable` factory swapped for one that disposes its box and throws on its SECOND call:
+    // element 0 resolves through the token probe (no factory call), element 1 is factory call 1,
+    // element 2 throws. What the read already built (the element 1 wrapper) is released, the list
+    // handle is released, and the caller's own CountingStray is never disposed. Net zero.
+    [Fact]
+    public void HandleListReturn_ThrowingElementFactory_ReleasesWhatItBuilt()
+    {
+        Func<NugetKotlinHandle, object> original = NugetMarshal.Factories[typeof(Adoption.IAdoptable)];
+        int calls = 0;
+        NugetMarshal.Factories[typeof(Adoption.IAdoptable)] = handle =>
+        {
+            if (++calls == 2)
+            {
+                handle.Dispose();
+                throw new InvalidOperationException("Oreo sat on the adoption forms");
+            }
+            return new Adoption.Adoptable(handle, out _);
+        };
+
+        try
+        {
+            var biscuit = new CountingStray("Biscuit");
+            using var centre = new Adoption.AdoptionCentre();
+            AssertNoLeak(() =>
+            {
+                calls = 0;
+                using var oreo = new Adoption.Kitten("Oreo");
+                Assert.Throws<InvalidOperationException>(() =>
+                    centre.Echo(new Adoption.IAdoptable[] { biscuit, oreo, oreo }));
+            });
+            Assert.Equal(0, biscuit.Disposals);
+        }
+        finally
+        {
+            NugetMarshal.Factories[typeof(Adoption.IAdoptable)] = original;
+        }
+    }
+
+    // Unchanged behaviour: a caller who never disposes the collection is still covered by the
+    // ADR-187 finalizers, so a settled read returns to baseline. Ledger: +2 per read, -2 by GC.
+    [Fact]
+    public void HandleListReturn_UndisposedCollection_ReturnsToBaseline()
+    {
+        using var centre = new Adoption.AdoptionCentre();
+        AssertNoLeak(() =>
+        {
+            IReadOnlyList<Adoption.IAdoptable> pets = centre.Pets;
+            Assert.Equal("Mylo", pets[1].Name);
         });
     }
 }

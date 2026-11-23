@@ -49,6 +49,15 @@ class AdoptionCentre {
   /** Handle-free control: must stay `IReadOnlyList<string>`. */
   val names: List<String> get() = listOf("Oreo", "Mylo")
 
+  /**
+   * `var` position: one C# property type serves the setter, so the static type stays
+   * `IReadOnlyList<Kitten>` while the getter still hands back a disposable collection.
+   */
+  var shortlist: List<Kitten> = listOf(Kitten("Mylo"))
+
+  /** Kotlin-side observation of [shortlist], so a C# write is checked by Kotlin, not echoed back. */
+  fun shortlistNames(): String = shortlist.joinToString(",") { it.name }
+
   /** Method return, plain class elements. */
   fun kittens(): List<Kitten> = listOf(Kitten("Oreo"), Kitten("Mylo"))
 
