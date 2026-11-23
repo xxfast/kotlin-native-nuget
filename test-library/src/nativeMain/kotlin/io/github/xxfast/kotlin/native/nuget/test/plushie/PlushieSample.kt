@@ -142,6 +142,69 @@ fun oreosBox(): PlushieBox = PlushieBox(favouritePlushie(), null, plushies())
 
 fun echoBox(box: PlushieBox): PlushieBox = box
 
+// Shapes that bound while `Plushie` was a handle and must keep binding now it is a value.
+
+/** A value class over a value, declared as `CatResult` is over a handle class. */
+value class PlushieTicket(val plushie: Plushie)
+
+fun ticketFor(plushie: Plushie): PlushieTicket = PlushieTicket(plushie)
+
+fun redeem(ticket: PlushieTicket): Plushie = ticket.plushie
+
+/** An extension property on the value. */
+val Plushie.shout: String get() = "${name.uppercase()} SQUEAKS $squeaks TIMES"
+
+/** An extension function on the value, for comparison with [shout]. */
+fun Plushie.hug(): String = "Oreo hugs $name"
+
+/** A `suspend` extension on the value, with a real suspension point. */
+suspend fun Plushie.nap(): String {
+  delay(1)
+  return "$name naps"
+}
+
+/** A top-level `suspend` function taking the value, with a real suspension point. */
+suspend fun weigh(plushie: Plushie): Int {
+  delay(1)
+  return plushie.squeaks * 10
+}
+
+/** An ordinary handle class whose `suspend`, `Flow` and lambda members take the value. */
+class Nursery {
+  private val stashed = mutableListOf<Plushie>()
+
+  suspend fun stash(plushie: Plushie): Int {
+    delay(1)
+    stashed += plushie
+    return stashed.size
+  }
+
+  fun watch(plushie: Plushie): Flow<Int> = flow {
+    emit(plushie.squeaks)
+    emit(plushie.squeaks + 1)
+  }
+
+  fun visit(plushie: Plushie, block: (String) -> Unit) = block("Mylo visits ${plushie.name}")
+}
+
+/** A qualifying data class whose own members sit on the `suspend`, `Flow` and callback routes. */
+data class NappingPlushie(val name: String) {
+  suspend fun snooze(): String {
+    delay(1)
+    return "$name snoozes"
+  }
+
+  fun fidget(): Flow<Int> = flow {
+    emit(1)
+    emit(2)
+    emit(3)
+  }
+
+  fun forEachLetter(block: (Char) -> Unit) = name.forEach(block)
+}
+
+fun nappingPlushie(): NappingPlushie = NappingPlushie("Milo")
+
 // Negative fixtures: each breaks exactly one predicate clause and stays a handle class.
 
 /** A `var` component. */

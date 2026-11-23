@@ -72,6 +72,8 @@ using TestLibrary.Store;
 using Bindle = TestLibrary.Bindle;
 using Adoption = TestLibrary.Adoption;
 using Plush = TestLibrary.Plushie;
+// The plushie extension members (ADR-242 cells), without importing the whole namespace.
+using static TestLibrary.Plushie.PlushieExtensions;
 
 namespace LeakTests;
 
@@ -3947,17 +3949,16 @@ public class LiveHandleTests
 
     // Row 10e. ADR-211: a top-level function's own `T`, on the same boxed wire as Row 10b, from a
     // static method on the file facade. A builtin `T` mints one `Wrap<T>` box the C# `finally`
-    // disposes; a wrapper `T` (Mylo's toy) mints nothing and is released by its own `using`. The
-    // `string` return is not a handle.
-    // Pick(oreoToy, toy) (issue #556) passes two wrappers, minting nothing, and returns the second
-    // as a fresh wrapper its own `using` releases.
-    // Ledger per iteration: toy +1/-1, oreoToy +1/-1, Describe(4) box +1/-1, Describe(toy) nothing,
-    // picked +1/-1. Net zero.
+    // disposes. Since ADR-242 two kinds of class cross `T`: a value (`Toy`) is minted into an owned
+    // box the call releases, and a returned one is read and released at once, so it owns nothing; a
+    // handle wrapper (`Cat`) mints nothing going in and comes back as a fresh wrapper its own `using`
+    // releases. The `string` return is not a handle.
+    // Ledger per iteration: Describe(4) box +1/-1; each `Toy` crossing +1/-1 inside the call;
+    // oreo +1/-1, mylo +1/-1, Describe(oreo) nothing, picked cat +1/-1, each shuffled cat +1/-1.
+    // Net zero, and with no GC, since every release above is deterministic.
     [Fact]
     public void TopLevelGenericMethod_BoxedTypeParameter_ReturnsToBaseline()
     {
-        // ADR-242: `Toy` is a value now, so at the erased `T` each toy passed in is a minted box the
-        // call releases, and each returned one is read and released at once: nothing retained, no GC.
         AssertRetainsNothing(() =>
         {
             var toy = new Toy("Mylo's Milo Mouse", "Brown");
@@ -3969,6 +3970,18 @@ public class LiveHandleTests
             foreach (Toy shuffled in Descriptions.Shuffle(new[] { oreoToy, toy }))
             {
                 Assert.NotNull(shuffled.Name);
+            }
+
+            using var oreo = new Cat("Oreo", 9);
+            using var mylo = new Cat("Mylo", 7);
+            Assert.EndsWith(": Cat", Descriptions.Describe(oreo));
+            using (Cat pickedCat = Descriptions.Pick(oreo, mylo))
+            {
+                Assert.Equal("Mylo", pickedCat.Name);
+            }
+            foreach (Cat shuffled in Descriptions.Shuffle(new[] { oreo, mylo }))
+            {
+                using (shuffled) Assert.NotNull(shuffled.Name);
             }
         });
     }
@@ -6150,19 +6163,20 @@ public class LiveHandleTests
     // A `suspend fun <T>` on the suspend route, in a tight loop. Each primitive or string `T` argument
     // is an owned `Wrap<T>` box the C# `finally` disposes once the `_async` extern returns (Kotlin
     // read it in the prelude, before `launchForCSharp`); each result is one handle `FromHandle<T>`
-    // consumes. The wrapper argument is borrowed across the suspension, as ADR-208's `Box<T>` is.
-    // The pre-cancelled call proves the owned box goes when the job never completes, since the
-    // `finally` runs after the extern, not on completion.
+    // consumes. A handle wrapper argument (`Cat`) is borrowed across the suspension, as ADR-208's
+    // `Box<T>` is, and its result is a fresh wrapper its own `using` releases. A value argument
+    // (`Toy`, since ADR-242) is an owned box like a builtin, and its result is read and released
+    // at once. The pre-cancelled call proves the owned box goes when the job never completes, since
+    // the `finally` runs after the extern, not on completion.
     // Ledger per iteration: FetchLater(i) box +1/-1, result +1/-1; FetchLater("Oreo") the same;
-    // FetchLater(toy) result wrapper +1/-1 (toy outside the loop); HoldLater("late") box +1/-1.
-    // Net zero.
+    // FetchLater(toy) box +1/-1, result +1/-1; FetchLater(oreo) result wrapper +1/-1 (oreo outside
+    // the loop); HoldLater("late") box +1/-1. Net zero. `Toy` results are rooted until after the
+    // measurement, so a finalizer cannot release a handle a value wrongly kept.
     [Fact]
     public async Task TopLevelSuspendGeneric_BoxedTypeParameter_ReturnsToBaseline()
     {
-        // ADR-242: `Toy` is a value now: the argument is a minted box the call releases and each
-        // result is read and released at once. Results are rooted until after the measurement, so a
-        // finalizer cannot release a handle a value wrongly kept.
         var toy = new Toy("Mylo's Milo Mouse", "Brown");
+        using var oreo = new Cat("Oreo", 9);
         var rooted = new List<Toy>();
         int i = 0;
         await AssertNoLeakAsync(async () =>
@@ -6173,6 +6187,10 @@ public class LiveHandleTests
             Toy back = await Suspendgeneric.SuspendGenericSample.FetchLaterAsync(toy);
             rooted.Add(back);
             Assert.Equal("Mylo's Milo Mouse", back.Name);
+            using (Cat backCat = await Suspendgeneric.SuspendGenericSample.FetchLaterAsync(oreo))
+            {
+                Assert.Equal("Oreo", backCat.Name);
+            }
             using var cts = new CancellationTokenSource();
             cts.Cancel();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(
@@ -9726,5 +9744,80 @@ public class LiveHandleTests
             _ = box.Stack.Count;
             _ = box.Equals(box.Copy(spare: box.Star));
         }, iterations: 500);
+    }
+
+    // ADR-242: the shapes that bound while `Plushie` was a handle and must keep binding now it is a
+    // value, each crossed with no `Dispose` on the value. A value class over a value, and the
+    // extension property and function on it: synchronous, so nothing may be retained, with no GC.
+    [Fact]
+    public void ScalarDataClass_ValueClassOverAValue_ReturnsToBaselineWithoutDispose()
+    {
+        var bun = new Plush.Plushie("Bun", ["pink", "white"], Plush.Mood.Happy, 3);
+        AssertRetainsNothing(() =>
+        {
+            Plush.PlushieTicket ticket = Plush.PlushieSample.TicketFor(bun);
+            Assert.Equal(bun, Plush.PlushieSample.Redeem(ticket));
+        }, iterations: 500);
+    }
+
+    [Fact]
+    public void ScalarDataClass_ExtensionMembers_ReturnToBaselineWithoutDispose()
+    {
+        var bun = new Plush.Plushie("Bun", ["pink", "white"], Plush.Mood.Happy, 3);
+        AssertRetainsNothing(() =>
+        {
+            Assert.Equal("BUN SQUEAKS 3 TIMES", bun.Shout);
+            Assert.Equal("Oreo hugs Bun", bun.Hug());
+        }, iterations: 500);
+    }
+
+    // ADR-242: the value as a parameter of an ordinary handle class's `suspend`, `Flow` and lambda
+    // members, of a top-level `suspend` function, and as the receiver of a `suspend` extension.
+    // Every route here suspends (`delay`), so a small count. Only the `Nursery` is a handle, and it
+    // is disposed.
+    [Fact]
+    public async Task ScalarDataClass_AsValueParameterOfAsyncFlowAndLambdaMembers_ReturnsToBaseline()
+    {
+        var bun = new Plush.Plushie("Bun", ["pink", "white"], Plush.Mood.Happy, 3);
+
+        async Task Crossing()
+        {
+            using var nursery = new Plush.Nursery();
+            Assert.Equal(1, await nursery.StashAsync(bun));
+            int seen = 0;
+            await foreach (int _ in nursery.Watch(bun)) seen++;
+            Assert.Equal(2, seen);
+            nursery.Visit(bun, line => Assert.Equal("Mylo visits Bun", line));
+            Assert.Equal(30, await Plush.PlushieSample.WeighAsync(bun));
+            Assert.Equal("Bun naps", await bun.NapAsync());
+        }
+
+        await Crossing();
+        await AssertNoLeakAsync(Crossing, iterations: 50);
+    }
+
+    // ADR-242: a value whose own members ride the `suspend`, `Flow` and callback routes. Each call
+    // mints a transient instance and releases it; nothing is disposed and nothing may stay.
+    [Fact]
+    public async Task ScalarDataClass_OwnAsyncFlowAndCallbackMembers_ReturnToBaseline()
+    {
+        var rooted = new List<object>();
+
+        async Task Crossing()
+        {
+            Plush.NappingPlushie milo = Plush.PlushieSample.NappingPlushie();
+            rooted.Add(milo);
+            Assert.Equal("Milo snoozes", await milo.SnoozeAsync());
+            int fidgets = 0;
+            await foreach (int _ in milo.Fidget()) fidgets++;
+            Assert.Equal(3, fidgets);
+            int letters = 0;
+            milo.ForEachLetter(_ => letters++);
+            Assert.Equal(4, letters);
+        }
+
+        await Crossing();
+        await AssertNoLeakAsync(Crossing, iterations: 50);
+        GC.KeepAlive(rooted);
     }
 }

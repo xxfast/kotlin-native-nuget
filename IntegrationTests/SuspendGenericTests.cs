@@ -254,4 +254,66 @@ public class SuspendGenericTests
         Toy back = await porch.LeaveAsync(toy);
         Assert.Equal("Oreo's Biscuit Ball", back.Name);
     }
+
+    // ADR-242 made `Toy` a value, so the `Toy` cases above no longer carry a handle through `T`.
+    // These keep the handle path (a borrowed wrapper in, a fresh owned wrapper out) exercised on
+    // each route with an ordinary class.
+    [Fact]
+    public async Task FetchLaterAsync_HandleArgument_ComesBackAsTheSameKotlinObject()
+    {
+        using var oreo = new Cat("Oreo", 9);
+
+        using Cat back = await SuspendGenericSample.FetchLaterAsync(oreo);
+
+        Assert.Equal("Oreo", back.Name);
+        Assert.Equal(9, back.Lives);
+    }
+
+    [Fact]
+    public async Task PickLaterAsync_HandleArguments_ReturnsSecond()
+    {
+        using var oreo = new Cat("Oreo", 9);
+        using var mylo = new Cat("Mylo", 7);
+
+        using Cat picked = await SuspendGenericSample.PickLaterAsync(oreo, mylo);
+
+        Assert.Equal("Mylo", picked.Name);
+    }
+
+    [Fact]
+    public async Task ShuffleLaterAsync_HandleElements_ReturnsReversed()
+    {
+        using var oreo = new Cat("Oreo", 9);
+        using var mylo = new Cat("Mylo", 7);
+
+        IReadOnlyList<Cat> shuffled = await SuspendGenericSample.ShuffleLaterAsync(new[] { oreo, mylo });
+
+        Assert.Equal(2, shuffled.Count);
+        using Cat first = shuffled[0];
+        using Cat second = shuffled[1];
+        Assert.Equal("Mylo", first.Name);
+        Assert.Equal("Oreo", second.Name);
+    }
+
+    [Fact]
+    public async Task Courier_FerryAsync_HandleArgument_RoundTrips()
+    {
+        await using var courier = new Courier();
+        using var mylo = new Cat("Mylo", 7);
+
+        using Cat back = await courier.FerryAsync(mylo);
+
+        Assert.Equal("Mylo", back.Name);
+    }
+
+    [Fact]
+    public async Task Porch_LeaveAsync_HandleArgument_RoundTrips()
+    {
+        await using var porch = new Delivery.Porch("welcome mat");
+        using var oreo = new Cat("Oreo", 9);
+
+        using Cat back = await porch.LeaveAsync(oreo);
+
+        Assert.Equal("Oreo", back.Name);
+    }
 }

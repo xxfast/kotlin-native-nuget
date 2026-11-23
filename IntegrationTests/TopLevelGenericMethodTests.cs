@@ -103,4 +103,41 @@ public class TopLevelGenericMethodTests
         Assert.Equal("Mylo's Milo Mouse", first.Name);
         Assert.Equal("Oreo's Biscuit Ball", second.Name);
     }
+
+    // ADR-242 made `Toy` a value, so the cases above no longer carry a handle through `T`. These
+    // keep the handle path (a borrowed wrapper in, a fresh owned wrapper out) exercised with an
+    // ordinary class.
+    [Fact]
+    public void Describe_HandleArgument_ReachesKotlinAsTheSameObject()
+    {
+        using var oreo = new Cat("Oreo", 9);
+
+        Assert.EndsWith(": Cat", Descriptions.Describe(oreo));
+    }
+
+    [Fact]
+    public void Pick_HandleArguments_ReturnsSecond()
+    {
+        using var oreo = new Cat("Oreo", 9);
+        using var mylo = new Cat("Mylo", 7);
+
+        using Cat picked = Descriptions.Pick(oreo, mylo);
+
+        Assert.Equal("Mylo", picked.Name);
+    }
+
+    [Fact]
+    public void Shuffle_HandleElements_ReturnsTheSameObjectsReversed()
+    {
+        using var oreo = new Cat("Oreo", 9);
+        using var mylo = new Cat("Mylo", 7);
+
+        IReadOnlyList<Cat> shuffled = Descriptions.Shuffle(new[] { oreo, mylo });
+
+        Assert.Equal(2, shuffled.Count);
+        using Cat first = shuffled[0];
+        using Cat second = shuffled[1];
+        Assert.Equal("Mylo", first.Name);
+        Assert.Equal("Oreo", second.Name);
+    }
 }

@@ -310,6 +310,34 @@ public class PlushieValueTests
     }
 
     [Fact]
+    public void PlushieTagAndBox_AtAnErasedPosition_AndTheirObjectMembers()
+    {
+        PlushieTag tag = PlushieSample.MylosTag();
+        PlushieTag heavier = tag.Copy(weight: 1.0);
+        PlushieBox box = PlushieSample.OreosBox();
+        PlushieBox spared = box.Copy(spare: Bun());
+
+        // An erased `T`: each value is minted into an owned box on the way in and read back out.
+        Assert.StartsWith("PlushieTag(stitches=", TestLibrary.Cat.Descriptions.Describe(tag));
+        Assert.EndsWith(": PlushieTag", TestLibrary.Cat.Descriptions.Describe(tag));
+        Assert.Equal(tag, TestLibrary.Cat.Descriptions.Pick(heavier, tag));
+        Assert.EndsWith(": PlushieBox", TestLibrary.Cat.Descriptions.Describe(box));
+        Assert.Equal(spared, TestLibrary.Cat.Descriptions.Pick(box, spared));
+
+        Assert.StartsWith("PlushieTag(stitches=", tag.ToString());
+        Assert.Contains("nickname=null", tag.ToString());
+        Assert.StartsWith("PlushieBox(star=Plushie(name=Bun", box.ToString());
+        Assert.True(tag.Equals((object)PlushieSample.MylosTag()));
+        Assert.False(tag.Equals((object)box));
+        Assert.True(box.Equals((object)PlushieSample.OreosBox()));
+        Assert.False(box.Equals((object)tag));
+        Assert.True(tag != heavier);
+        Assert.False(tag != PlushieSample.MylosTag());
+        Assert.True(box != spared);
+        Assert.False(box != PlushieSample.OreosBox());
+    }
+
+    [Fact]
     public void PredicateExclusions_StayDisposableHandleClasses()
     {
         // One data class per ADR-242 exclusion, each obtained through Kotlin so the factory binds.
