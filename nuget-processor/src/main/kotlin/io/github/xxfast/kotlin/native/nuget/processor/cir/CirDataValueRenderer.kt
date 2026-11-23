@@ -24,6 +24,10 @@ private const val MINT_RECEIVER: String = "using NugetKotlinHandle _handle = Nug
 
 private const val HANDLE_ASSIGNMENT: String = "_handle = new NugetKotlinHandle(handle);"
 
+private const val OPTIONAL_PREFIX: String = "global::Kotlin.Native.Interop.KotlinOptional<"
+
+private const val GENERIC_T: String = "T"
+
 /**
  * ADR-242: `public sealed class X : IEquatable<X>`, no handle field, no `IDisposable`. The
  * components are get-only properties filled once, by the public constructor from its arguments
@@ -65,20 +69,42 @@ internal fun StringBuilder.renderDataValueClass(
   renderDllImport(constructorNativeImport(cls.libraryName, cls.nativePrefix, ctor), externs)
   val declarations: String = ctor.parameters.joinToString(", ") { it.declaration }
   val names: String = ctor.parameters.joinToString(", ") { it.name }
-  val componentReads: String =
-    value.components.joinToString(", ") { components.getValue(it.propertyName).identifierOf() }
+  // A defaulted parameter is a `KotlinOptional<T>` (or an absent-means-default `T?`), which only
+  // ever widens a component, so the mint wraps each component in it explicitly: `T` to
+  // `KotlinOptional<T>` is a user-defined conversion C# refuses from an interface type.
+  val optional: Boolean = ctor.parameters.any { it.type.startsWith(OPTIONAL_PREFIX) }
+  val componentReads: String = value.components.zip(ctor.parameters)
+    .joinToString(", ") { (component, parameter) ->
+      val read: String = components.getValue(component.propertyName).identifierOf()
+      if (parameter.type.startsWith(OPTIONAL_PREFIX)) "NugetSome($read)" else read
+    }
+  // With a defaulted parameter, Kotlin decides a component the caller left out, so the public
+  // constructor reads its components back from the instance it made rather than its arguments.
+  val readsBack: Boolean = ctor.parameters.any { it.defaultValue != null }
   renderDoc(ctor.doc, "        ")
-  appendLine("        public $name($declarations)")
-  appendLine("        {")
-  // Kotlin's constructor and `init` run here; the instance is released at once.
-  appendLine("            new NugetKotlinHandle(NugetCreate${ctor.nativeSuffix}($names)).Dispose();")
-  value.components.zip(ctor.parameters).forEach { (component, parameter) ->
-    val target: String = components.getValue(component.propertyName).identifierOf()
-    appendLine("            $target = ${component.defensiveCopy.replace("{0}", parameter.name)};")
+  if (readsBack) {
+    appendLine(
+      "        public $name($declarations) : " +
+          "this(new NugetKotlinHandle(NugetCreate${ctor.nativeSuffix}($names)), out _)",
+    )
+    appendLine("        {")
+  } else {
+    appendLine("        public $name($declarations)")
+    appendLine("        {")
+    // Kotlin's constructor and `init` run here; the instance is released at once.
+    appendLine("            new NugetKotlinHandle(NugetCreate${ctor.nativeSuffix}($names)).Dispose();")
+    value.components.zip(ctor.parameters).forEach { (component, parameter) ->
+      val target: String = components.getValue(component.propertyName).identifierOf()
+      appendLine("            $target = ${component.defensiveCopy.replace("{0}", parameter.name)};")
+    }
   }
   appendLine("        }")
   appendLine()
   renderCreate(ctor, declarations)
+  if (optional) {
+    appendLine("        private static $OPTIONAL_PREFIX$GENERIC_T> NugetSome<T>(T value) => value;")
+    appendLine()
+  }
 
   // A secondary constructor reads its components back from the instance Kotlin built.
   cls.secondaryConstructors.forEach { secondary ->

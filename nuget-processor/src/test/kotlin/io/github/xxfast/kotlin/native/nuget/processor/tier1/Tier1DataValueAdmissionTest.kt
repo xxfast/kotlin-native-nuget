@@ -242,6 +242,8 @@ class Tier1DataValueAdmissionTest {
 
       data class Crate(val star: Toy, val spare: Toy?, val stack: List<Toy>)
 
+      data class Tagged(val name: String, val notes: List<String>? = null, val count: Int = 1)
+
       fun favourite(): Toy = Toy("Bun", listOf("pink"), Mood.Happy, 3)
       fun echo(toy: Toy): Toy = toy
       fun find(name: String): Toy? = null
@@ -293,6 +295,9 @@ class Tier1DataValueAdmissionTest {
               Toy? onShelf = shelf.Spare;
               int put = shelf.Put(toy);
               IEquatable<Toy> equatable = toy;
+              Tagged defaulted = new Tagged("Oreo");
+              Tagged counted = new Tagged("Mylo", count: 2, notes: new[] { "sleepy" });
+              bool tagsEqual = defaulted == counted.Copy(name: "Oreo");
           }
       }
     """.trimIndent()
