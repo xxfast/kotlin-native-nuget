@@ -204,7 +204,8 @@ internal fun FileSpec.Builder.addStaticFlowExports(
       val qualified: String = owner.valueClass.kotlinQualifiedReference()
       ForwardStaticFlowCall(
         owner.stem,
-        if (owner.rewrap) ({ read -> "${owner.construction ?: qualified}($read)." }) else ({ read -> "$read." }),
+        if (owner.rewrap) ({ read -> "${owner.construction ?: qualified}($read)." })
+        else ({ read -> "$read." }),
         owner.underlying,
       )
     }

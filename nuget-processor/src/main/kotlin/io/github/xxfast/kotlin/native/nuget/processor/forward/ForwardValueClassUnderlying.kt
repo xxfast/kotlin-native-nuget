@@ -127,7 +127,8 @@ internal fun BridgeType.valueClassUnderlyingRole(): ForwardValueClassUnderlying 
  * real value, and a nullable underlying's null is one too, so neither is refused.
  */
 internal fun BridgeType.ValueClass.hasNullDefault(): Boolean =
-  underlying == BridgeType.String || underlying is BridgeType.ObjectHandle || underlying is BridgeType.DataValue ||
+  underlying == BridgeType.String || underlying is BridgeType.ObjectHandle ||
+      underlying is BridgeType.DataValue ||
       // ADR-220: a bound own `T` (`T : Any`) inside a generic value class is a non-null slot, but a
       // `struct`-constrained one (`T : Enum<T>`) defaults to a real value, its first entry.
       underlying is BridgeType.TypeParameter && !underlying.valueType

@@ -2110,7 +2110,9 @@ internal class ForwardCallablePlanner(
       val function: KSFunctionDeclaration = entry.node as? KSFunctionDeclaration ?: return@map entry
       val stem = "${prefix}_${function.simpleName.asString()}${entry.overloadTail(function)}"
       entry
-        .onStaticSuspendRoute(ForwardStaticSuspendOwner.ValueClass(stem, cls, receiver, rewrap = false))
+        .onStaticSuspendRoute(
+          ForwardStaticSuspendOwner.ValueClass(stem, cls, receiver, rewrap = false),
+        )
         .onStaticFlowRoute(ForwardStaticFlowOwner.ValueClass(stem, cls, receiver, rewrap = false))
     }
   }
@@ -4330,7 +4332,8 @@ internal class ForwardCallablePlanner(
     )
 
     // ADR-147: a `T` parameter rides the identical boxed StableRef wire a handle does.
-    is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface, is BridgeType.TypeParameter -> listOf(
+    is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface,
+    is BridgeType.TypeParameter -> listOf(
       ForwardAbiParameter(
         name = name,
         wireType = ForwardAbiWireType.POINTER,
@@ -4476,7 +4479,8 @@ internal class ForwardCallablePlanner(
       )
 
       // ADR-147: `T?` rides the null pointer on the same slot, ADR-083's shape.
-      is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface, is BridgeType.TypeParameter -> listOf(
+      is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface,
+      is BridgeType.TypeParameter -> listOf(
         ForwardAbiParameter(
           name = name,
           wireType = ForwardAbiWireType.POINTER,
@@ -4792,7 +4796,8 @@ internal class ForwardCallablePlanner(
     )
 
     // ADR-147: a `T` result is minted by `NugetHandles.retain` like any other handle.
-    is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface, is BridgeType.TypeParameter ->
+    is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface,
+    is BridgeType.TypeParameter ->
       handleResultShape(this)
     // ADR-160 amendment: the lambda is minted by `NugetHandles.retain` like any other handle, and
     // has a shape only when C# can spell every one of its type arguments (issue #111).
@@ -4867,7 +4872,8 @@ internal class ForwardCallablePlanner(
     )
 
     // ADR-147: `T?` out is the null pointer, then the handle.
-    is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface, is BridgeType.TypeParameter ->
+    is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface,
+    is BridgeType.TypeParameter ->
       handleResultShape(BridgeType.Nullable(type))
     // ADR-239: a nullable returned lambda is the null pointer, then the lambda handle.
     is BridgeType.ReturnedLambda ->
@@ -4912,7 +4918,8 @@ internal class ForwardCallablePlanner(
         ),
       )
 
-      is BridgeType.ObjectHandle, is BridgeType.DataValue -> handleResultShape(BridgeType.Nullable(type)).let { shape ->
+      is BridgeType.ObjectHandle,
+      is BridgeType.DataValue -> handleResultShape(BridgeType.Nullable(type)).let { shape ->
         shape.copy(
           transfer = shape.transfer.copy(conversion = ForwardConversion.UNBOX_VALUE_CLASS),
           helperRequirements = shape.helperRequirements + ForwardHelperRequirement.VALUE_CLASS,
@@ -5249,7 +5256,8 @@ internal class ForwardCallablePlanner(
    */
   private fun BridgeType.isOrdinaryValueClassUnderlying(): Boolean =
     this == BridgeType.String || this is BridgeType.Primitive ||
-        this is BridgeType.Enum || this is BridgeType.ObjectHandle || this is BridgeType.DataValue ||
+        this is BridgeType.Enum || this is BridgeType.ObjectHandle ||
+            this is BridgeType.DataValue ||
         isOwnTypeParameterUnderlying() ||
         // ADR-228: a nullable String underlying (`Nick(val name: String?)`), null in-band.
         (this is BridgeType.Nullable && type == BridgeType.String) ||
@@ -5415,7 +5423,8 @@ internal class ForwardCallablePlanner(
     // through NugetMarshal.HandleOf (ForwardCirPlanProjection.callArgument), which throws
     // NotSupportedException at runtime for a C#-implemented (non-Kotlin-backed) IFoo.
     // ADR-147: `NugetMarshal.Wrap<T>` boxes whatever `T` was instantiated to.
-    is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface, is BridgeType.TypeParameter -> null
+    is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface,
+    is BridgeType.TypeParameter -> null
     // ADR-088: admissible at a parameter position regardless of `implementable` — the incoming
     // GCHandle only needs `nuget{Iface}Value`, which every manifest-listed interface has. Only a
     // RETURN of a plain Kotlin implementation needs the mint.
@@ -5445,7 +5454,8 @@ internal class ForwardCallablePlanner(
     // nullability is orthogonal to its components' marshallability, same as the property setter
     // side of this same ADR.
     is BridgeType.Nullable -> when (val inner = type) {
-      BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Primitive,
+      BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.DataValue,
+      is BridgeType.Primitive,
       // ADR-147: `Wrap<T>` maps a null `T` to `IntPtr.Zero` already.
       is BridgeType.TypeParameter,
       // ADR-133: an interface parameter is already plannable non-null (ADR-040 sub-decision B,
@@ -5687,7 +5697,8 @@ internal class ForwardCallablePlanner(
   private fun BridgeType.underlyingWireType(): ForwardAbiWireType = when (this) {
     is BridgeType.Enum -> ForwardAbiWireType.INT32
     // ADR-220: a member's own `T` inside a generic value class is the bare-`T` box pointer.
-    is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.TypeParameter -> ForwardAbiWireType.POINTER
+    is BridgeType.ObjectHandle, is BridgeType.DataValue,
+    is BridgeType.TypeParameter -> ForwardAbiWireType.POINTER
     // ADR-228: a nullable String underlying is the nullable STRING slot.
     is BridgeType.Nullable -> when (type) {
       is BridgeType.TypeParameter -> ForwardAbiWireType.POINTER

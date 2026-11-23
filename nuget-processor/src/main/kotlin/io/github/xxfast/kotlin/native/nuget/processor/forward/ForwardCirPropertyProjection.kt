@@ -412,7 +412,8 @@ internal object ForwardCirPropertyProjection {
       BridgeType.String -> appendLine("            IntPtr nativeResult = $native($callArgs);")
       // ADR-147: a `T` getter reads the same boxed-handle wire.
       // ADR-151: and so does a ByteArray getter.
-      is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface, is BridgeType.Collection,
+      is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface,
+      is BridgeType.Collection,
       BridgeType.ByteArray, is BridgeType.TypeParameter,
       is BridgeType.ReturnedLambda ->
         appendLine("            IntPtr nativeResult = $native($callArgs);")
@@ -547,7 +548,8 @@ internal object ForwardCirPropertyProjection {
         append("            return NugetErrorNative.BuildException(nativeResult);")
 
       is BridgeType.ObjectHandle -> append("            return ${value.handleReconstruction()};")
-      is BridgeType.DataValue -> append("            return ${value.handle.handleReconstruction()};")
+      is BridgeType.DataValue ->
+        append("            return ${value.handle.handleReconstruction()};")
       // ADR-236: a delegate bound to the `KotlinFunc` (or sibling) that owns the lambda handle.
       is BridgeType.ReturnedLambda -> append(
         "            return new ${value.lambdaWrapperCsharpType()}(nativeResult).${value.lambdaInvokeMethod()};",
@@ -1052,7 +1054,8 @@ internal object ForwardCirPropertyProjection {
             else "$unwrapped._handle"
           // ADR-242: the transient instance [handleStep] minted from the struct.
           is BridgeType.DataValue ->
-            if (nullable) "${name.valueLocal()} ?? NugetKotlinHandle.Null" else "${name.valueLocal()}!"
+            if (nullable) "${name.valueLocal()} ?? NugetKotlinHandle.Null"
+            else "${name.valueLocal()}!"
 
           BridgeType.String -> if (nullable) "$name.HasValue ? $unwrapped : null" else unwrapped
 
@@ -1171,5 +1174,5 @@ private fun CirProperty.narrowedIf(narrows: Boolean, plan: ForwardPropertyPlan):
   return copy(type = narrowed)
 }
 
-/** ADR-242: the minted-handle local of a value-class-over-value setter value (`value.Value` too). */
+/** ADR-242: the minted-handle local of a value-class-over-value setter value. */
 private fun String.valueLocal(): String = replace(".", "") + "Handle"

@@ -182,7 +182,8 @@ internal fun KSTypeParameter.isUnrecoverableArmParameter(): Boolean {
  */
 internal fun BridgeType.isErasedTypeArgument(): Boolean = when (this) {
   is BridgeType.Primitive, BridgeType.Char, BridgeType.String, is BridgeType.Enum,
-  is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface, is BridgeType.TypeParameter,
+  is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface,
+  is BridgeType.TypeParameter,
     -> true
 
   // ADR-228: a generic one too, through the one box pair every instantiation shares.

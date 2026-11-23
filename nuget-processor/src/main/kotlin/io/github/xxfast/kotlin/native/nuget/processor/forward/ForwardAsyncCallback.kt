@@ -246,7 +246,7 @@ private fun BridgeType.asyncKotlinType(): String = when (this) {
   BridgeType.String -> "kotlin.String"
   is BridgeType.Enum -> qualifiedName
   is BridgeType.ObjectHandle -> kotlinReadType ?: qualifiedName
-  is BridgeType.DataValue -> with(handle) { kotlinReadType ?: qualifiedName }
+  is BridgeType.DataValue -> handle.kotlinReadType ?: handle.qualifiedName
   is BridgeType.Interface -> qualifiedName
   // A function type is contravariant in its parameters, so the widest spelling is assignable to
   // whichever of `Throwable` / `Exception` / `RuntimeException` the member declared.
@@ -391,7 +391,8 @@ private fun BridgeType.asyncScalarPayloadArgument(argument: String): String = wh
   is BridgeType.Enum -> "$argument.ordinal"
   BridgeType.String -> "NugetHandles.retain($argument as Any)"
   is BridgeType.Throwable -> "NugetHandles.retain(buildError($argument, ::nugetMappedType))"
-  is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface -> "NugetHandles.retain($argument)"
+  is BridgeType.ObjectHandle, is BridgeType.DataValue,
+  is BridgeType.Interface -> "NugetHandles.retain($argument)"
   // ADR-215 lane C: lane A's boxed payload; a null `T` mints nothing.
   is BridgeType.TypeParameter -> "NugetHandles.retain($argument)"
   is BridgeType.Nullable -> "$argument?.let { NugetHandles.retain(it) }"

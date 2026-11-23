@@ -639,7 +639,7 @@ internal class ForwardBridgeTypeClassifier(
   /** ADR-242: the memoised predicate verdict per class, `null` for a class that stays a handle. */
   private val dataValues: MutableMap<String, BridgeType.DataValue?> = mutableMapOf()
 
-  /** ADR-242: the classes whose predicate is being evaluated, so a cyclic type graph stays a handle. */
+  /** ADR-242: the classes being evaluated, so a cyclic type graph stays a handle. */
   private val dataValuesInProgress: MutableSet<String> = mutableSetOf()
 
   /**
@@ -666,7 +666,8 @@ internal class ForwardBridgeTypeClassifier(
     if (qualifiedName in dataValuesInProgress) return null
     dataValuesInProgress += qualifiedName
     val verdict: BridgeType.DataValue? = try {
-      dataValueComponents(declaration)?.let { components -> BridgeType.DataValue(handle, components) }
+      dataValueComponents(declaration)
+        ?.let { components -> BridgeType.DataValue(handle, components) }
     } finally {
       dataValuesInProgress -= qualifiedName
     }
@@ -1833,7 +1834,7 @@ internal class ForwardBridgeTypeClassifier(
     // ADR-199: a generic sealed base reads through its closed `Factories` entry or its
     // `NugetFactory<T>` slot (`FromHandle<Outcome<int>>`); it alone carries a [kotlinReadType].
     is BridgeType.ObjectHandle -> !viaDiscriminator || kotlinReadType != null
-    is BridgeType.DataValue -> with(handle) { !viaDiscriminator || kotlinReadType != null }
+    is BridgeType.DataValue -> !handle.viaDiscriminator || handle.kotlinReadType != null
     is BridgeType.Interface -> true
     // ADR-201 amendment: the ADR-107 envelope, read (and disposed) by `BuildException`.
     is BridgeType.Throwable -> true

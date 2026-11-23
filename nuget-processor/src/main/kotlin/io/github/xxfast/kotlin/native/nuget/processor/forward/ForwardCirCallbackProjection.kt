@@ -208,7 +208,8 @@ private fun forwardCallbackBody(
     // borrowed wrapper handle is retained through the generated `<lib>__retain_handle`.
     // ADR-231: an exported class result is the same owned box, read back at its class.
     // ADR-239: and so is every other erased result ([isBoxedCallbackResult]).
-    is BridgeType.TypeParameter, is BridgeType.Nullable, is BridgeType.ObjectHandle, is BridgeType.DataValue,
+    is BridgeType.TypeParameter, is BridgeType.Nullable, is BridgeType.ObjectHandle,
+    is BridgeType.DataValue,
     BridgeType.Char, BridgeType.Instant, BridgeType.Duration, BridgeType.Uuid, is BridgeType.Enum,
     is BridgeType.Interface, is BridgeType.ValueClass, is BridgeType.Collection,
     BridgeType.ByteArray ->
@@ -291,7 +292,7 @@ private fun BridgeType.callbackArgumentExpression(slot: String): String {
     is BridgeType.Enum -> "($csharpType)$slot"
     BridgeType.String -> "NugetMarshal.FromHandle<string>($slot)"
     is BridgeType.ObjectHandle -> "NugetMarshal.FromHandle<$csharpType>($slot)"
-    is BridgeType.DataValue -> with(handle) { "NugetMarshal.FromHandle<$csharpType>($slot)" }
+    is BridgeType.DataValue -> "NugetMarshal.FromHandle<${handle.csharpType}>($slot)"
     is BridgeType.Interface -> "NugetMarshal.FromHandle<$csharpType>($slot)"
     // ADR-201 amendment: the ADR-107 envelope; `BuildException` disposes it as it reads.
     is BridgeType.Throwable -> "NugetErrorNative.BuildException($slot)"
@@ -371,7 +372,8 @@ private fun BridgeType.wireSuffix(): String {
 
     is BridgeType.Enum -> "Int"
     BridgeType.String -> "String"
-    is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface, is BridgeType.Throwable,
+    is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface,
+    is BridgeType.Throwable,
     is BridgeType.TypeParameter, is BridgeType.Nullable -> "Object"
     BridgeType.Char,
     BridgeType.Instant,
@@ -475,7 +477,8 @@ internal fun BridgeType.AsyncCallback.forwardAsyncEnd(): CirAsyncEnd {
     // through `WrapOwned<T>` on the read, so Kotlin always owns the box it reads.
     // ADR-239: so does every other boxed result ([isBoxedCallbackResult]).
     is BridgeType.TypeParameter, is BridgeType.Nullable, BridgeType.Char, BridgeType.Instant,
-    BridgeType.Duration, BridgeType.Uuid, is BridgeType.Enum, is BridgeType.ObjectHandle, is BridgeType.DataValue,
+    BridgeType.Duration, BridgeType.Uuid, is BridgeType.Enum, is BridgeType.ObjectHandle,
+    is BridgeType.DataValue,
     is BridgeType.Interface, is BridgeType.ValueClass, is BridgeType.Collection,
     BridgeType.ByteArray ->
       CirAsyncEnd(name, "IntPtr", "NugetTasks.EndBoxed(a0)")

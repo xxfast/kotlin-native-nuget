@@ -92,7 +92,9 @@ internal fun StringBuilder.renderDataValueClass(
     appendLine("        public $name($declarations)")
     appendLine("        {")
     // Kotlin's constructor and `init` run here; the instance is released at once.
-    appendLine("            new NugetKotlinHandle(NugetCreate${ctor.nativeSuffix}($names)).Dispose();")
+    appendLine(
+      "            new NugetKotlinHandle(NugetCreate${ctor.nativeSuffix}($names)).Dispose();",
+    )
     value.components.zip(ctor.parameters).forEach { (component, parameter) ->
       val target: String = components.getValue(component.propertyName).identifierOf()
       appendLine("            $target = ${component.defensiveCopy.replace("{0}", parameter.name)};")
@@ -113,7 +115,8 @@ internal fun StringBuilder.renderDataValueClass(
     renderDoc(secondary.doc, "        ")
     appendLine(
       "        public $name(${secondary.parameters.joinToString(", ") { it.declaration }}) : " +
-          "this(new NugetKotlinHandle(NugetCreate${secondary.nativeSuffix}($secondaryNames)), out _)",
+          "this(new NugetKotlinHandle(NugetCreate${secondary.nativeSuffix}($secondaryNames)), " +
+          "out _)",
     )
     appendLine("        {")
     appendLine("        }")
@@ -149,17 +152,22 @@ internal fun StringBuilder.renderDataValueClass(
   )
   appendLine()
   // An erased position (`Wrap<T>`, `object`) takes the owned-mint branch, never `INugetHandle`.
-  appendLine("        IntPtr INugetGenericValue.NugetBox() => NugetCreate${ctor.nativeSuffix}($componentReads);")
+  appendLine(
+    "        IntPtr INugetGenericValue.NugetBox() => " +
+        "NugetCreate${ctor.nativeSuffix}($componentReads);",
+  )
   appendLine()
 
   // Components: plain get-only properties, each with its getter extern behind the handle read.
   value.components.forEach { component ->
     val prop: CirProperty = components.getValue(component.propertyName)
-    cls.propertyNativeImports(prop).forEach { nativeImport -> renderDllImport(nativeImport, externs) }
+    cls.propertyNativeImports(prop).forEach { native -> renderDllImport(native, externs) }
     renderDoc(prop.doc, "        ", generated = prop.remarks)
     appendLine("        public ${prop.type} ${prop.explicitName} { get; }")
     appendLine()
-    appendLine("        private static ${prop.type} NugetRead${prop.name}(NugetKotlinHandle _handle)")
+    appendLine(
+      "        private static ${prop.type} NugetRead${prop.name}(NugetKotlinHandle _handle)",
+    )
     val read: String =
       if (prop.getter.contains('\n')) prop.getter else "\n            return ${prop.getter};"
     appendLine("        {$read")
@@ -169,12 +177,13 @@ internal fun StringBuilder.renderDataValueClass(
 
   // Computed members: Kotlin's code on every call, over a transient instance.
   cls.properties.filter { it.name !in components }.forEach { prop ->
-    cls.propertyNativeImports(prop).forEach { nativeImport -> renderDllImport(nativeImport, externs) }
+    cls.propertyNativeImports(prop).forEach { native -> renderDllImport(native, externs) }
     renderProperty(if (prop.isStatic) prop else prop.withMintedReceiver())
   }
   cls.methods.forEach { method ->
     if (!method.isAbstract) renderDllImport(cls.methodNativeImport(method), externs)
-    append(buildString { renderMethod(method, name) }.let { if (method.isStatic) it else it.withMintedReceiverBody() })
+    val rendered: String = buildString { renderMethod(method, name) }
+    append(if (method.isStatic) rendered else rendered.withMintedReceiverBody())
   }
   cls.callbackMethods.forEach { member ->
     append(buildString { renderMember(member, name, externs) }.withMintedReceiverBody())
@@ -243,7 +252,9 @@ private fun StringBuilder.renderDataValueEquality(cls: CirClass, externs: CirExt
   appendLine("            return Native_Equals(_handle, otherHandle);")
   appendLine("        }")
   appendLine()
-  appendLine("        public override bool Equals(object? obj) => obj is $name other && Equals(other);")
+  appendLine(
+    "        public override bool Equals(object? obj) => obj is $name other && Equals(other);",
+  )
   appendLine()
   appendLine("        public override int GetHashCode()")
   appendLine("        {")
@@ -262,7 +273,9 @@ private fun StringBuilder.renderDataValueEquality(cls: CirClass, externs: CirExt
         "left is null ? right is null : left.Equals(right);",
   )
   appendLine()
-  appendLine("        public static bool operator !=($name? left, $name? right) => !(left == right);")
+  appendLine(
+    "        public static bool operator !=($name? left, $name? right) => !(left == right);",
+  )
 }
 
 private fun CirProperty.identifierOf(): String = explicitName

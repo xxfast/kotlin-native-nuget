@@ -31,7 +31,7 @@ internal fun BridgeType.forwardPublicCsharpType(): String = when (this) {
   // ADR-066: the classifier already computed the correctly-qualified public spelling (bare
   // simple name in this class's own namespace, `global::Namespace.Name` otherwise).
   is BridgeType.ObjectHandle -> csharpType
-  is BridgeType.DataValue -> with(handle) { csharpType }
+  is BridgeType.DataValue -> handle.csharpType
   // ADR-040: the public C# spelling is the projected interface (`IPet`), never the backing
   // wrapper class: the wrapper is a construction-only implementation detail.
   is BridgeType.Interface -> csharpType

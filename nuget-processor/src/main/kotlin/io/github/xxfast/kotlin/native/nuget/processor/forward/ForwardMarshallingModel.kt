@@ -1481,7 +1481,8 @@ internal object ForwardCallablePlanValidator {
       BridgeType.Uuid,
         // ADR-151: valid at every ordinary position, over the collection handle wire.
       BridgeType.ByteArray,
-      is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle, is BridgeType.DataValue,
+      is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,
+      is BridgeType.DataValue,
       is BridgeType.Interface, is BridgeType.BoundInterface,
         // ADR-147: a class type parameter, valid at every top-level position over the boxed wire.
       is BridgeType.TypeParameter,
@@ -1564,7 +1565,8 @@ internal object ForwardCallablePlanValidator {
     }
 
     // ADR-147: a `T` position crosses as the same StableRef handle an object does.
-    is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface, is BridgeType.TypeParameter,
+    is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface,
+    is BridgeType.TypeParameter,
     is BridgeType.ReturnedLambda,
       ->
       if (flow == ForwardFlow.INTO_KOTLIN) {
@@ -1719,7 +1721,8 @@ internal fun BridgeType.mentionsAny(): Boolean = when (this) {
   is BridgeType.AsyncCallback -> (parameters + result).any { it.mentionsAny() }
   is BridgeType.FlowSource -> element.mentionsAny()
   is BridgeType.ReturnedLambda -> typeArguments.any { it.mentionsAny() }
-  BridgeType.Unit, is BridgeType.Primitive, is BridgeType.ObjectHandle, is BridgeType.DataValue, BridgeType.Char,
+  BridgeType.Unit, is BridgeType.Primitive, is BridgeType.ObjectHandle, is BridgeType.DataValue,
+  BridgeType.Char,
   BridgeType.String, BridgeType.Instant, BridgeType.Duration, is BridgeType.Throwable,
   BridgeType.Uuid,
   is BridgeType.Enum, is BridgeType.Interface, is BridgeType.BoundInterface,

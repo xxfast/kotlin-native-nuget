@@ -129,7 +129,8 @@ internal object ForwardCirPlanProjection {
       boxParameter = boxParameter.csharpName,
       boxArguments = box.callArgument(boxParameter),
       // ADR-242: a value underlying is minted for the box export and released after it.
-      boxBody = if (type.underlying is BridgeType.DataValue) box.wireBoxBody("Native_NugetBox") else null,
+      boxBody =
+        if (type.underlying is BridgeType.DataValue) box.wireBoxBody("Native_NugetBox") else null,
       unboxResult = if (hasValue) {
         "new ${type.csharpType}(nativeResult ? " +
             "${type.underlying.hasValueSlotRead(requireNotNull(unboxValueOut).name)} : null)"
@@ -605,7 +606,8 @@ internal object ForwardCirPlanProjection {
           }
     val cleanup: List<String> =
       inputs.unwrapped().mapNotNull {
-        dataValueCleanup(it) ?: plan.bytesCleanup(it) ?: plan.collectionCleanup(it) ?: plan.interfaceCleanup(it)
+        dataValueCleanup(it) ?: plan.bytesCleanup(it) ?: plan.collectionCleanup(it)
+          ?: plan.interfaceCleanup(it)
           ?: plan.typeParameterCleanup(it)
           ?: asyncCleanup(it)
       }
@@ -1309,7 +1311,8 @@ internal object ForwardCirPlanProjection {
           listOf(managedExceptionTextCs(parameter.csharpName, nullable = true))
         is BridgeType.ObjectHandle ->
           listOf("${parameter.csharpName}?._handle ?? NugetKotlinHandle.Null")
-        is BridgeType.DataValue -> listOf("${parameter.csharpLocal}Handle ?? NugetKotlinHandle.Null")
+        is BridgeType.DataValue ->
+          listOf("${parameter.csharpLocal}Handle ?? NugetKotlinHandle.Null")
         is BridgeType.Interface -> listOf("${parameter.csharpLocal}Handle")
         // ADR-083/147: `Wrap<T>` already maps a null to `IntPtr.Zero`, so `T?` needs no guard.
         is BridgeType.TypeParameter -> listOf("${parameter.csharpLocal}Box")
@@ -2011,7 +2014,9 @@ internal object ForwardCirPlanProjection {
           body = checkedPointerBody(
             nativeName,
             callArguments,
-            exit.returning("nativeResult == IntPtr.Zero ? null : ${type.handle.handleReconstruction()}"),
+            exit.returning(
+              "nativeResult == IntPtr.Zero ? null : ${type.handle.handleReconstruction()}",
+            ),
             prelude,
             cleanup,
             exit,
@@ -2300,7 +2305,8 @@ internal object ForwardCirPlanProjection {
    * ordinal, "IntPtr" for String/ObjectHandle).
    */
   private fun valueClassUnderlyingWireCs(underlying: BridgeType): String = when (underlying) {
-    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.TypeParameter -> "IntPtr"
+    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.DataValue,
+    is BridgeType.TypeParameter -> "IntPtr"
     // ADR-220: an own `T?` inside a generic value class, the same null-pointer box wire.
     is BridgeType.Nullable ->
       // ADR-228: and a nullable String underlying (`Nick(val name: String?)`), null in-band.

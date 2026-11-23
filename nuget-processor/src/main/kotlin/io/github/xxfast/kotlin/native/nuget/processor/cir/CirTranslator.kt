@@ -595,7 +595,9 @@ internal fun translate(
         cls, context.libraryName, tracker, exportedTypes, logger, callableCatalog, context,
         classifier, interfaceDeclarationCatalog, expects, memberRegistry,
         companionAsyncMembers = companionAsync(cls) + companionFlow(cls),
-      ).let { translated -> translated.copy(companionMembers = translated.companionMembers + dataValueAsync(cls)) }
+      ).let { translated ->
+        translated.copy(companionMembers = translated.companionMembers + dataValueAsync(cls))
+      }
       addAll(withNestedDeclarations(translated, translateNestedOf(cls)))
     }
     enums.filter { isOwnedBy(owner, it) }.forEach { enum ->
@@ -658,7 +660,9 @@ internal fun translate(
         cls, context.libraryName, tracker, exportedTypes, logger, callableCatalog, context,
         classifier, interfaceDeclarationCatalog, expects, memberRegistry,
         companionAsyncMembers = companionAsync(cls) + companionFlow(cls),
-      ).let { translated -> translated.copy(companionMembers = translated.companionMembers + dataValueAsync(cls)) }
+      ).let { translated ->
+        translated.copy(companionMembers = translated.companionMembers + dataValueAsync(cls))
+      }
       withNestedDeclarations(translated, translateNestedOf(cls))
     } ?: return@forEach
     declarations.forEach { declaration ->

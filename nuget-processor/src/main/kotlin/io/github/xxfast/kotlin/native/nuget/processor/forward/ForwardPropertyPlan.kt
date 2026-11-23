@@ -290,7 +290,8 @@ internal data class ForwardPropertyPlan(
   private fun validateType(type: BridgeType) {
     when (type) {
       BridgeType.Unit, BridgeType.Char, BridgeType.String, BridgeType.Instant, BridgeType.Duration,
-      is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle, is BridgeType.DataValue,
+      is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,
+      is BridgeType.DataValue,
       is BridgeType.Interface, is BridgeType.Collection,
         // ADR-151: valid at a property, getter and setter alike, over the collection handle wire.
       BridgeType.ByteArray -> Unit

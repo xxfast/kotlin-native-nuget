@@ -191,7 +191,8 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(
     // `NugetMarshal.FromHandle<T>`.
     // ADR-151: a ByteArray result is the same mint; C# reads it back with `NugetMarshal.ReadBytes`.
     // ADR-160 amendment: a returned lambda is the same mint, wrapped C#-side by `new KotlinFunc`.
-    is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface, is BridgeType.Collection,
+    is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface,
+    is BridgeType.Collection,
     BridgeType.ByteArray, is BridgeType.TypeParameter, is BridgeType.ReturnedLambda -> {
       // ADR-081: a collection with a value-class component boxes a projected copy of itself, so the
       // per-element boxes carry the underlying rather than the value class.
@@ -503,7 +504,8 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
     // ADR-151: the byte array is retained whole, with no per-element projection.
     // ADR-239: so is a returned lambda.
     // An interface result is the same `NugetHandles.retain` mint the ordinary route uses.
-    is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface, is BridgeType.Collection,
+    is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface,
+    is BridgeType.Collection,
     BridgeType.ByteArray, is BridgeType.ReturnedLambda -> {
       // ADR-081: same projected-copy boxing as the ordinary result route above.
       val boxed: String =
@@ -1073,7 +1075,8 @@ private fun addNullableResult(
     // ADR-147: `T?` rides the same null-pointer-then-handle body.
     // ADR-239: and so does a nullable returned lambda.
     // ADR-151: and so does `ByteArray?`.
-    is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface, is BridgeType.Collection,
+    is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface,
+    is BridgeType.Collection,
     BridgeType.ByteArray, is BridgeType.TypeParameter, is BridgeType.ReturnedLambda -> {
       val boxed: String =
         if (type is BridgeType.Collection) {
@@ -2073,7 +2076,8 @@ private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): Typ
   BridgeType.String, BridgeType.Uuid, is BridgeType.Throwable -> kotlinType("String")
   // ADR-147: the boxed handle `NugetMarshal.Wrap<T>` minted.
   // ADR-151: the handle `NugetMarshal.CreateBytes` minted.
-  is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface, is BridgeType.Collection,
+  is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface,
+  is BridgeType.Collection,
   BridgeType.ByteArray, is BridgeType.TypeParameter -> cOpaquePointer
   // ADR-088: the transfer GCHandle the C# wrapper allocated.
   is BridgeType.BoundInterface -> cOpaquePointer
@@ -2091,7 +2095,8 @@ private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): Typ
   is BridgeType.Nullable -> when (val inner = type.type) {
     BridgeType.String, BridgeType.Uuid, is BridgeType.Throwable ->
       kotlinType("String").copy(nullable = true)
-    is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface, is BridgeType.Collection,
+    is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface,
+    is BridgeType.Collection,
     BridgeType.ByteArray, is BridgeType.TypeParameter,
     // ADR-238: the transfer GCHandle, or the null pointer for a null `IFeedable?`.
     is BridgeType.BoundInterface -> cOpaquePointer.copy(nullable = true)
@@ -2476,7 +2481,8 @@ internal fun loweredCallbackExpression(
         if (component.kind == PrimitiveKind.BOOLEAN) "Byte" else component.kind.simpleKotlinName()
 
       is BridgeType.Enum -> "Int"
-      BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface,
+      BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.DataValue,
+      is BridgeType.Interface,
       is BridgeType.Throwable -> "COpaquePointer?"
       // ADR-215: a `T` or `T?` rides the boxed `Object` wire, null for a null `T`.
       is BridgeType.TypeParameter -> "COpaquePointer?"
@@ -2686,8 +2692,10 @@ internal fun valueClassUnderlyingLowering(name: String, underlying: BridgeType):
     is BridgeType.Enum -> "${underlying.qualifiedName}.entries[$name]"
     is BridgeType.ObjectHandle ->
       "$name.asStableRef<${underlying.kotlinReadType ?: underlying.qualifiedName}>().get()"
-    is BridgeType.DataValue ->
-      "$name.asStableRef<${underlying.handle.kotlinReadType ?: underlying.handle.qualifiedName}>().get()"
+    is BridgeType.DataValue -> {
+      val handle: BridgeType.ObjectHandle = underlying.handle
+      "$name.asStableRef<${handle.kotlinReadType ?: handle.qualifiedName}>().get()"
+    }
     // ADR-220: a member's own `T` inside a generic value class, read like a bare `T`.
     is BridgeType.TypeParameter ->
       forwardBoundedRead(name, underlying.bounds(), nullable = false, underlying.typeVariable())
