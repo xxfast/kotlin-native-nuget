@@ -190,12 +190,14 @@ internal object ForwardCirPlanProjection {
     val prelude: List<ForwardCirHandleStep> =
       parameters.mapNotNull { parameter -> parameter.optionalPrelude() } +
         parameters.unwrapped().zip(parameters).mapNotNull { (parameter, declared) ->
-          bytesPrelude(parameter)
+          dataValuePrelude(parameter)
+            ?: bytesPrelude(parameter)
             ?: collectionPrelude(parameter, named = declared.csharpName)
             ?: interfacePrelude(parameter)
         }
     val cleanup: List<String> = parameters.unwrapped().mapNotNull { parameter ->
-      bytesCleanup(parameter) ?: collectionCleanup(parameter) ?: interfaceCleanup(parameter)
+      dataValueCleanup(parameter) ?: bytesCleanup(parameter) ?: collectionCleanup(parameter) ?:
+        interfaceCleanup(parameter)
     }
     val arguments: String = (parameters.flatMap { parameter -> inputArguments(parameter) } +
       "out IntPtr error").joinToString(", ")
@@ -588,7 +590,8 @@ internal object ForwardCirPlanProjection {
     val prelude: List<ForwardCirHandleStep> =
       inputs.mapNotNull { parameter -> parameter.optionalPrelude() } +
           inputs.unwrapped().zip(inputs).mapNotNull { (parameter, declared) ->
-            plan.bytesPrelude(parameter)
+            dataValuePrelude(parameter)
+              ?: plan.bytesPrelude(parameter)
               ?: plan.collectionPrelude(parameter, named = declared.csharpName)
               ?: plan.interfacePrelude(parameter)
               ?: plan.boundInterfacePrelude(parameter)
@@ -597,7 +600,7 @@ internal object ForwardCirPlanProjection {
           }
     val cleanup: List<String> =
       inputs.unwrapped().mapNotNull {
-        plan.bytesCleanup(it) ?: plan.collectionCleanup(it) ?: plan.interfaceCleanup(it)
+        dataValueCleanup(it) ?: plan.bytesCleanup(it) ?: plan.collectionCleanup(it) ?: plan.interfaceCleanup(it)
           ?: plan.typeParameterCleanup(it)
           ?: asyncCleanup(it)
       }
@@ -1214,7 +1217,9 @@ internal object ForwardCirPlanProjection {
       BridgeType.Instant -> listOf("${parameter.csharpName}.UtcTicks")
       // ADR-103: TimeSpan has one tick domain, so the plain `.Ticks` is unambiguous.
       BridgeType.Duration -> listOf("${parameter.csharpName}.Ticks")
-      is BridgeType.ObjectHandle, is BridgeType.DataValue -> listOf("${parameter.csharpName}._handle")
+      is BridgeType.ObjectHandle -> listOf("${parameter.csharpName}._handle")
+      // ADR-242: the transient instance [dataValuePrelude] minted; [dataValueCleanup] releases it.
+      is BridgeType.DataValue -> listOf("${parameter.csharpLocal}Handle!")
       // ADR-147: the box [typeParameterPrelude] minted; the `finally` disposes it when owned.
       is BridgeType.TypeParameter -> listOf("${parameter.csharpLocal}Box")
       // ADR-040 sub-decision B: an interface-typed parameter's public static type is `IFoo`, which
@@ -1295,8 +1300,9 @@ internal object ForwardCirPlanProjection {
         // ADR-201: a C# null crosses as the null string pointer.
         is BridgeType.Throwable ->
           listOf(managedExceptionTextCs(parameter.csharpName, nullable = true))
-        is BridgeType.ObjectHandle, is BridgeType.DataValue ->
+        is BridgeType.ObjectHandle ->
           listOf("${parameter.csharpName}?._handle ?? NugetKotlinHandle.Null")
+        is BridgeType.DataValue -> listOf("${parameter.csharpLocal}Handle ?? NugetKotlinHandle.Null")
         is BridgeType.Interface -> listOf("${parameter.csharpLocal}Handle")
         // ADR-083/147: `Wrap<T>` already maps a null to `IntPtr.Zero`, so `T?` needs no guard.
         is BridgeType.TypeParameter -> listOf("${parameter.csharpLocal}Box")
@@ -1478,6 +1484,28 @@ internal object ForwardCirPlanProjection {
   private fun ForwardCallablePlan.callbackCleanup(parameter: ForwardPublicParameter): String? {
     if (parameter.type !is BridgeType.Callback) return null
     return forwardCallbackCleanup(parameter.csharpLocal)
+  }
+
+  /**
+   * ADR-242: a value parameter mints a transient Kotlin instance from its components for the call,
+   * the Kotlin half reading it exactly as it reads any handle. [dataValueCleanup] releases it.
+   */
+  private fun dataValuePrelude(parameter: ForwardPublicParameter): ForwardCirHandleStep? {
+    if (parameter.type.unwrapNullable() !is BridgeType.DataValue) return null
+    val nullable: Boolean = parameter.type is BridgeType.Nullable
+    val name: String = parameter.csharpName
+    val local: String = parameter.csharpLocal
+    val minted: String = if (nullable) "$name?.NugetMint()" else "$name.NugetMint()"
+    return ForwardCirHandleStep(
+      flat = "NugetKotlinHandle? ${local}Handle = $minted;",
+      declarations = listOf("NugetKotlinHandle? ${local}Handle = null;"),
+      statement = "${local}Handle = $minted;",
+    )
+  }
+
+  private fun dataValueCleanup(parameter: ForwardPublicParameter): String? {
+    if (parameter.type.unwrapNullable() !is BridgeType.DataValue) return null
+    return "${parameter.csharpLocal}Handle?.Dispose();"
   }
 
   private fun ForwardCallablePlan.bytesPrelude(
@@ -1718,7 +1746,8 @@ internal object ForwardCirPlanProjection {
       parameters.mapNotNull { parameter -> callbackNullGuard(parameter) } +
           parameters.mapNotNull { parameter -> parameter.optionalPrelude() } +
           parameters.unwrapped().zip(parameters).mapNotNull { (parameter, declared) ->
-            bytesPrelude(parameter)
+            dataValuePrelude(parameter)
+              ?: bytesPrelude(parameter)
               ?: collectionPrelude(parameter, named = declared.csharpName)
               ?: interfacePrelude(parameter)
               ?: boundInterfacePrelude(parameter)
@@ -1728,7 +1757,8 @@ internal object ForwardCirPlanProjection {
           }
     val cleanup: List<String> =
       parameters.unwrapped().mapNotNull { parameter ->
-        bytesCleanup(parameter)
+        dataValueCleanup(parameter)
+          ?: bytesCleanup(parameter)
           ?: collectionCleanup(parameter)
           ?: interfaceCleanup(parameter)
           ?: typeParameterCleanup(parameter)

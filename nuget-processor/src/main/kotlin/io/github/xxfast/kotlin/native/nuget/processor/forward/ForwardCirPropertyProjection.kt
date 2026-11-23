@@ -796,6 +796,16 @@ internal object ForwardCirPropertyProjection {
   private fun BridgeType.handleStep(name: String): ForwardCirHandleStep? {
     val nullable: Boolean = this is BridgeType.Nullable
     return when (val value = unwrapNullable()) {
+      // ADR-242: a value mints a transient Kotlin instance for the call; the cleanup releases it.
+      is BridgeType.DataValue -> {
+        val minted: String = if (nullable) "$name?.NugetMint()" else "$name.NugetMint()"
+        ForwardCirHandleStep(
+          flat = "NugetKotlinHandle? ${name}Handle = $minted;",
+          declarations = listOf("NugetKotlinHandle? ${name}Handle = null;"),
+          statement = "${name}Handle = $minted;",
+        )
+      }
+
       is BridgeType.Interface -> {
         val helper: String = if (nullable) "HandleOfOrZero" else "HandleOf"
         ForwardCirHandleStep(
@@ -870,7 +880,7 @@ internal object ForwardCirPropertyProjection {
       is BridgeType.Throwable,
       BridgeType.Uuid,
       is BridgeType.Enum,
-      is BridgeType.ObjectHandle, is BridgeType.DataValue,
+      is BridgeType.ObjectHandle,
       is BridgeType.ValueClass,
       is BridgeType.Nullable,
       is BridgeType.Callback,
@@ -887,6 +897,8 @@ internal object ForwardCirPropertyProjection {
 
   private fun BridgeType.handleCleanup(name: String): String? =
     when (val value = unwrapNullable()) {
+      // ADR-242: the transient instance [handleStep] minted.
+      is BridgeType.DataValue -> "${name}Handle?.Dispose();"
       // ADR-218: only a box the setter minted is disposed; a borrowed wrapper is kept alive.
       is BridgeType.TypeParameter -> forwardCirTypeParameterCleanup(this, name, name)
       // Only a minted bridge handle is disposed: a Kotlin-backed wrapper's `_handle` belongs to
@@ -923,7 +935,7 @@ internal object ForwardCirPropertyProjection {
       is BridgeType.Throwable,
       BridgeType.Uuid,
       is BridgeType.Enum,
-      is BridgeType.ObjectHandle, is BridgeType.DataValue,
+      is BridgeType.ObjectHandle,
       is BridgeType.BoundInterface,
       is BridgeType.ValueClass,
       is BridgeType.Nullable,
@@ -964,9 +976,13 @@ internal object ForwardCirPropertyProjection {
       is BridgeType.Throwable ->
         managedExceptionTextCs(name, nullable = this is BridgeType.Nullable && !nonNull)
 
-      is BridgeType.ObjectHandle, is BridgeType.DataValue ->
+      is BridgeType.ObjectHandle ->
         if (this is BridgeType.Nullable) "$name?._handle ?? NugetKotlinHandle.Null"
         else "$name._handle"
+      // ADR-242: the transient instance [handleStep] minted.
+      is BridgeType.DataValue ->
+        if (this is BridgeType.Nullable) "${name}Handle ?? NugetKotlinHandle.Null"
+        else "${name}Handle!"
       // ADR-236: the wrapper's conversion hands back the lambda a getter's delegate is bound to, or
       // mints a Kotlin lambda over any other delegate.
       is BridgeType.ReturnedLambda -> {

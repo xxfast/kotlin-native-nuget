@@ -59,7 +59,8 @@ class Tier1NestedClassSkipTest {
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
     val csharp: String = result.generatedCSharp
     listOf(
-      "public class Nested",
+      // ADR-242: an all-scalar nested data class is a value, still nested.
+      "public sealed class Nested : IEquatable<Nested>",
       "public static class Single",
       "public class Unused",
       // Depth 2 was already in this fixture: `Quiet.Unused.Deeper`.

@@ -241,6 +241,8 @@ private fun StringBuilder.renderClassDeclaration(
   // ADR-116 amendment (2026-11-09, issue #613): every extern this body declares, and the enclosing
   // bases' it hides.
   val externs = CirExternScope(enclosing.hiddenBy(cls.hidesExternsOf))
+  // ADR-242: a scalar data class renders as a C# value, in its own renderer.
+  cls.dataValue?.let { value -> return renderDataValueClass(cls, value, externs, enclosing) }
   val abstract: String = if (cls.isAbstract) "abstract " else ""
   val sealedModifier: String = if (cls.isSealed) "sealed " else ""
 

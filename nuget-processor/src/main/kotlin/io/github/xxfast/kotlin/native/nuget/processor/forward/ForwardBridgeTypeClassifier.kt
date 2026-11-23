@@ -649,6 +649,11 @@ internal class ForwardBridgeTypeClassifier(
   internal fun isDataValue(declaration: KSClassDeclaration): Boolean {
     val qualifiedName: String = declaration.qualifiedName?.asString() ?: return false
     if (qualifiedName !in context.exportedObjectHandles) return false
+    // Ahead of `classify`, which records every generic instantiation it meets: a star-projected
+    // generic class would register an erased closed instantiation nothing else asked for.
+    if (Modifier.DATA !in declaration.modifiers || declaration.typeParameters.isNotEmpty()) {
+      return false
+    }
     return classify(declaration.asStarProjectedType()) is BridgeType.DataValue
   }
 

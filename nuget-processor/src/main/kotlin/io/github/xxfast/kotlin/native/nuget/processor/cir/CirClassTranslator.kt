@@ -1757,6 +1757,7 @@ internal fun translateClass(
     interfaces = interfaces,
     handleInterfaces = forwardHandleInterfaces(cls, exportedTypes, classifier),
     hidesExternsOf = cls.enclosingKeptBases(superClassDeclaration, exportedTypes),
+    dataValue = cirDataValue(cls, classifier),
     superClass = superClass,
     exceptionBase = cls.exceptionCsharpBase().takeIf { superClass == null },
     isException = cls.exceptionCsharpBase() != null,
