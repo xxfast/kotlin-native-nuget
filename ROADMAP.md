@@ -60,7 +60,6 @@ Complete.
 ## Phase 4: Rich type support
 
 - [ ] An unexported subclass of an exported class read at an `Any` position arrives as `KotlinObject` instead of its nearest exported type, because `ReadAny` looks the factory up by Kotlin name only (`cir/CirAnyRenderer.kt:79-86`, ADR-237). Verified by reading, predates ADR-241 ([details](docs/backlog/any-position-unexported-subclass-reads-as-kotlinobject.md)).
-- [ ] Reported, not verified: a Kotlin throw from a value class member has no error slot ([ADR-014](docs/adr/014-value-class-mapping.md)), so it would kill the host instead of crossing as an exception. Found while building ADR-241; [value-classes.md](docs/topics/value-classes.md) says a failing `init` on a `ByteArray`- or collection-backed struct receiver throws the usual exception, so the scope may be narrower.
 
 ## Phase 5: Exception handling
 
