@@ -293,7 +293,12 @@ internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
   appendLine()
 }
 
-internal fun StringBuilder.renderSyncErrorCheckMethod(method: CirMethod, className: String = "") {
+internal fun StringBuilder.renderSyncErrorCheckMethod(
+  method: CirMethod,
+  className: String = "",
+  // Issue #610: the disposed-receiver guard the body opens with, for a `_handle` receiver.
+  guard: String? = null,
+) {
   val visibility: String =
     method.memberHead(if (method.visibility == CirVisibility.PRIVATE) "private" else "public")
   val static: String = if (method.isStatic) "static " else ""
@@ -336,6 +341,7 @@ internal fun StringBuilder.renderSyncErrorCheckMethod(method: CirMethod, classNa
         "${method.explicitName}$generic($paramStr)$where"
   )
   appendLine("        {")
+  if (guard != null) appendLine("            $guard")
 
   when {
     isVoid -> appendLine("            ${nativeFuncName}($nativeCallArgs);")

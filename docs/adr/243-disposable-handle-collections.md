@@ -1,8 +1,8 @@
 # ADR-243: Forward, a returned list of handles is a `KotlinList<T>` that releases the elements it handed out when disposed, with `Keep` as the named opt-out
 
 ## Status
-Proposed (2026-11-09, GitHub issue #610). Research memo:
-[disposable-handle-collections](../research/roadmap/disposable-handle-collections.md).
+Accepted (2026-11-23). Proposed 2026-11-09, GitHub issue #610. Implemented and verified; the text
+below describes what shipped, with the corrections found during implementation folded in.
 
 ## Context
 
@@ -36,9 +36,9 @@ Constraints read from the repo:
   (`ForwardCirPlanProjection.kt:2495`), the property route (`ForwardCirPropertyProjection.kt:693-695`),
   the legacy suspend route (`ForwardLegacyRouteCollections.kt:1662`) and the bridge
   (`CirBridgeRenderer.kt:708`) goes through `componentCollectionRead`
-  (`ForwardCirCollectionComponents.kt:437`). **Verified** by grep. The one exception found is the
-  legacy companion-function route, which keeps its own inline loop (`CirClassTranslator.kt:4537-4542`,
-  **verified** by reading).
+  (`ForwardCirCollectionComponents.kt:437`). **Verified** by grep. The legacy companion-function
+  route's inline loop (`CirClassTranslator.kt:4537-4542`) is dead code: `translateCompanionFunction`
+  has no caller, so companion functions take the plan route and narrow like any other member.
 - **The public spelling is shared with parameters.** `forwardPublicCsharpType`
   (`ForwardCsharpTypes.kt:42`) spells `IReadOnlyList<E>` for every position, parameters included
   (93 call sites, **verified** by grep). The return spelling must change only at the return
@@ -152,7 +152,7 @@ IReadOnlyList<IPet> old = shelter.Pets;    // still compiles: KotlinList<IPet> i
 Generated shape (sketch, per package, next to `KotlinFlow<T>` in `CirFlowRenderer.kt:84`'s family):
 
 ```csharp
-public sealed class KotlinList<T> : ReadOnlyCollection<T>, IDisposable
+public sealed class KotlinList<T> : ReadOnlyCollection<T>, IDisposable, INugetOwnedList
 {
     private HashSet<object>? _kept;
     private int _disposed;
@@ -178,33 +178,44 @@ public sealed class KotlinList<T> : ReadOnlyCollection<T>, IDisposable
 }
 ```
 
-`ReleaseAbandoned` (`CirMarshalRenderer.kt:852-866`) already disposes only `INugetHandle` items,
-skips strings and `byte[]`, and recurses into nested collections and both map halves. It gains one
-first branch: a nested `KotlinList` is released through its own `Dispose()`, so a `Keep` on an inner
-list is honoured.
+The shipped class also implements an internal marker, `INugetOwnedList`. `ReleaseAbandoned`
+(`CirMarshalRenderer.kt:852-866`) already disposes only `INugetHandle` items, skips strings and
+`byte[]`, and recurses into nested collections and both map halves. It gains one first branch: a
+nested `INugetOwnedList` is released through its own `Dispose()`, so a `Keep` on an inner list is
+honoured.
+
+`NugetMarshal.ReadOwnedList<T>` is `internal`: the issue #126 rule bars a public member that exposes
+`IntPtr`, and consumers never call it.
 
 `Keep` is by element reference, not index, because the same rule then serves a future `KotlinSet` and
 dictionary value/key, and because elements are distinct wrapper objects (no identity cache, see
-Context), so a reference names exactly one slot. `ReferenceEqualityComparer` is .NET 5+, and the
-generated code targets net8.0 and later (**inferred**, check the consumer TFM floor when
-implementing).
+Context), so a reference names exactly one slot. `ReferenceEqualityComparer` is .NET 5+; the
+consumer floor is net10.0, so it is always available.
 
 ### Where the static type changes (v1)
 
 The member's static return type becomes `KotlinList<E>` (or `KotlinList<E>?`, since `using` accepts
 `null`) when all of these hold:
 
-- the return is a Kotlin `List<E>` (read-only kind) at a direct return position: property getter,
-  method, top-level function, `object`/companion member, extension function;
+- the return is a Kotlin `List<E>` (read-only kind) at a direct return position: `val` property
+  getter, method, top-level function, `object`/companion member, extension function;
 - the member is not `isOverride`, `isVirtual` or `isAbstract`, and its owner is not an interface
-  (`ForwardPublicSignature`, `ForwardMarshallingModel.kt:964-972`);
+  (`ForwardPublicSignature`, `ForwardMarshallingModel.kt:964-972`). That was not enough alone: a
+  sealed arm implementing an interface member carries no override flag and hit CS0738, so the plan
+  also carries `overridesNothing`, and the member narrows only when it is true;
+- the property is not a `var`: one C# property type serves the getter and the setter, so a `var`
+  keeps `IReadOnlyList<E>` (the getter still returns a `KotlinList<E>` at run time);
 - `E` carries a handle: `ObjectHandle`, `Interface`, a sealed or abstract base, a generic class
-  instantiation, a value class over one of those, or a nested collection whose components do
-  (computed from `BridgeType` with an exhaustive `when`, no `else`, per CLAUDE.md).
+  instantiation, or a nested collection whose components do (computed from `BridgeType` with an
+  exhaustive `when`, no `else`, per CLAUDE.md). A value class is excluded: its C# side is a struct
+  that `Dispose` cannot reach (**inferred** from reading, not run).
+
+A nested list narrows only the outer type: `List<List<Kitten>>` is `KotlinList<IReadOnlyList<Kitten>>`,
+and the inner lists are `KotlinList<Kitten>` at run time.
 
 The runtime object is a `KotlinList<E>` wherever the element carries a handle, including the
 positions whose static type stays `IReadOnlyList<E>` (nested inner lists, suspend results, Flow
-elements, interface and virtual members), because the change is made once in
+elements, interface and virtual members, `var` properties), because the change is made once in
 `componentCollectionRead`'s `LIST` branch (`ForwardCirCollectionComponents.kt:458`). A list of
 strings, primitives, enums or other handle-free elements is unchanged: the type says the collection
 owns something.
@@ -222,71 +233,93 @@ collection, or the finalizer stays a single release. No finalizer on `KotlinList
 
 - Eager read, list handle released inside `ReadList`, `.AsReadOnly()` outer wrap: **verified** by
   reading.
-- Every outer list read except the legacy companion route funnels through `componentCollectionRead`:
-  **verified** by grep.
+- Every outer list read funnels through `componentCollectionRead`: **verified** by grep, with the
+  dead companion loop excluded.
 - Element wrappers are always fresh for Kotlin-backed elements; C#-implemented originals are not
   `INugetHandle`: **verified** by reading (`CirMarshalRenderer.kt:840-846`, LeakTests row 4).
 - `ReadOnlyCollection<T>` is unsealed with a public `IList<T>` constructor and protected `Items`:
   **verified** by reading the dotnet/runtime source; **not compiled**.
 - Source compatibility of the narrower return (`IReadOnlyList<E> x = shelter.Pets;`, `var`, LINQ,
-  `foreach`, passing to an `IEnumerable<E>` parameter) compiles: **inferred** from C# conversion
-  rules (implicit reference conversion to a base interface). **Not spiked**: no `dotnet` SDK in the
-  research session. The first implementation step must compile these shapes in a Tier 1 strict
-  compile cell (`-Pnuget.strictCompileCheck=true`) or a scratch project.
-- Using a released element: **NOT VERIFIED, load-bearing.** ADR-187 verified that a zero-valued,
-  never-closed `SafeHandle` argument passes through to native as zero
-  (`docs/adr/187-forward-finalizer-contract.md:88`). The plan-route member body passes `_handle`
-  with no `IsInvalid` check (`ForwardCirPlanProjection.kt:706-709`, **verified** by reading; the only
-  `IsInvalid` checks found are on StateFlow, listener and flow members), and the Kotlin
-  `equals`/`hashCode`/`toString` exports call `handle.asStableRef<T>().get()` with no null guard
-  (`ClassExports.kt:578-602`, **verified** by reading). What a zero receiver does in Kotlin/Native
-  (`ObjectDisposedException`, a mapped `NullPointerException`, or a process crash) is **inferred
-  to be a native crash** and nobody has run it. If it crashes, a consumer who forgets `Keep` turns a
-  leak into a process abort, which the issue names as worse than today. The implementation must
-  therefore start with the red test
-  `Pets_ElementUsedAfterCollectionDispose_ThrowsObjectDisposedException`; if it does not throw
-  `ObjectDisposedException`, a disposed-receiver guard on wrapper members
-  (`if (_handle.IsInvalid) throw new ObjectDisposedException(nameof(Pet));`) is a prerequisite and
-  lands first. That guard is the same problem today for a caller who disposes an element and keeps
-  using it, so it is a fix in its own right.
+  `foreach`, passing to an `IEnumerable<E>` parameter): **verified** by compiling the consumer
+  tests and the Tier 1 strict compile cell.
+- Using a released element: **verified**, and it was the load-bearing gap. A disposed wrapper's
+  zero handle reached Kotlin, and a data class's `Equals`/`GetHashCode`/`ToString` overrides aborted
+  the process while other members threw `KotlinNullReferenceException`. The prerequisite shipped
+  first: every planned wrapper member, and a data class's `Equals`, `GetHashCode` and `ToString`
+  (receiver, and the `Equals` argument), now throws `ObjectDisposedException` on a disposed
+  receiver. A plain class or interface wrapper's `object` members stay the managed defaults.
 - NativeAOT: the type is a closed generic over reference types with no reflection, and
   `ReleaseAbandoned` uses only `is` tests: **inferred** AOT-safe. `AotLeakTests` compiles the
   LeakTests sources (CLAUDE.md), so the new rows run under NativeAOT through `scripts/verify.sh`.
 
 ## Consequences
 
-- **Source change, with a migration note required.** Members matching the v1 rule narrow from
+- **Source change, with a migration note.** Members matching the v1 rule narrow from
   `IReadOnlyList<E>` to `KotlinList<E>`. Explicitly typed `IReadOnlyList<E>` locals, `var`,
-  `foreach`, LINQ and argument passing keep compiling (**inferred**, to be compiled first). What can
-  break: a C# method group or delegate typed `Func<IReadOnlyList<E>>` bound to the member is fine
-  (return covariance for delegates of reference types, **inferred**), but code that relies on the
-  member's exact `MethodInfo.ReturnType` via reflection sees the new type. Binary compatibility is
-  broken for prebuilt consumers of a republished package (the return type is part of the member
-  signature); this ships in a version bump and the topic page and release notes carry the
-  migration note.
-- **Behaviour change only for opt-in callers.** No caller who does not dispose the collection sees a
-  difference. Generic code that disposes any `IDisposable` it is handed (a DI container that owns a
-  registered instance, for example) will now release the elements; noted in the migration text.
+  `foreach`, LINQ and argument passing keep compiling. A method group or delegate typed
+  `Func<IReadOnlyList<E>>` bound to the member is fine (return covariance for delegates of reference
+  types). Code that relies on the member's exact `MethodInfo.ReturnType` sees the new type. See
+  Breaking below; the collections topic page carries the consumer migration note.
+- **Opt-in release, universal disposal guard.** No caller who does not dispose the collection sees
+  the collection release anything. The disposed-receiver guard is not opt-in: every consumer who
+  used a disposed wrapper now gets `ObjectDisposedException` instead of a
+  `KotlinNullReferenceException` or an aborted process. Generic code that disposes any
+  `IDisposable` it is handed (a DI container that owns a registered instance, for example) will now
+  release the elements.
 - **Throw path.** `ReadOwnedList` keeps `ReadList`'s `catch { DisposeMaterialized(result); throw; }`,
-  so a half-built list still releases what it built.
-- **Sibling Proposed ADRs.** [ADR-242](242-scalar-data-classes-as-values.md) adds a `DataValue`
+  so a half-built list releases what it built. `DisposeMaterialized` also releases the nested sets
+  and maps it already built, not only nested lists.
+- **Sibling ADRs.** [ADR-242](242-scalar-data-classes-as-values.md) adds a `DataValue`
   `BridgeType` variant that carries no handle, so `List<Toy>` stays `IReadOnlyList<Toy>`; whichever
   lands second adds that arm to the handle-carrying `when`. [ADR-241](241-exported-kotlin-exception-types.md)
   exception elements read through `NugetErrorNative.BuildException` and carry no handle either.
-- **Leak rows.** Two new `LiveHandleTests` rows that measure without `Settle` while every element is
-  kept reachable (see the memo's sample); both run again under `AotLeakTests`.
+- **Leak rows.** Six `LiveHandleTests` rows (`HandleListReturn_*`): the first two and the nested row
+  measure without `Settle` while every element is kept reachable, the others cover a throwing
+  element factory (flat and nested) and an undisposed collection returning to baseline. All run
+  again under `AotLeakTests`.
 
-Deferred (each keeps `IReadOnlyList<E>` / its current type statically, with a `KotlinList<E>` at
-runtime where the element is a list):
+## Breaking
+
+Source-compatible for ordinary use, binary-incompatible for prebuilt consumers.
+
+- **A narrowed member returns `KotlinList<E>`, not `IReadOnlyList<E>`** (property getters, methods,
+  top-level functions, `object` and companion members and extensions whose element carries a
+  handle, except `var` properties and overridable members). Affects every consumer of such a
+  member. Source: `IReadOnlyList<E> x = ...`, `var`, `foreach`, LINQ and argument passing still
+  compile; code that compares `MethodInfo.ReturnType` fails. Binary: the return type is part of the
+  member signature, so a consumer built against the previous package throws
+  `MissingMethodException` until rebuilt.
+- **A disposed receiver throws `ObjectDisposedException`**, not `KotlinNullReferenceException`,
+  including the `TryX` variants (behaviour). Affects every `catch (KotlinNullReferenceException)`
+  that guarded a use after dispose, and a data class's `Equals`, `GetHashCode` and `ToString`, which
+  used to abort the process. Update the catch sites.
+- **A read that throws partway also releases nested sets and maps it already built** (behaviour).
+  Observable only as fewer leaked wrappers after a failed read; no code change needed.
+
+## Deferred
+
+Each keeps today's type statically, with a `KotlinList<E>` at run time where the element is a list:
 
 - `Set<E>` and `Map<K, V>` (`KotlinSet<T>` over `HashSet<T>`, `KotlinDictionary<TKey, TValue>` over
   `Dictionary<TKey, TValue>`, same `Keep`): unchecked by the issue; the read helpers are shaped the
-  same way (`CirMarshalRenderer.kt:798-835`).
+  same way (`CirMarshalRenderer.kt:798-835`). `suspend` and `Flow` returns of handle elements are
+  deferred with them (decided at the gate, 2026-11-09).
 - `MutableList<E>` returns (`IList<E>` over a `List<T>` copy): the caller may add its own wrappers,
   which the collection must then not release; needs its own ownership rule.
 - `suspend` returns (`Task<IReadOnlyList<E>>`): `Task<T>` is invariant, so narrowing to
   `Task<KotlinList<E>>` breaks explicitly typed `Task<IReadOnlyList<E>>` locals (**inferred**).
 - `Flow<List<E>>` / `StateFlow<List<E>>` elements, lambda results, `T`-typed (`List<T>`) generic
-  returns, interface, abstract, open and override members.
-- The legacy companion-function route's inline loop (`CirClassTranslator.kt:4537-4542`).
-- A `KeepAll()` / ownership transfer of the whole list.
+  returns, interface, abstract, open and override members, and nested inner lists' static type.
+- Lists of value-class elements and `var` properties (one C# type serves the getter and the setter).
+- A `KeepAll()` / ownership transfer of the whole list, and a `Releasing()` extension for the
+  positions that stay `IReadOnlyList<E>`.
+
+## Discovered, not fixed
+
+Both are **inferred**, not run.
+
+- A disposed wrapper passed as an argument hands the zero handle to Kotlin
+  (`ForwardCirPlanProjection.kt:1209`, `:1254`, `ForwardCirPropertyProjection.kt:956`); a nullable
+  argument (`ForwardCirPlanProjection.kt:1291`) probably reads as `null` silently.
+- `KotlinFunc`/`KotlinAction` `Invoke*` after dispose has no guard (`CirFunctionRenderer.kt:49` and
+  nearby), probably aborting the process.

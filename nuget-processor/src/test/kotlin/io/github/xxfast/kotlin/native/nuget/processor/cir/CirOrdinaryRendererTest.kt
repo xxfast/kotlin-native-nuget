@@ -249,10 +249,12 @@ class CirOrdinaryRendererTest {
     assertFalse(rendered.contains("Native_Copy"), "no unplanned copy import; rendered=$rendered")
     assertContains(rendered, "public override bool Equals(object? obj)")
     assertContains(rendered, "Native_Equals(_handle, other._handle)")
-    assertContains(rendered, "public override int GetHashCode() => Native_HashCode(_handle);")
+    // Issue #610: none of the three exports has an error slot, so each opens with the guard.
+    val guard = "if (_handle.IsInvalid) throw new ObjectDisposedException(nameof(Point));"
+    assertContains(rendered, "public override int GetHashCode()\n        {\n            $guard\n            return Native_HashCode(_handle);")
     assertContains(
       rendered,
-      "public override string ToString() => Marshal.PtrToStringUTF8(Native_ToString(_handle))!;",
+      "public override string ToString()\n        {\n            $guard\n            return Marshal.PtrToStringUTF8(Native_ToString(_handle))!;",
     )
   }
 

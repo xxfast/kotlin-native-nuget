@@ -24,6 +24,9 @@ internal object ForwardCirPropertyProjection {
     // ROADMAP line 28, case D: the C# spellings of `plan.explicitSetterInterfaces`, spelled by the
     // translator (it holds the KSP supertypes and the namespace mapping; the plan holds neither).
     explicitSetterInterfaces: List<String> = emptyList(),
+    // Issue #610: the declaration overrides nothing in Kotlin and is not an interface member
+    // (`overridesNothing`), so its getter may narrow to `KotlinList<E>`.
+    overridesNothing: Boolean = false,
   ): CirProperty {
     require(plan.position == ForwardPropertyPosition.CLASS) { "Expected class property plan" }
     val projected: CirProperty = property(
@@ -33,7 +36,8 @@ internal object ForwardCirPropertyProjection {
       isOverride = isOverride,
       isVirtual = isVirtual,
       isAbstract = isAbstract,
-    )
+    ).copy(guardsReceiver = true)
+      .narrowedIf(overridesNothing && !isOverride && !isVirtual && !isAbstract, plan)
     // A setter planned ONLY for an explicit implementation must never reach the public property:
     // with no interface spelled (a caller that does not render case D, or an interface the base
     // list could not spell either), it renders get-only, exactly as before case D existed.
@@ -63,7 +67,8 @@ internal object ForwardCirPropertyProjection {
       "Expected static property plan"
     }
     val imports: List<CirDllImport> = plan.calls().map { call -> nativeImport(call, libraryName, emptyList(), plan) }
-    return imports + property(plan, receiver = "", isStatic = true)
+    // Issue #610: a static property is never implemented or overridden from C#.
+    return imports + property(plan, receiver = "", isStatic = true).narrowedIf(true, plan)
   }
 
   fun extension(plan: ForwardPropertyPlan, libraryName: String): List<CirMember> {
@@ -119,7 +124,8 @@ internal object ForwardCirPropertyProjection {
     val property = CirExtensionProperty(
       receiverType = publicReceiver,
       name = plan.publicName,
-      type = plan.publicCsharpType(),
+      // Issue #610: an extension property is static, so nothing overrides it.
+      type = plan.narrowedType() ?: plan.publicCsharpType(),
       getter = getterBody(plan, receiverArgument, receiverStep, receiverCleanup),
       setter = plan.setter?.let {
         setterBody(plan, receiverArgument, receiverStep, receiverCleanup)
@@ -1105,4 +1111,21 @@ internal object ForwardCirPropertyProjection {
     ForwardAbiWireType.STRING -> "string"; ForwardAbiWireType.POINTER -> "IntPtr"
     ForwardAbiWireType.UNKNOWN -> error("Unknown property wire type")
   }
+}
+
+/**
+ * Issue #610 / ADR-243: a `val`'s `KotlinList<E>` spelling, or null when it keeps its shipped one.
+ * A `var` keeps `IReadOnlyList<E>`: one C# property type serves the setter too, which must keep
+ * accepting any `IReadOnlyList<E>`.
+ */
+private fun ForwardPropertyPlan.narrowedType(): String? {
+  if (setter != null || view != null) return null
+  val narrowed: String = type.forwardReturnCsharpType()
+  return narrowed.takeIf { spelling -> spelling != type.forwardPublicCsharpType() }
+}
+
+/** Issue #610: this property spelled `KotlinList<E>` when [narrows] and [plan] owns a handle list. */
+private fun CirProperty.narrowedIf(narrows: Boolean, plan: ForwardPropertyPlan): CirProperty {
+  val narrowed: String = plan.narrowedType()?.takeIf { narrows } ?: return this
+  return copy(type = narrowed)
 }

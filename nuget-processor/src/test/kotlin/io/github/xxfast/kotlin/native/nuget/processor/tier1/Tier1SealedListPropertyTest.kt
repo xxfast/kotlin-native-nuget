@@ -39,10 +39,11 @@ class Tier1SealedListPropertyTest {
     assertContains(
       result.generatedCSharp,
       """
-      |            public IReadOnlyList<global::Interop.Item> Items
+      |            public KotlinList<global::Interop.Item> Items
       |            {
       |                get
       |                {
+      |                    if (_handle.IsInvalid) throw new ObjectDisposedException(nameof(Loaded));
       |                    IntPtr nativeResult = Native_Get_items(_handle, out IntPtr error);
       |                    if (error != IntPtr.Zero)
       |                    {
@@ -52,7 +53,7 @@ class Tier1SealedListPropertyTest {
     )
     assertContains(
       result.generatedCSharp,
-      "static h1 => NugetMarshal.FromHandle<global::Interop.Item>(h1)).AsReadOnly();",
+      "static h1 => NugetMarshal.FromHandle<global::Interop.Item>(h1));",
     )
   }
 
@@ -86,6 +87,7 @@ class Tier1SealedListPropertyTest {
       |            {
       |                get
       |                {
+      |                    if (_handle.IsInvalid) throw new ObjectDisposedException(nameof(Loaded));
       |                    bool nativeResult = Native_Get_refreshing(_handle, out IntPtr error);
       |                    if (error != IntPtr.Zero)
       |                    {

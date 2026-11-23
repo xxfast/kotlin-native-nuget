@@ -111,19 +111,19 @@ internal fun StringBuilder.renderSealedBase(sealed: CirSealedClass) {
     // ADR-175: a base Flow/StateFlow property takes the flow extern block, as on an arm.
     if (property.isFlow) {
       renderFlowPropertyNativeImports(sealed.libraryName, sealed.nativePrefix, property)
-      renderProperty(property)
+      renderProperty(property, "${sealed.name}$typeArguments")
       appendLine()
       continue
     }
     propertyNativeImports(sealed.libraryName, sealed.nativePrefix, property)
       .forEach { nativeImport -> renderDllImport(nativeImport) }
-    renderProperty(property)
+    renderProperty(property, "${sealed.name}$typeArguments")
     appendLine()
   }
 
   for (method in sealed.methods) {
     renderDllImport(methodNativeImport(sealed.libraryName, sealed.nativePrefix, method))
-    renderMethod(method, sealed.name)
+    renderMethod(method, "${sealed.name}$typeArguments")
   }
 
   // ADR-175: the base's own suspend and Flow members, dispatched by the same `renderMember` an
@@ -352,7 +352,7 @@ internal fun sealedSubclassBlock(
           renderFlowPropertyNativeImports(sealed.libraryName, subclass.nativePrefix, prop)
         }.indentNestedBody(),
       )
-      renderSealedSubclassProperty(prop)
+      renderSealedSubclassProperty(prop, "${subclass.name}$armArguments")
       appendLine()
       continue
     }
@@ -373,7 +373,7 @@ internal fun sealedSubclassBlock(
         }.indentNestedBody(),
       )
     }
-    renderSealedSubclassProperty(prop)
+    renderSealedSubclassProperty(prop, "${subclass.name}$armArguments")
     appendLine()
   }
 
@@ -392,7 +392,7 @@ internal fun sealedSubclassBlock(
         }
         // `renderMethod` already closes with its own blank separator line, unlike the property
         // renderer, so this loop adds none.
-        renderMethod(method, subclass.name)
+        renderMethod(method, "${subclass.name}$armArguments")
       }.indentNestedBody(),
     )
   }
@@ -423,7 +423,7 @@ internal fun sealedSubclassBlock(
   // same `renderMember` and re-indented the same way. The extern rides the member, so nothing here
   // composes an entry point of its own.
   subclass.callbackMembers.forEach { member ->
-    append(buildString { renderMember(member, subclass.name) }.indentNestedBody())
+    append(buildString { renderMember(member, "${subclass.name}$armArguments") }.indentNestedBody())
   }
 
   // Issue #54: a `data object` gets the same generated members a `data class` gets, and Kotlin
@@ -612,18 +612,8 @@ internal fun StringBuilder.renderSealedSubclassDataMethods(
   appendLine("            [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${nativePrefix}_tostring\")]")
   appendLine("            private static extern IntPtr Native_ToString(NugetKotlinHandle handle);")
   appendLine()
-  appendLine("            public override bool Equals(object? obj)")
-  appendLine("            {")
-  appendLine("                if (obj is $subclassName other) return Native_Equals(_handle, other._handle);")
-  appendLine("                return false;")
-  appendLine("            }")
-  appendLine()
-  appendLine("            public override int GetHashCode() => Native_HashCode(_handle);")
-  appendLine()
-  if (withToString) {
-    appendLine("            public override string ToString() => Marshal.PtrToStringUTF8(Native_ToString(_handle))!;")
-    appendLine()
-  }
+  // Issue #610: the arm's own applied spelling, which `nameof(...)` binds to inside a generic arm.
+  appendDataClassOverrides(subclassName, subclassName, "            ", withToString)
 }
 
 /**
@@ -637,12 +627,14 @@ internal fun StringBuilder.renderSealedSubclassDataMethods(
  * forked body in the translator. ADR-111: a `var` on a sealed subclass reaches the setter arm,
  * which the legacy route never had (it always passed `setter = null`).
  */
-private fun StringBuilder.renderSealedSubclassProperty(prop: CirProperty) {
+private fun StringBuilder.renderSealedSubclassProperty(property: CirProperty, owner: String) {
+  // Issue #610: ahead of the explicit branch, so its setter carries the guard too.
+  val prop: CirProperty = property.withReceiverGuard(owner)
   // ADR-168 on an arm (2026-09-27): `CirClassRenderer.renderProperty`'s explicit branch, one
   // nesting level deeper. The public property renders get-only (CS0546 against the sealed base's
   // get-only slot), and each interface the arm lists takes the setter explicitly.
   if (prop.explicitSetterInterfaces.isNotEmpty()) {
-    renderSealedSubclassProperty(prop.copy(setter = null, explicitSetterInterfaces = emptyList()))
+    renderSealedSubclassProperty(prop.copy(setter = null, explicitSetterInterfaces = emptyList()), owner)
     val setter: String = checkNotNull(prop.setter) {
       "Property ${prop.name} has explicit interface setters but no setter body"
     }

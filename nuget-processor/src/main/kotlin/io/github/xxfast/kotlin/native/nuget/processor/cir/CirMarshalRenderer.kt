@@ -796,6 +796,7 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
     appendLine("            finally { NugetListNative.Dispose(handle); }")
     appendLine("        }")
     appendLine()
+    renderReadOwnedList()
   }
   if (helper.includesSet) {
     appendLine("        public static HashSet<T> ReadSet<T>(IntPtr handle, Func<IntPtr, T> read)")
@@ -842,10 +843,9 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   if (helper.includesList || helper.includesSet || helper.includesMap) {
     appendLine("        private static void DisposeMaterialized<T>(System.Collections.Generic.IEnumerable<T> materialized)")
     appendLine("        {")
-    appendLine(
-      "            foreach (T item in materialized) " +
-        "if (item is INugetHandle && item is IDisposable disposable) disposable.Dispose();",
-    )
+    // Issue #610: through `ReleaseAbandoned`, the same ownership rule, so a nested collection the
+    // throwing read already built (an inner owned list included) releases its elements too.
+    appendLine("            foreach (T item in materialized) ReleaseAbandoned(item);")
     appendLine("        }")
     appendLine()
     // LeakTests row 16l: a flow collection element read but never handed to the consumer. Same
@@ -854,6 +854,8 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
     // handle, so it is not walked element by element.
     appendLine("        internal static void ReleaseAbandoned(object? value)")
     appendLine("        {")
+    // Issue #610: a nested owned list releases through its own `Dispose()`, honouring its `Keep`.
+    if (helper.includesList) appendLine("            if (value is INugetOwnedList && value is IDisposable owned) { owned.Dispose(); return; }")
     appendLine("            if (value is INugetHandle && value is IDisposable disposable) { disposable.Dispose(); return; }")
     appendLine("            if (value is string || value is byte[]) return;")
     appendLine("            if (value is System.Collections.IDictionary map)")
@@ -1058,6 +1060,7 @@ internal fun StringBuilder.renderListHelper(helper: CirListHelper) {
   appendLine("        internal static extern void Dispose(IntPtr handle);")
   appendLine("    }")
   appendLine()
+  renderKotlinList()
 }
 
 internal fun StringBuilder.renderMapHelper(helper: CirMapHelper) {

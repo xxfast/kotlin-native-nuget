@@ -59,10 +59,10 @@ class Tier1SealedSubclassCrossNamespaceTest {
     val result = run()
 
     assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
-    assertContains(result.generatedCSharp, "public IReadOnlyList<$remote.Assignment> Result")
+    assertContains(result.generatedCSharp, "public KotlinList<$remote.Assignment> Result")
     assertContains(
       result.generatedCSharp,
-      "NugetMarshal.ReadList<$remote.Assignment>(nativeResult,",
+      "NugetMarshal.ReadOwnedList<$remote.Assignment>(nativeResult,",
     )
     assertContains(
       result.generatedCSharp,

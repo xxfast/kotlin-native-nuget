@@ -1342,6 +1342,10 @@ internal data class CirMethod(
   // `[DllImport]` through `methodNativeImport`. Its `override`/`virtual`/`abstract`/`static`
   // modifiers are this method's at render time, since translators adjust those after projection.
   val tryOverload: CirMethod? = null,
+  // Issue #610: true when the body passes the owner's `_handle` as its receiver, so the renderer
+  // opens it with [disposedOwnerGuard]. Set by the ADR-062 plan route's `classMethod` only: a
+  // value-class `boxed` member or an interface default member is non-static with no `_handle`.
+  val guardsReceiver: Boolean = false,
 ) : CirMember {
   init {
     requireUnescaped(name)
@@ -1526,6 +1530,9 @@ internal data class CirProperty(
   // public property must stay get-only (it overrides a get-only base, CS0546); [setter] still
   // holds the body, so the `Native_Set_` import is emitted exactly as for a public setter.
   val explicitSetterInterfaces: List<String> = emptyList(),
+  // Issue #610: the property-side twin of [CirMethod.guardsReceiver], set by the planned class
+  // property route only. Both accessors open with [disposedOwnerGuard].
+  val guardsReceiver: Boolean = false,
   // ADR-075 amendment (2026-09-10): the property-side twin of [CirMethod.isAbstract]: an
   // `abstract val`/`abstract var` the class declares without implementing. Renders bodiless
   // (`public abstract T Name { get; }`) so a subclass `override` compiles instead of CS0506.

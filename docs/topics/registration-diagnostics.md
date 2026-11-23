@@ -332,6 +332,18 @@ never disposed for you, even when a later element's factory throws. `LeakTests/L
 `InterfaceListEcho_CSharpElementResolved_ReturnsToBaseline` and
 `InterfaceListReturn_ThrowingElementFactory_DoesNotDisposeCSharpElement` cover them.
 
+A returned `List` of handle elements is a disposable [`KotlinList<T>`](collections.md#releasing-a-returned-list-of-handles):
+disposing it releases every element it handed out and none you kept, and an undisposed one is
+still released by the elements' finalizers. The first three rows below measure without
+`Settle()` while the elements stay reachable, so the finalizer cannot be what released them.
+`LeakTests/LiveHandleTests.cs`'s
+`HandleListReturn_DisposedCollection_ReleasesEveryElement_WithoutCollecting`,
+`HandleListReturn_KeptElement_SurvivesTheCollection_ThenReturnsToBaseline`,
+`HandleListReturn_NestedDisposedCollection_ReleasesInnerElements_WithoutCollecting`,
+`HandleListReturn_ThrowingElementFactory_ReleasesWhatItBuilt`,
+`HandleListReturn_UndisposedCollection_ReturnsToBaseline` and
+`HandleListReturn_NestedThrowingElementFactory_ReleasesBuiltInnerLists` cover them.
+
 A `List` of Kotlin class elements releases an element's handle even when materializing that element
 fails before any wrapper exists, and a wrapper that was constructed first still releases once however
 often you dispose it. `LeakTests/LiveHandleTests.cs`'s

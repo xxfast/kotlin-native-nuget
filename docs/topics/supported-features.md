@@ -115,7 +115,7 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 
 | Kotlin | ⇄ | C# | Notes | Docs |
 |---|:-:|---|---|---|
-| `List<T>` | → | `IReadOnlyList<T>` | Eager copy at a property (settable when every component is wrappable), a return and a parameter; `T` may be a collection or an interface (Kotlin-backed elements arrive as wrappers). | [Collections](collections.md) |
+| `List<T>` | → | `IReadOnlyList<T>`, `KotlinList<T>` (returned list of objects) | Eager copy, settable when every component is wrappable. A returned list of objects is a disposable `KotlinList<T>`: dispose it to release every element, or `Keep` one. | [Collections](collections.md) |
 | `MutableList<T>` | → | `IList<T>` | Eager copy; a parameter never writes back to Kotlin. Settable as a property when every component is wrappable; `T` may itself be a collection. | [Collections](collections.md) |
 | `Map<K,V>` | → | `IReadOnlyDictionary<K,V>` | Eager copy at a property, return and parameter; a key or value may be a scalar, enum, handle, interface or collection. A nullable key (`Map<K?, V>`) has no route anywhere. | [Collections](collections.md) |
 | `MutableMap<K,V>` | → | `IDictionary<K,V>` | Eager copy; a parameter never writes back. Settable as a property when every component is wrappable; `V` may itself be a collection. | [Collections](collections.md) |

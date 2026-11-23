@@ -204,7 +204,7 @@ class Tier1SealedInterfaceOverArmsTest {
       "public static global::Interop.Evidence Connect(global::Interop.IConnectable device)",
       "public static global::Interop.IConnectable Preferred()",
       "public static global::Interop.IConnectable? NearbyOrNull(bool present)",
-      "public static IReadOnlyList<global::Interop.IConnectable> All()",
+      "public static KotlinList<global::Interop.IConnectable> All()",
       "public static IReadOnlySet<global::Interop.IConnectable> AllSet()",
       "public static string DescribeOrNone(global::Interop.IConnectable? device)",
       "Native_DescribeOrNone(device?._handle ?? NugetKotlinHandle.Null, out IntPtr error)",

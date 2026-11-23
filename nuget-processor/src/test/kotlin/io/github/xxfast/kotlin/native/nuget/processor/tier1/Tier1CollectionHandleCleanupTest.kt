@@ -135,6 +135,7 @@ class Tier1CollectionHandleCleanupTest {
       """
       |            set
       |            {
+      |                if (_handle.IsInvalid) throw new ObjectDisposedException(nameof(Chart));
       |                IntPtr valueHandle = IntPtr.Zero;
       |                try
       |                {

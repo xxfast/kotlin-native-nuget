@@ -251,7 +251,7 @@ class Tier1InterfaceReturnTest {
       "expected no skip diagnostic for Shelter.pets; kspWarnings=${result.kspWarnings}",
     )
     val csharp: String = result.generatedCSharp
-    assertContains(csharp, "public IReadOnlyList<global::Interop.IPet> Pets()")
+    assertContains(csharp, "public KotlinList<global::Interop.IPet> Pets()")
     assertContains(csharp, "NugetMarshal.FromHandle<global::Interop.IPet>(")
     assertContains(csharp, "public sealed class Pet : IPet")
     assertContains(

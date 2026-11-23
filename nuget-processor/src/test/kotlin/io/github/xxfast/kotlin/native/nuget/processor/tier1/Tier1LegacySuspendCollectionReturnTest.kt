@@ -96,7 +96,7 @@ class Tier1LegacySuspendCollectionReturnTest {
 
     val element = "global::Interop.Roster.Member"
     val missing: List<String> = listOf(
-      "public IReadOnlyList<$element> Members",
+      "public KotlinList<$element> Members",
       "public Task<IReadOnlyList<$element>> FetchAsync(int limit, int offset",
       "new TaskCompletionSource<IReadOnlyList<$element>>(",
     ).filterNot(result.generatedCSharp::contains)
@@ -122,7 +122,7 @@ class Tier1LegacySuspendCollectionReturnTest {
     val result = run()
 
     val missing: List<String> = listOf(
-      "NugetMarshal.ReadList<global::Interop.Roster.Member>(resultPtr",
+      "NugetMarshal.ReadOwnedList<global::Interop.Roster.Member>(resultPtr",
       "NugetMarshal.ReadList<string>(resultPtr",
       "NugetMarshal.ReadSet<int>(resultPtr",
       "NugetMarshal.ReadMap<string, int>(resultPtr",

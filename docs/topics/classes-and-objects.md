@@ -78,7 +78,8 @@ registered and delivering while the owner lives; disposing or finalizing the own
 and a later `Dispose()` of the subscription does nothing.
 
 A held or awaited `KotlinStateFlow` used after its own `Dispose()`, or collected after the object
-it came from was disposed, throws `ObjectDisposedException`.
+it came from was disposed, throws `ObjectDisposedException`. So does any other member of a disposed
+wrapper, including a data class's `Equals` (receiver or argument), `GetHashCode` and `ToString`.
 
 ## Method returns
 

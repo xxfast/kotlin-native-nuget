@@ -4088,6 +4088,7 @@ internal class ForwardCallablePlanner(
         isOverride = isOverride,
         isVirtual = isVirtual,
         isAbstract = isAbstract,
+        overridesNothing = node.overridesNothing(),
         doc = doc.forPublic(publicParameters),
         dispatchMask = widening.dispatchMask,
         receiver = widening.receiver?.let { parameter ->
@@ -6883,3 +6884,13 @@ internal val ENUM_SYNTHESIZED_FUNCTIONS: Set<String> = setOf("values", "valueOf"
 /** ADR-213: `handle_`, `handle__`, ...: a user `handle` (or `handle_`) the plan shifted. */
 private fun String.isShiftedHandle(): Boolean =
   startsWith("handle_") && substring("handle".length).all { it == '_' }
+
+/**
+ * Issue #610: [ForwardPublicSignature.overridesNothing] off the planned declaration. A declaration
+ * an interface declares, or one Kotlin marks `override`, has a return type something else fixes.
+ */
+internal fun KSNode?.overridesNothing(): Boolean {
+  val declaration: KSDeclaration = this as? KSDeclaration ?: return false
+  if (Modifier.OVERRIDE in declaration.modifiers) return false
+  return (declaration.parentDeclaration as? KSClassDeclaration)?.classKind != ClassKind.INTERFACE
+}

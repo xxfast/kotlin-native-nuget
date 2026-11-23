@@ -94,6 +94,71 @@ internal fun BridgeType.forwardPublicCsharpType(): String = when (this) {
 }
 
 /**
+ * Issue #610 / ADR-243: whether a value of this type, read back into C#, holds a Kotlin handle the
+ * reader owns, so a list of it is a `KotlinList<T>` that releases what it handed out.
+ *
+ * Exhaustive with no `else`: a new variant is a compile error here until it says whether it owns a
+ * handle. Several arms are false by scope rather than by construction, named below.
+ */
+internal fun BridgeType.carriesHandle(): Boolean = when (this) {
+  is BridgeType.ObjectHandle,
+  is BridgeType.Interface,
+    -> true
+
+  // Deferred to its own item: the C# side is a record struct `ReleaseAbandoned` cannot release, and
+  // `Keep` cannot track a struct by reference.
+  is BridgeType.ValueClass -> false
+  is BridgeType.Collection -> listOfNotNull(element, key, value).any { it.carriesHandle() }
+  is BridgeType.Nullable -> type.carriesHandle()
+
+  BridgeType.Unit,
+  is BridgeType.Primitive,
+  BridgeType.Char,
+  BridgeType.String,
+  BridgeType.Instant,
+  BridgeType.Duration,
+  BridgeType.Uuid,
+  is BridgeType.Enum,
+  BridgeType.ByteArray,
+  // ADR-201: read through `NugetErrorNative.BuildException`, a managed exception with no handle.
+  is BridgeType.Throwable,
+    -> false
+
+  // False by scope. A bound interface reads back the consumer's own C# original (ADR-088). An
+  // `Any` or `T` element's static type says nothing about ownership. Lambdas and flows as elements
+  // are out of ADR-243's scope. The last four never reach a planned signature.
+  is BridgeType.BoundInterface,
+  is BridgeType.TypeParameter,
+  is BridgeType.Callback,
+  is BridgeType.AsyncCallback,
+  is BridgeType.FlowSource,
+  is BridgeType.ReturnedLambda,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+  is BridgeType.RawCollection,
+    -> false
+}
+
+/** Issue #610: a read-only `List` whose element carries a handle, read back as a `KotlinList<T>`. */
+internal fun BridgeType.Collection.isOwnedHandleList(): Boolean =
+  kind == CollectionKind.LIST && requireNotNull(element).carriesHandle()
+
+/**
+ * Issue #610 / ADR-243: the public C# spelling at a direct return C# cannot implement or override,
+ * beside [forwardPublicCsharpType], which also spells every parameter and must not change. Only an
+ * owned handle list differs: `KotlinList<E>` (or `KotlinList<E>?`), its element still spelled as
+ * [forwardPublicCsharpType] spells it, so an inner list stays `IReadOnlyList<E>` statically.
+ */
+internal fun BridgeType.forwardReturnCsharpType(): String {
+  val list: BridgeType.Collection? = (unwrapNullable() as? BridgeType.Collection)
+    ?.takeIf { collection -> collection.isOwnedHandleList() }
+  if (list == null) return forwardPublicCsharpType()
+  val owned = "KotlinList<${requireNotNull(list.element).forwardPublicCsharpType()}>"
+  return if (this is BridgeType.Nullable) "$owned?" else owned
+}
+
+/**
  * True when [forwardPublicCsharpType] has an arm for this type, i.e. when a declaration-only site
  * (the `abstractMethods` walk, which has no plan, no export and no marshalling) can spell it.
  *
