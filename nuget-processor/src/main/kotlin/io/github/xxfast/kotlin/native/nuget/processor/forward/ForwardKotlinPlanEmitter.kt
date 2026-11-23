@@ -99,7 +99,8 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(
   // ADR-202: a returned suspend lambda is invoked through the runtime-owned `nuget_suspend_func*`,
   // which maps a thrown exception through this module's classifier (ADR-241's exported keys too),
   // as the suspend-lambda property getter already installs it.
-  if ((plan.publicSignature.result.unwrapNullable() as? BridgeType.ReturnedLambda)?.suspend == true) {
+  val result: BridgeType = plan.publicSignature.result.unwrapNullable()
+  if ((result as? BridgeType.ReturnedLambda)?.suspend == true) {
     builder.addStatement(INSTALL_MODULE_MAPPED_TYPE)
   }
 

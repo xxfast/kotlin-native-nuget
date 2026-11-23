@@ -410,8 +410,9 @@ internal enum class ForwardDiagnosticKind(
 
   /** ADR-241: a member an exported exception class declares whose C# name would hide a
    *  `System.Exception` member (`Data`, `Source`, `HelpLink`, `HResult`, `StackTrace`,
-   *  `TargetSite`, `InnerException`, `GetBaseException`, `GetObjectData`, `GetType`). The class binds
-   *  as a C# exception type, so the member is absent from both halves; renaming is deferred. */
+   *  `TargetSite`, `InnerException`, `GetBaseException`, `GetObjectData`, `GetType`). The class
+   *  binds as a C# exception type, so the member is absent from both halves; renaming is
+   *  deferred. */
   SKIPPED_EXCEPTION_MEMBER_COLLISION(ForwardDiagnosticSeverity.WARNING),
 
   /** ADR-109: an admitted dependency-module type whose package another forward publisher in the

@@ -680,7 +680,8 @@ internal fun StringBuilder.renderConstructor(
 
   // ADR-241: an exception's base is immutable and must be built from the Kotlin object's own
   // envelope, so the handle has to exist before the base constructor runs: the body moves into a
-  // static factory the constructor initializer calls, and the handle constructor reads the snapshot.
+  // static factory the constructor initializer calls, and the handle constructor reads the
+  // snapshot.
   val factory: String? = if (isException) exceptionFactoryBody(ctor) else null
   if (factory != null) {
     val factoryName = "NugetCreate$className${ctor.nativeSuffix}"
@@ -747,8 +748,9 @@ private fun exceptionFactoryBody(ctor: CirConstructor): String? {
   }
   val assignment = "_handle = new NugetKotlinHandle(handle);"
   val body: String = ctor.body
+  val rest: String = body.replace(assignment, "")
   val movable: Boolean = Regex(Regex.escape(assignment)).findAll(body).count() == 1 &&
-    body.replace(assignment, "").let { rest -> "_handle" !in rest && !Regex("""\bthis\b""").containsMatchIn(rest) }
+    "_handle" !in rest && !Regex("""\bthis\b""").containsMatchIn(rest)
   if (!movable) return null
   return body.replace(assignment, "return new NugetKotlinHandle(handle);")
 }

@@ -4066,7 +4066,9 @@ internal class NugetProcessor(
     )
     // ADR-239: a bound C# interface at an erased position, once the routes above recorded it.
     builder.addBoundInterfaceBoxExports(forwardClassifier.boundInterfaces, context.symbols)
-    if (forwardClassifier.boxesThrowable || exportedExceptions.isNotEmpty()) builder.addThrowableBoxExports(context.symbols)
+    if (forwardClassifier.boxesThrowable || exportedExceptions.isNotEmpty()) {
+      builder.addThrowableBoxExports(context.symbols)
+    }
     // ADR-210: the holder a generated `suspend` lambda captures, and the two cinterop extensions
     // its lambda and cleaner call. Last for the same reason as the line above: the legacy suspend
     // routes record their sightings on the classifier as they emit. Everything else the lambda

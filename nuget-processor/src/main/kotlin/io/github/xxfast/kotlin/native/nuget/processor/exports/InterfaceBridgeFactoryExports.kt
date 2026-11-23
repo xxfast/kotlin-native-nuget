@@ -61,7 +61,7 @@ internal fun FileSpec.Builder.addInterfaceBridgeFactoryExport(plan: ForwardBridg
     // installed. Every such value is handed over by this bridge, so the bridge's own creation is
     // the mint site that runs first, on the caller's thread.
     val handsOutSuspendLambda: Boolean = plan.slots.any { slot ->
-      slot.parameters.any { parameter -> parameter.type.lambda?.suspend == true || parameter.type.hotFlow }
+      slot.parameters.any { param -> param.type.lambda?.suspend == true || param.type.hotFlow }
     }
     if (handsOutSuspendLambda) appendLine(INSTALL_MODULE_MAPPED_TYPE)
     appendLine("return try {")

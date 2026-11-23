@@ -1383,7 +1383,8 @@ internal fun translate(
       context.libraryName,
       exported = exportedExceptions,
       // Every exception root's handle constructor reads a snapshot, arms or not.
-      envelopeEntry = context.symbols.throwableEnvelopeExport().takeIf { exceptionTypes.isNotEmpty() },
+      envelopeEntry = context.symbols.throwableEnvelopeExport()
+        .takeIf { exceptionTypes.isNotEmpty() },
     ),
   )
   if (tracker.needsFlow || hotFlows) {

@@ -48,14 +48,14 @@ internal fun exportedExceptionTypes(
   val candidates: List<KSClassDeclaration> =
     classes + sealedClasses + sealedClasses.flatMap { sealed -> sealed.getSealedSubclasses() }
   return candidates
-    .filter { declaration -> declaration.classKind == ClassKind.CLASS || declaration.classKind == ClassKind.OBJECT }
+    .filter { declaration -> declaration.classKind in setOf(ClassKind.CLASS, ClassKind.OBJECT) }
     .filter { declaration -> declaration.isPublic() }
     .filter { declaration -> declaration.typeParameters.isEmpty() }
     .mapNotNull { declaration ->
       val qualifiedName: String = declaration.qualifiedName?.asString() ?: return@mapNotNull null
       val base: String = declaration.exceptionCsharpBase() ?: return@mapNotNull null
       val depth: Int = declaration.getAllSuperTypes()
-        .count { supertype -> (supertype.declaration as? KSClassDeclaration)?.classKind == ClassKind.CLASS }
+        .count { type -> (type.declaration as? KSClassDeclaration)?.classKind == ClassKind.CLASS }
       ExportedExceptionType(declaration, qualifiedName, depth, base)
     }
     .distinctBy { type -> type.kotlinType }
@@ -72,8 +72,8 @@ internal fun KSClassDeclaration.exceptionBackingName(): String? =
 
 /**
  * ADR-241: the shared-contract exception type this class's C# wrapper derives from when it is the
- * ROOT of its exported hierarchy (the matched mapped `Kotlin*` row type, in `KOTLIN_EXCEPTION_TYPES`
- * order, else `KotlinException`), or null when the class is not a `Throwable`.
+ * ROOT of its exported hierarchy (the matched mapped `Kotlin*` row type, in
+ * `KOTLIN_EXCEPTION_TYPES` order, else `KotlinException`), or null when the class is not a `Throwable`.
  */
 internal fun KSClassDeclaration.exceptionCsharpBase(): String? {
   val supertypes: Set<String> = getAllSuperTypes()
@@ -92,7 +92,8 @@ internal fun KSClassDeclaration.exceptionCsharpBase(): String? {
  * `Exception.Message`, `cause` is `InnerException`, and the JVM's `getLocalizedMessage()` is the
  * message again. Not rendered and not reported: nothing is missing.
  */
-internal val EXCEPTION_CARRIED_MEMBERS: Set<String> = setOf("Message", "Cause", "GetLocalizedMessage")
+internal val EXCEPTION_CARRIED_MEMBERS: Set<String> =
+  setOf("Message", "Cause", "GetLocalizedMessage")
 
 /**
  * ADR-241: the C# names of `System.Exception`'s public instance members a bound member would hide
@@ -117,7 +118,9 @@ internal fun String.isExceptionMemberName(): Boolean =
  * this names the drop, once, on the class that declares it. An inherited `Throwable` member is a
  * stdlib member, not the author's, and is not reported.
  */
-internal fun exceptionMemberCollisions(types: List<ExportedExceptionType>): List<ForwardDiagnostic> =
+internal fun exceptionMemberCollisions(
+  types: List<ExportedExceptionType>,
+): List<ForwardDiagnostic> =
   types.flatMap { type ->
     val cls: KSClassDeclaration = type.declaration
     val members: List<KSDeclaration> = cls.declarations

@@ -62,10 +62,13 @@ private fun CirFile.exceptionCrefs(): Map<String, String> = buildMap {
     }
     if (declaration is CirSealedClass && declaration.isException && declaration.typeParameters.isEmpty()) {
       declaration.exceptionKotlinType?.let { kotlinName -> put(kotlinName, cref) }
-      for (arm in declaration.subclasses.filter { arm -> arm.isException && arm.typeParameters.isEmpty() }) {
-        val armPath: List<String> = (if (arm.isNested) path else prefix) + arm.name
-        arm.kotlinName?.let { kotlinName -> put(kotlinName, "global::$namespace.${armPath.joinToString(".")}") }
-      }
+      declaration.subclasses
+        .filter { arm -> arm.isException && arm.typeParameters.isEmpty() }
+        .forEach { arm ->
+          val armPath: List<String> = (if (arm.isNested) path else prefix) + arm.name
+          val armCref = "global::$namespace.${armPath.joinToString(".")}"
+          arm.kotlinName?.let { kotlinName -> put(kotlinName, armCref) }
+        }
     }
     for (nested in declaration.docLinkChildren()) visit(nested, namespace, path)
   }
