@@ -23,10 +23,16 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.KotlinExceptionRow
  * [nugetMappedTypeFunction], so the module installs it into its own statically linked runtime
  * copy. Idempotent, synchronous on the calling thread, and always before C# holds the handle.
  *
- * The three mint sites: a class's suspend-lambda property getter, a suspend function returning
- * `StateFlow`, and a held `MutableStateFlow` acquire. They are the Kotlin halves of the only C#
- * sites that construct `KotlinSuspendFunc` / `KotlinSuspendAction` or call
- * `NugetStateFlowNative.Collect`.
+ * The mint sites, every export that hands C# a suspend lambda or a hot flow:
+ * - a suspend-lambda property getter (`ForwardPropertyKotlinEmitter`);
+ * - an ordinary callable returning a suspend lambda (`ForwardKotlinPlanEmitter`, ADR-241: the
+ *   exported-exception keys made a missing install observable);
+ * - a suspend function returning `StateFlow` (`SuspendFunctionExports`; one returning a suspend
+ *   lambda is skipped before it reaches an export);
+ * - a held `MutableStateFlow` acquire (`FlowExports`) and the `subscriptionCount` reads
+ *   (`SharedFlowExports`);
+ * - an interface bridge factory whose slots hand C# a suspend lambda or a hot flow
+ *   (`InterfaceBridgeFactoryExports`, ADR-241), since the bridge mints every value its slots pass.
  */
 internal const val INSTALL_MODULE_MAPPED_TYPE: String = "nugetInstallMappedType(::nugetMappedType)"
 
