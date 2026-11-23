@@ -86,8 +86,19 @@ internal data class CirDoc(
  */
 internal data class CirDocParam(val name: String, val text: CirDocText)
 
-/** [cref] is a C# exception type this generator itself emits, so it always resolves (CS1574). */
-internal data class CirDocThrows(val cref: String, val text: CirDocText)
+/**
+ * [cref] is a C# exception type this generator itself emits, so it always resolves (CS1574).
+ *
+ * ADR-241: [kotlinType] is the Kotlin class the `@throws` resolved to. When the finished file
+ * declares that class as a generated exception type, `CirFile.resolveDocLinks()` crefs it instead,
+ * with [exportedText] (the author's text without the `T: ` prefix an unmapped type carries).
+ */
+internal data class CirDocThrows(
+  val cref: String,
+  val text: CirDocText,
+  val kotlinType: String? = null,
+  val exportedText: CirDocText = text,
+)
 
 internal data class CirFile(
   val usings: List<String> = listOf("System", "System.Runtime.InteropServices"),
@@ -493,6 +504,12 @@ internal data class CirSealedClass(
   // Kotlin FQN, the `KotlinType` a C#-constructed (handle-less) instance reports.
   val exceptionBase: String? = null,
   val exceptionKotlinType: String? = null,
+  // ADR-241: a `Throwable` base at any depth, so it chains the snapshot constructor its arms call.
+  val isException: Boolean = false,
+  // ADR-241: the sealed ROOT of an exported exception hierarchy declares an internal concrete
+  // wrapper of this name, which `MapExported` constructs for a throwable whose nearest exported
+  // class is the root. Null for every other sealed class.
+  val exceptionBackingName: String? = null,
   /**
    * ADR-101 amendment (2026-09-27): the exported interfaces the sealed base lists, spelled for C#,
    * so `is`/`as` against them hold. An unexported one is dropped with

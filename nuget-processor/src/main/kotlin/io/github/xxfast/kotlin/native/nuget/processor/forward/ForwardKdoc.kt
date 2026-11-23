@@ -21,6 +21,8 @@ internal data class ForwardKdocThrows(
    * when the name did not resolve, and the simple-name match below is the fallback.
    */
   val resolvedCsharpType: String? = null,
+  /** ADR-241: the qualified name of the class [type] resolved to, or null when it did not. */
+  val kotlinType: String? = null,
 )
 
 /**
@@ -326,10 +328,12 @@ private fun ForwardKdocThrows.toCirDocThrows(): CirDocThrows {
       ?.csharpType
   // The `T: ` prefix is this generator's own prose, so it is glued on BEFORE tokenizing: the
   // Kotlin type name stays plain text rather than becoming a `<c>` span of its own.
-  return if (mapped != null) CirDocThrows(mapped, text.docInlines())
+  return if (mapped != null) CirDocThrows(mapped, text.docInlines(), kotlinType)
   else CirDocThrows(
     "KotlinException",
     (if (text.isEmpty()) simple else "$simple: $text").docInlines(),
+    kotlinType,
+    exportedText = text.docInlines(),
   )
 }
 

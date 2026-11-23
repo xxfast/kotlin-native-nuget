@@ -25,6 +25,8 @@ internal data class CirBacking(
    * itself, and its externs are hoisted onto the holder.
    */
   val typeParameters: List<CirTypeParameter> = emptyList(),
+  // ADR-241: the owner is an exported exception class, so the wrapper chains its snapshot ctor too.
+  val isException: Boolean = false,
 ) {
   val isHeld: Boolean get() = typeParameters.isNotEmpty()
 }
@@ -86,6 +88,7 @@ internal fun backingClassBlock(backing: CirBacking): String = buildString {
   appendLine("            {")
   appendLine("            }")
   appendLine()
+  if (backing.isException) renderExceptionSnapshotConstructor(name, "            ")
   val members: String = buildString {
     backing.properties.forEach { property ->
       // A nested wrapper reads the owner's private property externs; a held one cannot.
@@ -164,6 +167,7 @@ internal fun CirClass.backing(): CirBacking? {
     ),
     inherited = backingInherited,
     typeParameters = typeParameters,
+    isException = isException,
   )
 }
 

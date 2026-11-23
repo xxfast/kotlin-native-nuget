@@ -1,6 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
-import io.github.xxfast.kotlin.native.nuget.processor.EXCEPTION_MEMBER_COLLISIONS
+import io.github.xxfast.kotlin.native.nuget.processor.isExceptionMemberName
 import io.github.xxfast.kotlin.native.nuget.processor.exceptionCsharpBase
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.getDeclaredFunctions
@@ -503,7 +503,7 @@ internal fun KSDeclaration.isForwardPlannableMemberOf(
  * planned on either side, so the two halves agree it is absent.
  */
 private fun KSDeclaration.collidesWithExceptionMember(cls: KSClassDeclaration): Boolean =
-  csharpMemberName() in EXCEPTION_MEMBER_COLLISIONS && cls.exceptionCsharpBase() != null
+  csharpMemberName().isExceptionMemberName() && cls.exceptionCsharpBase() != null
 
 /**
  * ADR-101 amendment (2026-09-11): whether this member is inherited from an interface the class
@@ -879,6 +879,27 @@ internal fun KSClassDeclaration.isForwardExtensible(): Boolean =
  */
 internal fun KSClassDeclaration.abstractBackingName(): String? {
   if (!hasAbstractBacking()) return null
+  return freeBackingName()
+}
+
+/**
+ * ADR-241: the C# name of the internal concrete wrapper nested in the sealed ROOT of an exported
+ * exception hierarchy, or null for any other class. Kotlin throws an instance whose nearest
+ * exported class is the root (an `internal` arm, or any unexported subclass the discriminator does
+ * not list), and C# must still catch it as the root, which it cannot instantiate. Named by the
+ * same rule as [abstractBackingName], so the abstract arms below it avoid it too.
+ */
+internal fun KSClassDeclaration.sealedExceptionBackingName(): String? {
+  if (Modifier.SEALED !in modifiers || classKind != ClassKind.CLASS) return null
+  if (exceptionCsharpBase() == null) return null
+  val sealedAbove: Boolean = getAllSuperTypes()
+    .mapNotNull { type -> type.declaration as? KSClassDeclaration }
+    .any { base -> Modifier.SEALED in base.modifiers }
+  if (sealedAbove) return null
+  return freeBackingName()
+}
+
+private fun KSClassDeclaration.freeBackingName(): String {
   val taken: Set<String> = buildSet {
     add(simpleName.asString())
     declarations.filterIsInstance<KSClassDeclaration>().forEach { add(it.simpleName.asString()) }
@@ -892,9 +913,11 @@ internal fun KSClassDeclaration.abstractBackingName(): String? {
       .flatMap { base -> base.declarations.filterIsInstance<KSClassDeclaration>() }
       .forEach { add(it.simpleName.asString()) }
     // So is an abstract base's own wrapper (`Puppy : Animal` beside `Animal.Backing`).
-    bases.forEach { base -> base.abstractBackingName()?.let(::add) }
+    bases.forEach { base ->
+      (base.abstractBackingName() ?: base.sealedExceptionBackingName())?.let(::add)
+    }
     // And a subclass inherits this one, so its members must not hide it either.
-    addAll(ForwardSubclassMemberNames.of(this@abstractBackingName))
+    addAll(ForwardSubclassMemberNames.of(this@freeBackingName))
     getAllFunctions().forEach { add(it.csharpMemberName()) }
     getAllProperties().forEach { add(it.csharpMemberName()) }
   }

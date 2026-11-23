@@ -408,6 +408,12 @@ internal enum class ForwardDiagnosticKind(
    *  left without its P/Invoke (ADR-055) and a library that built before still builds. */
   SKIPPED_RESULT_TRY_COLLISION(ForwardDiagnosticSeverity.WARNING),
 
+  /** ADR-241: a member an exported exception class declares whose C# name would hide a
+   *  `System.Exception` member (`Data`, `Source`, `HelpLink`, `HResult`, `StackTrace`,
+   *  `TargetSite`, `InnerException`, `GetBaseException`, `GetObjectData`, `GetType`). The class binds
+   *  as a C# exception type, so the member is absent from both halves; renaming is deferred. */
+  SKIPPED_EXCEPTION_MEMBER_COLLISION(ForwardDiagnosticSeverity.WARNING),
+
   /** ADR-109: an admitted dependency-module type whose package another forward publisher in the
    *  same Gradle build also exports. ADR-066 generates it into *this* module's package, as its own
    *  C# class over its own opaque handle, so a consumer referencing both NuGet packages sees two

@@ -25,9 +25,10 @@ internal fun CirFile.resolveDocLinks(): CirFile {
   val byNamespace: Map<String, Map<String, String>> = entries
     .groupBy { entry -> entry.namespace }
     .mapValues { (_, inNamespace) -> inNamespace.filter { it.isPath }.uniqueBy { it.key } }
+  val exceptions: Map<String, String> = exceptionCrefs()
   return copy(
     namespaces = namespaces.map { namespace ->
-      val index = DocLinkIndex(byNamespace[namespace.name].orEmpty(), fileWide)
+      val index = DocLinkIndex(byNamespace[namespace.name].orEmpty(), fileWide, exceptions)
       namespace.copy(declarations = namespace.declarations.map { it.resolveDocLinks(index) })
     },
   )
@@ -39,7 +40,39 @@ internal fun CirFile.resolveDocLinks(): CirFile {
  * ([CirDocInline.Link.scopedPath]): that type or nothing, never a same-named one elsewhere.
  * [fileWide] answers an unscoped link, and only for a name exactly one type in the file claims.
  */
-private class DocLinkIndex(val local: Map<String, String>, val fileWide: Map<String, String>)
+private class DocLinkIndex(
+  val local: Map<String, String>,
+  val fileWide: Map<String, String>,
+  /** ADR-241: Kotlin qualified name to cref, for every generated exception type in the file. */
+  val exceptions: Map<String, String> = emptyMap(),
+)
+
+/**
+ * ADR-241: the generated exception types this file declares, keyed by the Kotlin qualified name a
+ * `@throws` resolved to, so the cref names the type a consumer catches. Keyed by the qualified
+ * name rather than the spelling, so two same-named classes in different packages cannot collide.
+ */
+private fun CirFile.exceptionCrefs(): Map<String, String> = buildMap {
+  fun visit(declaration: CirDeclaration, namespace: String, prefix: List<String>) {
+    val name: String = declaration.docLinkName() ?: return
+    val path: List<String> = prefix + name
+    val cref = "global::$namespace.${path.joinToString(".")}"
+    if (declaration is CirClass && declaration.isException && declaration.typeParameters.isEmpty()) {
+      declaration.kotlinName?.let { kotlinName -> put(kotlinName, cref) }
+    }
+    if (declaration is CirSealedClass && declaration.isException && declaration.typeParameters.isEmpty()) {
+      declaration.exceptionKotlinType?.let { kotlinName -> put(kotlinName, cref) }
+      for (arm in declaration.subclasses.filter { arm -> arm.isException && arm.typeParameters.isEmpty() }) {
+        val armPath: List<String> = (if (arm.isNested) path else prefix) + arm.name
+        arm.kotlinName?.let { kotlinName -> put(kotlinName, "global::$namespace.${armPath.joinToString(".")}") }
+      }
+    }
+    for (nested in declaration.docLinkChildren()) visit(nested, namespace, path)
+  }
+  for (namespace in namespaces) {
+    for (declaration in namespace.declarations) visit(declaration, namespace.name, emptyList())
+  }
+}
 
 /** One key a declared type can be linked by, with the namespace that declares it. */
 private data class DocLinkEntry(
@@ -269,7 +302,14 @@ private fun CirDoc?.resolve(index: DocLinkIndex): CirDoc? {
     },
     params = doc.params.map { param -> param.copy(text = param.text.map { it.resolve(index) }) },
     returns = doc.returns?.map { it.resolve(index) },
-    throws = doc.throws.map { thrown -> thrown.copy(text = thrown.text.map { it.resolve(index) }) },
+    throws = doc.throws.map { thrown ->
+      val exported: String? = thrown.kotlinType?.let { kotlinType -> index.exceptions[kotlinType] }
+      if (exported != null) {
+        thrown.copy(cref = exported, text = thrown.exportedText.map { it.resolve(index) })
+      } else {
+        thrown.copy(text = thrown.text.map { it.resolve(index) })
+      }
+    },
     seeAlso = doc.seeAlso.map { it.resolve(index) },
   )
 }

@@ -87,6 +87,10 @@ internal fun StringBuilder.renderSealedBase(sealed: CirSealedClass) {
     )
     appendLine("        {")
     appendLine("        }")
+    if (sealed.isException) {
+      appendLine()
+      renderExceptionSnapshotConstructor(sealed.name, "        ", trailingBlank = false)
+    }
   }
   appendLine()
   // ADR-175 (ADR-159's owner rule, one level up): the scope field and its lazy creator, `internal`
@@ -129,6 +133,8 @@ internal fun StringBuilder.renderSealedBase(sealed: CirSealedClass) {
   sealed.subclasses.filter { it.isNested && !generic }.forEach { subclass ->
     append(sealedSubclassBlock(sealed, subclass))
   }
+
+  sealed.exceptionBackingName?.let { name -> renderSealedExceptionBacking(sealed, name) }
 
   // ADR-134: types Kotlin declares inside the sealed base, rendered after the arm blocks and
   // before the discriminator, at the depth an arm block sits at.
@@ -191,6 +197,39 @@ internal fun StringBuilder.renderSealedBase(sealed: CirSealedClass) {
   // own `Native_Dispose` (ADR-159's `Brusher` shape).
   if (sealed.ownsScope) appendLine("        public abstract ValueTask DisposeAsync();")
   appendLine("    }")
+}
+
+/**
+ * ADR-241: the sealed root's internal concrete wrapper, at the depth an arm block sits at. C#
+ * cannot instantiate the root, yet a throwable whose nearest exported class is the root (an
+ * `internal` arm, or an unexported subclass) must still be catchable as it. The root projects its
+ * members as concrete call-throughs, so the wrapper only implements the disposal the root leaves
+ * abstract; there is no root `_dispose` export, and the body never calls one (ADR-187's swap and
+ * release, as every arm's).
+ */
+private fun StringBuilder.renderSealedExceptionBacking(sealed: CirSealedClass, name: String) {
+  appendLine("        internal sealed class $name : ${sealed.name}")
+  appendLine("        {")
+  appendLine("            internal $name(NugetKotlinHandle handle, out NugetHandleTag tag) : base(handle, out tag)")
+  appendLine("            {")
+  appendLine("            }")
+  appendLine()
+  renderExceptionSnapshotConstructor(name, "            ")
+  append(
+    buildString {
+      renderDispose(
+        nativeImport = null,
+        importsDispose = false,
+        hasSuperClass = true,
+        hasSuspendMethods = sealed.ownsScope,
+        ownsScope = false,
+        overridesDisposeAsync = sealed.ownsScope,
+      )
+    }.trimEnd().indentNestedBody(),
+  )
+  appendLine()
+  appendLine("        }")
+  appendLine()
 }
 
 /** One subclass, rendered at the nesting depth of a class declared inside its sealed base. */
@@ -261,6 +300,7 @@ internal fun sealedSubclassBlock(
   appendLine("            {")
   appendLine("            }")
   appendLine()
+  if (subclass.isException) renderExceptionSnapshotConstructor(subclass.name, "            ")
   // ADR-204: the arm is also an arm of a sealed interface over declared arms.
   subclass.handleInterfaces.forEach { iface ->
     appendLine("            NugetKotlinHandle $iface._handle => _handle;")
@@ -290,6 +330,7 @@ internal fun sealedSubclassBlock(
           className = subclass.name,
           ctor = ctor,
           hasSuperClass = true,
+          isException = subclass.isException,
         )
       }.indentNestedBody(),
     )
@@ -508,6 +549,7 @@ internal fun CirSealedSubclass.backing(sealed: CirSealedClass): CirBacking? {
     properties = properties.backingOverrides(),
     methods = methods.backingOverrides(),
     inheritedExternNames = baseExterns + ordinaryNativeImports(sealed.libraryName).map { it.name },
+    isException = isException,
   )
 }
 

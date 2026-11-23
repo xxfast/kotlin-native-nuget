@@ -35,6 +35,8 @@ internal object Tier1CSharpCompile {
     consumerSource: String,
     defines: String = "",
     allowUnsafe: Boolean = true,
+    // Builds the XML documentation as `GeneratedBindingsCheck` does, so an unresolved cref is CS1574.
+    documentationFile: Boolean = false,
   ): Tier1CSharpBuild {
     val root: File = generateSequence(File(System.getProperty("user.dir")).canonicalFile) {
       it.parentFile
@@ -48,6 +50,11 @@ internal object Tier1CSharpCompile {
       directory.resolve("Consumer.cs").writeText(consumerSource)
       val unsafeBlocks: String =
         if (allowUnsafe) "<AllowUnsafeBlocks>true</AllowUnsafeBlocks>" else ""
+      val documentation: String = if (documentationFile) {
+        "<GenerateDocumentationFile>true</GenerateDocumentationFile><NoWarn>\$(NoWarn);CS1591</NoWarn>"
+      } else {
+        ""
+      }
       directory.resolve("Consumer.csproj").writeText(
         """
         <Project Sdk="Microsoft.NET.Sdk">
@@ -56,7 +63,7 @@ internal object Tier1CSharpCompile {
             <LangVersion>14</LangVersion>
             <Nullable>enable</Nullable>
             <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-            <DefineConstants>$defines</DefineConstants>$unsafeBlocks
+            <DefineConstants>$defines</DefineConstants>$unsafeBlocks$documentation
           </PropertyGroup>
           <ItemGroup><ProjectReference Include="$contract" /></ItemGroup>
         </Project>
@@ -98,8 +105,9 @@ internal object Tier1CSharpCompile {
     consumerSource: String,
     defines: String = "",
     allowUnsafe: Boolean = true,
+    documentationFile: Boolean = false,
   ) {
-    val build: Tier1CSharpBuild = compile(result, consumerSource, defines, allowUnsafe)
+    val build: Tier1CSharpBuild = compile(result, consumerSource, defines, allowUnsafe, documentationFile)
     assertTrue(
       build.succeeded,
       "fresh generated C# must compile (requires dotnet SDK 10): ${build.log}",

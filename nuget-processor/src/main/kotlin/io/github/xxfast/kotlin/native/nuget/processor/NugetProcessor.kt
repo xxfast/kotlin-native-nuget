@@ -2326,6 +2326,7 @@ internal class NugetProcessor(
     // ADR-241: the exported `Throwable` classes, deepest first, with their C# exception base.
     val exportedExceptionTypes: List<ExportedExceptionType> =
       exportedExceptionTypes(allClasses, sealedClasses)
+    ForwardDiagnosticSink.emit(exceptionMemberCollisions(exportedExceptionTypes), logger)
 
     if (hasNothingToProcess) {
       // Issue #55: the diagnostics file is what `nugetReportDiagnostics` re-emits, so the
