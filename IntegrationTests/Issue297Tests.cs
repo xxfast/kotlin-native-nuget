@@ -21,7 +21,7 @@ public class Issue297Tests
     public void Config_SettingOnlyTheLastDefault_LeavesTheOtherThreeAtKotlinDefaults()
     {
         // The issue's own example: impossible under the trailing omitting overloads.
-        using var oreo = new Config(mode: Mode.Always);
+        var oreo = new Config(mode: Mode.Always);
 
         Assert.Equal(Mode.Always, oreo.Mode);
         Assert.Equal(3, oreo.Retries);
@@ -34,8 +34,8 @@ public class Issue297Tests
     {
         // `Uuid.random()` is evaluated by Kotlin at each call site, never copied into C#, so two
         // default-constructed configs cannot share an id.
-        using var oreo = new Config();
-        using var mylo = new Config();
+        var oreo = new Config();
+        var mylo = new Config();
 
         Assert.NotEqual(oreo.Id, mylo.Id);
         Assert.Equal(Mode.Never, mylo.Mode);
@@ -46,7 +46,7 @@ public class Issue297Tests
     {
         var id = Guid.Parse("0b5e0a11-c0de-4bad-8a75-000000000001");
 
-        using var mylo = new Config(id, TimeSpan.FromSeconds(30), 5, Mode.Always);
+        var mylo = new Config(id, TimeSpan.FromSeconds(30), 5, Mode.Always);
 
         Assert.Equal(id, mylo.Id);
         Assert.Equal(TimeSpan.FromSeconds(30), mylo.Timeout);
@@ -58,8 +58,8 @@ public class Issue297Tests
     public void Config_Copy_ReplacesOnlyTheNamedField()
     {
         // Unset on `Copy` means "the receiver's value", which is Kotlin's own `copy` default.
-        using var original = new Config(timeout: TimeSpan.FromSeconds(90), mode: Mode.Always);
-        using var copy = original.Copy(retries: 7);
+        var original = new Config(timeout: TimeSpan.FromSeconds(90), mode: Mode.Always);
+        var copy = original.Copy(retries: 7);
 
         Assert.Equal(7, copy.Retries);
         Assert.Equal(original.Id, copy.Id);

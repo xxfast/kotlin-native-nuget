@@ -68,7 +68,7 @@ public class NestedClassGateTests
         // Was: Assert.Null(GetMethod("Make", PublicInstance)). The Kotlin member is now `nest()`,
         // because an instance Make() beside the companion's static Make() is CS0111.
         using var outer = new ProbeOuter();
-        using var nested = outer.Nest();
+        var nested = outer.Nest();
 
         Assert.Equal("n", nested.X);
     }

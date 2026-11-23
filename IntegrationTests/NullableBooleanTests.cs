@@ -17,21 +17,21 @@ public class NullableBooleanTests
     [Fact]
     public void CatChip_Implanted_False()
     {
-        using var chip = new CatChip("Oreo", false);
+        var chip = new CatChip("Oreo", false);
         Assert.False(chip.Implanted);
     }
 
     [Fact]
     public void CatChip_Implanted_True()
     {
-        using var chip = new CatChip("Oreo", true);
+        var chip = new CatChip("Oreo", true);
         Assert.True(chip.Implanted);
     }
 
     [Fact]
     public void CatChip_Implanted_Null()
     {
-        using var chip = new CatChip("Mylo", null);
+        var chip = new CatChip("Mylo", null);
         Assert.Null(chip.Implanted);
     }
 

@@ -77,6 +77,12 @@ suspend fun fetchPlushie(): Plushie {
   return favouritePlushie()
 }
 
+/**
+ * A `suspend` result with NO suspension point: the coroutine can complete before the P/Invoke
+ * that started it returns, the race the leak harness drives in a tight loop.
+ */
+suspend fun peekPlushie(): Plushie = favouritePlushie()
+
 /** A `Flow` element. */
 fun plushieParade(): Flow<Plushie> = flow {
   for (plushie in plushies()) emit(plushie)

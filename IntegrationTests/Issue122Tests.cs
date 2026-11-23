@@ -33,9 +33,9 @@ public class Issue122Tests
     [Fact]
     public async Task FetchAsync_ListReturnOnASealedArm_AgreesWithThePropertyRoute()
     {
-        using var oreo = new Member(1, "Oreo");
-        using var mylo = new Member(2, "Mylo");
-        using var biscuit = new Member(3, "Biscuit");
+        var oreo = new Member(1, "Oreo");
+        var mylo = new Member(2, "Mylo");
+        var biscuit = new Member(3, "Biscuit");
         using var factory = new AssignmentFactory();
         using Existing existing = factory.Existing([oreo, mylo, biscuit]);
 
@@ -44,8 +44,6 @@ public class Issue122Tests
 
         Assert.Equal(viaProperty.Select(m => m.Id), viaSuspend.Select(m => m.Id));
         Assert.Equal(viaProperty.Select(m => m.Name), viaSuspend.Select(m => m.Name));
-        foreach (Member member in viaSuspend) member.Dispose();
-        foreach (Member member in viaProperty) member.Dispose();
     }
 
     /// <summary>
@@ -55,9 +53,9 @@ public class Issue122Tests
     [Fact]
     public async Task FetchAsync_WithAWindow_ReturnsTheSlice()
     {
-        using var oreo = new Member(1, "Oreo");
-        using var mylo = new Member(2, "Mylo");
-        using var biscuit = new Member(3, "Biscuit");
+        var oreo = new Member(1, "Oreo");
+        var mylo = new Member(2, "Mylo");
+        var biscuit = new Member(3, "Biscuit");
         using var factory = new AssignmentFactory();
         using Existing existing = factory.Existing([oreo, mylo, biscuit]);
 
@@ -65,7 +63,6 @@ public class Issue122Tests
 
         Assert.Single(page);
         Assert.Equal("Mylo", page[0].Name);
-        page[0].Dispose();
     }
 
     [Fact]

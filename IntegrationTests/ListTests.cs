@@ -58,7 +58,7 @@ public class ListTests
     {
         using var cat = new Cat("Oreo", 9);
         IReadOnlyList<Toy> toys = cat.Toys;
-        using var first = toys[0];
+        var first = toys[0];
         Assert.Equal("Mouse", first.Name);
         Assert.Equal("Gray", first.Color);
     }
@@ -71,7 +71,7 @@ public class ListTests
         var names = new List<string>();
         foreach (var toy in toys)
         {
-            using var t = toy;
+            var t = toy;
             names.Add(t.Name);
         }
         Assert.Equal(new List<string> { "Mouse", "Ball" }, names);

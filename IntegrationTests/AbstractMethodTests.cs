@@ -117,8 +117,8 @@ public class AbstractMethodTests
     {
         using var hauler = new CatHauler("H1");
 
-        using Toy cargo = hauler.Cargo();
-        using Toy viaBase = ((Hauler)hauler).Cargo();
+        Toy cargo = hauler.Cargo();
+        Toy viaBase = ((Hauler)hauler).Cargo();
 
         Assert.IsType<Toy>(cargo);
         Assert.Equal("Catnip Banana", cargo.Name);

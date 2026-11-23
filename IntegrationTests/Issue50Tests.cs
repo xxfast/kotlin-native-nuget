@@ -45,7 +45,7 @@ public class Issue50Tests
         using Issue50State state = Issue50Feed.Issue50Loaded();
         var success = Assert.IsType<Issue50State.Success>(state);
 
-        using Issue50Position position = success.Position;
+        Issue50Position position = success.Position;
 
         Assert.Equal(-37.81, position.Latitude);
         Assert.Equal(144.96, position.Longitude);

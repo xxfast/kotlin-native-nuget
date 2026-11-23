@@ -29,7 +29,7 @@ public class Issue65Tests
     [Fact]
     public void Constructor_KeywordParameter_AcceptsVerbatimNamedArgument()
     {
-        using var article = new Issue65Article(
+        var article = new Issue65Article(
             @abstract: "Mylo slept through the entire press conference.",
             title: "Cat Naps Through Budget Address");
 
@@ -40,7 +40,7 @@ public class Issue65Tests
     [Fact]
     public void Constructor_KeywordParameter_AcceptsPositionalArgument()
     {
-        using var article = new Issue65Article(
+        var article = new Issue65Article(
             "Oreo, black with a white middle, reviewed the biscuits.",
             "Biscuit Review: Nine Out Of Nine");
 
@@ -51,7 +51,7 @@ public class Issue65Tests
     [Fact]
     public void Describe_KeywordScalarParameter_NamedArgument_ReachesNative()
     {
-        using var article = new Issue65Article(@abstract: "Mylo, brown and creamy.", title: "Milo");
+        var article = new Issue65Article(@abstract: "Mylo, brown and creamy.", title: "Milo");
 
         // If the generated call site emits the bare C# `default` literal instead of the escaped
         // parameter, this compiles but returns "Milo x0".
@@ -61,7 +61,7 @@ public class Issue65Tests
     [Fact]
     public void Describe_KeywordScalarParameter_Positional_ReachesNative()
     {
-        using var article = new Issue65Article(@abstract: "Oreo, mid-biscuit.", title: "Oreo");
+        var article = new Issue65Article(@abstract: "Oreo, mid-biscuit.", title: "Oreo");
 
         Assert.Equal("Oreo x3", article.Describe(3));
     }
@@ -69,7 +69,7 @@ public class Issue65Tests
     [Fact]
     public void Tag_KeywordCollectionParameter_MarshalsTheWholeList()
     {
-        using var article = new Issue65Article(@abstract: "Two cats.", title: "Roll Call");
+        var article = new Issue65Article(@abstract: "Two cats.", title: "Roll Call");
 
         IReadOnlyList<string> tags = new List<string> { "Oreo", "Mylo", "biscuit" };
 
@@ -88,7 +88,7 @@ public class Issue65Tests
     [Fact]
     public void Byline_TopLevelKeywordObjectParameter_ReadsThroughTheHandle()
     {
-        using var article = new Issue65Article(
+        var article = new Issue65Article(
             @abstract: "Mylo declined to comment.",
             title: "Sunbeam Occupied Until Further Notice");
 

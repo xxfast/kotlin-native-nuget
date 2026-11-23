@@ -28,7 +28,7 @@ public class Issue41Tests
     {
         // Baseline: the sub-namespace type is fine on its own. Only the cross-namespace
         // reference from the root namespace is broken, so this must stay green either way.
-        using var thing = new Issue41Thing("Crinkle ball", 40);
+        var thing = new Issue41Thing("Crinkle ball", 40);
 
         Assert.Equal("Crinkle ball", thing.Name);
         Assert.Equal(40, thing.Weight);
@@ -38,11 +38,11 @@ public class Issue41Tests
     public void Issue41Bundle_Constructor_TakesTheSubNamespaceTypeInBothPositions()
     {
         // Constructor-parameter positions: IReadOnlyList<Issue41Thing> and Issue41Thing.
-        using var ball = new Issue41Thing("Crinkle ball", 40);
-        using var mouse = new Issue41Thing("Felt mouse", 15);
-        using var collar = new Issue41Thing("Bell collar", 22);
+        var ball = new Issue41Thing("Crinkle ball", 40);
+        var mouse = new Issue41Thing("Felt mouse", 15);
+        var collar = new Issue41Thing("Bell collar", 22);
 
-        using var bundle = new Issue41Bundle(new List<Issue41Thing> { ball, mouse }, collar);
+        var bundle = new Issue41Bundle(new List<Issue41Thing> { ball, mouse }, collar);
 
         Assert.NotNull(bundle);
     }
@@ -51,16 +51,16 @@ public class Issue41Tests
     public void Issue41Bundle_Things_ReadsTheListPropertyAndItsElements()
     {
         // Property + `new List<Issue41Thing>(count)` + FromHandle<Issue41Thing> positions.
-        using var ball = new Issue41Thing("Crinkle ball", 40);
-        using var mouse = new Issue41Thing("Felt mouse", 15);
-        using var collar = new Issue41Thing("Bell collar", 22);
-        using var bundle = new Issue41Bundle(new List<Issue41Thing> { ball, mouse }, collar);
+        var ball = new Issue41Thing("Crinkle ball", 40);
+        var mouse = new Issue41Thing("Felt mouse", 15);
+        var collar = new Issue41Thing("Bell collar", 22);
+        var bundle = new Issue41Bundle(new List<Issue41Thing> { ball, mouse }, collar);
 
         IReadOnlyList<Issue41Thing> things = bundle.Things;
 
         Assert.Equal(2, things.Count);
-        using Issue41Thing first = things[0];
-        using Issue41Thing second = things[1];
+        Issue41Thing first = things[0];
+        Issue41Thing second = things[1];
         Assert.Equal("Crinkle ball", first.Name);
         Assert.Equal(40, first.Weight);
         Assert.Equal("Felt mouse", second.Name);
@@ -71,11 +71,11 @@ public class Issue41Tests
     public void Issue41Bundle_One_ReadsTheScalarObjectProperty()
     {
         // Property + `new Issue41Thing(handle)` positions, without the collection in the way.
-        using var ball = new Issue41Thing("Crinkle ball", 40);
-        using var collar = new Issue41Thing("Bell collar", 22);
-        using var bundle = new Issue41Bundle(new List<Issue41Thing> { ball }, collar);
+        var ball = new Issue41Thing("Crinkle ball", 40);
+        var collar = new Issue41Thing("Bell collar", 22);
+        var bundle = new Issue41Bundle(new List<Issue41Thing> { ball }, collar);
 
-        using Issue41Thing one = bundle.One;
+        Issue41Thing one = bundle.One;
 
         Assert.Equal("Bell collar", one.Name);
         Assert.Equal(22, one.Weight);
@@ -85,26 +85,26 @@ public class Issue41Tests
     public void Issue41Bundle_Copy_ReplacingOne_ReturnsANewBundle()
     {
         // Copy parameter + return positions.
-        using var ball = new Issue41Thing("Crinkle ball", 40);
-        using var mouse = new Issue41Thing("Felt mouse", 15);
-        using var collar = new Issue41Thing("Bell collar", 22);
-        using var harness = new Issue41Thing("Walking harness", 90);
-        using var bundle = new Issue41Bundle(new List<Issue41Thing> { ball, mouse }, collar);
+        var ball = new Issue41Thing("Crinkle ball", 40);
+        var mouse = new Issue41Thing("Felt mouse", 15);
+        var collar = new Issue41Thing("Bell collar", 22);
+        var harness = new Issue41Thing("Walking harness", 90);
+        var bundle = new Issue41Bundle(new List<Issue41Thing> { ball, mouse }, collar);
 
-        using Issue41Bundle copied = bundle.Copy(bundle.Things, harness);
+        Issue41Bundle copied = bundle.Copy(bundle.Things, harness);
 
-        using Issue41Thing copiedOne = copied.One;
+        Issue41Thing copiedOne = copied.One;
         Assert.Equal("Walking harness", copiedOne.Name);
         Assert.Equal(90, copiedOne.Weight);
 
         // The original is untouched.
-        using Issue41Thing originalOne = bundle.One;
+        Issue41Thing originalOne = bundle.One;
         Assert.Equal("Bell collar", originalOne.Name);
 
         // And the list component survived the round trip through Copy.
         IReadOnlyList<Issue41Thing> copiedThings = copied.Things;
         Assert.Equal(2, copiedThings.Count);
-        using Issue41Thing copiedFirst = copiedThings[0];
+        Issue41Thing copiedFirst = copiedThings[0];
         Assert.Equal("Crinkle ball", copiedFirst.Name);
     }
 
@@ -114,28 +114,28 @@ public class Issue41Tests
         // Copy's collection parameter position, driven from a freshly built list rather than
         // the bundle's own, so the IReadOnlyList<Issue41Thing> parameter type is exercised
         // against a plain C#-constructed List<T>.
-        using var ball = new Issue41Thing("Crinkle ball", 40);
-        using var collar = new Issue41Thing("Bell collar", 22);
-        using var harness = new Issue41Thing("Walking harness", 90);
-        using var bundle = new Issue41Bundle(new List<Issue41Thing> { ball }, collar);
+        var ball = new Issue41Thing("Crinkle ball", 40);
+        var collar = new Issue41Thing("Bell collar", 22);
+        var harness = new Issue41Thing("Walking harness", 90);
+        var bundle = new Issue41Bundle(new List<Issue41Thing> { ball }, collar);
 
-        using Issue41Bundle copied = bundle.Copy(new List<Issue41Thing> { ball, harness }, collar);
+        Issue41Bundle copied = bundle.Copy(new List<Issue41Thing> { ball, harness }, collar);
 
         IReadOnlyList<Issue41Thing> copiedThings = copied.Things;
         Assert.Equal(2, copiedThings.Count);
-        using Issue41Thing copiedSecond = copiedThings[1];
+        Issue41Thing copiedSecond = copiedThings[1];
         Assert.Equal("Walking harness", copiedSecond.Name);
 
-        using Issue41Thing only = Assert.Single(bundle.Things);
+        Issue41Thing only = Assert.Single(bundle.Things);
         Assert.Equal("Crinkle ball", only.Name);
     }
 
     [Fact]
     public void Issue41Bundle_ToString_RendersTheKotlinDataClassForm()
     {
-        using var ball = new Issue41Thing("Crinkle ball", 40);
-        using var collar = new Issue41Thing("Bell collar", 22);
-        using var bundle = new Issue41Bundle(new List<Issue41Thing> { ball }, collar);
+        var ball = new Issue41Thing("Crinkle ball", 40);
+        var collar = new Issue41Thing("Bell collar", 22);
+        var bundle = new Issue41Bundle(new List<Issue41Thing> { ball }, collar);
 
         Assert.Equal(
             "Issue41Bundle(things=[Issue41Thing(name=Crinkle ball, weight=40)], "
