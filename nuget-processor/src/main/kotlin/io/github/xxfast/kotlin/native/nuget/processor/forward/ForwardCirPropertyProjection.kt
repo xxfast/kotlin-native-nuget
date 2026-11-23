@@ -33,7 +33,7 @@ internal object ForwardCirPropertyProjection {
       isOverride = isOverride,
       isVirtual = isVirtual,
       isAbstract = isAbstract,
-    )
+    ).copy(guardsReceiver = true)
     // A setter planned ONLY for an explicit implementation must never reach the public property:
     // with no interface spelled (a caller that does not render case D, or an interface the base
     // list could not spell either), it renders get-only, exactly as before case D existed.

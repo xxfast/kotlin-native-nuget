@@ -26,8 +26,22 @@ class Kitten(override val name: String) : Adoptable {
   fun purr(): String = "$name purrs like a tiny engine"
 }
 
+/**
+ * A data class on purpose: it is the only kind of wrapper the generator gives Kotlin-bridged
+ * `Equals`/`GetHashCode`/`ToString`, so it is where a disposed receiver reaches Kotlin through
+ * those three. It stays a handle under ADR-242 (which turns an immutable data class of only
+ * scalars, strings, enums and collections of those into a C# value) twice over: [kitten] is a
+ * class-typed component and [day] is a `var`. Never a list element, it is a receiver probe only.
+ */
+data class AdoptionRecord(val kitten: Kitten, var day: Int)
+
 /** The host. Every read builds fresh Kitten instances, so each list owns its element handles. */
 class AdoptionCentre {
+
+  private val oreo: Kitten = Kitten("Oreo")
+
+  /** Plain method return. Shares one [Kitten], so two reads are equal by Kotlin's data `equals`. */
+  fun record(): AdoptionRecord = AdoptionRecord(oreo, 3)
 
   /** Property getter, interface elements: two Kotlin-backed [Kitten]s seen as [Adoptable]. */
   val pets: List<Adoptable> get() = listOf(Kitten("Oreo"), Kitten("Mylo"))

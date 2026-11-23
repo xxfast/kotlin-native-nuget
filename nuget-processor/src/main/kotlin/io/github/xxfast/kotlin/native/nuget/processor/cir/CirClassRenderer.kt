@@ -372,22 +372,28 @@ private fun StringBuilder.renderClassDeclaration(
     appendLine()
   }
 
+  // ADR-215: a generic class's Flow member names its owner applied (`nameof(Brook<T>)`), since
+  // `nameof(Brook)` does not bind inside `Brook<T>` (CS0305). ADR-219: so does a suspend member,
+  // and (issue #610) every member that opens with the disposed-receiver guard.
+  val owner: String = if (cls.typeParameters.isEmpty()) cls.name
+  else cls.name + cls.typeParameters.joinToString(", ", "<", ">") { it.name }
+
   for (prop in cls.properties) {
     if (!prop.hasNativeImport) {
       // ADR-075 amendment (2026-09-11): a declaration-only abstract property (inherited from an
       // exported interface, never implemented here) has no export to import. Rendered, not
       // imported: the mirror of the abstract-method arm below.
-      renderProperty(prop)
+      renderProperty(prop, owner)
     } else if (prop.isFlow) {
       renderFlowPropertyNativeImports(cls.libraryName, cls.nativePrefix, prop, externs)
-      renderProperty(prop)
+      renderProperty(prop, owner)
     } else if (prop.usesLegacyNativeImport()) {
       renderLegacyPropertyNativeImports(cls, prop, externs)
-      renderProperty(prop)
+      renderProperty(prop, owner)
     } else {
       cls.propertyNativeImports(prop)
         .forEach { nativeImport -> renderDllImport(nativeImport, externs) }
-      renderProperty(prop)
+      renderProperty(prop, owner)
     }
   }
 
@@ -401,11 +407,11 @@ private fun StringBuilder.renderClassDeclaration(
           "its own [DllImport], never by CirClass.methods"
     }
     if (!method.isAbstract) renderDllImport(cls.methodNativeImport(method), externs)
-    renderMethod(method, cls.name)
+    renderMethod(method, owner)
   }
 
   cls.callbackMethods.forEach { cbMethod ->
-    renderCallbackMethod(cbMethod, externs)
+    renderCallbackMethod(cbMethod, externs, owner)
   }
 
   cls.storedCallbackMethods.forEach { scMethod ->
@@ -416,20 +422,16 @@ private fun StringBuilder.renderClassDeclaration(
     renderInterfaceBridgeMethod(ibMethod, externs)
   }
 
-  // ADR-215: a generic class's Flow member names its owner applied (`nameof(Brook<T>)`), since
-  // `nameof(Brook)` does not bind inside `Brook<T>` (CS0305). ADR-219: so does a suspend member.
-  val flowOwner: String = if (cls.typeParameters.isEmpty()) cls.name
-  else cls.name + cls.typeParameters.joinToString(", ", "<", ">") { it.name }
   for (member in cls.companionMembers) {
     renderMember(
       member,
-      if (member is CirMethod && (member.isFlow || member.isAsync)) flowOwner else cls.name,
+      if (member is CirMethod && (member.isFlow || member.isAsync)) owner else cls.name,
       externs,
     )
   }
 
   if (cls.isDataClass) {
-    renderDataClassMethods(cls, externs, withToString = !cls.isException)
+    renderDataClassMethods(cls, externs, owner, withToString = !cls.isException)
   }
 
   renderDispose(
@@ -760,7 +762,9 @@ private fun CirConstructor.nativeCallArguments(): String {
   return if (names.isEmpty()) "out IntPtr error" else "$names, out IntPtr error"
 }
 
-internal fun StringBuilder.renderProperty(prop: CirProperty) {
+internal fun StringBuilder.renderProperty(property: CirProperty, owner: String = "") {
+  // Issue #610: ahead of case D below, so its explicit setter carries the guard too.
+  val prop: CirProperty = property.withReceiverGuard(owner)
   // ROADMAP line 28, case D: the public property overrides a get-only base property, so it renders
   // get-only (CS0546 otherwise), and the setter the interface declares is implemented explicitly
   // beside it. The `Native_Set_` import still comes off `setter`, so it is emitted either way.
@@ -848,9 +852,9 @@ internal fun StringBuilder.renderMember(
   when (member) {
     is CirDllImport -> renderDllImport(member, externs)
     is CirMethod -> renderMethod(member, className)
-    is CirProperty -> renderProperty(member)
+    is CirProperty -> renderProperty(member, className)
     is CirConst -> renderConst(member)
-    is CirCallbackMethod -> renderCallbackMethod(member, externs)
+    is CirCallbackMethod -> renderCallbackMethod(member, externs, className)
     is CirStoredCallbackMethod -> renderStoredCallbackMethod(member, externs)
     is CirInterfaceBridgeMethod -> renderInterfaceBridgeMethod(member, externs)
     is CirExtensionProperty -> renderExtensionProperty(member)
@@ -1004,10 +1008,20 @@ private fun StringBuilder.renderMethodBody(method: CirMethod, className: String)
     return
   }
 
+  // Issue #610: a member over the owner's `_handle` opens with the disposed-receiver guard, ahead of
+  // every prelude (a callback's null check, a minted argument handle), so a disposed receiver is an
+  // `ObjectDisposedException` rather than the zero sentinel Kotlin dereferences.
+  val guard: String? = if (method.guardsReceiver && !method.isStatic && !method.isAbstract) {
+    check(disposedName.isNotEmpty()) { "Receiver-guarded method ${method.name} has no owner name" }
+    disposedOwnerGuard(disposedName)
+  } else {
+    null
+  }
+
   // A planned abstract member keeps its plan's error slot (its backing override needs it), but is
   // declaration-only here, so it takes the abstract arm below.
   if (method.isSyncErrorCheckEnabled && !method.hasCustomBody && !method.isAbstract) {
-    renderSyncErrorCheckMethod(method, className)
+    renderSyncErrorCheckMethod(method, className, guard)
     return
   }
 
@@ -1049,7 +1063,14 @@ private fun StringBuilder.renderMethodBody(method: CirMethod, className: String)
   if (method.isAbstract) {
     appendLine("        $visibility ${abstract}${method.returnType} ${method.explicitName}$genericDecl($paramStr)$whereStr;")
   } else {
-    val isMultiLine: Boolean = method.body.contains('\n')
+    // An expression body takes the guard as a block: the guard is a statement.
+    val body: String = when {
+      guard == null -> method.body
+      method.body.contains('\n') -> guardedBody(method.body, guard)
+      method.returnType == "void" -> "\n            $guard\n            ${method.body};"
+      else -> "\n            $guard\n            return ${method.body};"
+    }
+    val isMultiLine: Boolean = body.contains('\n')
 
     if (isMultiLine) {
       if (method.returnType == "void") {
@@ -1057,7 +1078,7 @@ private fun StringBuilder.renderMethodBody(method: CirMethod, className: String)
       } else {
         appendLine("        $visibility $static$override${method.returnType} ${method.explicitName}$genericDecl($paramStr)$whereStr")
       }
-      appendLine("        {${method.body}")
+      appendLine("        {$body")
       appendLine("        }")
     } else {
       if (method.returnType == "void") {
@@ -1087,24 +1108,49 @@ internal fun CirMethod.whereClauses(): String = typeParameters
 internal fun StringBuilder.renderDataClassMethods(
   cls: CirClass,
   externs: CirExternScope? = null,
+  owner: String = cls.name,
   withToString: Boolean = true,
 ) {
   cls.dataClassNativeImports().forEach { nativeImport -> renderDllImport(nativeImport, externs) }
 
-  if (cls.copyMethod != null) renderMethod(cls.copyMethod, cls.name)
+  if (cls.copyMethod != null) renderMethod(cls.copyMethod, owner)
 
-  appendLine("        public override bool Equals(object? obj)")
-  appendLine("        {")
-  appendLine("            if (obj is ${cls.name} other) return Native_Equals(_handle, other._handle);")
-  appendLine("            return false;")
-  appendLine("        }")
+  // Issue #610: none of the three exports has an error slot, so a disposed receiver reaching
+  // Kotlin ends the process; each override opens with the guard instead.
+  appendDataClassOverrides(cls.name, disposedOwnerGuard(owner), "        ", withToString)
+}
+
+/**
+ * The `Equals` / `GetHashCode` / `ToString` overrides over a data class's (or data arm's)
+ * `Native_Equals` / `Native_HashCode` / `Native_ToString` externs, at member [indent], each behind
+ * [guard]. `ToString` only [withToString].
+ */
+internal fun StringBuilder.appendDataClassOverrides(
+  typeName: String,
+  guard: String,
+  indent: String,
+  withToString: Boolean = true,
+) {
+  appendLine("${indent}public override bool Equals(object? obj)")
+  appendLine("$indent{")
+  appendLine("$indent    $guard")
+  appendLine("$indent    if (obj is $typeName other) return Native_Equals(_handle, other._handle);")
+  appendLine("$indent    return false;")
+  appendLine("$indent}")
   appendLine()
-  appendLine("        public override int GetHashCode() => Native_HashCode(_handle);")
+  appendLine("${indent}public override int GetHashCode()")
+  appendLine("$indent{")
+  appendLine("$indent    $guard")
+  appendLine("$indent    return Native_HashCode(_handle);")
+  appendLine("$indent}")
   appendLine()
   // ADR-241: an exception keeps `KotlinException.ToString`, which carries the Kotlin trace.
-  if (withToString) {
-    appendLine("        public override string ToString() => Marshal.PtrToStringUTF8(Native_ToString(_handle))!;")
-  }
+  if (!withToString) return
+  appendLine("${indent}public override string ToString()")
+  appendLine("$indent{")
+  appendLine("$indent    $guard")
+  appendLine("$indent    return Marshal.PtrToStringUTF8(Native_ToString(_handle))!;")
+  appendLine("$indent}")
   appendLine()
 }
 
@@ -1418,7 +1464,10 @@ private fun StringBuilder.appendSubscriptionReturn(unregister: String) {
 private fun StringBuilder.renderCallbackMethod(
   method: CirCallbackMethod,
   externs: CirExternScope? = null,
+  // Issue #610: the `nameof(...)` spelling of the owner whose `_handle` [CirCallbackMethod.wrapperBody] passes.
+  owner: String,
 ) {
+  check(owner.isNotEmpty()) { "Per-call callback method ${method.csMethodName} has no owner name" }
   appendLine("        [DllImport(\"${method.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${method.nativeEntryPoint}\")]")
   narrowReturnMarshal(method.nativeImportReturnType)?.let { appendLine(it) }
   appendExtern(
@@ -1436,6 +1485,8 @@ private fun StringBuilder.renderCallbackMethod(
   // invoked and the resulting `NullReferenceException` crosses back as a Kotlin error that never
   // names the argument. Kotlin nullability does not matter: C# has no "no listener" spelling here.
   appendLine("            ArgumentNullException.ThrowIfNull(${method.lambdaParamName});")
+  // Issue #610: receiver state after the argument, both ahead of `RegisterCtx`.
+  appendLine("            ${disposedOwnerGuard(owner)}")
   appendLine("            ${method.delegateName} nativeCallback = ${method.delegateParamList} =>")
   appendLine("            {")
   appendLine(method.callbackBody)
@@ -1473,6 +1524,38 @@ internal const val TAKE_HANDLE: String =
  */
 internal fun disposedOwnerGuard(owner: String): String =
   "if (_handle.IsInvalid) throw new ObjectDisposedException(nameof($owner));"
+
+/**
+ * Issue #610: a statement-block [body] (baked with a leading newline, the shape every member body
+ * takes) behind [guard], at the body's own first-statement indent. A leading callback
+ * `ThrowIfNull` stays ahead of it: argument validation precedes receiver state, the order the
+ * listener pairs ship, and neither mints nor crosses.
+ */
+internal fun guardedBody(body: String, guard: String): String {
+  check(body.startsWith("\n")) { "A receiver-guarded body must be a statement block: $body" }
+  val lines: List<String> = body.removePrefix("\n").split("\n")
+  val validations: Int =
+    lines.takeWhile { line -> line.trimStart().startsWith("ArgumentNullException.ThrowIfNull(") }.size
+  val indent: String = lines[validations].takeWhile { it == ' ' }
+  val guarded: List<String> = lines.take(validations) + "$indent$guard" + lines.drop(validations)
+  return "\n" + guarded.joinToString("\n")
+}
+
+/**
+ * Issue #610: this property with both accessors behind [disposedOwnerGuard] for [owner], the
+ * spelling `nameof(...)` binds to at the render site. A planned class property's accessors are
+ * always statement blocks (the error slot), so no expression body needs converting.
+ */
+internal fun CirProperty.withReceiverGuard(owner: String): CirProperty {
+  if (!guardsReceiver || isStatic || isAbstract) return this
+  check(owner.isNotEmpty()) { "Receiver-guarded property $name has no owner name" }
+  val guard: String = disposedOwnerGuard(owner)
+  return copy(
+    getter = guardedBody(getter, guard),
+    setter = setter?.let { body -> guardedBody(body, guard) },
+    guardsReceiver = false,
+  )
+}
 
 /**
  * [call] as a block-bodied lambda body at [indent], behind [guard]: the shape every owner-keyed

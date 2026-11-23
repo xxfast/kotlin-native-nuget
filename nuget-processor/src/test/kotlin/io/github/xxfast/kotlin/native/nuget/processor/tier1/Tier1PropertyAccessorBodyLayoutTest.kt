@@ -48,6 +48,7 @@ class Tier1PropertyAccessorBodyLayoutTest {
       |        {
       |            get
       |            {
+      |                if (_handle.IsInvalid) throw new ObjectDisposedException(nameof(Gauge));
       |                IntPtr nativeResult = Native_Get_label(_handle, out IntPtr error);
       |                if (error != IntPtr.Zero)
       |                {
@@ -75,6 +76,7 @@ class Tier1PropertyAccessorBodyLayoutTest {
       """
       |            get
       |            {
+      |                if (_handle.IsInvalid) throw new ObjectDisposedException(nameof(Gauge));
       |                bool hasValue = Native_Get_level(_handle, out IntPtr error);
       |                if (error != IntPtr.Zero)
       |                {
@@ -97,6 +99,7 @@ class Tier1PropertyAccessorBodyLayoutTest {
       """
       |            set
       |            {
+      |                if (_handle.IsInvalid) throw new ObjectDisposedException(nameof(Gauge));
       |                if (value.HasValue)
       |                {
       |                    Native_Set_level(_handle, value.Value, out IntPtr error);

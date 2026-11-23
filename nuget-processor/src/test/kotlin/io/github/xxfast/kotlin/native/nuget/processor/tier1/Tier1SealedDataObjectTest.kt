@@ -61,7 +61,11 @@ class Tier1SealedDataObjectTest {
     assertContains(result.generatedCSharp, "EntryPoint = \"library_tier1_dataobject__shape_empty_hashcode\"")
     assertContains(result.generatedCSharp, "EntryPoint = \"library_tier1_dataobject__shape_empty_tostring\"")
     assertContains(result.generatedCSharp, "if (obj is Empty other) return Native_Equals(_handle, other._handle);")
-    assertContains(result.generatedCSharp, "public override int GetHashCode() => Native_HashCode(_handle);")
+    // Issue #610: a disposed arm throws instead of aborting through the slotless export.
+    assertContains(
+      result.generatedCSharp,
+      "public override int GetHashCode()\n            {\n                $GUARD\n                return Native_HashCode(_handle);",
+    )
   }
 
   /** The old constant literal is what made the wrapper's `ToString` disagree with Kotlin's. */
@@ -75,7 +79,11 @@ class Tier1SealedDataObjectTest {
     )
     assertContains(
       result.generatedCSharp,
-      "public override string ToString() => Marshal.PtrToStringUTF8(Native_ToString(_handle))!;",
+      "public override string ToString()\n            {\n                $GUARD\n                return Marshal.PtrToStringUTF8(Native_ToString(_handle))!;",
     )
+  }
+
+  private companion object {
+    const val GUARD = "if (_handle.IsInvalid) throw new ObjectDisposedException(nameof(Empty));"
   }
 }

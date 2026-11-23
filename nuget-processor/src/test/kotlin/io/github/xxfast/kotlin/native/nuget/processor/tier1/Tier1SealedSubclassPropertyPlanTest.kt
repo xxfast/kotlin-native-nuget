@@ -112,6 +112,7 @@ class Tier1SealedSubclassPropertyPlanTest {
       |            {
       |                get
       |                {
+      |                    if (_handle.IsInvalid) throw new ObjectDisposedException(nameof(Ping));
       |                    IntPtr nativeResult = Native_Get_friend(_handle, out IntPtr error);
       |                    if (error != IntPtr.Zero)
       |                    {
@@ -160,6 +161,7 @@ class Tier1SealedSubclassPropertyPlanTest {
       |            {
       |                get
       |                {
+      |                    if (_handle.IsInvalid) throw new ObjectDisposedException(nameof(Ping));
       |                    IntPtr nativeResult = Native_Get_id(_handle, out IntPtr error);
       |                    if (error != IntPtr.Zero)
       |                    {
@@ -205,6 +207,7 @@ class Tier1SealedSubclassPropertyPlanTest {
       """
       |                set
       |                {
+      |                    if (_handle.IsInvalid) throw new ObjectDisposedException(nameof(Ping));
       |                    Native_Set_counter(_handle, value, out IntPtr error);
       |                    if (error != IntPtr.Zero)
       """.trimMargin(),

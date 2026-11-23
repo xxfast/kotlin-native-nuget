@@ -735,6 +735,9 @@ internal object ForwardCirPlanProjection {
       hasCustomBody = result.hasCustomBody,
       nativeParameters = nativeParams,
       doc = plan.publicSignature.cirDoc(),
+      // Issue #610: the body passes `_handle`, so it opens with the disposed-receiver guard; the
+      // `TryX` twin inherits the flag through `copy`.
+      guardsReceiver = true,
     )
     // The twin rides on the method rather than beside it in the member list, so the one extern
     // this method's import is derived from stays the only one (a second CirMethod would mint a

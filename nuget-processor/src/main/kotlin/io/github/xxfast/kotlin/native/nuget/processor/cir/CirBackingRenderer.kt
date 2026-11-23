@@ -89,6 +89,9 @@ internal fun backingClassBlock(backing: CirBacking): String = buildString {
   appendLine("            }")
   appendLine()
   if (backing.isException) renderExceptionSnapshotConstructor(name, "            ")
+  // Issue #610: the disposed-receiver guard names the type the consumer holds, spelled as the base
+  // list above spells it, which compiles by construction.
+  val owner = "${backing.ownerName}$arguments"
   val members: String = buildString {
     backing.properties.forEach { property ->
       // A nested wrapper reads the owner's private property externs; a held one cannot.
@@ -96,28 +99,28 @@ internal fun backingClassBlock(backing: CirBacking): String = buildString {
         propertyNativeImports(backing.libraryName, backing.nativePrefix, property)
           .forEach { nativeImport -> renderDllImport(nativeImport) }
       }
-      renderProperty(property)
+      renderProperty(property, owner)
     }
     backing.methods.forEach { method ->
       renderDllImport(
         methodNativeImport(backing.libraryName, backing.nativePrefix, method)
           .hiding(backing.inheritedExternNames),
       )
-      renderMethod(method, name)
+      renderMethod(method, owner)
     }
     backing.inherited.forEach { base ->
       base.properties.forEach { property ->
         propertyNativeImports(backing.libraryName, base.nativePrefix, property)
           .map { nativeImport -> nativeImport.hiding(backing.inheritedExternNames) }
           .forEach { nativeImport -> renderDllImport(nativeImport) }
-        renderProperty(property)
+        renderProperty(property, owner)
       }
       base.methods.forEach { method ->
         renderDllImport(
           methodNativeImport(backing.libraryName, base.nativePrefix, method)
             .hiding(backing.inheritedExternNames),
         )
-        renderMethod(method, name)
+        renderMethod(method, owner)
       }
     }
     val dispose: CirBackingDispose? = backing.dispose
