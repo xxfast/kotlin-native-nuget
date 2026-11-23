@@ -71,6 +71,7 @@ using TestLibrary.Pawpost;
 using TestLibrary.Store;
 using Bindle = TestLibrary.Bindle;
 using Adoption = TestLibrary.Adoption;
+using Plush = TestLibrary.Plushie;
 
 namespace LeakTests;
 
@@ -231,6 +232,28 @@ public class LiveHandleTests
 
             Assert.Fail(
                 $"expected {before} live handles after {iterations} crossings, got {after} (delta {after - before}) on attempt {attempt}");
+        }
+    }
+
+    // ADR-242: the deterministic twin of `AssertNoLeak`, for crossings that must retain nothing at
+    // all. Settle once for the baseline, then read the count straight after the crossings with no
+    // GC in between: a finalizer-released handle (ADR-242's rejected option 3) would pass
+    // `AssertNoLeak`'s settle, and must not pass this. Same rule on the delta as the helpers above.
+    private static void AssertRetainsNothing(Action crossing, int iterations = 50)
+    {
+        for (int attempt = 1; ; attempt++)
+        {
+            Settle();
+            long before = NugetMarshal.LiveHandles;
+
+            for (int i = 0; i < iterations; i++) crossing();
+
+            long after = NugetMarshal.LiveHandles;
+            if (after == before) return;
+            if (after < before && attempt < MeasurementAttempts) continue;
+
+            Assert.Fail(
+                $"expected {before} live handles straight after {iterations} crossings with no GC, got {after} (delta {after - before}) on attempt {attempt}");
         }
     }
 
@@ -9580,5 +9603,104 @@ public class LiveHandleTests
             IReadOnlyList<Adoption.IAdoptable> pets = centre.Pets;
             Assert.Equal("Mylo", pets[1].Name);
         });
+    }
+
+    // ADR-242: a scalar data class is a value. Every Kotlin-defined member mints a transient Kotlin
+    // instance, calls it and releases it before returning, and a value Kotlin returns is read and
+    // its handle released at once. So the count is back at baseline straight after the crossings,
+    // with no GC and no Dispose: nothing may be retained. Oreo's favourite, Bun, crosses a thousand
+    // times and nobody puts it back.
+    [Fact]
+    public void ScalarDataClass_EveryCrossing_ReturnsToBaselineWithoutDispose()
+    {
+        AssertRetainsNothing(() =>
+        {
+            Plush.Plushie p = Plush.PlushieSample.EchoPlushie(Plush.PlushieSample.FavouritePlushie());
+            _ = p.Label;
+            _ = p.Describe(false);
+            _ = p.GetHashCode();
+            _ = p.ToString();
+            _ = p.Equals(p.Copy(squeaks: 4));
+            _ = Plush.PlushieSample.Plushies().Count;
+            _ = Plush.PlushieSample.FindPlushie("Milo");
+            _ = Plush.PlushieSample.NameOf(new Plush.Plushie("Milo", ["brown"], Plush.Mood.Sleepy, 0));
+        }, iterations: 1000);
+    }
+
+    // ADR-242: the transient instance minted for a member call is released on the throwing path
+    // too. Bun explodes; the stuffing goes everywhere, the handle does not.
+    [Fact]
+    public void ScalarDataClass_ThrowingMember_ReleasesTheTransientInstance()
+    {
+        AssertRetainsNothing(() =>
+        {
+            var bun = new Plush.Plushie("Bun", ["pink", "white"], Plush.Mood.Happy, 3);
+            Assert.Throws<KotlinInvalidOperationException>(() => bun.Explode());
+        }, iterations: 500);
+    }
+
+    // ADR-242: a constructor or `Copy` whose `init { require }` throws mints nothing that outlives
+    // the call. The receiver is made before the baseline, so only the failing crossings count.
+    [Fact]
+    public void ScalarDataClass_FailingConstructorRequire_LeaksNoHandle()
+    {
+        var bun = new Plush.Plushie("Bun", ["pink", "white"], Plush.Mood.Happy, 3);
+        AssertRetainsNothing(() =>
+        {
+            Assert.Throws<KotlinArgumentException>(() => new Plush.Plushie("", [], Plush.Mood.Happy, 0));
+            Assert.Throws<KotlinArgumentException>(() => bun.Copy(name: ""));
+        }, iterations: 500);
+        GC.KeepAlive(bun);
+    }
+
+    // ADR-242: the value's other seams. Every value handed back is rooted until after the
+    // measurement, so a finalizer cannot release a retained handle inside the settle and turn this
+    // green: with values, there is nothing to release. The `suspend` crossing runs two thousand
+    // times, per the harness convention for completion routes. Only the `Shelf` is a handle, and it
+    // is disposed. Mylo carries the plushies up to the shelf, one at a time.
+    [Fact]
+    public async Task ScalarDataClass_AsyncAndCollectionCrossings_ReturnToBaseline()
+    {
+        var rooted = new List<object>();
+
+        async Task Crossing()
+        {
+            Plush.Plushie fetched = await Plush.PlushieSample.FetchPlushieAsync();
+            rooted.Add(fetched);
+            await foreach (Plush.Plushie marcher in Plush.PlushieSample.PlushieParade()) rooted.Add(marcher);
+            Assert.Equal(6, Plush.PlushieSample.TotalSqueaks([fetched, fetched]));
+            rooted.Add(Plush.PlushieSample.Restyle(p =>
+            {
+                rooted.Add(p);
+                return p.Copy(squeaks: 9);
+            }));
+            using var shelf = new Plush.Shelf();
+            rooted.Add(shelf.Favourite);
+            shelf.Favourite = fetched;
+            Assert.Equal(1, shelf.Put(fetched));
+        }
+
+        await Crossing();
+        await AssertNoLeakAsync(Crossing, iterations: 2000);
+        GC.KeepAlive(rooted);
+    }
+
+    // ADR-242 open question 3: the wider components (value class, Instant, Duration, Uuid, a
+    // nullable scalar, Double, Set, Map) and nested scalar data classes cross the same way.
+    [Fact]
+    public void ScalarDataClass_NestedAndWiderComponents_ReturnToBaselineWithoutDispose()
+    {
+        AssertRetainsNothing(() =>
+        {
+            Plush.PlushieTag tag = Plush.PlushieSample.EchoTag(Plush.PlushieSample.MylosTag());
+            _ = tag.Equals(tag.Copy(nickname: "Milo"));
+            _ = tag.GetHashCode();
+            _ = tag.ToString();
+
+            Plush.PlushieBox box = Plush.PlushieSample.EchoBox(Plush.PlushieSample.OreosBox());
+            _ = box.Star.Label;
+            _ = box.Stack.Count;
+            _ = box.Equals(box.Copy(spare: box.Star));
+        }, iterations: 500);
     }
 }
