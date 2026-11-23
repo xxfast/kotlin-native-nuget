@@ -672,6 +672,7 @@ class ForwardMarshallingMatrixTest {
     BridgeType.ByteArray -> "ByteArray"
     is BridgeType.Enum -> "Enum"
     is BridgeType.ObjectHandle -> "ObjectHandle"
+    is BridgeType.DataValue -> "DataValue"
     is BridgeType.Interface -> "Interface"
     is BridgeType.BoundInterface -> "BoundInterface"
     is BridgeType.ValueClass -> "ValueClass"

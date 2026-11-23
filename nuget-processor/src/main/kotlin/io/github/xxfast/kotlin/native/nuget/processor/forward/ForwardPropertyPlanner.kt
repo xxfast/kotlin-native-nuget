@@ -941,6 +941,7 @@ internal class ForwardPropertyPlanner(
     }
     val starred: List<String> = when (val unwrapped: BridgeType = receiverType.unwrapNullable()) {
       is BridgeType.ObjectHandle -> unwrapped.starTypeParameters
+      is BridgeType.DataValue -> unwrapped.handle.starTypeParameters
       is BridgeType.Collection -> listOfNotNull(unwrapped.element, unwrapped.key, unwrapped.value)
         .mapNotNull { component -> component.unwrapNullable() as? BridgeType.TypeParameter }
         .filter { component -> component.kotlinName == STAR_KOTLIN_NAME }
@@ -989,7 +990,7 @@ internal class ForwardPropertyPlanner(
     is BridgeType.Callback, is BridgeType.AsyncCallback, is BridgeType.FlowSource,
     is BridgeType.ReturnedLambda -> false
 
-    is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Primitive,
+    is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface, is BridgeType.Primitive,
     BridgeType.String -> true
 
     // ADR-132 amendment: the converting by-value receivers. Each crosses as exactly one wire slot
@@ -1013,7 +1014,7 @@ internal class ForwardPropertyPlanner(
     // two-slot `receiverHasValue` + value pair (`parameters()` below). Both emitters lower it off
     // that flag; admitting it here alone would read the value slot only and lose the null.
     is BridgeType.Nullable -> when (val inner: BridgeType = type) {
-      is BridgeType.ObjectHandle, is BridgeType.Interface, BridgeType.String,
+      is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface, BridgeType.String,
       BridgeType.Uuid -> true
 
       // ADR-238: the handle-minting receivers ride the null pointer too: C# mints the bytes,
@@ -1549,7 +1550,7 @@ internal class ForwardPropertyPlanner(
     BridgeType.Unit -> false
 
     BridgeType.Char, BridgeType.String, BridgeType.Instant, BridgeType.Duration,
-    is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,
+    is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle, is BridgeType.DataValue,
     is BridgeType.Interface -> true
 
     // ADR-147: a `T` getter reads the boxed handle back through `NugetMarshal.FromHandle<T>`, the
@@ -1577,7 +1578,7 @@ internal class ForwardPropertyPlanner(
     // (String/primitive/enum/ObjectHandle).
     is BridgeType.ValueClass -> when (type.underlying) {
       BridgeType.String, is BridgeType.Primitive, is BridgeType.Enum,
-      is BridgeType.ObjectHandle,
+      is BridgeType.ObjectHandle, is BridgeType.DataValue,
       // ADR-234: a `Char` underlying, on the by-value CHAR16 slot.
       BridgeType.Char -> true
 
@@ -1662,7 +1663,7 @@ internal class ForwardPropertyPlanner(
     // reachability walk in `NugetProcessor` now visits every collection component. The setter side
     // is `isWrappableComponent`, which admits `Interface` too.
     BridgeType.Char, BridgeType.String, BridgeType.Instant, BridgeType.Duration,
-    is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,
+    is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle, is BridgeType.DataValue,
     is BridgeType.Interface -> true
 
     // ADR-201: a value class over `Throwable` stays deferred, as `isBridgeableComponent` says.
@@ -1692,7 +1693,7 @@ internal class ForwardPropertyPlanner(
     BridgeType.Char -> ForwardAbiWireType.CHAR16
     // ADR-147: the boxed handle a `T` getter mints.
     // ADR-151: the handle to the Kotlin array, on both the getter and the setter side.
-    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface,
+    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface,
     is BridgeType.Collection, BridgeType.ByteArray,
     is BridgeType.TypeParameter -> ForwardAbiWireType.POINTER
 
@@ -1758,7 +1759,7 @@ internal class ForwardPropertyPlanner(
     BridgeType.Instant,
     BridgeType.Duration,
     is BridgeType.Enum,
-    is BridgeType.ObjectHandle,
+    is BridgeType.ObjectHandle, is BridgeType.DataValue,
     is BridgeType.Interface,
     is BridgeType.BoundInterface,
     BridgeType.ByteArray,
@@ -1848,7 +1849,7 @@ internal fun BridgeType.conversion(flow: ForwardFlow): ForwardConversion? = when
     ForwardConversion.ENUM_TO_ORDINAL
   }
 
-  is BridgeType.ObjectHandle, is BridgeType.Interface -> if (flow == ForwardFlow.INTO_KOTLIN) {
+  is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface -> if (flow == ForwardFlow.INTO_KOTLIN) {
     ForwardConversion.HANDLE_TO_STABLE_REF
   } else {
     ForwardConversion.STABLE_REF_TO_HANDLE

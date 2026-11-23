@@ -83,7 +83,7 @@ internal fun BridgeType.valueClassUnderlyingRole(): ForwardValueClassUnderlying 
   // ADR-234: `Char` crosses on its own `char` wire, like a primitive.
   BridgeType.String, is BridgeType.Primitive, BridgeType.Char, is BridgeType.Enum ->
     ForwardValueClassUnderlying.VALUE
-  is BridgeType.ObjectHandle -> ForwardValueClassUnderlying.REFERENCE
+  is BridgeType.ObjectHandle, is BridgeType.DataValue -> ForwardValueClassUnderlying.REFERENCE
   // ADR-105: a sealed underlying crosses as the base's handle on the shipped ABI.
   is BridgeType.SpecializedProtocol ->
     if (name.startsWith(SEALED_HELPER_PREFIX)) ForwardValueClassUnderlying.REFERENCE

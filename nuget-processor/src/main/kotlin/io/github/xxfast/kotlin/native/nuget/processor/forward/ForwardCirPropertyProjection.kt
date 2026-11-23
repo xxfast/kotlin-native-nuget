@@ -412,7 +412,7 @@ internal object ForwardCirPropertyProjection {
       BridgeType.String -> appendLine("            IntPtr nativeResult = $native($callArgs);")
       // ADR-147: a `T` getter reads the same boxed-handle wire.
       // ADR-151: and so does a ByteArray getter.
-      is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
+      is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface, is BridgeType.Collection,
       BridgeType.ByteArray, is BridgeType.TypeParameter,
       is BridgeType.ReturnedLambda ->
         appendLine("            IntPtr nativeResult = $native($callArgs);")
@@ -474,6 +474,10 @@ internal object ForwardCirPropertyProjection {
         is BridgeType.ObjectHandle -> append(
           "            return nativeResult == IntPtr.Zero ? null : " +
               "${inner.handleReconstruction()};",
+        )
+        is BridgeType.DataValue -> append(
+          "            return nativeResult == IntPtr.Zero ? null : " +
+              "${inner.handle.handleReconstruction()};",
         )
         // ADR-236: the null pointer is a null lambda; anything else is a delegate bound to the
         // wrapper that owns the lambda handle.
@@ -543,6 +547,7 @@ internal object ForwardCirPropertyProjection {
         append("            return NugetErrorNative.BuildException(nativeResult);")
 
       is BridgeType.ObjectHandle -> append("            return ${value.handleReconstruction()};")
+      is BridgeType.DataValue -> append("            return ${value.handle.handleReconstruction()};")
       // ADR-236: a delegate bound to the `KotlinFunc` (or sibling) that owns the lambda handle.
       is BridgeType.ReturnedLambda -> append(
         "            return new ${value.lambdaWrapperCsharpType()}(nativeResult).${value.lambdaInvokeMethod()};",
@@ -605,6 +610,7 @@ internal object ForwardCirPropertyProjection {
       BridgeType.String -> "Marshal.PtrToStringUTF8($wireValue)!"
       is BridgeType.Enum -> "(${underlying.csharpType})$wireValue"
       is BridgeType.ObjectHandle -> underlying.handleReconstruction(wireValue)
+      is BridgeType.DataValue -> underlying.handle.handleReconstruction(wireValue)
       is BridgeType.Primitive -> wireValue
       // ADR-234: a `Char` underlying is the `char` a bare `Char` getter returns.
       BridgeType.Char -> wireValue
@@ -726,7 +732,7 @@ internal object ForwardCirPropertyProjection {
       if (type is BridgeType.Nullable) "string?" else "string"
     is BridgeType.Enum -> "int"
     // ADR-187: a wrapper value is passed as its owned handle, which the call keeps alive.
-    is BridgeType.ObjectHandle -> KOTLIN_HANDLE
+    is BridgeType.ObjectHandle, is BridgeType.DataValue -> KOTLIN_HANDLE
     is BridgeType.Interface -> "IntPtr"
     // ADR-236: the wrapper's own lambda handle, borrowed for the call.
     is BridgeType.ReturnedLambda -> KOTLIN_HANDLE
@@ -735,7 +741,7 @@ internal object ForwardCirPropertyProjection {
     is BridgeType.ValueClass -> when (value.underlying) {
       BridgeType.String -> if (type is BridgeType.Nullable) "string?" else "string"
       is BridgeType.Enum -> "int"
-      is BridgeType.ObjectHandle -> KOTLIN_HANDLE
+      is BridgeType.ObjectHandle, is BridgeType.DataValue -> KOTLIN_HANDLE
       BridgeType.Unit,
       is BridgeType.Primitive,
       BridgeType.Char,
@@ -864,7 +870,7 @@ internal object ForwardCirPropertyProjection {
       is BridgeType.Throwable,
       BridgeType.Uuid,
       is BridgeType.Enum,
-      is BridgeType.ObjectHandle,
+      is BridgeType.ObjectHandle, is BridgeType.DataValue,
       is BridgeType.ValueClass,
       is BridgeType.Nullable,
       is BridgeType.Callback,
@@ -917,7 +923,7 @@ internal object ForwardCirPropertyProjection {
       is BridgeType.Throwable,
       BridgeType.Uuid,
       is BridgeType.Enum,
-      is BridgeType.ObjectHandle,
+      is BridgeType.ObjectHandle, is BridgeType.DataValue,
       is BridgeType.BoundInterface,
       is BridgeType.ValueClass,
       is BridgeType.Nullable,
@@ -958,7 +964,7 @@ internal object ForwardCirPropertyProjection {
       is BridgeType.Throwable ->
         managedExceptionTextCs(name, nullable = this is BridgeType.Nullable && !nonNull)
 
-      is BridgeType.ObjectHandle ->
+      is BridgeType.ObjectHandle, is BridgeType.DataValue ->
         if (this is BridgeType.Nullable) "$name?._handle ?? NugetKotlinHandle.Null"
         else "$name._handle"
       // ADR-236: the wrapper's conversion hands back the lambda a getter's delegate is bound to, or
@@ -1009,7 +1015,7 @@ internal object ForwardCirPropertyProjection {
         }
         when (value.underlying) {
           is BridgeType.Enum -> "(int)$unwrapped"
-          is BridgeType.ObjectHandle ->
+          is BridgeType.ObjectHandle, is BridgeType.DataValue ->
             if (nullable) "$name.HasValue ? $unwrapped._handle : NugetKotlinHandle.Null"
             else "$unwrapped._handle"
 
@@ -1066,7 +1072,7 @@ internal object ForwardCirPropertyProjection {
   private fun BridgeType.wireType(): ForwardAbiWireType = when (val type = unwrapNullable()) {
     BridgeType.Unit -> ForwardAbiWireType.VOID
     BridgeType.Char -> ForwardAbiWireType.CHAR16
-    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface,
+    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface,
     is BridgeType.Collection, BridgeType.ByteArray,
     is BridgeType.TypeParameter, is BridgeType.ReturnedLambda -> ForwardAbiWireType.POINTER
 

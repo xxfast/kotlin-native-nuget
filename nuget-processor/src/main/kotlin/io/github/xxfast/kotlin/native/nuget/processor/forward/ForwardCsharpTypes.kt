@@ -31,6 +31,7 @@ internal fun BridgeType.forwardPublicCsharpType(): String = when (this) {
   // ADR-066: the classifier already computed the correctly-qualified public spelling (bare
   // simple name in this class's own namespace, `global::Namespace.Name` otherwise).
   is BridgeType.ObjectHandle -> csharpType
+  is BridgeType.DataValue -> with(handle) { csharpType }
   // ADR-040: the public C# spelling is the projected interface (`IPet`), never the backing
   // wrapper class: the wrapper is a construction-only implementation detail.
   is BridgeType.Interface -> csharpType
@@ -200,7 +201,7 @@ internal fun BridgeType.isPubliclySpellable(
   BridgeType.Uuid,
   BridgeType.ByteArray,
   is BridgeType.Throwable,
-  is BridgeType.ObjectHandle,
+  is BridgeType.ObjectHandle, is BridgeType.DataValue,
   is BridgeType.Interface,
   is BridgeType.Enum,
   is BridgeType.ValueClass,
@@ -257,7 +258,7 @@ internal fun BridgeType.isNullableStringWire(): Boolean {
  */
 internal fun BridgeType.isKotlinHandleWire(): Boolean =
   when (val type: BridgeType = if (this is BridgeType.Nullable) this.type else this) {
-    is BridgeType.ObjectHandle -> true
+    is BridgeType.ObjectHandle, is BridgeType.DataValue -> true
     is BridgeType.ValueClass -> type.underlying is BridgeType.ObjectHandle
     BridgeType.Unit,
     is BridgeType.Primitive,
@@ -330,7 +331,7 @@ private fun BridgeType.isLambdaTypeArgument(isResult: Boolean): Boolean =
  */
 internal fun BridgeType.isErasedBoxable(): Boolean = when (this) {
   is BridgeType.Primitive, BridgeType.Char, BridgeType.String, is BridgeType.Enum,
-  is BridgeType.ObjectHandle, is BridgeType.Interface,
+  is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface,
   // ADR-239: over the runtime's `nuget_wrap_*` / `nuget_unwrap_*` pairs for each.
   BridgeType.Instant, BridgeType.Duration, BridgeType.Uuid,
   // ADR-239: over `NugetMarshal.ReadBytes` / `CreateBytes`, a copy each way.
@@ -385,7 +386,7 @@ private fun BridgeType.containsTypeParameter(): Boolean = when (this) {
   is BridgeType.Throwable,
   BridgeType.Uuid,
   is BridgeType.Enum,
-  is BridgeType.ObjectHandle,
+  is BridgeType.ObjectHandle, is BridgeType.DataValue,
   is BridgeType.Interface,
   is BridgeType.BoundInterface,
   is BridgeType.ValueClass,

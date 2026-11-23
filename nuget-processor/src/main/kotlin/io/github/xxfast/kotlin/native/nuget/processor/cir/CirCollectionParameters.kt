@@ -519,7 +519,7 @@ internal fun legacyWireParameter(
     else scalar("string", nonNullStringOrThrow(value, named ?: name))
     BridgeType.Uuid -> if (nullable) scalar("string?", "($value)?.ToString()")
     else scalar("string", "$value.ToString()")
-    is BridgeType.ObjectHandle -> CirParameter(
+    is BridgeType.ObjectHandle, is BridgeType.DataValue -> CirParameter(
       name,
       type = public,
       nativeType = KOTLIN_HANDLE,

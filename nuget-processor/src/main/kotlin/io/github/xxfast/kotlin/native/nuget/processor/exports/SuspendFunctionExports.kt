@@ -838,7 +838,7 @@ internal fun FunSpec.Builder.addLegacyWireParameter(
     is BridgeType.Enum -> INT
     BridgeType.String, BridgeType.Uuid -> STRING.copy(nullable = nullable)
     BridgeType.ByteArray, is BridgeType.Interface, is BridgeType.Collection,
-    is BridgeType.ObjectHandle,
+    is BridgeType.ObjectHandle, is BridgeType.DataValue,
     is BridgeType.BoundInterface -> cOpaquePointer.copy(nullable = nullable)
     BridgeType.Unit,
     BridgeType.Char,

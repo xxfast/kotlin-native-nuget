@@ -156,6 +156,7 @@ private fun ForwardBridgeTypeClassifier.directStaticSuspendReceiver(
   val nullable: Boolean = classified is BridgeType.Nullable
   return when (val inner: BridgeType = classified.unwrapNullable()) {
     is BridgeType.ObjectHandle -> ForwardStaticSuspendReceiver.Handle(inner, kotlinType, nullable)
+    is BridgeType.DataValue -> ForwardStaticSuspendReceiver.Handle(inner.handle, kotlinType, nullable)
     is BridgeType.Enum -> if (nullable) null else ForwardStaticSuspendReceiver.Enum(inner, kotlinType)
     is BridgeType.Primitive, BridgeType.Char, BridgeType.String ->
       if (nullable) null else ForwardStaticSuspendReceiver.Scalar(inner, kotlinType)

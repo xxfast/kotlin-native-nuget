@@ -1382,7 +1382,7 @@ private fun mintedStateFlowElement(elementType: KSType?): MutableStateFlowElemen
     is BridgeType.Throwable,
     BridgeType.Uuid,
     is BridgeType.Enum,
-    is BridgeType.ObjectHandle,
+    is BridgeType.ObjectHandle, is BridgeType.DataValue,
     is BridgeType.BoundInterface,
     is BridgeType.ValueClass,
     is BridgeType.Nullable,

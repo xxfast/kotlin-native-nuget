@@ -26,6 +26,7 @@ class ForwardPublicCsharpTypeTest {
     BridgeType.Uuid,
     BridgeType.Enum("pkg.Mood"),
     BridgeType.ObjectHandle("pkg.Cat"),
+    BridgeType.DataValue(BridgeType.ObjectHandle("pkg.Toy"), listOf(BridgeType.DataValueComponent("name", BridgeType.String))),
     BridgeType.Interface("pkg.Pet"),
     BridgeType.BoundInterface("dotnet.IClock", "global::Contoso.IClock"),
     BridgeType.ValueClass("pkg.ChartId", BridgeType.String),
@@ -56,6 +57,7 @@ class ForwardPublicCsharpTypeTest {
     BridgeType.Uuid -> BridgeType.Uuid::class
     is BridgeType.Enum -> BridgeType.Enum::class
     is BridgeType.ObjectHandle -> BridgeType.ObjectHandle::class
+    is BridgeType.DataValue -> BridgeType.DataValue::class
     is BridgeType.Interface -> BridgeType.Interface::class
     is BridgeType.BoundInterface -> BridgeType.BoundInterface::class
     is BridgeType.ValueClass -> BridgeType.ValueClass::class
@@ -85,7 +87,7 @@ class ForwardPublicCsharpTypeTest {
   fun `every variant is sampled exactly once`() {
     val variants: List<KClass<out BridgeType>> = samples.map(::variantOf)
     assertEquals(variants.size, variants.toSet().size, "a variant is sampled twice: $variants")
-    assertEquals(23, variants.size, "a BridgeType variant was added; sample it here")
+    assertEquals(24, variants.size, "a BridgeType variant was added; sample it here")
   }
 
   @Test

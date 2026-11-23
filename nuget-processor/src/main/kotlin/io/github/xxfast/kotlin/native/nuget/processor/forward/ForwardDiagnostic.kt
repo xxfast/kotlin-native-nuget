@@ -1726,6 +1726,7 @@ internal fun BridgeType.diagnosticTypeName(): String = when (this) {
   is BridgeType.Primitive -> kind.name.lowercase().replaceFirstChar { it.uppercase() }
   is BridgeType.Enum -> qualifiedName.substringAfterLast('.')
   is BridgeType.ObjectHandle -> qualifiedName.substringAfterLast('.')
+  is BridgeType.DataValue -> with(handle) { qualifiedName.substringAfterLast('.') }
   is BridgeType.Interface -> qualifiedName.substringAfterLast('.')
   is BridgeType.BoundInterface -> qualifiedName.substringAfterLast('.')
   is BridgeType.ValueClass -> qualifiedName.substringAfterLast('.')
