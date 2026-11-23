@@ -46,7 +46,7 @@ class NugetCrossTargetContractTest {
   @Test fun `matching unknown producer and source trivia pack with sidecars`() {
     val task = pack(source = "// comment\n public enum Mode /* comment */ { A=0 }")
     task.pack()
-    assertTrue(File(task.outputDir.get().asFile, "TestLibrary.1.0.0/runtimes/win-arm64/ForwardAbi.json").isFile)
+    assertTrue(File(task.outputDir.get().asFile, "prebuilt-runtimes/win-arm64/ForwardAbi.json").isFile)
     assertTrue(File(task.outputDir.get().asFile, "TestLibrary.1.0.0/contentFiles/cs/net10.0/Interop.cs").isFile)
   }
   @Test fun `missing extra symbols and constant drift are actionable`() {
@@ -90,6 +90,14 @@ class NugetCrossTargetContractTest {
     File(prebuilt, "win-arm64/Interop.cs").writeText("public enum Mode { A = 99 }")
     assertFailsWith<IllegalArgumentException> { task.pack() }
     assertTrue(!File(task.outputDir.get().asFile, "TestLibrary.1.0.0").exists())
+    assertTrue(!File(task.outputDir.get().asFile, "prebuilt-runtimes").exists())
+  }
+
+  @Test fun `missing producer contract names the transferable tree to upload`() {
+    val task = pack()
+    File(task.prebuiltRuntimesDir.get().asFile, "win-arm64/Interop.cs").delete()
+    val error = assertFailsWith<IllegalArgumentException> { task.pack() }
+    assertTrue(error.message.orEmpty().contains("prebuilt-runtimes"), error.message)
   }
 
   @Test fun `two local producers match and native drift then fails`() {
@@ -99,7 +107,7 @@ class NugetCrossTargetContractTest {
     task.nativeLibDirs.set(listOf("win-x64", "win-arm64").associateWith { File(root, "$it/native").path })
     task.localContractDirs.set(listOf("win-x64", "win-arm64").associateWith { File(root, it).path })
     task.pack()
-    assertTrue(File(task.outputDir.get().asFile, "TestLibrary.1.0.0/runtimes/win-x64/Interop.cs").isFile)
+    assertTrue(File(task.outputDir.get().asFile, "prebuilt-runtimes/win-x64/Interop.cs").isFile)
     File(root, "win-x64/ForwardAbi.json").writeText("{\"schemaVersion\":1,\"abi\":[\"f(in long) -> int\"]}")
     assertFailsWith<IllegalArgumentException> { task.pack() }
   }
