@@ -62,6 +62,8 @@ value you receive.
 
 A `List`, `Set` or `Map` of an interface (`List<Pet>`) binds too, as `IReadOnlyList<IPet>` and its
 kin; see [Collections: Interfaces as collection components](collections.md#interfaces-as-collection-components).
+A returned `List` of them is a disposable `KotlinList<IPet>` that releases its elements
+([Releasing a returned list of handles](collections.md#releasing-a-returned-list-of-handles)).
 
 ### Defaulted interface members on implementing classes {id="defaulted-interface-members-on-implementing-classes"}
 

@@ -27,6 +27,10 @@ IList<string> foods = cat.FavoriteFoods;
 foods.Add("Chicken"); // only changes this C# copy; Cat's own list is untouched
 ```
 
+A `List` of objects, interfaces or other handle-carrying elements comes back as a disposable
+`KotlinList<T>` instead, which releases its elements in one statement; see
+[Releasing a returned list of handles](#releasing-a-returned-list-of-handles).
+
 A `var`-declared collection property can still be reassigned: `cat.FavoriteFoods = new List<string>
 { "Chicken" }` replaces the whole collection on the Kotlin side. See
 [Mutable collection properties](#mutable-collection-properties) for what element types support this.
@@ -283,9 +287,9 @@ class FosterHome {
 ```
 
 ```C#
-public IReadOnlyList<global::TestLibrary.Cat.IPet> ResidentsNow()
+public KotlinList<global::TestLibrary.Cat.IPet> ResidentsNow()
 public string Roll(IReadOnlyList<global::TestLibrary.Cat.IPet> pets)
-public IReadOnlyList<global::TestLibrary.Cat.IPet> Echo(IReadOnlyList<global::TestLibrary.Cat.IPet> pets)
+public KotlinList<global::TestLibrary.Cat.IPet> Echo(IReadOnlyList<global::TestLibrary.Cat.IPet> pets)
 public IReadOnlyDictionary<string, global::TestLibrary.Cat.IPet> ByName()
 public Task<IReadOnlyList<global::TestLibrary.Cat.IPet>> ResidentsLaterAsync(CancellationToken cancellationToken = default)
 ```
@@ -300,17 +304,100 @@ var rex = new Dog("Rex");
 
 string rollCall = home.Roll(new IPet[] { oreo, rex });      // "Oreo: ... | Rex: Woof!"
 
-IReadOnlyList<IPet> back = home.Echo(new IPet[] { rex, oreo });
-Assert.Same(rex, back[0]);                                   // your own object
-back[1].Dispose();                                           // a Kotlin-backed element
+using KotlinList<IPet> back = home.Echo(new IPet[] { rex, oreo });
+Assert.Same(rex, back[0]);                                   // your own object, never disposed by the list
 ```
 
 A Kotlin-backed element is a fresh wrapper of the interface (`Pet`, never `Cat`, the concrete class),
-so do not cast it down. You own every wrapper a returned collection hands you: dispose each element
-you keep, as you would for a single interface return
-([Interface-typed return values](interfaces-abstract-sealed.md#interface-typed-return-values)). A map
+so do not cast it down. You own every wrapper a returned collection hands you, as you would for a
+single interface return
+([Interface-typed return values](interfaces-abstract-sealed.md#interface-typed-return-values)); a
+returned `List` releases them for you when disposed
+([below](#releasing-a-returned-list-of-handles)). A map
 keyed by an interface compares keys by reference, so look a key up with the instance the collection
 gave you or that you passed in, not with another wrapper over the same Kotlin object.
+
+## Releasing a returned list of handles {id="releasing-a-returned-list-of-handles"}
+
+A returned `List` whose elements are Kotlin objects (classes, interfaces, sealed types, generic class
+instances, or lists of those) is a `KotlinList<T>`: a `ReadOnlyCollection<T>` that is also
+`IDisposable`. Disposing it releases every element it handed out, so one `using` replaces a dispose
+loop.
+
+```kotlin
+class AdoptionCentre {
+  val pets: List<Adoptable> get() = listOf(Kitten("Oreo"), Kitten("Mylo"))
+  fun kittens(): List<Kitten> = listOf(Kitten("Oreo"), Kitten("Mylo"))
+}
+```
+
+```C#
+using var centre = new AdoptionCentre();
+
+using var pets = centre.Pets;                       // KotlinList<IAdoptable>
+foreach (IAdoptable pet in pets) Console.WriteLine(pet.Name);
+// end of scope: both elements released
+```
+
+To keep an element past the list, hand it to `Keep`. The list then skips it, and you dispose it
+yourself:
+
+```C#
+Kitten oreo;
+using (KotlinList<Kitten> kittens = centre.Kittens())
+{
+    oreo = kittens.Keep(kittens[0]);
+}
+
+oreo.Purr();      // still live
+oreo.Dispose();   // yours now
+```
+
+- An element you did not keep is released, and using it afterwards throws `ObjectDisposedException`.
+- `Keep` takes an element of this list by reference. Anything else throws `ArgumentException`, and a
+  disposed list throws `ObjectDisposedException`.
+- `Dispose()` is idempotent, and disposing an element yourself as well is safe.
+- A C#-implemented element you passed in and got back (see `Echo` above) is never disposed by the
+  list.
+- A nested `List<List<Kitten>>` is a `KotlinList<IReadOnlyList<Kitten>>`; disposing the outer list
+  releases the elements of every inner list, and `Keep` on an inner list is honoured.
+- A nullable list is `KotlinList<Kitten>?`, and `using` accepts `null`.
+- Do not pass a disposed element back to Kotlin as an argument; that case is not guarded.
+
+### Where the static type is `KotlinList<T>`
+
+The member's C# type is `KotlinList<T>` on a `val` property, a method, a top-level function, an
+`object` or companion member and an extension function. It stays `IReadOnlyList<T>` where C# could
+implement or override the member, or where one type has to serve a setter: interface members, open,
+abstract and override members, and a `var` property.
+
+The object is still a `KotlinList<T>` at run time at those positions, and everywhere else the element
+carries a handle (nested lists, `suspend` results, `Flow` elements), so dispose it through the
+interface when you want it released:
+
+```C#
+IReadOnlyList<Kitten> shortlist = centre.Shortlist;   // a var property
+(shortlist as IDisposable)?.Dispose();
+```
+
+A list of strings, primitives, enums or value classes is unchanged: it is a plain read-only list and
+owns nothing. So are `Set`, `Map` and `MutableList` returns of objects, whose elements you still
+dispose one by one.
+
+### Migrating from `IReadOnlyList<T>` {id="migrating-to-kotlinlist"}
+
+- A narrowed member now returns `KotlinList<T>`. Assigning it to `IReadOnlyList<T>`, `var`, LINQ,
+  `foreach` and passing it as an argument all compile as before, and disposing each element by hand
+  stays safe. Code that reads the member's return type through reflection sees the new type, and a
+  consumer built against the previous package must be rebuilt, because the return type is part of
+  the member signature.
+- A disposed wrapper throws `ObjectDisposedException` from every member, including the `TryX`
+  variants and a data class's `Equals`, `GetHashCode` and `ToString`. Before, members threw
+  `KotlinNullReferenceException` and a data class's overrides aborted the process. Update any
+  `catch (KotlinNullReferenceException)` that guarded a use after dispose.
+- A read that throws partway now also releases the nested sets and maps it had already built.
+- Generic code that disposes every `IDisposable` it is handed, such as a DI container that owns a
+  registered instance, now releases the list's elements.
 
 ## Exception safety on collection parameters and returns {id="exception-safety-on-collection-parameters-and-returns"}
 

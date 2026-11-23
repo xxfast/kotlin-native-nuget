@@ -60,6 +60,14 @@ Complete.
 ## Phase 4: Rich type support
 
 - [ ] An unexported subclass of an exported class read at an `Any` position arrives as `KotlinObject` instead of its nearest exported type, because `ReadAny` looks the factory up by Kotlin name only (`cir/CirAnyRenderer.kt:79-86`, ADR-237). Verified by reading, predates ADR-241 ([details](docs/backlog/any-position-unexported-subclass-reads-as-kotlinobject.md)).
+- [ ] `Set<E>` and `Map<K, V>` returns of handle elements bind as plain `IReadOnlySet`/`IReadOnlyDictionary`, so the caller still disposes each element by hand: a `KotlinSet<T>` over `HashSet<T>` and `KotlinDictionary<TKey, TValue>` over `Dictionary<TKey, TValue>` with the same `Keep` ([ADR-243](docs/adr/243-disposable-handle-collections.md)).
+- [ ] `suspend` and `Flow`/`StateFlow` list returns of handle elements keep a static `IReadOnlyList<E>` (`Task<T>` is invariant, so narrowing breaks typed `Task<IReadOnlyList<E>>` locals), so `using` does not compile there; the run-time object is already a `KotlinList<E>` ([ADR-243](docs/adr/243-disposable-handle-collections.md)).
+- [ ] `MutableList<E>` returns of handle elements are not releasable in one statement: the caller may add its own wrappers, so the collection needs an ownership rule before it can dispose ([ADR-243](docs/adr/243-disposable-handle-collections.md)).
+- [ ] A list of handle elements returned by a lambda, a `List<T>` on a generic carrier, and an interface, abstract, open or override member keep a static `IReadOnlyList<E>` and a nested list keeps its inner static type; a `Releasing()` extension on `IReadOnlyList<T>` (`using var scope = pets.Releasing();`) would cover them ([ADR-243](docs/adr/243-disposable-handle-collections.md)).
+- [ ] `KotlinList<T>` has no `KeepAll()` to transfer the whole list to the caller ([ADR-243](docs/adr/243-disposable-handle-collections.md)).
+- [ ] A list of value-class elements (a struct on the C# side) and a `var` property's list (one C# type serves the getter and the setter) stay `IReadOnlyList<E>`, so `Dispose` cannot release them statically ([ADR-243](docs/adr/243-disposable-handle-collections.md)).
+- [ ] A disposed wrapper passed as an argument hands the zero handle to Kotlin instead of throwing `ObjectDisposedException` (`ForwardCirPlanProjection.kt:1209`, `:1254`, `ForwardCirPropertyProjection.kt:956`), and a nullable argument (`ForwardCirPlanProjection.kt:1291`) probably reads as `null` silently; inferred, not run, found by ADR-243.
+- [ ] `KotlinFunc`/`KotlinAction` `Invoke*` after `Dispose()` has no disposed-receiver guard (`CirFunctionRenderer.kt:49` and nearby) and probably aborts the process instead of throwing `ObjectDisposedException`; inferred, not run, found by ADR-243.
 
 ## Phase 5: Exception handling
 
