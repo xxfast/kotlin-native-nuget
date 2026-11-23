@@ -166,6 +166,19 @@ class Tier1DisposedReceiverGuardTest {
     assertOpensWithGuard(running, "public override int GetHashCode()", "Running")
     assertOpensWithGuard(running, "public override string ToString()", "Running")
     assertOpensWithGuard(running, "public int Bump()", "Running")
+    // A disposed `other` is refused before the slotless `Native_Equals`, after the receiver guard.
+    assertArgumentGuarded(record, "Record")
+    assertArgumentGuarded(running, "Running")
+  }
+
+  private fun assertArgumentGuarded(code: String, owner: String) {
+    val equals: String = code.substringAfter("public override bool Equals(object? obj)").substringBefore("return false;")
+    val receiver: Int = equals.indexOf(guard(owner))
+    val argument: Int =
+      equals.indexOf("if (other._handle.IsInvalid) throw new ObjectDisposedException(nameof($owner));")
+    val call: Int = equals.indexOf("Native_Equals(_handle, other._handle)")
+    assertTrue(receiver in 0 until argument, "the receiver guard comes first; $equals")
+    assertTrue(argument < call, "the argument guard precedes Native_Equals; $equals")
   }
 
   @Test

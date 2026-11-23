@@ -613,7 +613,7 @@ internal fun StringBuilder.renderSealedSubclassDataMethods(
   appendLine("            private static extern IntPtr Native_ToString(NugetKotlinHandle handle);")
   appendLine()
   // Issue #610: the arm's own applied spelling, which `nameof(...)` binds to inside a generic arm.
-  appendDataClassOverrides(subclassName, disposedOwnerGuard(subclassName), "            ", withToString)
+  appendDataClassOverrides(subclassName, subclassName, "            ", withToString)
 }
 
 /**

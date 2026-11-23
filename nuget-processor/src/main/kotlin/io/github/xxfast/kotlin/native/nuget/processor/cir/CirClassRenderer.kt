@@ -1117,24 +1117,31 @@ internal fun StringBuilder.renderDataClassMethods(
 
   // Issue #610: none of the three exports has an error slot, so a disposed receiver reaching
   // Kotlin ends the process; each override opens with the guard instead.
-  appendDataClassOverrides(cls.name, disposedOwnerGuard(owner), "        ", withToString)
+  appendDataClassOverrides(cls.name, owner, "        ", withToString)
 }
 
 /**
  * The `Equals` / `GetHashCode` / `ToString` overrides over a data class's (or data arm's)
  * `Native_Equals` / `Native_HashCode` / `Native_ToString` externs, at member [indent], each behind
- * [guard]. `ToString` only [withToString].
+ * [disposedOwnerGuard] for [owner] (the `nameof(...)` spelling). `ToString` only [withToString].
  */
 internal fun StringBuilder.appendDataClassOverrides(
   typeName: String,
-  guard: String,
+  owner: String,
   indent: String,
   withToString: Boolean = true,
 ) {
+  val guard: String = disposedOwnerGuard(owner)
   appendLine("${indent}public override bool Equals(object? obj)")
   appendLine("$indent{")
   appendLine("$indent    $guard")
-  appendLine("$indent    if (obj is $typeName other) return Native_Equals(_handle, other._handle);")
+  appendLine("$indent    if (obj is $typeName other)")
+  appendLine("$indent    {")
+  // Issue #610: the export has no error slot, so a disposed `other` (the zero sentinel) reaching
+  // Kotlin ends the process; it is refused here, after the receiver's own guard.
+  appendLine("$indent        if (other._handle.IsInvalid) throw new ObjectDisposedException(nameof($owner));")
+  appendLine("$indent        return Native_Equals(_handle, other._handle);")
+  appendLine("$indent    }")
   appendLine("$indent    return false;")
   appendLine("$indent}")
   appendLine()

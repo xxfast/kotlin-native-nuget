@@ -160,8 +160,8 @@ public class DisposableCollectionTests
     // ---- Data-class receiver: the three bridges reach Kotlin, so they must be guarded ----
     //
     // `AdoptionRecord` is a data class that keeps a handle (class-typed component plus a `var`), so
-    // its `Equals`/`GetHashCode`/`ToString` call Kotlin. Disposed RECEIVER only: the disposed
-    // ARGUMENT case (`live.Equals(disposed)`) is tracked as a separate bug and kills the host today.
+    // its `Equals`/`GetHashCode`/`ToString` call Kotlin. Both a disposed receiver and a disposed
+    // `Equals` argument must throw before the call reaches Kotlin, which would abort the host.
 
     [Fact]
     public void Record_DayAfterDispose_ThrowsObjectDisposedException()
@@ -211,6 +211,23 @@ public class DisposableCollectionTests
         paperwork.Dispose();
 
         Assert.Throws<ObjectDisposedException>(() => paperwork.ToString());
+    }
+
+    [Fact]
+    public void Record_LiveReceiverEqualsDisposedArgument_ThrowsObjectDisposedException()
+    {
+        // ARGUMENT probe: the receiver is live, the disposed record is the parameter.
+        using var centre = new AdoptionCentre();
+        using var live = centre.Record();
+        var paperwork = centre.Record();
+        Assert.True(live.Equals(paperwork));   // Kotlin data equals: same Oreo, same day
+
+        paperwork.Dispose();
+
+        ObjectDisposedException thrown = Assert.Throws<ObjectDisposedException>(() => live.Equals(paperwork));
+        Assert.Equal(nameof(AdoptionRecord), thrown.ObjectName);
+        Assert.True(live.Equals(live));
+        Assert.False(live.Equals(null));
     }
 
     // ---- Dispose and Keep ----

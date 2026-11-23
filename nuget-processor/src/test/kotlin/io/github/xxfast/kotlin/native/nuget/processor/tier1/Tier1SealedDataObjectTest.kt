@@ -60,7 +60,8 @@ class Tier1SealedDataObjectTest {
     assertContains(result.generatedCSharp, "EntryPoint = \"library_tier1_dataobject__shape_empty_equals\"")
     assertContains(result.generatedCSharp, "EntryPoint = \"library_tier1_dataobject__shape_empty_hashcode\"")
     assertContains(result.generatedCSharp, "EntryPoint = \"library_tier1_dataobject__shape_empty_tostring\"")
-    assertContains(result.generatedCSharp, "if (obj is Empty other) return Native_Equals(_handle, other._handle);")
+    assertContains(result.generatedCSharp, "if (obj is Empty other)")
+    assertContains(result.generatedCSharp, "return Native_Equals(_handle, other._handle);")
     // Issue #610: a disposed arm throws instead of aborting through the slotless export.
     assertContains(
       result.generatedCSharp,
