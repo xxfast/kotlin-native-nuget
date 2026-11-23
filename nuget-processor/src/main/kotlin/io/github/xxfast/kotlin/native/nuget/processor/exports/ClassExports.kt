@@ -382,6 +382,8 @@ internal fun KSClassDeclaration.forwardClassLegacyMembers(
   // methods, plus a sibling synchronous `_value` export (see the flowMethods.forEach loop).
   val flowMethods: List<KSFunctionDeclaration> = allRegularMethods
     .filter { method -> method.hasLegacyFlowReturn() }
+    // ADR-242: a value has no instance lifetime; its Flow members ride the static flow route.
+    .filter { !classifier.isDataValue(cls) }
     // ADR-114: a generic parameter this route cannot marshal skips the member entirely rather
     // than emitting non-compiling Kotlin. `NugetProcessor` names it in a SKIPPED_UNSUPPORTED_INPUT.
     // ADR-123: likewise an element this route cannot marshal, named SKIPPED_UNSUPPORTED_RETURN.

@@ -63,6 +63,8 @@ internal sealed interface ForwardStaticFlowOwner {
     val underlying: ForwardStaticSuspendReceiver,
     /** ADR-228: the constructor the receiver is rewrapped through (`pkg.Decal<Nothing>`). */
     val construction: String? = null,
+    /** ADR-242: false for a scalar data class's member, called on the value itself. */
+    val rewrap: Boolean = true,
   ) : ForwardStaticFlowOwner
 }
 

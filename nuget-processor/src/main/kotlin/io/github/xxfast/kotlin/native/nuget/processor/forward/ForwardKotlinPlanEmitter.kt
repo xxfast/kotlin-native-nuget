@@ -1163,7 +1163,7 @@ private fun addNullableResult(
         "Forward Kotlin nullable value-class result must use POINTER"
       }
       val unboxed = "$invocation?.${type.underlyingPropertyName}"
-      if (underlying is BridgeType.ObjectHandle) {
+      if (underlying is BridgeType.ObjectHandle || underlying is BridgeType.DataValue) {
         builder.returns(cOpaquePointer.copy(nullable = true))
         builder.addCode(
           nullableHandleResultBody(unboxed, errorName),

@@ -49,6 +49,9 @@ internal object ForwardCirPlanProjection {
       // the positional record constructor it delegates to.
       result is BridgeType.ObjectHandle ->
         result.handleReconstruction("CreateChecked$nativeSuffix($paramNames)")
+      // ADR-242: a value underlying reads its components off the fresh handle and releases it.
+      result is BridgeType.DataValue ->
+        result.handle.handleReconstruction("CreateChecked$nativeSuffix($paramNames)")
       else -> "CreateChecked$nativeSuffix($paramNames)"
     }
     val nativeCall: ForwardNativeCall = plan.nativeExports.single()
@@ -125,6 +128,8 @@ internal object ForwardCirPlanProjection {
       ),
       boxParameter = boxParameter.csharpName,
       boxArguments = box.callArgument(boxParameter),
+      // ADR-242: a value underlying is minted for the box export and released after it.
+      boxBody = if (type.underlying is BridgeType.DataValue) box.wireBoxBody("Native_NugetBox") else null,
       unboxResult = if (hasValue) {
         "new ${type.csharpType}(nativeResult ? " +
             "${type.underlying.hasValueSlotRead(requireNotNull(unboxValueOut).name)} : null)"
@@ -1264,7 +1269,9 @@ internal object ForwardCirPlanProjection {
         listOf(
           when (type.underlying) {
             is BridgeType.Enum -> "(int)$unwrapped"
-            is BridgeType.ObjectHandle, is BridgeType.DataValue -> "$unwrapped._handle"
+            is BridgeType.ObjectHandle -> "$unwrapped._handle"
+            // ADR-242: the transient instance [dataValuePrelude] minted from the struct.
+            is BridgeType.DataValue -> "${parameter.csharpLocal}Handle!.DangerousGetHandle()"
             BridgeType.Unit,
             is BridgeType.Primitive,
             BridgeType.Char,
@@ -1357,7 +1364,9 @@ internal object ForwardCirPlanProjection {
             val name: String = parameter.csharpName
             val present: String = inner.underlyingCs("$name.Value", named)
             listOf(
-              if (inner.underlying is BridgeType.ObjectHandle) {
+              if (inner.underlying is BridgeType.DataValue) {
+                "${parameter.csharpLocal}Handle?.DangerousGetHandle() ?? IntPtr.Zero"
+              } else if (inner.underlying is BridgeType.ObjectHandle) {
                 "$name.HasValue ? $present._handle : NugetKotlinHandle.Null"
               } else {
                 "$name.HasValue ? $present : null"
@@ -1491,11 +1500,23 @@ internal object ForwardCirPlanProjection {
    * the Kotlin half reading it exactly as it reads any handle. [dataValueCleanup] releases it.
    */
   private fun dataValuePrelude(parameter: ForwardPublicParameter): ForwardCirHandleStep? {
-    if (parameter.type.unwrapNullable() !is BridgeType.DataValue) return null
     val nullable: Boolean = parameter.type is BridgeType.Nullable
     val name: String = parameter.csharpName
     val local: String = parameter.csharpLocal
-    val minted: String = if (nullable) "$name?.NugetMint()" else "$name.NugetMint()"
+    val inner: BridgeType = parameter.type.unwrapNullable()
+    val minted: String = when {
+      inner is BridgeType.DataValue -> if (nullable) "$name?.NugetMint()" else "$name.NugetMint()"
+      // A value class over a value: the struct holds the C# value, minted from its underlying.
+      inner.isValueClassOverDataValue() -> {
+        val valueClass = inner as BridgeType.ValueClass
+        if (nullable) {
+          "$name.HasValue ? ${valueClass.underlyingCs("$name.Value", name)}.NugetMint() : null"
+        } else {
+          "${valueClass.underlyingCs(name, name)}.NugetMint()"
+        }
+      }
+      else -> return null
+    }
     return ForwardCirHandleStep(
       flat = "NugetKotlinHandle? ${local}Handle = $minted;",
       declarations = listOf("NugetKotlinHandle? ${local}Handle = null;"),
@@ -1504,7 +1525,8 @@ internal object ForwardCirPlanProjection {
   }
 
   private fun dataValueCleanup(parameter: ForwardPublicParameter): String? {
-    if (parameter.type.unwrapNullable() !is BridgeType.DataValue) return null
+    val inner: BridgeType = parameter.type.unwrapNullable()
+    if (inner !is BridgeType.DataValue && !inner.isValueClassOverDataValue()) return null
     return "${parameter.csharpLocal}Handle?.Dispose();"
   }
 
@@ -2876,3 +2898,7 @@ internal fun BridgeType.hasValueSlotRead(slot: String): String =
  */
 internal fun ForwardPublicSignature.narrowsMemberReturn(): Boolean =
   overridesNothing && !isOverride && !isVirtual && !isAbstract
+
+/** ADR-242: a value class whose underlying is a C# value, minted per call like the value itself. */
+internal fun BridgeType.isValueClassOverDataValue(): Boolean =
+  this is BridgeType.ValueClass && underlying is BridgeType.DataValue

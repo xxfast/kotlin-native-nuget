@@ -109,6 +109,11 @@ internal sealed interface ForwardStaticSuspendOwner {
      * phantom `T` (no argument infers it); null spells the qualified name bare.
      */
     val construction: String? = null,
+    /**
+     * ADR-242: false for a scalar data class's member, whose receiver is the value itself (read
+     * as its handle), so the call is `receiver.member()` with no rewrap.
+     */
+    val rewrap: Boolean = true,
   ) : ForwardStaticSuspendOwner
 }
 
@@ -156,7 +161,13 @@ private fun ForwardBridgeTypeClassifier.directStaticSuspendReceiver(
   val nullable: Boolean = classified is BridgeType.Nullable
   return when (val inner: BridgeType = classified.unwrapNullable()) {
     is BridgeType.ObjectHandle -> ForwardStaticSuspendReceiver.Handle(inner, kotlinType, nullable)
-    is BridgeType.DataValue -> ForwardStaticSuspendReceiver.Handle(inner.handle, kotlinType, nullable)
+    // ADR-242: a value has no handle of its own; it crosses as the legacy parameter it would be
+    // (C# mints it through `Wrap<T>` per extern call, Kotlin reads it before the launch).
+    is BridgeType.DataValue -> ForwardStaticSuspendReceiver.Parameter(
+      ForwardLegacyParameterShape.Handle(inner.handle, nullable = nullable, value = true),
+      expanded,
+      kotlinType,
+    )
     is BridgeType.Enum -> if (nullable) null else ForwardStaticSuspendReceiver.Enum(inner, kotlinType)
     is BridgeType.Primitive, BridgeType.Char, BridgeType.String ->
       if (nullable) null else ForwardStaticSuspendReceiver.Scalar(inner, kotlinType)

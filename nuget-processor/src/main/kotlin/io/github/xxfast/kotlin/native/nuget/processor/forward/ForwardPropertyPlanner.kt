@@ -1024,6 +1024,7 @@ internal class ForwardPropertyPlanner(
 
       is BridgeType.ValueClass ->
         inner.underlying is BridgeType.String || inner.underlying is BridgeType.ObjectHandle ||
+            inner.underlying is BridgeType.DataValue ||
             hasValueFanOutInner() != null
 
       BridgeType.Unit,
@@ -1053,7 +1054,7 @@ internal class ForwardPropertyPlanner(
     // in a parameter slot.
     is BridgeType.ValueClass ->
       underlying is BridgeType.String || underlying is BridgeType.Primitive ||
-          underlying is BridgeType.Enum || underlying is BridgeType.ObjectHandle ||
+          underlying is BridgeType.Enum || underlying is BridgeType.ObjectHandle || underlying is BridgeType.DataValue ||
           // ADR-234: and a `Char`, on the by-value CHAR16 slot.
           underlying == BridgeType.Char
 

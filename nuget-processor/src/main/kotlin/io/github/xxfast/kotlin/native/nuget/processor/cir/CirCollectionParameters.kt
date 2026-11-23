@@ -287,6 +287,20 @@ internal fun legacyRouteParameter(
       } else {
         shape.type.forwardPublicCsharpType()
       }
+      // ADR-242: a value holds no handle, so `Wrap<T>` mints one through its `NugetBox` (owned,
+      // released once the extern returns), exactly as an interface parameter is wrapped (ADR-232).
+      if (shape.value) {
+        return CirParameter(
+          name,
+          type = type,
+          nativeType = "IntPtr",
+          isReferenceType = true,
+          collectionCreate = "NugetMarshal.Wrap<$type>($name, " +
+            "out bool ${requireNotNull(names.ownedLocals[index])})",
+          collectionHandle = requireNotNull(names.handleLocals[index]),
+          boxOwnedLocal = requireNotNull(names.ownedLocals[index]),
+        )
+      }
       CirParameter(
         name,
         type = if (shape.optional) "global::Kotlin.Native.Interop.KotlinOptional<$type>" else type,

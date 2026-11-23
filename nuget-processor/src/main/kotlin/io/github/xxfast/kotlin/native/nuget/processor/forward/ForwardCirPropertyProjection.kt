@@ -796,6 +796,22 @@ internal object ForwardCirPropertyProjection {
   private fun BridgeType.handleStep(name: String): ForwardCirHandleStep? {
     val nullable: Boolean = this is BridgeType.Nullable
     return when (val value = unwrapNullable()) {
+      // ADR-242: a value class over a value mints from its struct's underlying.
+      is BridgeType.ValueClass -> if (value.underlying !is BridgeType.DataValue) null else {
+        val root: String = name.substringBefore('.')
+        val local: String = name.valueLocal()
+        val minted: String = if (nullable) {
+          "$name.HasValue ? ${value.underlyingCs("$name.Value", root)}.NugetMint() : null"
+        } else {
+          "${value.underlyingCs(name, root)}.NugetMint()"
+        }
+        ForwardCirHandleStep(
+          flat = "NugetKotlinHandle? $local = $minted;",
+          declarations = listOf("NugetKotlinHandle? $local = null;"),
+          statement = "$local = $minted;",
+        )
+      }
+
       // ADR-242: a value mints a transient Kotlin instance for the call; the cleanup releases it.
       is BridgeType.DataValue -> {
         val minted: String = if (nullable) "$name?.NugetMint()" else "$name.NugetMint()"
@@ -881,7 +897,6 @@ internal object ForwardCirPropertyProjection {
       BridgeType.Uuid,
       is BridgeType.Enum,
       is BridgeType.ObjectHandle,
-      is BridgeType.ValueClass,
       is BridgeType.Nullable,
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
@@ -897,6 +912,8 @@ internal object ForwardCirPropertyProjection {
 
   private fun BridgeType.handleCleanup(name: String): String? =
     when (val value = unwrapNullable()) {
+      is BridgeType.ValueClass ->
+        if (value.underlying is BridgeType.DataValue) "${name.valueLocal()}?.Dispose();" else null
       // ADR-242: the transient instance [handleStep] minted.
       is BridgeType.DataValue -> "${name}Handle?.Dispose();"
       // ADR-218: only a box the setter minted is disposed; a borrowed wrapper is kept alive.
@@ -937,7 +954,6 @@ internal object ForwardCirPropertyProjection {
       is BridgeType.Enum,
       is BridgeType.ObjectHandle,
       is BridgeType.BoundInterface,
-      is BridgeType.ValueClass,
       is BridgeType.Nullable,
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
@@ -1031,9 +1047,12 @@ internal object ForwardCirPropertyProjection {
         }
         when (value.underlying) {
           is BridgeType.Enum -> "(int)$unwrapped"
-          is BridgeType.ObjectHandle, is BridgeType.DataValue ->
+          is BridgeType.ObjectHandle ->
             if (nullable) "$name.HasValue ? $unwrapped._handle : NugetKotlinHandle.Null"
             else "$unwrapped._handle"
+          // ADR-242: the transient instance [handleStep] minted from the struct.
+          is BridgeType.DataValue ->
+            if (nullable) "${name.valueLocal()} ?? NugetKotlinHandle.Null" else "${name.valueLocal()}!"
 
           BridgeType.String -> if (nullable) "$name.HasValue ? $unwrapped : null" else unwrapped
 
@@ -1151,3 +1170,6 @@ private fun CirProperty.narrowedIf(narrows: Boolean, plan: ForwardPropertyPlan):
   val narrowed: String = plan.narrowedType()?.takeIf { narrows } ?: return this
   return copy(type = narrowed)
 }
+
+/** ADR-242: the minted-handle local of a value-class-over-value setter value (`value.Value` too). */
+private fun String.valueLocal(): String = replace(".", "") + "Handle"

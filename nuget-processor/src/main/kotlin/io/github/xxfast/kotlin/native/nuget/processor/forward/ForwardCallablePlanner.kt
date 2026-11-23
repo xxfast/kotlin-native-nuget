@@ -2090,6 +2090,29 @@ internal class ForwardCallablePlanner(
         else -> false
       }
     }.nameGenericOwnerLegacyRoutes(cls, methods)
+      .onDataValueStaticRoutes(cls, prefix)
+  }
+
+  /**
+   * ADR-242: a scalar data class has no instance lifetime to own a coroutine scope, so its
+   * `suspend` and `Flow` members bind on the static routes a value class member takes, over the
+   * scope a top-level member uses. The receiver is the value itself, minted per extern call by C#
+   * and read before the launch by Kotlin, and called on directly (no rewrap).
+   */
+  private fun List<ForwardCallableCatalogEntry>.onDataValueStaticRoutes(
+    cls: KSClassDeclaration,
+    prefix: String,
+  ): List<ForwardCallableCatalogEntry> {
+    if (!classifier.isDataValue(cls)) return this
+    val receiver: ForwardStaticSuspendReceiver =
+      classifier.staticSuspendReceiver(cls.asStarProjectedType()) ?: return this
+    return map { entry ->
+      val function: KSFunctionDeclaration = entry.node as? KSFunctionDeclaration ?: return@map entry
+      val stem = "${prefix}_${function.simpleName.asString()}${entry.overloadTail(function)}"
+      entry
+        .onStaticSuspendRoute(ForwardStaticSuspendOwner.ValueClass(stem, cls, receiver, rewrap = false))
+        .onStaticFlowRoute(ForwardStaticFlowOwner.ValueClass(stem, cls, receiver, rewrap = false))
+    }
   }
 
   /**
@@ -5226,7 +5249,7 @@ internal class ForwardCallablePlanner(
    */
   private fun BridgeType.isOrdinaryValueClassUnderlying(): Boolean =
     this == BridgeType.String || this is BridgeType.Primitive ||
-        this is BridgeType.Enum || this is BridgeType.ObjectHandle ||
+        this is BridgeType.Enum || this is BridgeType.ObjectHandle || this is BridgeType.DataValue ||
         isOwnTypeParameterUnderlying() ||
         // ADR-228: a nullable String underlying (`Nick(val name: String?)`), null in-band.
         (this is BridgeType.Nullable && type == BridgeType.String) ||

@@ -118,7 +118,7 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
       // nullable-String wire or as a null StableRef pointer for an ObjectHandle underlying.
       is BridgeType.ValueClass -> {
         val unboxed = "$access?.${inner.underlyingPropertyName}"
-        if (inner.underlying is BridgeType.ObjectHandle) {
+        if (inner.underlying is BridgeType.ObjectHandle || inner.underlying is BridgeType.DataValue) {
           builder.returns(cOpaquePointer.copy(nullable = true))
           builder.addCode(
             nullableHandleBody(unboxed, "errorOut"),

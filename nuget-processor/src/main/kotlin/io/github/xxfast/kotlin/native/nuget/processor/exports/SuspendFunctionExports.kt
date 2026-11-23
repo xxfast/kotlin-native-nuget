@@ -167,7 +167,7 @@ internal fun FileSpec.Builder.addStaticSuspendExports(
     is ForwardStaticSuspendOwner.ValueClass -> {
       importIfDefaultPackage(owner.valueClass)
       val qualified: String = owner.construction ?: owner.valueClass.kotlinQualifiedReference()
-      ({ read -> "$qualified($read).$name" })
+      if (owner.rewrap) ({ read -> "$qualified($read).$name" }) else ({ read -> "$read.$name" })
     }
   }
   addStaticSuspendExport(func, owner.stem, callee, receiver, classifier, callableCatalog)
