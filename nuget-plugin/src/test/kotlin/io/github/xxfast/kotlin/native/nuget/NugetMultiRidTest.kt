@@ -250,7 +250,7 @@ class NugetMultiRidTest {
   private fun packLocalAndPrebuilt(outputDir: File): PackNugetTask {
     val task: PackNugetTask = newTask()
     configureCommon(task, outputDir)
-    val local = nativeDir("local", "libkn_testlibrary.dylib")
+    val local: File = nativeDir("local", "libkn_testlibrary.dylib")
     File(local, "libold.dylib").writeText("leftover from an old baseName")
     task.nativeLibDirs.set(mapOf("osx-arm64" to local.path))
     task.localContractDirs.set(mapOf("osx-arm64" to local.path))
@@ -284,11 +284,9 @@ class NugetMultiRidTest {
     val sources: List<String> = entries
       .filter { it.substringAfterLast('/') == "Interop.cs" && !it.startsWith("contentFiles/") }
     assertTrue(sources.isEmpty(), "Interop.cs belongs only under contentFiles/, found $sources")
-    assertTrue(
-      entries.contains("runtimes/osx-arm64/native/libkn_testlibrary.dylib") &&
-        entries.contains("runtimes/win-x64/native/kn_testlibrary.dll"),
-      "both RIDs must still ship their native library, was $entries",
-    )
+    val shipsMac: Boolean = entries.contains("runtimes/osx-arm64/native/libkn_testlibrary.dylib")
+    val shipsWindows: Boolean = entries.contains("runtimes/win-x64/native/kn_testlibrary.dll")
+    assertTrue(shipsMac && shipsWindows, "both RIDs must still ship their native library: $entries")
   }
 
   @Test
@@ -313,7 +311,7 @@ class NugetMultiRidTest {
     val second: PackNugetTask = newTask()
     val secondOut: File = Files.createTempDirectory("pack-out-b").toFile()
     configureCommon(second, secondOut)
-    val local = nativeDir("local-b", "kn_testlibrary.dll")
+    val local: File = nativeDir("local-b", "kn_testlibrary.dll")
     second.nativeLibDirs.set(mapOf("win-arm64" to local.path))
     second.localContractDirs.set(mapOf("win-arm64" to local.path))
     second.prebuiltRuntimesDir.set(firstTree)
@@ -328,9 +326,9 @@ class NugetMultiRidTest {
     assertTransferable(secondTree, "osx-arm64", "libkn_testlibrary.dylib")
     assertTransferable(secondTree, "win-arm64", "kn_testlibrary.dll")
     assertTransferable(secondTree, "win-x64", "kn_testlibrary.dll")
-    val sidecars: List<String> = nupkgEntries(secondOut).filter {
-      it.startsWith("runtimes/") && (it.endsWith("/ForwardAbi.json") || it.endsWith("/Interop.cs"))
-    }
+    val sidecars: List<String> = nupkgEntries(secondOut)
+      .filter { it.startsWith("runtimes/") }
+      .filter { it.endsWith("/ForwardAbi.json") || it.endsWith("/Interop.cs") }
     assertTrue(sidecars.isEmpty(), "the chained nupkg must not ship sidecars, found $sidecars")
   }
 

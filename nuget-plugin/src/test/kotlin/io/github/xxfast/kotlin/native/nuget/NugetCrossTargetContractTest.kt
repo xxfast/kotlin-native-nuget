@@ -46,7 +46,8 @@ class NugetCrossTargetContractTest {
   @Test fun `matching unknown producer and source trivia pack with sidecars`() {
     val task = pack(source = "// comment\n public enum Mode /* comment */ { A=0 }")
     task.pack()
-    assertTrue(File(task.outputDir.get().asFile, "prebuilt-runtimes/win-arm64/ForwardAbi.json").isFile)
+    val manifest = File(task.outputDir.get().asFile, "prebuilt-runtimes/win-arm64/ForwardAbi.json")
+    assertTrue(manifest.isFile)
     assertTrue(File(task.outputDir.get().asFile, "TestLibrary.1.0.0/contentFiles/cs/net10.0/Interop.cs").isFile)
   }
   @Test fun `missing extra symbols and constant drift are actionable`() {
@@ -98,7 +99,7 @@ class NugetCrossTargetContractTest {
     val tree = File(task.outputDir.get().asFile, PREBUILT_RUNTIMES_DIR)
     task.prebuiltRuntimesDir.get().asFile.copyRecursively(tree)
     task.prebuiltRuntimesDir.set(File(tree, "."))
-    val error = assertFailsWith<IllegalArgumentException> { task.pack() }
+    val error: IllegalArgumentException = assertFailsWith { task.pack() }
     assertTrue(error.message.orEmpty().contains(PREBUILT_RUNTIMES_DIR), error.message)
     assertTrue(error.message.orEmpty().contains("separate directory"), error.message)
     assertTrue(File(tree, "win-x64/native/kn_testlibrary.dll").isFile)
@@ -108,7 +109,7 @@ class NugetCrossTargetContractTest {
   @Test fun `missing producer contract names the transferable tree to upload`() {
     val task = pack()
     File(task.prebuiltRuntimesDir.get().asFile, "win-arm64/Interop.cs").delete()
-    val error = assertFailsWith<IllegalArgumentException> { task.pack() }
+    val error: IllegalArgumentException = assertFailsWith { task.pack() }
     assertTrue(error.message.orEmpty().contains("prebuilt-runtimes"), error.message)
   }
 
