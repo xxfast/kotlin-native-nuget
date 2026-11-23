@@ -441,16 +441,10 @@ A value handed to your callback from any of the C# → Kotlin routes on this pag
 Kotlin, once it crosses:
 
 - a `string` (or other marshalled value) arrives already fully read; there is nothing to dispose.
+  So does a [data class that crosses as a value](data-classes.md#data-classes-as-values):
+  `cat.ForEachToy(toy => toyNames.Add(toy.Name))` needs no `Dispose`.
 - an exported object arrives as a live wrapper you own, the same as any other object you construct
-  or receive. Dispose it yourself to release it promptly:
-
-```C#
-cat.ForEachToy(toy =>
-{
-    using var t = toy;
-    toyNames.Add(t.Name);
-});
-```
+  or receive. Dispose it yourself to release it promptly, as `using (c)` does in the example below.
 
 A payload your callback never disposes is not leaked: the .NET GC releases it when it finalizes the
 wrapper, eventually and not at process exit, the same as any other

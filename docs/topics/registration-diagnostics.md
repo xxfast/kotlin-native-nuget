@@ -212,6 +212,20 @@ count returns to baseline. `LeakTests/LiveHandleTests.cs`'s
 
 A [generic value class over a collection of its own `T`](value-classes.md#a-generic-value-class-over-a-collection) (`Bundle<T>(List<T>)`) mints a list handle per crossing and a box per erased position, all released, including when `init` refuses the re-wrap. `GenericValueClassOverCollection_OrdinaryPositions_ReturnToBaseline`, `GenericValueClassOverCollection_Members_ReturnToBaseline`, `GenericValueClassOverCollection_ErasedPositions_ReturnToBaseline` and `GenericValueClassOverCollection_AsyncPositions_ReturnToBaseline` pin them.
 
+A [data class that crosses as a value](data-classes.md#data-classes-as-values) holds no handle, so
+the count returns to baseline with no `Dispose`: the constructor, `Copy` and every Kotlin member
+release the Kotlin instance they made before returning, on the throwing path too. The synchronous
+rows below measure straight after the crossings with no garbage collection, and the async rows keep
+every value reachable, so a finalizer cannot be what released it. `LeakTests/LiveHandleTests.cs`'s `ScalarDataClass_EveryCrossing_ReturnsToBaselineWithoutDispose`,
+`ScalarDataClass_ThrowingMember_ReleasesTheTransientInstance`,
+`ScalarDataClass_FailingConstructorRequire_LeaksNoHandle`,
+`ScalarDataClass_AsyncAndCollectionCrossings_ReturnToBaseline`,
+`ScalarDataClass_NestedAndWiderComponents_ReturnToBaselineWithoutDispose`,
+`ScalarDataClass_ValueClassOverAValue_ReturnsToBaselineWithoutDispose`,
+`ScalarDataClass_ExtensionMembers_ReturnToBaselineWithoutDispose`,
+`ScalarDataClass_AsValueParameterOfAsyncFlowAndLambdaMembers_ReturnsToBaseline` and
+`ScalarDataClass_OwnAsyncFlowAndCallbackMembers_ReturnToBaseline` cover them.
+
 A [value class over `ByteArray`, a collection or an interface](value-classes.md#over-instant-bytearray-collection-interface)
 crosses on that underlying's own wire, so it releases what the bare underlying would: the bytes and
 list copies once read, a Kotlin-backed `IRumbler` when you dispose it, and a C#-implemented one once
@@ -271,13 +285,14 @@ parameter lends its handle and mints nothing. `LeakTests/LiveHandleTests.cs` row
 complete before the call that started it returns) pin the returns, the parameters and the `suspend`
 route.
 
-A class-typed [enum member property](enums.md) getter counts here too: every read mints a fresh
-owned wrapper the caller must dispose, the same as any other class-typed property getter.
-`LeakTests/LiveHandleTests.cs` row 1h,
-`EnumMemberClassTypedGetter_UsingDispose_ReturnsToBaseline`, measures repeated reads and disposes
-of one such member returning to baseline. Row 1i,
-`EnumMemberFunctionClassTypedReturn_UsingDispose_ReturnsToBaseline`, pins the same for a class-typed
-enum member function return.
+A class-typed [enum member property](enums.md) getter counts here too: every read of an ordinary
+class mints a fresh owned wrapper the caller must dispose, the same as any other class-typed
+property getter. `LeakTests/LiveHandleTests.cs` row 1h,
+`EnumMemberClassTypedGetter_UsingDispose_ReturnsToBaseline`, reads a member typed as a
+[data class value](data-classes.md#data-classes-as-values), so each read releases its Kotlin
+instance before returning and the count stays at baseline with no `Dispose` and no garbage
+collection. Row 1i, `EnumMemberFunctionClassTypedReturn_UsingDispose_ReturnsToBaseline`, pins the
+same for an enum member function return, nullable included.
 
 An [inner class](classes-and-objects.md#inner-classes) constructor borrows its outer handle and mints
 one of its own. Row 1j, `InnerOfInnerConstructor_IntermediateOuterDisposedFirst_ReturnsToBaseline`,

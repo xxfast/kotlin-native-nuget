@@ -80,33 +80,38 @@ CirClass(
   ],
   copyMethod = CirMethod("Copy", returnType = "Toy"),          // entry: kn_testlibrary_cat__toy_copy
   methods = [ Equals, GetHashCode, ToString ],
+  dataValue = CirDataValue(components = [Name, Color]),       // ADR-242: crosses as a C# value
 )
 ```
 
 ### 3. `CirRenderer` emits the C# surface
 
-The consumer-facing API. The Kotlin object lives behind an opaque `IntPtr _handle`; every member is a `[DllImport]` into the native library, wrapped in idiomatic C# with UTF-8 string marshalling and error propagation. The entry points match the CIR exactly.
+The consumer-facing API. Every member is a `[DllImport]` into the native library, wrapped in idiomatic C# with UTF-8 string marshalling and error propagation, and the entry points match the CIR exactly. `Toy` qualifies as a [data class value](data-classes.md#data-classes-as-values), so the C# side holds the components itself: the constructor runs Kotlin's constructor and releases the handle at once, and each Kotlin member mints a short-lived handle from the components (`NugetMint()`) for the one call. An ordinary class instead keeps its Kotlin object behind a `NugetKotlinHandle _handle` field and is `IDisposable`.
 
 ```C#
-public class Toy : IDisposable
+public sealed class Toy : IEquatable<Toy>, INugetGenericValue
 {
-    internal IntPtr _handle;
-
-    [DllImport("kn_testlibrary", EntryPoint = "kn_testlibrary_cat__toy_create")]
-    private static extern IntPtr Native_Create(string name, string color, out IntPtr error);
+    [DllImport("kn_testlibrary", CallingConvention = CallingConvention.Cdecl, EntryPoint = "kn_testlibrary_cat__toy_create")]
+    private static extern IntPtr Native_Create([MarshalAs(UnmanagedType.LPUTF8Str)] string name, [MarshalAs(UnmanagedType.LPUTF8Str)] string color, out IntPtr error);
 
     public Toy(string name, string color)
     {
-        IntPtr handle = Native_Create(name, color, out IntPtr error);
-        if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);
-        _handle = handle;
+        new NugetKotlinHandle(NugetCreate(name, color)).Dispose();
+        Name = name;
+        Color = color;
     }
 
-    [DllImport("kn_testlibrary", EntryPoint = "kn_testlibrary_cat__toy_get_name")]
-    private static extern IntPtr Native_Get_name(IntPtr handle, out IntPtr error);
-    public string Name => Marshal.PtrToStringUTF8(Native_Get_name(_handle, out _))!;
+    public string Name { get; }
+    public string Color { get; }
 
-    // ... Color via kn_testlibrary_cat__toy_get_color, Copy via kn_testlibrary_cat__toy_copy, ToString, Dispose ...
+    public override string ToString()
+    {
+        using NugetKotlinHandle _handle = NugetMint();
+        return Marshal.PtrToStringUTF8(Native_ToString(_handle))!;
+    }
+
+    // ... NugetCreate and NugetMint over kn_testlibrary_cat__toy_create, the component read-back
+    // through kn_testlibrary_cat__toy_get_name/_get_color, Copy, Equals, GetHashCode, == and != ...
 }
 ```
 
@@ -145,7 +150,7 @@ public fun export_kn_testlibrary_cat__toy_get_name(handle: COpaquePointer, error
 }
 ```
 
-At runtime, C# `new Toy(...)` calls P/Invoke `kn_testlibrary_cat__toy_create`, which reaches Kotlin `export_kn_testlibrary_cat__toy_create` and returns a handle from `NugetHandles.retain`. See [Publishing Kotlin to C#](forward-overview.md) for the full forward pipeline, and [ADR-127](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/127-nuget-runtime-library.md) for why the fixed ABI moved into its own library.
+At runtime, C# `new Toy(...)` calls P/Invoke `kn_testlibrary_cat__toy_create`, which reaches Kotlin `export_kn_testlibrary_cat__toy_create` and returns a handle from `NugetHandles.retain`; the value's constructor releases it before returning. See [Publishing Kotlin to C#](forward-overview.md) for the full forward pipeline, and [ADR-127](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/127-nuget-runtime-library.md) for why the fixed ABI moved into its own library.
 
 The reverse bridge (below) builds its own thrown-exception envelope through the same `buildError`, rather than a second, structurally identical error class: `internal expect fun nugetKotlinError(t: Throwable)` in the generated `nativeMain` file, with a per-target `actual` that calls `StableRef.create(buildError(t)).asCPointer()` where the runtime is visible. See [ADR-130](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/130-reverse-error-envelope-on-runtime.md).
 

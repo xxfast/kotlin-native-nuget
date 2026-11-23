@@ -103,7 +103,9 @@ also covers a member whose own type is a *different* enum, such as `enum class S
 Patch)`: `swirl.Patch()` returns the C# `Patch` enum, not a raw handle.
 
 An enum member property follows the same type rules as any other property: a class-typed member
-returns an owned wrapper the caller must dispose (`using var toy = mood.FavouriteToy();`), an
+returns an owned wrapper the caller must dispose, or a value when the class is a
+[data class that crosses as a value](data-classes.md#data-classes-as-values)
+(`Toy toy = mood.FavouriteToy();`), an
 `Int?`-shaped member reads through the usual nullable pair, and a member typed with something a
 property can't cross (a lambda, for example) is a named skip rather than a broken export.
 
