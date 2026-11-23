@@ -439,7 +439,10 @@ class Tier1DataClassStoredStateTest {
       """.trimIndent(),
     )
 
-    assertTrue(result.compileErrors.isNotEmpty(), "expected the fixture to be rejected")
+    assertTrue(
+      result.compileErrors.any { "backing field" in it.lowercase() },
+      "expected a no-backing-field rejection: ${result.compileErrors}",
+    )
     val x = properties.single { it.key == "Shadowed.x" }
     assertEquals(
       row("Shadowed.x", hasBackingField = false, constructorProperty = false, getter = "KOTLIN", type = "kotlin.Int [CLASS]"),
