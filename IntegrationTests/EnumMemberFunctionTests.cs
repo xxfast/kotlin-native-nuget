@@ -75,7 +75,7 @@ public class EnumMemberFunctionTests
     [Fact]
     public void Mood_ToyFor_ReturnsAnOwnedToy()
     {
-        using Toy toy = Mood.Grumpy.ToyFor();
+        Toy toy = Mood.Grumpy.ToyFor();
         Assert.Equal("Hissing Oreo's mouse", toy.Name);
         Assert.Equal("black", toy.Color);
     }
@@ -84,7 +84,7 @@ public class EnumMemberFunctionTests
     [Fact]
     public void Mood_FetchToy_NullableWrapperReturn()
     {
-        using Toy? yarn = Mood.Sleepy.FetchToy("cream");
+        Toy? yarn = Mood.Sleepy.FetchToy("cream");
         Assert.NotNull(yarn);
         Assert.Equal("Snoozing Mylo's cream yarn", yarn!.Name);
         Assert.Equal("cream", yarn.Color);

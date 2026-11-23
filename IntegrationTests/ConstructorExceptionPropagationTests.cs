@@ -192,7 +192,7 @@ public class ConstructorExceptionPropagationTests
     [Fact]
     public void CatProfile_ValidBudget_ConstructorSucceeds()
     {
-        using var profile = new CatProfile("Oreo", 100);
+        var profile = new CatProfile("Oreo", 100);
         Assert.Equal("Oreo", profile.Name);
         Assert.Equal(100, profile.TreatBudget);
     }
@@ -200,7 +200,7 @@ public class ConstructorExceptionPropagationTests
     [Fact]
     public void CatProfile_ZeroBudget_ConstructorSucceeds()
     {
-        using var profile = new CatProfile("Mylo", 0);
+        var profile = new CatProfile("Mylo", 0);
         Assert.Equal("Mylo", profile.Name);
         Assert.Equal(0, profile.TreatBudget);
     }
@@ -210,7 +210,7 @@ public class ConstructorExceptionPropagationTests
     [Fact]
     public void CatProfile_Copy_NegativeTreatBudget_ThrowsArgumentException()
     {
-        using var profile = new CatProfile("Oreo", 100);
+        var profile = new CatProfile("Oreo", 100);
         Assert.ThrowsAny<ArgumentException>(
             () => profile.Copy("Oreo", -1));
     }
@@ -218,7 +218,7 @@ public class ConstructorExceptionPropagationTests
     [Fact]
     public void CatProfile_Copy_NegativeTreatBudget_IsExactType_KotlinArgumentException()
     {
-        using var profile = new CatProfile("Oreo", 100);
+        var profile = new CatProfile("Oreo", 100);
         var ex = Assert.ThrowsAny<ArgumentException>(
             () => profile.Copy("Oreo", -1));
         Assert.IsType<KotlinArgumentException>(ex);
@@ -227,7 +227,7 @@ public class ConstructorExceptionPropagationTests
     [Fact]
     public void CatProfile_Copy_NegativeTreatBudget_KotlinType_IsIllegalArgumentException()
     {
-        using var profile = new CatProfile("Oreo", 100);
+        var profile = new CatProfile("Oreo", 100);
         var ex = Assert.ThrowsAny<ArgumentException>(
             () => profile.Copy("Oreo", -1));
         var ke = (IKotlinException)ex;
@@ -237,8 +237,8 @@ public class ConstructorExceptionPropagationTests
     [Fact]
     public void CatProfile_Copy_ValidBudget_Succeeds()
     {
-        using var profile = new CatProfile("Oreo", 100);
-        using var updated = profile.Copy("Oreo", 200);
+        var profile = new CatProfile("Oreo", 100);
+        var updated = profile.Copy("Oreo", 200);
         Assert.Equal("Oreo", updated.Name);
         Assert.Equal(200, updated.TreatBudget);
     }
@@ -246,8 +246,8 @@ public class ConstructorExceptionPropagationTests
     [Fact]
     public void CatProfile_Copy_DifferentName_Succeeds()
     {
-        using var profile = new CatProfile("Oreo", 50);
-        using var myloProfile = profile.Copy("Mylo", 50);
+        var profile = new CatProfile("Oreo", 50);
+        var myloProfile = profile.Copy("Mylo", 50);
         Assert.Equal("Mylo", myloProfile.Name);
         Assert.Equal(50, myloProfile.TreatBudget);
         Assert.Equal("Oreo", profile.Name);

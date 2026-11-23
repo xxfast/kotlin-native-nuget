@@ -202,8 +202,8 @@ private fun StringBuilder.renderValueClassCreateChecked(
  */
 private fun StringBuilder.renderValueClassBoxing(cls: CirValueClass) {
   val boxing: CirValueClassBoxing = cls.boxing ?: return
-  if (boxing.boxBody != null) {
-    renderWireValueClassBoxing(cls, boxing, requireNotNull(boxing.unboxBody))
+  if (boxing.boxBody != null && boxing.unboxBody != null) {
+    renderWireValueClassBoxing(cls, boxing, boxing.unboxBody)
     return
   }
   if (cls.typeParameters.isNotEmpty()) {
@@ -215,6 +215,9 @@ private fun StringBuilder.renderValueClassBoxing(cls: CirValueClass) {
   renderDllImport(boxing.unboxImport)
   appendLine("        internal static IntPtr NugetBox(${cls.name} ${boxing.boxParameter})")
   appendLine("        {")
+  // ADR-242: a value underlying is minted around the box export, the ordinary route's body.
+  val boxBody: String? = boxing.boxBody
+  if (boxBody != null) appendLine(boxBody) else {
   appendLine(
     "            IntPtr boxed = ${boxing.boxImport.name}(" +
         "${boxing.boxArguments.joinToString(", ")}, out IntPtr error);",
@@ -225,6 +228,7 @@ private fun StringBuilder.renderValueClassBoxing(cls: CirValueClass) {
   appendLine("            }")
   appendLine("            NugetErrorNative.ClearManagedFault();")
   appendLine("            return boxed;")
+  }
   appendLine("        }")
   appendLine()
   appendLine("        internal static ${cls.name} NugetUnbox(IntPtr boxed)")

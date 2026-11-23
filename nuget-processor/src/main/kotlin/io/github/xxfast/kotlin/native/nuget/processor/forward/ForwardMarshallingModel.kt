@@ -159,6 +159,26 @@ internal sealed interface BridgeType {
   ) : BridgeType
 
   /**
+   * ADR-242: an immutable, all-scalar data class declared in this module, which C# holds as a
+   * value (`sealed class : IEquatable<T>`, no handle). The wire is exactly [handle]'s: one POINTER
+   * slot holding a `StableRef`, and every Kotlin export is the handle's. Only the C# half differs:
+   * a value crossing into Kotlin mints a transient handle through the create export and releases
+   * it after the call, and a handle Kotlin hands out is read component by component.
+   *
+   * Its own variant, not a flag on [ObjectHandle], so every exhaustive `when` has to decide about
+   * it: a site that ignored a flag would hand Kotlin a borrowed handle the value never held.
+   *
+   * @param components the primary-constructor components, in declaration order.
+   */
+  data class DataValue(
+    val handle: ObjectHandle,
+    val components: List<DataValueComponent>,
+  ) : BridgeType
+
+  /** One [DataValue] component: the Kotlin property name and its classified type. */
+  data class DataValueComponent(val name: kotlin.String, val type: BridgeType)
+
+  /**
    * ADR-040: a Kotlin interface returned or accepted at an ordinary position. Wire-identical to
    * [ObjectHandle] (POINTER, STABLE_REF_TO_HANDLE/HANDLE_TO_STABLE_REF, OWNED_HANDLE +
    * DISPOSE_STABLE_REF for a result), differing only in the two places where the *public C#
@@ -553,6 +573,7 @@ internal fun BridgeType.openSlots(): List<OpenSlot> =
 private fun BridgeType.collectOpenSlots(): List<OpenSlot> = when (this) {
   is BridgeType.ObjectHandle -> (if (open) listOf(openSlot()) else emptyList()) +
       openArguments.map { it.openSlot() } + valueClassSlots()
+  is BridgeType.DataValue -> handle.collectOpenSlots()
   is BridgeType.Nullable -> type.collectOpenSlots()
   is BridgeType.Collection -> listOfNotNull(element, key, value).flatMap { it.collectOpenSlots() }
   is BridgeType.Callback -> (parameters + result).flatMap { it.collectOpenSlots() }
@@ -1461,6 +1482,7 @@ internal object ForwardCallablePlanValidator {
         // ADR-151: valid at every ordinary position, over the collection handle wire.
       BridgeType.ByteArray,
       is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,
+      is BridgeType.DataValue,
       is BridgeType.Interface, is BridgeType.BoundInterface,
         // ADR-147: a class type parameter, valid at every top-level position over the boxed wire.
       is BridgeType.TypeParameter,
@@ -1543,7 +1565,8 @@ internal object ForwardCallablePlanValidator {
     }
 
     // ADR-147: a `T` position crosses as the same StableRef handle an object does.
-    is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.TypeParameter,
+    is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface,
+    is BridgeType.TypeParameter,
     is BridgeType.ReturnedLambda,
       ->
       if (flow == ForwardFlow.INTO_KOTLIN) {
@@ -1698,7 +1721,8 @@ internal fun BridgeType.mentionsAny(): Boolean = when (this) {
   is BridgeType.AsyncCallback -> (parameters + result).any { it.mentionsAny() }
   is BridgeType.FlowSource -> element.mentionsAny()
   is BridgeType.ReturnedLambda -> typeArguments.any { it.mentionsAny() }
-  BridgeType.Unit, is BridgeType.Primitive, is BridgeType.ObjectHandle, BridgeType.Char,
+  BridgeType.Unit, is BridgeType.Primitive, is BridgeType.ObjectHandle, is BridgeType.DataValue,
+  BridgeType.Char,
   BridgeType.String, BridgeType.Instant, BridgeType.Duration, is BridgeType.Throwable,
   BridgeType.Uuid,
   is BridgeType.Enum, is BridgeType.Interface, is BridgeType.BoundInterface,

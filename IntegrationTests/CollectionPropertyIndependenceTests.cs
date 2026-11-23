@@ -14,7 +14,7 @@ public class CollectionPropertyIndependenceTests
     [Fact]
     public void Visit_Symptoms_NonNullCollection_StillMaterializes()
     {
-        using var visit = new Visit("Oreo", new List<string> { "purring", "hungry" }, null);
+        var visit = new Visit("Oreo", new List<string> { "purring", "hungry" }, null);
 
         Assert.Equal(new[] { "purring", "hungry" }, visit.Symptoms);
     }
@@ -22,7 +22,7 @@ public class CollectionPropertyIndependenceTests
     [Fact]
     public void Visit_Notes_WhenProvided_MaterializesElements()
     {
-        using var visit = new Visit(
+        var visit = new Visit(
             "Oreo",
             new List<string> { "purring" },
             new List<string> { "watch weight" });
@@ -34,7 +34,7 @@ public class CollectionPropertyIndependenceTests
     [Fact]
     public void Visit_Notes_WhenNull_IsNullNotAStrayHandle()
     {
-        using var visit = new Visit("Mylo", new List<string> { "sneezing" }, null);
+        var visit = new Visit("Mylo", new List<string> { "sneezing" }, null);
 
         // This is the actual reported bug: a null Kotlin handle must come back as C# `null`,
         // not a boxed IntPtr or an empty list.

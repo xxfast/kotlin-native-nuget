@@ -351,7 +351,7 @@ public Task<T> FerryAsync<T>(T value, CancellationToken cancellationToken = defa
 
 ```C#
 Assert.Equal(4, await SuspendGenericSample.FetchLaterAsync(4));
-using Toy back = await SuspendGenericSample.FetchLaterAsync(toy);   // the same Kotlin object, yours to dispose
+Toy back = await SuspendGenericSample.FetchLaterAsync(toy);   // Toy is a data class value: an equal Toy, nothing to dispose
 ```
 
 - A builtin, a `string`, a wrapper or a C# implementation of an exported interface all work as `T`.
@@ -367,7 +367,8 @@ using Toy back = await SuspendGenericSample.FetchLaterAsync(toy);   // the same 
 A `suspend` member of an `object`, a companion, an enum, a value class or a suspend extension binds
 as a `Task`-returning method with a trailing `CancellationToken`, the same as a top-level function.
 These owners have nothing to dispose, so each call runs on its own scope and the token is the only
-way to cancel it. A member's own `T` binds as on a top-level function.
+way to cancel it. A member's own `T` binds as on a top-level function. The same holds for the
+`suspend` and `Flow` members of a [data class that crosses as a value](data-classes.md#data-classes-as-values).
 
 ```kotlin
 object Siesta { suspend fun minutesFor(name: String): Int }

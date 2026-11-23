@@ -35,7 +35,7 @@ public class ReservedNamesTests
     public void Constructor_HandleParameter_RoundTripsThroughTheHandleProperty()
     {
         // `IntPtr handle = Native_Create(handle, out IntPtr error)` in the ctor body: CS0136.
-        using var widget = new Widget(handle_: 1);
+        var widget = new Widget(handle_: 1);
 
         Assert.Equal(1, widget.Handle);
     }
@@ -45,8 +45,8 @@ public class ReservedNamesTests
     {
         // `Copy` is an instance callable, so its extern already leads with the `IntPtr handle`
         // receiver slot; a second `handle` beside it is CS0100.
-        using var oreo = new Widget(handle_: 1);
-        using var mylo = oreo.Copy(handle_: 2);
+        var oreo = new Widget(handle_: 1);
+        var mylo = oreo.Copy(handle_: 2);
 
         Assert.Equal(2, mylo.Handle);
         Assert.Equal(1, oreo.Handle);

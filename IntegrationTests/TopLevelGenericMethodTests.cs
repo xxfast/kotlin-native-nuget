@@ -32,7 +32,7 @@ public class TopLevelGenericMethodTests
     [Fact]
     public void Describe_WrapperArgument_ReachesKotlinAsTheSameObject()
     {
-        using var toy = new Toy("Mylo's Milo Mouse", "Brown");
+        var toy = new Toy("Mylo's Milo Mouse", "Brown");
 
         Assert.Equal("Toy(name=Mylo's Milo Mouse, color=Brown): Toy", Descriptions.Describe(toy));
     }
@@ -60,10 +60,10 @@ public class TopLevelGenericMethodTests
     [Fact]
     public void Pick_WrapperArguments_ReturnsSecond()
     {
-        using var oreoToy = new Toy("Oreo's Biscuit Ball", "Black");
-        using var myloToy = new Toy("Mylo's Milo Mouse", "Brown");
+        var oreoToy = new Toy("Oreo's Biscuit Ball", "Black");
+        var myloToy = new Toy("Mylo's Milo Mouse", "Brown");
 
-        using var picked = Descriptions.Pick(oreoToy, myloToy);
+        var picked = Descriptions.Pick(oreoToy, myloToy);
 
         Assert.Equal("Mylo's Milo Mouse", picked.Name);
     }
@@ -92,15 +92,52 @@ public class TopLevelGenericMethodTests
     [Fact]
     public void Shuffle_WrapperElements_ReturnsTheSameObjectsReversed()
     {
-        using var oreoToy = new Toy("Oreo's Biscuit Ball", "Black");
-        using var myloToy = new Toy("Mylo's Milo Mouse", "Brown");
+        var oreoToy = new Toy("Oreo's Biscuit Ball", "Black");
+        var myloToy = new Toy("Mylo's Milo Mouse", "Brown");
 
         IReadOnlyList<Toy> shuffled = Descriptions.Shuffle(new[] { oreoToy, myloToy });
 
         Assert.Equal(2, shuffled.Count);
-        using var first = shuffled[0];
-        using var second = shuffled[1];
+        var first = shuffled[0];
+        var second = shuffled[1];
         Assert.Equal("Mylo's Milo Mouse", first.Name);
         Assert.Equal("Oreo's Biscuit Ball", second.Name);
+    }
+
+    // ADR-242 made `Toy` a value, so the cases above no longer carry a handle through `T`. These
+    // keep the handle path (a borrowed wrapper in, a fresh owned wrapper out) exercised with an
+    // ordinary class.
+    [Fact]
+    public void Describe_HandleArgument_ReachesKotlinAsTheSameObject()
+    {
+        using var oreo = new Cat("Oreo", 9);
+
+        Assert.EndsWith(": Cat", Descriptions.Describe(oreo));
+    }
+
+    [Fact]
+    public void Pick_HandleArguments_ReturnsSecond()
+    {
+        using var oreo = new Cat("Oreo", 9);
+        using var mylo = new Cat("Mylo", 7);
+
+        using Cat picked = Descriptions.Pick(oreo, mylo);
+
+        Assert.Equal("Mylo", picked.Name);
+    }
+
+    [Fact]
+    public void Shuffle_HandleElements_ReturnsTheSameObjectsReversed()
+    {
+        using var oreo = new Cat("Oreo", 9);
+        using var mylo = new Cat("Mylo", 7);
+
+        IReadOnlyList<Cat> shuffled = Descriptions.Shuffle(new[] { oreo, mylo });
+
+        Assert.Equal(2, shuffled.Count);
+        using Cat first = shuffled[0];
+        using Cat second = shuffled[1];
+        Assert.Equal("Mylo", first.Name);
+        Assert.Equal("Oreo", second.Name);
     }
 }

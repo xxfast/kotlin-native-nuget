@@ -88,8 +88,8 @@ public class Issue127Tests
 
     /// <summary>
     /// Every emission is materialised on its own, so a fix that reads the first list and reuses it
-    /// (or that reads only the replayed <c>Value</c>) fails here. The elements are handles, so the
-    /// test owns them and disposes each one.
+    /// (or that reads only the replayed <c>Value</c>) fails here. The elements are values
+    /// (ADR-242), so there is nothing to dispose.
     /// </summary>
     [Fact]
     public async Task Ticks_FlowOfList_MaterialisesEachEmissionsElements()
@@ -100,7 +100,6 @@ public class Issue127Tests
         await foreach (IReadOnlyList<Kind> page in hub.Ticks)
         {
             seen.Add(page.Select(kind => kind.Name).ToArray());
-            foreach (Kind kind in page) kind.Dispose();
         }
 
         Assert.Equal(3, seen.Count);
@@ -115,8 +114,8 @@ public class Issue127Tests
     public void Visible_TakesACollectionParameterAndReturnsCollectionElements()
     {
         using var hub = new NodeHub();
-        using var nap = new Kind("nap");
-        using var zoomies = new Kind("zoomies");
+        var nap = new Kind("nap");
+        var zoomies = new Kind("zoomies");
 
         IReadOnlyList<NodeId> visible = hub.Visible([nap, zoomies]).Value;
 

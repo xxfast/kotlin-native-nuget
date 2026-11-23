@@ -27,7 +27,7 @@ public class Issue66Tests
     [Fact]
     public void Constructor_ErrorParameter_RoundTripsThroughTheErrorProperty()
     {
-        using var state = new Issue66StoryState("Mylo knocked the water bowl over", "Kitchen Flood", 7);
+        var state = new Issue66StoryState("Mylo knocked the water bowl over", "Kitchen Flood", 7);
 
         Assert.Equal("Mylo knocked the water bowl over", state.Error);
         Assert.Equal("Kitchen Flood", state.Title);
@@ -37,7 +37,7 @@ public class Issue66Tests
     [Fact]
     public void Constructor_NullErrorArgument_LeavesTheErrorPropertyNull()
     {
-        using var state = new Issue66StoryState(null, "Nothing To Report", 7);
+        var state = new Issue66StoryState(null, "Nothing To Report", 7);
 
         Assert.Null(state.Error);
         Assert.Equal("Nothing To Report", state.Title);
@@ -49,7 +49,7 @@ public class Issue66Tests
         // ADR-164: `edition` is a trailing optional `int?`; `error` is a middle, already-nullable
         // default, so it is a required `KotlinOptional<string?>` and the string converts implicitly.
         // Edition defaults to 3, not 0: a mis-wired mask arm shows up as a wrong value.
-        using var state = new Issue66StoryState("Oreo raided the treat jar", "Biscuit Heist");
+        var state = new Issue66StoryState("Oreo raided the treat jar", "Biscuit Heist");
 
         Assert.Equal("Oreo raided the treat jar", state.Error);
         Assert.Equal("Biscuit Heist", state.Title);
@@ -59,7 +59,7 @@ public class Issue66Tests
     [Fact]
     public void Describe_ScalarErrorParameter_ReachesNative()
     {
-        using var state = new Issue66StoryState(null, "Evening Edition", 7);
+        var state = new Issue66StoryState(null, "Evening Edition", 7);
 
         Assert.Equal(
             "Evening Edition: Mylo sat on the keyboard",
@@ -69,7 +69,7 @@ public class Issue66Tests
     [Fact]
     public void Count_CollectionErrorParameter_MarshalsTheWholeList()
     {
-        using var state = new Issue66StoryState(null, "Incident Log", 7);
+        var state = new Issue66StoryState(null, "Incident Log", 7);
 
         IReadOnlyList<string> incidents = new List<string> { "Oreo", "Mylo", "biscuit" };
 
@@ -80,7 +80,7 @@ public class Issue66Tests
     [Fact]
     public void Summarise_TopLevelObjectErrorParameter_ReadsThroughTheHandle()
     {
-        using var state = new Issue66StoryState("Mylo again", "Sunbeam Occupied", 9);
+        var state = new Issue66StoryState("Mylo again", "Sunbeam Occupied", 9);
 
         Assert.Equal("Sunbeam Occupied #9 (Mylo again)", Issue66Sample.Issue66Summarise(state));
     }
@@ -88,7 +88,7 @@ public class Issue66Tests
     [Fact]
     public void Summarise_TopLevelObjectErrorParameter_HandlesNullError()
     {
-        using var state = new Issue66StoryState(null, "All Quiet", 9);
+        var state = new Issue66StoryState(null, "All Quiet", 9);
 
         Assert.Equal("All Quiet #9 (no error)", Issue66Sample.Issue66Summarise(state));
     }
@@ -96,8 +96,8 @@ public class Issue66Tests
     [Fact]
     public void Copy_ErrorParameter_ChangesErrorAndKeepsTitle()
     {
-        using var original = new Issue66StoryState("Oreo, mid-biscuit", "Roll Call", 4);
-        using var amended = original.Copy("Mylo, mid-nap", "Roll Call", 4);
+        var original = new Issue66StoryState("Oreo, mid-biscuit", "Roll Call", 4);
+        var amended = original.Copy("Mylo, mid-nap", "Roll Call", 4);
 
         Assert.Equal("Mylo, mid-nap", amended.Error);
         Assert.Equal("Roll Call", amended.Title);

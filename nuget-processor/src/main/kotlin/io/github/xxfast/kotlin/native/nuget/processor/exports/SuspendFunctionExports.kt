@@ -167,7 +167,7 @@ internal fun FileSpec.Builder.addStaticSuspendExports(
     is ForwardStaticSuspendOwner.ValueClass -> {
       importIfDefaultPackage(owner.valueClass)
       val qualified: String = owner.construction ?: owner.valueClass.kotlinQualifiedReference()
-      ({ read -> "$qualified($read).$name" })
+      if (owner.rewrap) ({ read -> "$qualified($read).$name" }) else ({ read -> "$read.$name" })
     }
   }
   addStaticSuspendExport(func, owner.stem, callee, receiver, classifier, callableCatalog)
@@ -838,7 +838,7 @@ internal fun FunSpec.Builder.addLegacyWireParameter(
     is BridgeType.Enum -> INT
     BridgeType.String, BridgeType.Uuid -> STRING.copy(nullable = nullable)
     BridgeType.ByteArray, is BridgeType.Interface, is BridgeType.Collection,
-    is BridgeType.ObjectHandle,
+    is BridgeType.ObjectHandle, is BridgeType.DataValue,
     is BridgeType.BoundInterface -> cOpaquePointer.copy(nullable = nullable)
     BridgeType.Unit,
     BridgeType.Char,

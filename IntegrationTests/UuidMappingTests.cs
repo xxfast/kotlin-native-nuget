@@ -270,7 +270,7 @@ public class UuidMappingTests
     {
         var minted = Guid.NewGuid();
 
-        using var record = new ChipRecord(minted);
+        var record = new ChipRecord(minted);
 
         Assert.Equal(minted, record.Id);
     }
@@ -278,7 +278,7 @@ public class UuidMappingTests
     [Fact]
     public void ChipRecord_HoldsTheWellKnownVectorUnchanged()
     {
-        using var record = new ChipRecord(Guid.Parse(WellKnown));
+        var record = new ChipRecord(Guid.Parse(WellKnown));
 
         Assert.Equal(WellKnown, record.Id.ToString());
     }

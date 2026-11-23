@@ -158,7 +158,7 @@ data class ChipRecord(val id: Uuid)
 
 ```C#
 var minted = Guid.NewGuid();
-using var record = new ChipRecord(minted);
+var record = new ChipRecord(minted);
 ```
 
 `record.Id` equals `minted`. All 128 bits are preserved, and `Uuid.NIL` maps to `Guid.Empty`.

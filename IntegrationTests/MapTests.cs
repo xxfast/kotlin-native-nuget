@@ -27,7 +27,7 @@ public class MapTests
     {
         using var cat = new Cat("Oreo", 9);
         IReadOnlyDictionary<string, Toy> accessories = cat.Accessories;
-        using var collar = accessories["collar"];
+        var collar = accessories["collar"];
         Assert.Equal("Bell Collar", collar.Name);
         Assert.Equal("Gold", collar.Color);
     }
@@ -49,7 +49,7 @@ public class MapTests
         var keys = new List<string>();
         foreach (var kvp in accessories)
         {
-            using var toy = kvp.Value;
+            var toy = kvp.Value;
             keys.Add(kvp.Key);
         }
         Assert.Equal(2, keys.Count);

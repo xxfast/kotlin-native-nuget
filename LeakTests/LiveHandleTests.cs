@@ -71,6 +71,9 @@ using TestLibrary.Pawpost;
 using TestLibrary.Store;
 using Bindle = TestLibrary.Bindle;
 using Adoption = TestLibrary.Adoption;
+using Plush = TestLibrary.Plushie;
+// The plushie extension members (ADR-242 cells), without importing the whole namespace.
+using static TestLibrary.Plushie.PlushieExtensions;
 
 namespace LeakTests;
 
@@ -231,6 +234,28 @@ public class LiveHandleTests
 
             Assert.Fail(
                 $"expected {before} live handles after {iterations} crossings, got {after} (delta {after - before}) on attempt {attempt}");
+        }
+    }
+
+    // ADR-242: the deterministic twin of `AssertNoLeak`, for crossings that must retain nothing at
+    // all. Settle once for the baseline, then read the count straight after the crossings with no
+    // GC in between: a finalizer-released handle (ADR-242's rejected option 3) would pass
+    // `AssertNoLeak`'s settle, and must not pass this. Same rule on the delta as the helpers above.
+    private static void AssertRetainsNothing(Action crossing, int iterations = 50)
+    {
+        for (int attempt = 1; ; attempt++)
+        {
+            Settle();
+            long before = NugetMarshal.LiveHandles;
+
+            for (int i = 0; i < iterations; i++) crossing();
+
+            long after = NugetMarshal.LiveHandles;
+            if (after == before) return;
+            if (after < before && attempt < MeasurementAttempts) continue;
+
+            Assert.Fail(
+                $"expected {before} live handles straight after {iterations} crossings with no GC, got {after} (delta {after - before}) on attempt {attempt}");
         }
     }
 
@@ -1492,9 +1517,11 @@ public class LiveHandleTests
     [Fact]
     public void EnumMemberClassTypedGetter_UsingDispose_ReturnsToBaseline()
     {
-        AssertNoLeak(() =>
+        // ADR-242: `Toy` is a value now, so the read releases its handle before returning and there
+        // is no `Dispose`. The stronger claim: nothing retained, with no GC.
+        AssertRetainsNothing(() =>
         {
-            using Toy toy = TestLibrary.Cat.Mood.Happy.FavouriteToy();
+            Toy toy = TestLibrary.Cat.Mood.Happy.FavouriteToy();
             Assert.Equal("Purring Oreo", toy.Name);
         });
     }
@@ -1506,11 +1533,12 @@ public class LiveHandleTests
     [Fact]
     public void EnumMemberFunctionClassTypedReturn_UsingDispose_ReturnsToBaseline()
     {
-        AssertNoLeak(() =>
+        // ADR-242: as Row 1h, a value return retains nothing, with no GC and no `Dispose`.
+        AssertRetainsNothing(() =>
         {
-            using Toy mouse = TestLibrary.Cat.Mood.Happy.ToyFor();
+            Toy mouse = TestLibrary.Cat.Mood.Happy.ToyFor();
             Assert.Equal("Purring Oreo's mouse", mouse.Name);
-            using Toy? yarn = TestLibrary.Cat.Mood.Sleepy.FetchToy("cream");
+            Toy? yarn = TestLibrary.Cat.Mood.Sleepy.FetchToy("cream");
             Assert.Equal("Snoozing Mylo's cream yarn", yarn!.Name);
             Assert.Null(TestLibrary.Cat.Mood.Grumpy.FetchToy("black"));
         });
@@ -2887,17 +2915,21 @@ public class LiveHandleTests
     [Fact]
     public async Task CollectionFlowElement_EnumerationAndValueRead_ReturnsToBaseline()
     {
+        // ADR-242: `Kind` is a value now. Every element is rooted until after the measurement, so a
+        // finalizer cannot release a handle a value wrongly kept; with values there is none to keep.
+        var rooted = new List<object>();
         await AssertNoLeakAsync(
             async () =>
             {
                 using var hub = new NodeHub();
                 await foreach (IReadOnlyList<Kind> page in hub.Ticks)
                 {
-                    foreach (Kind kind in page) kind.Dispose();
+                    rooted.AddRange(page);
                 }
                 Assert.Equal(3, hub.Items.Value.Count);
             },
             iterations: 200);
+        GC.KeepAlive(rooted);
     }
 
     // Row 8d-suspend. ADR-068, collection element: an awaited read-only `StateFlow<List<T>>` reads
@@ -3125,15 +3157,13 @@ public class LiveHandleTests
     [Fact]
     public void LambdaParameter_OnAnOrdinaryClass_ObjectPayload_ReturnsToBaseline()
     {
-        AssertNoLeak(() =>
+        // ADR-242: the `Toy` payload is a value now, so the lambda owns nothing and the thunk must
+        // release the payload handle itself: nothing retained, with no GC.
+        AssertRetainsNothing(() =>
         {
             using var oreo = new Cat("Oreo", 9);
             var toyNames = new List<string>();
-            oreo.ForEachToy(toy =>
-            {
-                using var t = toy;
-                toyNames.Add(t.Name);
-            });
+            oreo.ForEachToy(toy => toyNames.Add(toy.Name));
             Assert.Equal(new List<string> { "Mouse", "Ball" }, toyNames);
         });
     }
@@ -3919,25 +3949,37 @@ public class LiveHandleTests
 
     // Row 10e. ADR-211: a top-level function's own `T`, on the same boxed wire as Row 10b, from a
     // static method on the file facade. A builtin `T` mints one `Wrap<T>` box the C# `finally`
-    // disposes; a wrapper `T` (Mylo's toy) mints nothing and is released by its own `using`. The
-    // `string` return is not a handle.
-    // Pick(oreoToy, toy) (issue #556) passes two wrappers, minting nothing, and returns the second
-    // as a fresh wrapper its own `using` releases.
-    // Ledger per iteration: toy +1/-1, oreoToy +1/-1, Describe(4) box +1/-1, Describe(toy) nothing,
-    // picked +1/-1. Net zero.
+    // disposes. Since ADR-242 two kinds of class cross `T`: a value (`Toy`) is minted into an owned
+    // box the call releases, and a returned one is read and released at once, so it owns nothing; a
+    // handle wrapper (`Cat`) mints nothing going in and comes back as a fresh wrapper its own `using`
+    // releases. The `string` return is not a handle.
+    // Ledger per iteration: Describe(4) box +1/-1; each `Toy` crossing +1/-1 inside the call;
+    // oreo +1/-1, mylo +1/-1, Describe(oreo) nothing, picked cat +1/-1, each shuffled cat +1/-1.
+    // Net zero, and with no GC, since every release above is deterministic.
     [Fact]
     public void TopLevelGenericMethod_BoxedTypeParameter_ReturnsToBaseline()
     {
-        AssertNoLeak(() =>
+        AssertRetainsNothing(() =>
         {
-            using var toy = new Toy("Mylo's Milo Mouse", "Brown");
+            var toy = new Toy("Mylo's Milo Mouse", "Brown");
             Assert.Equal("4: Int", Descriptions.Describe(4));
             Assert.Equal("Toy(name=Mylo's Milo Mouse, color=Brown): Toy", Descriptions.Describe(toy));
-            using var oreoToy = new Toy("Oreo's Biscuit Ball", "Black");
-            using var picked = Descriptions.Pick(oreoToy, toy);
+            var oreoToy = new Toy("Oreo's Biscuit Ball", "Black");
+            var picked = Descriptions.Pick(oreoToy, toy);
             Assert.Equal("Mylo's Milo Mouse", picked.Name);
-            // ADR-212: the passed toys are borrowed; each returned element is minted and disposed here.
             foreach (Toy shuffled in Descriptions.Shuffle(new[] { oreoToy, toy }))
+            {
+                Assert.NotNull(shuffled.Name);
+            }
+
+            using var oreo = new Cat("Oreo", 9);
+            using var mylo = new Cat("Mylo", 7);
+            Assert.EndsWith(": Cat", Descriptions.Describe(oreo));
+            using (Cat pickedCat = Descriptions.Pick(oreo, mylo))
+            {
+                Assert.Equal("Mylo", pickedCat.Name);
+            }
+            foreach (Cat shuffled in Descriptions.Shuffle(new[] { oreo, mylo }))
             {
                 using (shuffled) Assert.NotNull(shuffled.Name);
             }
@@ -4923,10 +4965,12 @@ public class LiveHandleTests
     [Fact]
     public void WidenedDefaultConstructorAndCopy_ReturnsToBaseline()
     {
-        AssertNoLeak(() =>
+        // ADR-242: `Config` is a value now, so every arm's minted handle is released before the call
+        // returns: nothing retained, with no GC and no `Dispose`.
+        AssertRetainsNothing(() =>
         {
-            using var config = new Issue297.Config(mode: Issue297.Mode.Always);
-            using var copy = config.Copy(retries: 7);
+            var config = new Issue297.Config(mode: Issue297.Mode.Always);
+            var copy = config.Copy(retries: 7);
             Assert.Equal(7, copy.Retries);
             Assert.Equal(Issue297.Mode.Always, copy.Mode);
         });
@@ -5235,22 +5279,25 @@ public class LiveHandleTests
         AssertReleasedByTheGc("Cat wrappers", DropUndisposedCat);
 
     // Row 16a. The callback-payload leak ADR-187 closed:
-    // the per-call lambda-parameter route of Row 8i, with a callback body that reads each `Toy` and
-    // does NOT dispose it. The payload wrapper is the only owner of its handle (ADR-036's 2026-09-11
-    // amendment), so without a finalizer two handles per call stay live for the process. The
-    // receiver is disposed, so the payloads are the only thing that can still be counted.
+    // the per-call lambda-parameter route of Row 8i, with a callback body that reads each payload
+    // and does NOT dispose it. The payload wrapper is the only owner of its handle (ADR-036's
+    // 2026-09-11 amendment), so without a finalizer two handles per call stay live for the process.
+    // The receiver is disposed, so the payloads are the only thing that can still be counted.
+    // ADR-242 made Row 8i's `Toy` a value, which mints no handle here, so the row moved to
+    // `Bandstand.EachDrummer`: the same `NugetObjectVoidCallback` lowering, with an interface
+    // wrapper (`IDrummer`) as the handle-carrying payload.
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void DropUndisposedToyPayloads()
+    private static void DropUndisposedDrummerPayloads()
     {
-        using var mylo = new Cat("Mylo", 9);
-        var toyNames = new List<string>();
-        mylo.ForEachToy(toy => toyNames.Add(toy.Name));
-        Assert.Equal(new List<string> { "Mouse", "Ball" }, toyNames);
+        using var bandstand = new Bandstand();
+        var drummerNames = new List<string>();
+        bandstand.EachDrummer(drummer => drummerNames.Add(drummer.Name));
+        Assert.Equal(new List<string> { "Oreo", "Mylo" }, drummerNames);
     }
 
     [Fact]
     public void UndisposedCallbackObjectPayload_LambdaParameterRoute_IsReleasedByTheGc() =>
-        AssertReleasedByTheGc("Toy callback payloads", DropUndisposedToyPayloads);
+        AssertReleasedByTheGc("Drummer callback payloads", DropUndisposedDrummerPayloads);
 
     // Row 16b. The same payload residual on ADR-160's route (Row 13 without its `using (c)`): every
     // `Chime` candidate handed to the predicate is read and dropped. The member's returned chime is
@@ -5498,7 +5545,7 @@ public class LiveHandleTests
         using (var oreo = new Cat("Oreo", 9))
         {
             Assert.Equal("Oreo", oreo.Name);
-            oreo.ForEachToy(toy => { using (toy) { Assert.NotEmpty(toy.Name); } });
+            oreo.ForEachToy(toy => Assert.NotEmpty(toy.Name)); // a value since ADR-242: nothing to dispose
             oreo.AddMoodListener(_ => { }).Dispose();
         }
 
@@ -6116,29 +6163,40 @@ public class LiveHandleTests
     // A `suspend fun <T>` on the suspend route, in a tight loop. Each primitive or string `T` argument
     // is an owned `Wrap<T>` box the C# `finally` disposes once the `_async` extern returns (Kotlin
     // read it in the prelude, before `launchForCSharp`); each result is one handle `FromHandle<T>`
-    // consumes. The wrapper argument is borrowed across the suspension, as ADR-208's `Box<T>` is.
-    // The pre-cancelled call proves the owned box goes when the job never completes, since the
-    // `finally` runs after the extern, not on completion.
+    // consumes. A handle wrapper argument (`Cat`) is borrowed across the suspension, as ADR-208's
+    // `Box<T>` is, and its result is a fresh wrapper its own `using` releases. A value argument
+    // (`Toy`, since ADR-242) is an owned box like a builtin, and its result is read and released
+    // at once. The pre-cancelled call proves the owned box goes when the job never completes, since
+    // the `finally` runs after the extern, not on completion.
     // Ledger per iteration: FetchLater(i) box +1/-1, result +1/-1; FetchLater("Oreo") the same;
-    // FetchLater(toy) result wrapper +1/-1 (toy outside the loop); HoldLater("late") box +1/-1.
-    // Net zero.
+    // FetchLater(toy) box +1/-1, result +1/-1; FetchLater(oreo) result wrapper +1/-1 (oreo outside
+    // the loop); HoldLater("late") box +1/-1. Net zero. `Toy` results are rooted until after the
+    // measurement, so a finalizer cannot release a handle a value wrongly kept.
     [Fact]
     public async Task TopLevelSuspendGeneric_BoxedTypeParameter_ReturnsToBaseline()
     {
-        using var toy = new Toy("Mylo's Milo Mouse", "Brown");
+        var toy = new Toy("Mylo's Milo Mouse", "Brown");
+        using var oreo = new Cat("Oreo", 9);
+        var rooted = new List<Toy>();
         int i = 0;
         await AssertNoLeakAsync(async () =>
         {
             i++;
             Assert.Equal(i, await Suspendgeneric.SuspendGenericSample.FetchLaterAsync(i));
             Assert.Equal("Oreo", await Suspendgeneric.SuspendGenericSample.FetchLaterAsync("Oreo"));
-            using Toy back = await Suspendgeneric.SuspendGenericSample.FetchLaterAsync(toy);
+            Toy back = await Suspendgeneric.SuspendGenericSample.FetchLaterAsync(toy);
+            rooted.Add(back);
             Assert.Equal("Mylo's Milo Mouse", back.Name);
+            using (Cat backCat = await Suspendgeneric.SuspendGenericSample.FetchLaterAsync(oreo))
+            {
+                Assert.Equal("Oreo", backCat.Name);
+            }
             using var cts = new CancellationTokenSource();
             cts.Cancel();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(
                 () => Suspendgeneric.SuspendGenericSample.HoldLaterAsync("late", cts.Token));
         }, iterations: 200);
+        GC.KeepAlive(rooted);
     }
 
     // ADR-215
@@ -9580,5 +9638,186 @@ public class LiveHandleTests
             IReadOnlyList<Adoption.IAdoptable> pets = centre.Pets;
             Assert.Equal("Mylo", pets[1].Name);
         });
+    }
+
+    // ADR-242: a scalar data class is a value. Every Kotlin-defined member mints a transient Kotlin
+    // instance, calls it and releases it before returning, and a value Kotlin returns is read and
+    // its handle released at once. So the count is back at baseline straight after the crossings,
+    // with no GC and no Dispose: nothing may be retained. Oreo's favourite, Bun, crosses a thousand
+    // times and nobody puts it back.
+    [Fact]
+    public void ScalarDataClass_EveryCrossing_ReturnsToBaselineWithoutDispose()
+    {
+        AssertRetainsNothing(() =>
+        {
+            Plush.Plushie p = Plush.PlushieSample.EchoPlushie(Plush.PlushieSample.FavouritePlushie());
+            _ = p.Label;
+            _ = p.Describe(false);
+            _ = p.GetHashCode();
+            _ = p.ToString();
+            _ = p.Equals(p.Copy(squeaks: 4));
+            _ = Plush.PlushieSample.Plushies().Count;
+            _ = Plush.PlushieSample.FindPlushie("Milo");
+            _ = Plush.PlushieSample.NameOf(new Plush.Plushie("Milo", ["brown"], Plush.Mood.Sleepy, 0));
+        }, iterations: 1000);
+    }
+
+    // ADR-242: the transient instance minted for a member call is released on the throwing path
+    // too. Bun explodes; the stuffing goes everywhere, the handle does not.
+    [Fact]
+    public void ScalarDataClass_ThrowingMember_ReleasesTheTransientInstance()
+    {
+        AssertRetainsNothing(() =>
+        {
+            var bun = new Plush.Plushie("Bun", ["pink", "white"], Plush.Mood.Happy, 3);
+            Assert.Throws<KotlinInvalidOperationException>(() => bun.Explode());
+        }, iterations: 500);
+    }
+
+    // ADR-242: a constructor or `Copy` whose `init { require }` throws mints nothing that outlives
+    // the call. The receiver is made before the baseline, so only the failing crossings count.
+    [Fact]
+    public void ScalarDataClass_FailingConstructorRequire_LeaksNoHandle()
+    {
+        var bun = new Plush.Plushie("Bun", ["pink", "white"], Plush.Mood.Happy, 3);
+        AssertRetainsNothing(() =>
+        {
+            Assert.Throws<KotlinArgumentException>(() => new Plush.Plushie("", [], Plush.Mood.Happy, 0));
+            Assert.Throws<KotlinArgumentException>(() => bun.Copy(name: ""));
+        }, iterations: 500);
+        GC.KeepAlive(bun);
+    }
+
+    // ADR-242: the value's other seams. Every value handed back is rooted until after the
+    // measurement, so a finalizer cannot release a retained handle inside the settle and turn this
+    // green: with values, there is nothing to release. `PeekPlushie` has no suspension point, so it
+    // can complete before the P/Invoke that started it returns: that race leaks a fraction of
+    // calls, so it runs in a tight loop of two thousand, per the harness convention. The
+    // `delay`-backed `FetchPlushie`, `Flow`, `List`, lambda and `Shelf` crossings take a small
+    // count. Only the `Shelf` is a handle, and it is disposed. Mylo carries the plushies up to the
+    // shelf, one at a time.
+    [Fact]
+    public async Task ScalarDataClass_AsyncAndCollectionCrossings_ReturnToBaseline()
+    {
+        var rooted = new List<object>();
+
+        async Task Peek() => rooted.Add(await Plush.PlushieSample.PeekPlushieAsync());
+
+        async Task Crossing()
+        {
+            Plush.Plushie fetched = await Plush.PlushieSample.FetchPlushieAsync();
+            rooted.Add(fetched);
+            await foreach (Plush.Plushie marcher in Plush.PlushieSample.PlushieParade()) rooted.Add(marcher);
+            Assert.Equal(6, Plush.PlushieSample.TotalSqueaks([fetched, fetched]));
+            rooted.Add(Plush.PlushieSample.Restyle(p =>
+            {
+                rooted.Add(p);
+                return p.Copy(squeaks: 9);
+            }));
+            using var shelf = new Plush.Shelf();
+            rooted.Add(shelf.Favourite);
+            shelf.Favourite = fetched;
+            Assert.Equal(1, shelf.Put(fetched));
+        }
+
+        await Peek();
+        await AssertNoLeakAsync(Peek, iterations: 2000);
+        await Crossing();
+        await AssertNoLeakAsync(Crossing, iterations: 50);
+        GC.KeepAlive(rooted);
+    }
+
+    // ADR-242 open question 3: the wider components (value class, Instant, Duration, Uuid, a
+    // nullable scalar, Double, Set, Map) and nested scalar data classes cross the same way.
+    [Fact]
+    public void ScalarDataClass_NestedAndWiderComponents_ReturnToBaselineWithoutDispose()
+    {
+        AssertRetainsNothing(() =>
+        {
+            Plush.PlushieTag tag = Plush.PlushieSample.EchoTag(Plush.PlushieSample.MylosTag());
+            _ = tag.Equals(tag.Copy(nickname: "Milo"));
+            _ = tag.GetHashCode();
+            _ = tag.ToString();
+
+            Plush.PlushieBox box = Plush.PlushieSample.EchoBox(Plush.PlushieSample.OreosBox());
+            _ = box.Star.Label;
+            _ = box.Stack.Count;
+            _ = box.Equals(box.Copy(spare: box.Star));
+        }, iterations: 500);
+    }
+
+    // ADR-242: the shapes that bound while `Plushie` was a handle and must keep binding now it is a
+    // value, each crossed with no `Dispose` on the value. A value class over a value, and the
+    // extension property and function on it: synchronous, so nothing may be retained, with no GC.
+    [Fact]
+    public void ScalarDataClass_ValueClassOverAValue_ReturnsToBaselineWithoutDispose()
+    {
+        var bun = new Plush.Plushie("Bun", ["pink", "white"], Plush.Mood.Happy, 3);
+        AssertRetainsNothing(() =>
+        {
+            Plush.PlushieTicket ticket = Plush.PlushieSample.TicketFor(bun);
+            Assert.Equal(bun, Plush.PlushieSample.Redeem(ticket));
+        }, iterations: 500);
+    }
+
+    [Fact]
+    public void ScalarDataClass_ExtensionMembers_ReturnToBaselineWithoutDispose()
+    {
+        var bun = new Plush.Plushie("Bun", ["pink", "white"], Plush.Mood.Happy, 3);
+        AssertRetainsNothing(() =>
+        {
+            Assert.Equal("BUN SQUEAKS 3 TIMES", bun.Shout);
+            Assert.Equal("Oreo hugs Bun", bun.Hug());
+        }, iterations: 500);
+    }
+
+    // ADR-242: the value as a parameter of an ordinary handle class's `suspend`, `Flow` and lambda
+    // members, of a top-level `suspend` function, and as the receiver of a `suspend` extension.
+    // Every route here suspends (`delay`), so a small count. Only the `Nursery` is a handle, and it
+    // is disposed.
+    [Fact]
+    public async Task ScalarDataClass_AsValueParameterOfAsyncFlowAndLambdaMembers_ReturnsToBaseline()
+    {
+        var bun = new Plush.Plushie("Bun", ["pink", "white"], Plush.Mood.Happy, 3);
+
+        async Task Crossing()
+        {
+            using var nursery = new Plush.Nursery();
+            Assert.Equal(1, await nursery.StashAsync(bun));
+            int seen = 0;
+            await foreach (int _ in nursery.Watch(bun)) seen++;
+            Assert.Equal(2, seen);
+            nursery.Visit(bun, line => Assert.Equal("Mylo visits Bun", line));
+            Assert.Equal(30, await Plush.PlushieSample.WeighAsync(bun));
+            Assert.Equal("Bun naps", await bun.NapAsync());
+        }
+
+        await Crossing();
+        await AssertNoLeakAsync(Crossing, iterations: 50);
+    }
+
+    // ADR-242: a value whose own members ride the `suspend`, `Flow` and callback routes. Each call
+    // mints a transient instance and releases it; nothing is disposed and nothing may stay.
+    [Fact]
+    public async Task ScalarDataClass_OwnAsyncFlowAndCallbackMembers_ReturnToBaseline()
+    {
+        var rooted = new List<object>();
+
+        async Task Crossing()
+        {
+            Plush.NappingPlushie milo = Plush.PlushieSample.NappingPlushie();
+            rooted.Add(milo);
+            Assert.Equal("Milo snoozes", await milo.SnoozeAsync());
+            int fidgets = 0;
+            await foreach (int _ in milo.Fidget()) fidgets++;
+            Assert.Equal(3, fidgets);
+            int letters = 0;
+            milo.ForEachLetter(_ => letters++);
+            Assert.Equal(4, letters);
+        }
+
+        await Crossing();
+        await AssertNoLeakAsync(Crossing, iterations: 50);
+        GC.KeepAlive(rooted);
     }
 }

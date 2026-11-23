@@ -83,7 +83,7 @@ internal fun BridgeType.valueClassUnderlyingRole(): ForwardValueClassUnderlying 
   // ADR-234: `Char` crosses on its own `char` wire, like a primitive.
   BridgeType.String, is BridgeType.Primitive, BridgeType.Char, is BridgeType.Enum ->
     ForwardValueClassUnderlying.VALUE
-  is BridgeType.ObjectHandle -> ForwardValueClassUnderlying.REFERENCE
+  is BridgeType.ObjectHandle, is BridgeType.DataValue -> ForwardValueClassUnderlying.REFERENCE
   // ADR-105: a sealed underlying crosses as the base's handle on the shipped ABI.
   is BridgeType.SpecializedProtocol ->
     if (name.startsWith(SEALED_HELPER_PREFIX)) ForwardValueClassUnderlying.REFERENCE
@@ -128,6 +128,7 @@ internal fun BridgeType.valueClassUnderlyingRole(): ForwardValueClassUnderlying 
  */
 internal fun BridgeType.ValueClass.hasNullDefault(): Boolean =
   underlying == BridgeType.String || underlying is BridgeType.ObjectHandle ||
+      underlying is BridgeType.DataValue ||
       // ADR-220: a bound own `T` (`T : Any`) inside a generic value class is a non-null slot, but a
       // `struct`-constrained one (`T : Enum<T>`) defaults to a real value, its first entry.
       underlying is BridgeType.TypeParameter && !underlying.valueType

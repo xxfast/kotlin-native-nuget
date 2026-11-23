@@ -319,6 +319,8 @@ internal data class CirClass(
   // whose `private static extern`s this nested subclass sees, so each extern it redeclares with the
   // same signature renders `new` (CS0108 otherwise). Empty for a top-level or generic class.
   val hidesExternsOf: Set<String> = emptySet(),
+  // ADR-242: set exactly when the forward classifier admits this data class as a C# value.
+  val dataValue: CirDataValue? = null,
 ) : CirDeclaration
 
 internal data class CirValueClass(

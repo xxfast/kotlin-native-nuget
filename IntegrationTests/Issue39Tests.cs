@@ -35,11 +35,11 @@ public class Issue39Tests
 
         IReadOnlyList<Issue39Item> items = loaded.Items;
 
-        using Issue39Item oreo = items[0];
+        Issue39Item oreo = items[0];
         Assert.Equal("Oreo", oreo.Name);
         Assert.Equal(1, oreo.Count);
 
-        using Issue39Item mylo = items[1];
+        Issue39Item mylo = items[1];
         Assert.Equal("Mylo", mylo.Name);
         Assert.Equal(2, mylo.Count);
     }
@@ -53,7 +53,7 @@ public class Issue39Tests
         var names = new List<string>();
         foreach (Issue39Item item in loaded.Items)
         {
-            using var owned = item;
+            var owned = item;
             names.Add(owned.Name);
         }
 

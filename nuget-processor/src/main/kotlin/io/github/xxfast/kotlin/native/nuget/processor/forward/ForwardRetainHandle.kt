@@ -30,7 +30,7 @@ internal fun BridgeType.boxesIntoKotlin(): Boolean = when (this) {
   is BridgeType.Throwable,
   BridgeType.Uuid,
   is BridgeType.Enum,
-  is BridgeType.ObjectHandle,
+  is BridgeType.ObjectHandle, is BridgeType.DataValue,
   is BridgeType.Interface,
   is BridgeType.BoundInterface,
   is BridgeType.ValueClass,

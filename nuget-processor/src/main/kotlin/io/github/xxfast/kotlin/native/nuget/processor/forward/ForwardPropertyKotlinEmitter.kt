@@ -96,7 +96,8 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
       // ADR-151: `ByteArray?` too -- `NugetMarshal.ReadBytes` never sees a zero handle, the
       // generated C# returns null before it.
       // ADR-236: a nullable lambda property ships the null pointer, the retained lambda otherwise.
-      is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
+      is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface,
+      is BridgeType.Collection,
       BridgeType.ByteArray, is BridgeType.TypeParameter, is BridgeType.ReturnedLambda -> {
         // ADR-081: a value-class component is projected to its underlying before boxing, with the
         // whole chain `?.`-guarded so a null property value still ships a null pointer.
@@ -118,7 +119,8 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
       // nullable-String wire or as a null StableRef pointer for an ObjectHandle underlying.
       is BridgeType.ValueClass -> {
         val unboxed = "$access?.${inner.underlyingPropertyName}"
-        if (inner.underlying is BridgeType.ObjectHandle) {
+        val underlying: BridgeType = inner.underlying
+        if (underlying is BridgeType.ObjectHandle || underlying is BridgeType.DataValue) {
           builder.returns(cOpaquePointer.copy(nullable = true))
           builder.addCode(
             nullableHandleBody(unboxed, "errorOut"),
@@ -185,7 +187,8 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
     // ADR-147: a `T` getter mints the same `NugetHandles.retain` box.
     // ADR-151: a ByteArray getter mints one too, read back by `NugetMarshal.ReadBytes`.
     // ADR-236: a lambda property getter mints the same handle, wrapped C#-side as `KotlinFunc`.
-    is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
+    is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface,
+    is BridgeType.Collection,
     BridgeType.ByteArray, is BridgeType.TypeParameter, is BridgeType.ReturnedLambda -> {
       // ADR-081: read side of a collection property whose component is a value class -- box a copy
       // projected to the underlying, the shape a C# per-element re-wrap can read.
@@ -245,7 +248,7 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
           )
         }
 
-        is BridgeType.ObjectHandle -> {
+        is BridgeType.ObjectHandle, is BridgeType.DataValue -> {
           builder.returns(cOpaquePointer.copy(nullable = true))
           builder.addCode(
             handleBody(unboxed, "errorOut"), nugetHandles, cOpaquePointerVar, nugetHandles,
@@ -386,7 +389,7 @@ private fun FileSpec.Builder.addNullableValueGetter(
         BridgeType.Duration,
         is BridgeType.Throwable,
         BridgeType.Uuid,
-        is BridgeType.ObjectHandle,
+        is BridgeType.ObjectHandle, is BridgeType.DataValue,
         is BridgeType.Interface,
         is BridgeType.BoundInterface,
         is BridgeType.ValueClass,
@@ -414,7 +417,7 @@ private fun FileSpec.Builder.addNullableValueGetter(
     BridgeType.String,
     is BridgeType.Throwable,
     BridgeType.Uuid,
-    is BridgeType.ObjectHandle,
+    is BridgeType.ObjectHandle, is BridgeType.DataValue,
     is BridgeType.Interface,
     is BridgeType.BoundInterface,
     BridgeType.ByteArray,
@@ -636,6 +639,8 @@ private fun inputLowering(type: BridgeType, name: String): String = when (type) 
     is BridgeType.Throwable -> managedExceptionLowering(name, nullable = true)
     is BridgeType.ObjectHandle ->
       "$name?.asStableRef<${inner.kotlinReadType ?: inner.qualifiedName}>()?.get()"
+    is BridgeType.DataValue ->
+      "$name?.asStableRef<${inner.handle.kotlinReadType ?: inner.handle.qualifiedName}>()?.get()"
     is BridgeType.Interface ->
       "$name?.asStableRef<${inner.kotlinReadType ?: inner.qualifiedName}>()?.get()"
     // ADR-076: the wire value is a raw INT64 of ticks; convert it back to an Instant.
@@ -695,6 +700,8 @@ private fun inputLowering(type: BridgeType, name: String): String = when (type) 
   BridgeType.Duration -> "durationFromDotNetTicks($name)"
   is BridgeType.ObjectHandle ->
     "$name.asStableRef<${type.kotlinReadType ?: type.qualifiedName}>().get()"
+  is BridgeType.DataValue ->
+    "$name.asStableRef<${type.handle.kotlinReadType ?: type.handle.qualifiedName}>().get()"
   is BridgeType.Interface ->
     "$name.asStableRef<${type.kotlinReadType ?: type.qualifiedName}>().get()"
   // ADR-088 / ADR-132 (2026-09-20): a bound C# interface receiver is read back through the reverse
@@ -741,7 +748,8 @@ private fun kotlinInputType(type: BridgeType): TypeName = when (type) {
   // (ADR-077 sub-item 2).
   is BridgeType.ValueClass -> kotlinInputType(type.underlying)
   // ADR-088: the bound-interface transfer GCHandle is the same opaque pointer slot.
-  is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
+  is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface,
+  is BridgeType.Collection,
   is BridgeType.BoundInterface, BridgeType.ByteArray, is BridgeType.TypeParameter,
   is BridgeType.ReturnedLambda ->
     cOpaquePointer.copy(nullable = type is BridgeType.Nullable)
@@ -783,7 +791,7 @@ private fun kotlinType(type: BridgeType): TypeName = when (type) {
   is BridgeType.Throwable,
   BridgeType.Uuid,
   is BridgeType.Enum,
-  is BridgeType.ObjectHandle,
+  is BridgeType.ObjectHandle, is BridgeType.DataValue,
   is BridgeType.Interface,
   is BridgeType.BoundInterface,
   is BridgeType.ValueClass,

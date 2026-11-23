@@ -283,7 +283,7 @@ Assert.ThrowsAny<ArgumentException>(() => jar.TreatCount = -1);       // setter
 
 Assert.ThrowsAny<ArgumentException>(() => new Kitten("Oreo", -1));    // constructor
 
-using var profile = new CatProfile("Oreo", 100);
+var profile = new CatProfile("Oreo", 100);
 Assert.ThrowsAny<ArgumentException>(() => profile.Copy("Oreo", -1));  // Copy() re-validates
 ```
 

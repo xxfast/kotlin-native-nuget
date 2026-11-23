@@ -627,11 +627,127 @@ internal class ForwardBridgeTypeClassifier(
       )
     }
     val csharpType: String = csharpTypeNameFor(classDeclaration)
-    return BridgeType.ObjectHandle(
+    val handle = BridgeType.ObjectHandle(
       qualifiedName,
       csharpType = csharpType,
       constructType = classDeclaration.abstractBackingName()?.let { "$csharpType.$it" },
     )
+    // ADR-242: an immutable all-scalar data class crosses as a C# value over the same handle wire.
+    return dataValueOrNull(classDeclaration, handle) ?: handle
+  }
+
+  /** ADR-242: the memoised predicate verdict per class, `null` for a class that stays a handle. */
+  private val dataValues: MutableMap<String, BridgeType.DataValue?> = mutableMapOf()
+
+  /** ADR-242: the classes being evaluated, so a cyclic type graph stays a handle. */
+  private val dataValuesInProgress: MutableSet<String> = mutableSetOf()
+
+  /**
+   * ADR-242: whether [declaration] is a scalar data class, by its qualified name. Exposed so the C#
+   * class translator renders the value shape for exactly the classes this classifier admits.
+   */
+  internal fun isDataValue(declaration: KSClassDeclaration): Boolean {
+    val qualifiedName: String = declaration.qualifiedName?.asString() ?: return false
+    if (qualifiedName !in context.exportedObjectHandles) return false
+    // Ahead of `classify`, which records every generic instantiation it meets: a star-projected
+    // generic class would register an erased closed instantiation nothing else asked for.
+    if (Modifier.DATA !in declaration.modifiers || declaration.typeParameters.isNotEmpty()) {
+      return false
+    }
+    return classify(declaration.asStarProjectedType()) is BridgeType.DataValue
+  }
+
+  private fun dataValueOrNull(
+    declaration: KSClassDeclaration,
+    handle: BridgeType.ObjectHandle,
+  ): BridgeType.DataValue? {
+    val qualifiedName: String = handle.qualifiedName
+    if (qualifiedName in dataValues) return dataValues[qualifiedName]
+    if (qualifiedName in dataValuesInProgress) return null
+    dataValuesInProgress += qualifiedName
+    val verdict: BridgeType.DataValue? = try {
+      dataValueComponents(declaration)
+        ?.let { components -> BridgeType.DataValue(handle, components) }
+    } finally {
+      dataValuesInProgress -= qualifiedName
+    }
+    dataValues[qualifiedName] = verdict
+    return verdict
+  }
+
+  /** ADR-242's admission predicate: the ordered components, or `null` when any clause fails. */
+  private fun dataValueComponents(
+    declaration: KSClassDeclaration,
+  ): List<BridgeType.DataValueComponent>? {
+    if (Modifier.DATA !in declaration.modifiers) return null
+    if (declaration.classKind != ClassKind.CLASS) return null
+    // In-module only: a klib declaration's modifiers and backing-field answers are unpinned.
+    if (declaration.containingFile == null) return null
+    if (declaration.isExpect || declaration.typeParameters.isNotEmpty()) return null
+    if (declaration.forwardTypeParametersInScope().isNotEmpty()) return null
+    if (declaration.isSealedSubclass() || declaration.isThrowable()) return null
+    // No superclass other than `Any`, and no exported or sealed interface.
+    val supersAdmissible: Boolean = declaration.superTypes.all { reference ->
+      val superDeclaration = reference.resolve().expandAliases().declaration as? KSClassDeclaration
+        ?: return@all false
+      val superName: String? = superDeclaration.qualifiedName?.asString()
+      when {
+        superName == "kotlin.Any" -> true
+        superDeclaration.classKind != ClassKind.INTERFACE -> false
+        Modifier.SEALED in superDeclaration.modifiers -> false
+        else -> superName !in context.exportedObjectHandles
+      }
+    }
+    if (!supersAdmissible) return null
+    val constructor: KSFunctionDeclaration = declaration.primaryConstructor ?: return null
+    if (!constructor.isPublicDeclaration()) return null
+    if (constructor.optInMarker(context.exportMarkers) != null) return null
+    val properties: Map<String, KSPropertyDeclaration> =
+      declaration.getDeclaredProperties().associateBy { it.simpleName.asString() }
+    val components: List<BridgeType.DataValueComponent> = constructor.parameters.map { parameter ->
+      if (!parameter.isVal || parameter.isVar) return null
+      val name: String = parameter.name?.asString() ?: return null
+      val property: KSPropertyDeclaration = properties[name] ?: return null
+      if (!property.isPublicDeclaration()) return null
+      if (property.optInMarker(context.exportMarkers) != null) return null
+      val type: BridgeType = classify(parameter.type.resolve())
+      if (!type.isDataValueComponent()) return null
+      BridgeType.DataValueComponent(name, type)
+    }
+    // No stored body state: every non-component property is a getter-only computed `val`.
+    val componentNames: Set<String> = components.map { it.name }.toSet()
+    val bodyState: Boolean = properties.values
+      .filter { property -> property.simpleName.asString() !in componentNames }
+      .any { property ->
+        property.hasBackingField || property.isDelegated() || property.isMutable ||
+            Modifier.LATEINIT in property.modifiers
+      }
+    if (bodyState) return null
+    return components
+  }
+
+  private fun KSDeclaration.isPublicDeclaration(): Boolean =
+    Modifier.PRIVATE !in modifiers && Modifier.INTERNAL !in modifiers &&
+        Modifier.PROTECTED !in modifiers
+
+  /** ADR-242: the component types a value can carry with no handle anywhere inside it. */
+  private fun BridgeType.isDataValueComponent(): Boolean = when (this) {
+    is BridgeType.Primitive, BridgeType.Char, BridgeType.String, is BridgeType.Enum,
+    BridgeType.Instant, BridgeType.Duration, BridgeType.Uuid, is BridgeType.DataValue -> true
+    is BridgeType.ValueClass -> typeArguments.isEmpty() && underlying.isDataValueComponent()
+    is BridgeType.Nullable -> type.isDataValueComponent()
+    is BridgeType.Collection -> when (kind) {
+      CollectionKind.LIST, CollectionKind.SET, CollectionKind.MAP ->
+        listOfNotNull(element, key, value).let { parts ->
+          parts.isNotEmpty() && parts.all { it.isDataValueComponent() }
+        }
+      CollectionKind.MUTABLE_LIST, CollectionKind.MUTABLE_SET, CollectionKind.MUTABLE_MAP -> false
+    }
+    BridgeType.Unit, is BridgeType.Throwable, is BridgeType.ObjectHandle, is BridgeType.Interface,
+    is BridgeType.BoundInterface, BridgeType.ByteArray, is BridgeType.Callback,
+    is BridgeType.AsyncCallback, is BridgeType.FlowSource, is BridgeType.ReturnedLambda,
+    is BridgeType.SpecializedProtocol, is BridgeType.RawKSType, is BridgeType.Unsupported,
+    is BridgeType.RawCollection, is BridgeType.TypeParameter -> false
   }
 
   /**
@@ -1347,7 +1463,7 @@ internal class ForwardBridgeTypeClassifier(
           is BridgeType.Throwable,
           BridgeType.Uuid,
           is BridgeType.Enum,
-          is BridgeType.ObjectHandle,
+          is BridgeType.ObjectHandle, is BridgeType.DataValue,
           is BridgeType.Interface,
           is BridgeType.BoundInterface,
           BridgeType.ByteArray,
@@ -1718,6 +1834,7 @@ internal class ForwardBridgeTypeClassifier(
     // ADR-199: a generic sealed base reads through its closed `Factories` entry or its
     // `NugetFactory<T>` slot (`FromHandle<Outcome<int>>`); it alone carries a [kotlinReadType].
     is BridgeType.ObjectHandle -> !viaDiscriminator || kotlinReadType != null
+    is BridgeType.DataValue -> !handle.viaDiscriminator || handle.kotlinReadType != null
     is BridgeType.Interface -> true
     // ADR-201 amendment: the ADR-107 envelope, read (and disposed) by `BuildException`.
     is BridgeType.Throwable -> true
@@ -1762,7 +1879,7 @@ internal class ForwardBridgeTypeClassifier(
     BridgeType.Duration,
     BridgeType.Uuid,
     is BridgeType.Enum,
-    is BridgeType.ObjectHandle,
+    is BridgeType.ObjectHandle, is BridgeType.DataValue,
     is BridgeType.Interface,
     is BridgeType.ValueClass,
     BridgeType.ByteArray,

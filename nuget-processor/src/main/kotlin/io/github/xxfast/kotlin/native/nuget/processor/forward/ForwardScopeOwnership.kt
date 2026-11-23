@@ -66,6 +66,9 @@ internal fun KSClassDeclaration.forwardSuspendRouteMethods(
   val isGenericWithoutRoute: Boolean =
     forwardTypeParametersInScope().isNotEmpty() && !carriesGenericSuspendRoute()
   if (isGenericWithoutRoute) return emptyList()
+  // ADR-242: a value has no instance lifetime to own a scope; its suspend members ride the static
+  // suspend route, the receiver minted per extern call.
+  if (classifier.isDataValue(this)) return emptyList()
   return getAllFunctions()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { it.modifiers.contains(Modifier.SUSPEND) }
@@ -100,6 +103,8 @@ internal fun KSClassDeclaration.forwardClassFlowMethods(
   // ADR-215: a generic class reads its receiver erased on this route; any other generic owner
   // (an inner class of one, a generic sealed base) still has no spelling here.
   if (forwardTypeParametersInScope().isNotEmpty() && !carriesGenericFlowRoute()) return emptyList()
+  // ADR-242: a value's Flow members ride the static flow route instead.
+  if (classifier.isDataValue(this)) return emptyList()
   return getAllFunctions()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { method -> typeParameters.isEmpty() || method.takesGenericFlowRoute(this) }

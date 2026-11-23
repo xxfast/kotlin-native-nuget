@@ -161,8 +161,8 @@ public class LegacyRouteCollectionParameterTests
         // An object element is a different projection from a boxed `string`/`int`, so a fix that
         // only handled boxed primitives would leave this one broken.
         using var board = new TreatBoard();
-        using var mouse = new Toy("mouse", "grey");
-        using var ball = new Toy("ball", "red");
+        var mouse = new Toy("mouse", "grey");
+        var ball = new Toy("ball", "red");
         var seen = new List<string>();
 
         await foreach (var s in board.Feeding([mouse, ball]))

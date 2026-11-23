@@ -1343,6 +1343,8 @@ internal fun translateClass(
   // here would only hide it (CS0108).
   val flowMethods: List<KSFunctionDeclaration> = allFlowMethods
     .filterNot { method -> method.reProjectsKeptBaseMember(cls, superClassDeclaration) }
+    // ADR-242: a value's Flow members ride the static flow route instead.
+    .filterNot { classifier.isDataValue(cls) }
 
   // Boundary nullability part A2: the C# twin of the Kotlin half's refusal, applied at the same
   // point (before the partition) so the two halves cannot disagree about which members exist. A
@@ -1757,6 +1759,7 @@ internal fun translateClass(
     interfaces = interfaces,
     handleInterfaces = forwardHandleInterfaces(cls, exportedTypes, classifier),
     hidesExternsOf = cls.enclosingKeptBases(superClassDeclaration, exportedTypes),
+    dataValue = cirDataValue(cls, classifier),
     superClass = superClass,
     exceptionBase = cls.exceptionCsharpBase().takeIf { superClass == null },
     isException = cls.exceptionCsharpBase() != null,

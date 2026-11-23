@@ -86,9 +86,9 @@ oreo.Speak();                               // "Meow!"
 oreo.Brother = new Cat("Mylo", 9);          // nullable object setter
 oreo.Mood = Mood.Happy;                     // enums
 
-using var toy = new Toy("Mouse", "Gray");
+var toy = new Toy("Mouse", "Gray");            // immutable data class: a value, nothing to dispose
 toy.ToString();                             // "Toy(name=Mouse, color=Gray)"
-toy.Equals(toy.Copy("Ball", "Red"));        // data class equality + copy
+toy.Equals(toy.Copy("Ball", "Red"));        // value equality + copy
 
 IReadOnlyList<Toy> toys = oreo.Toys;        // collections
 using var box = new Box<string>("hello");    // generics

@@ -83,7 +83,7 @@ data class Visit(
 ```
 
 ```C#
-using var visit = new Visit("Mylo", new List<string> { "sneezing" }, null);
+var visit = new Visit("Mylo", new List<string> { "sneezing" }, null);
 
 Assert.Null(visit.Notes);
 ```
@@ -380,8 +380,8 @@ IReadOnlyList<Kitten> shortlist = centre.Shortlist;   // a var property
 (shortlist as IDisposable)?.Dispose();
 ```
 
-A list of strings, primitives, enums or value classes is unchanged: it is a plain read-only list and
-owns nothing. So are `Set`, `Map` and `MutableList` returns of objects, whose elements you still
+A list of strings, primitives, enums, value classes or [data classes that cross as values](data-classes.md#data-classes-as-values)
+is unchanged: it is a plain read-only list and owns nothing. So are `Set`, `Map` and `MutableList` returns of objects, whose elements you still
 dispose one by one.
 
 ### Migrating from `IReadOnlyList<T>` {id="migrating-to-kotlinlist"}

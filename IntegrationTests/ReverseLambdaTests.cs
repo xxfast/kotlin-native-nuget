@@ -44,7 +44,7 @@ public class ReverseLambdaTests
         var toyNames = new List<string>();
         cat.ForEachToy(toy =>
         {
-            using var t = toy;
+            var t = toy;
             toyNames.Add(t.Name);
         });
         Assert.Equal(new List<string> { "Mouse", "Ball" }, toyNames);

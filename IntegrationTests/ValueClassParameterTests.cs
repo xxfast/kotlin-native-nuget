@@ -43,12 +43,12 @@ public class ValueClassParameterTests
     [Fact]
     public void ChartEntry_PrimaryConstructorAndCopy_RoundTripTheUnwrappedChartId()
     {
-        using var entry = new ChartEntry(new ChartId("CH-OREO-2"), "chipped a claw");
+        var entry = new ChartEntry(new ChartId("CH-OREO-2"), "chipped a claw");
 
         Assert.Equal("CH-OREO-2: chipped a claw", entry.Label());
 
         // The generated copy() carries the same value-class parameter as the primary constructor.
-        using ChartEntry rechecked = entry.Copy(new ChartId("CH-MYLO-3"), "still purring");
+        ChartEntry rechecked = entry.Copy(new ChartId("CH-MYLO-3"), "still purring");
 
         Assert.Equal("CH-MYLO-3: still purring", rechecked.Label());
         Assert.Equal("CH-OREO-2: chipped a claw", entry.Label());

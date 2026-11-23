@@ -2,7 +2,8 @@
 
 A Kotlin `class` becomes a C# `class` implementing `IDisposable`. Each instance wraps an opaque
 native handle: dispose it when you are done, and every constructor call, property access, and
-method call crosses the bridge through that handle.
+method call crosses the bridge through that handle. A `data class` that only holds plain data is a
+value with no handle instead; see [Data classes](data-classes.md#data-classes-as-values).
 
 | Kotlin | C# |
 |---|---|
@@ -79,7 +80,8 @@ and a later `Dispose()` of the subscription does nothing.
 
 A held or awaited `KotlinStateFlow` used after its own `Dispose()`, or collected after the object
 it came from was disposed, throws `ObjectDisposedException`. So does any other member of a disposed
-wrapper, including a data class's `Equals` (receiver or argument), `GetHashCode` and `ToString`.
+wrapper, including a handle-backed data class's `Equals` (receiver or argument), `GetHashCode` and
+`ToString`.
 
 ## Method returns
 

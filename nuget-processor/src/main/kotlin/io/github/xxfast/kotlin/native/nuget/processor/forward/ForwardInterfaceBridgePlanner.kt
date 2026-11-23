@@ -1149,7 +1149,7 @@ internal fun BridgeType.isSlotBoxable(): Boolean = when (this) {
   BridgeType.Duration,
   BridgeType.Uuid,
   is BridgeType.Enum,
-  is BridgeType.ObjectHandle,
+  is BridgeType.ObjectHandle, is BridgeType.DataValue,
   is BridgeType.Interface,
   is BridgeType.BoundInterface,
   is BridgeType.ValueClass,

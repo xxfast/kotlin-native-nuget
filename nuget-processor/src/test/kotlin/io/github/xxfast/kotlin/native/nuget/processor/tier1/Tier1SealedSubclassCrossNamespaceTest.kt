@@ -19,7 +19,8 @@ class Tier1SealedSubclassCrossNamespaceTest {
     "Remote.kt" to """
       package tier1.issue50.remote
 
-      data class Assignment(val name: String)
+      // Not a data class: a scalar data class is a value (ADR-242), and these lists need handle elements.
+      class Assignment(val name: String)
       data class IssPosition(val latitude: Double, val longitude: Double)
       enum class Mood { CALM, HUNGRY }
     """.trimIndent(),

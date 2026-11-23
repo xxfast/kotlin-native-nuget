@@ -87,7 +87,7 @@ public class LambdaTests
     {
         using var cat = new Cat("Oreo", 9);
         var favoriteToy = cat.FavoriteToy;
-        using var toy = favoriteToy.Invoke();
+        var toy = favoriteToy.Invoke();
         Assert.Equal("Mouse", toy.Name);
         Assert.Equal("Gray", toy.Color);
     }

@@ -504,6 +504,25 @@ internal fun translate(
       .flatMap { member -> staticFlowCir(member, receiver) }
   }
 
+  // ADR-242: a scalar data class's `suspend` and `Flow` members, on the static routes a value
+  // class member takes, as instance members whose receiver is `this` minted per extern call.
+  fun dataValueAsync(cls: KSClassDeclaration): List<CirMember> {
+    if (!classifier.isDataValue(cls)) return emptyList()
+    val name: String = cls.simpleName.asString()
+    return valueClassAsync(cls)(
+      CirParameter(
+        "this",
+        name,
+        nativeType = "IntPtr",
+        isReferenceType = true,
+        collectionCreate = "NugetMarshal.Wrap<$name>(this, out bool receiverOwned)",
+        collectionHandle = "receiverBox",
+        boxOwnedLocal = "receiverOwned",
+        boxedRead = "this",
+      ),
+    )
+  }
+
   groupPropertiesByNamespaceAndFile(properties).forEach { (key, props) ->
     val (namespace, fileClassName) = key
     val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
@@ -576,7 +595,9 @@ internal fun translate(
         cls, context.libraryName, tracker, exportedTypes, logger, callableCatalog, context,
         classifier, interfaceDeclarationCatalog, expects, memberRegistry,
         companionAsyncMembers = companionAsync(cls) + companionFlow(cls),
-      )
+      ).let { translated ->
+        translated.copy(companionMembers = translated.companionMembers + dataValueAsync(cls))
+      }
       addAll(withNestedDeclarations(translated, translateNestedOf(cls)))
     }
     enums.filter { isOwnedBy(owner, it) }.forEach { enum ->
@@ -639,7 +660,9 @@ internal fun translate(
         cls, context.libraryName, tracker, exportedTypes, logger, callableCatalog, context,
         classifier, interfaceDeclarationCatalog, expects, memberRegistry,
         companionAsyncMembers = companionAsync(cls) + companionFlow(cls),
-      )
+      ).let { translated ->
+        translated.copy(companionMembers = translated.companionMembers + dataValueAsync(cls))
+      }
       withNestedDeclarations(translated, translateNestedOf(cls))
     } ?: return@forEach
     declarations.forEach { declaration ->

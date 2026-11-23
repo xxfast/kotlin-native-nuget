@@ -21,7 +21,7 @@ public class ValueClassPropertyTests
     [Fact]
     public void ChartEntry_Id_ValGetter_ReturnsTheRecordStructWithTheConstructedValue()
     {
-        using var entry = new ChartEntry(new ChartId("CH-OREO-4"), "stuck in a vase");
+        var entry = new ChartEntry(new ChartId("CH-OREO-4"), "stuck in a vase");
 
         ChartId id = entry.Id;
 

@@ -2,7 +2,10 @@
 
 ## Status
 
-Accepted
+Accepted. **Amended by [ADR-242](242-scalar-data-classes-as-values.md)** (2026-11-23): an
+immutable data class whose components are all plain data crosses as a C# `sealed class :
+IEquatable<T>` value with no handle and no `IDisposable`; its members still delegate to Kotlin.
+Every other data class keeps the mapping below.
 
 ## Context
 

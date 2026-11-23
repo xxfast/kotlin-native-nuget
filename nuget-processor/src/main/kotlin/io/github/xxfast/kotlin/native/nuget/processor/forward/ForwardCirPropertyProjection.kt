@@ -412,7 +412,8 @@ internal object ForwardCirPropertyProjection {
       BridgeType.String -> appendLine("            IntPtr nativeResult = $native($callArgs);")
       // ADR-147: a `T` getter reads the same boxed-handle wire.
       // ADR-151: and so does a ByteArray getter.
-      is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
+      is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface,
+      is BridgeType.Collection,
       BridgeType.ByteArray, is BridgeType.TypeParameter,
       is BridgeType.ReturnedLambda ->
         appendLine("            IntPtr nativeResult = $native($callArgs);")
@@ -474,6 +475,10 @@ internal object ForwardCirPropertyProjection {
         is BridgeType.ObjectHandle -> append(
           "            return nativeResult == IntPtr.Zero ? null : " +
               "${inner.handleReconstruction()};",
+        )
+        is BridgeType.DataValue -> append(
+          "            return nativeResult == IntPtr.Zero ? null : " +
+              "${inner.handle.handleReconstruction()};",
         )
         // ADR-236: the null pointer is a null lambda; anything else is a delegate bound to the
         // wrapper that owns the lambda handle.
@@ -543,6 +548,8 @@ internal object ForwardCirPropertyProjection {
         append("            return NugetErrorNative.BuildException(nativeResult);")
 
       is BridgeType.ObjectHandle -> append("            return ${value.handleReconstruction()};")
+      is BridgeType.DataValue ->
+        append("            return ${value.handle.handleReconstruction()};")
       // ADR-236: a delegate bound to the `KotlinFunc` (or sibling) that owns the lambda handle.
       is BridgeType.ReturnedLambda -> append(
         "            return new ${value.lambdaWrapperCsharpType()}(nativeResult).${value.lambdaInvokeMethod()};",
@@ -605,6 +612,7 @@ internal object ForwardCirPropertyProjection {
       BridgeType.String -> "Marshal.PtrToStringUTF8($wireValue)!"
       is BridgeType.Enum -> "(${underlying.csharpType})$wireValue"
       is BridgeType.ObjectHandle -> underlying.handleReconstruction(wireValue)
+      is BridgeType.DataValue -> underlying.handle.handleReconstruction(wireValue)
       is BridgeType.Primitive -> wireValue
       // ADR-234: a `Char` underlying is the `char` a bare `Char` getter returns.
       BridgeType.Char -> wireValue
@@ -726,7 +734,7 @@ internal object ForwardCirPropertyProjection {
       if (type is BridgeType.Nullable) "string?" else "string"
     is BridgeType.Enum -> "int"
     // ADR-187: a wrapper value is passed as its owned handle, which the call keeps alive.
-    is BridgeType.ObjectHandle -> KOTLIN_HANDLE
+    is BridgeType.ObjectHandle, is BridgeType.DataValue -> KOTLIN_HANDLE
     is BridgeType.Interface -> "IntPtr"
     // ADR-236: the wrapper's own lambda handle, borrowed for the call.
     is BridgeType.ReturnedLambda -> KOTLIN_HANDLE
@@ -735,7 +743,7 @@ internal object ForwardCirPropertyProjection {
     is BridgeType.ValueClass -> when (value.underlying) {
       BridgeType.String -> if (type is BridgeType.Nullable) "string?" else "string"
       is BridgeType.Enum -> "int"
-      is BridgeType.ObjectHandle -> KOTLIN_HANDLE
+      is BridgeType.ObjectHandle, is BridgeType.DataValue -> KOTLIN_HANDLE
       BridgeType.Unit,
       is BridgeType.Primitive,
       BridgeType.Char,
@@ -790,6 +798,32 @@ internal object ForwardCirPropertyProjection {
   private fun BridgeType.handleStep(name: String): ForwardCirHandleStep? {
     val nullable: Boolean = this is BridgeType.Nullable
     return when (val value = unwrapNullable()) {
+      // ADR-242: a value class over a value mints from its struct's underlying.
+      is BridgeType.ValueClass -> if (value.underlying !is BridgeType.DataValue) null else {
+        val root: String = name.substringBefore('.')
+        val local: String = name.valueLocal()
+        val minted: String = if (nullable) {
+          "$name.HasValue ? ${value.underlyingCs("$name.Value", root)}.NugetMint() : null"
+        } else {
+          "${value.underlyingCs(name, root)}.NugetMint()"
+        }
+        ForwardCirHandleStep(
+          flat = "NugetKotlinHandle? $local = $minted;",
+          declarations = listOf("NugetKotlinHandle? $local = null;"),
+          statement = "$local = $minted;",
+        )
+      }
+
+      // ADR-242: a value mints a transient Kotlin instance for the call; the cleanup releases it.
+      is BridgeType.DataValue -> {
+        val minted: String = if (nullable) "$name?.NugetMint()" else "$name.NugetMint()"
+        ForwardCirHandleStep(
+          flat = "NugetKotlinHandle? ${name}Handle = $minted;",
+          declarations = listOf("NugetKotlinHandle? ${name}Handle = null;"),
+          statement = "${name}Handle = $minted;",
+        )
+      }
+
       is BridgeType.Interface -> {
         val helper: String = if (nullable) "HandleOfOrZero" else "HandleOf"
         ForwardCirHandleStep(
@@ -865,7 +899,6 @@ internal object ForwardCirPropertyProjection {
       BridgeType.Uuid,
       is BridgeType.Enum,
       is BridgeType.ObjectHandle,
-      is BridgeType.ValueClass,
       is BridgeType.Nullable,
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
@@ -881,6 +914,10 @@ internal object ForwardCirPropertyProjection {
 
   private fun BridgeType.handleCleanup(name: String): String? =
     when (val value = unwrapNullable()) {
+      is BridgeType.ValueClass ->
+        if (value.underlying is BridgeType.DataValue) "${name.valueLocal()}?.Dispose();" else null
+      // ADR-242: the transient instance [handleStep] minted.
+      is BridgeType.DataValue -> "${name}Handle?.Dispose();"
       // ADR-218: only a box the setter minted is disposed; a borrowed wrapper is kept alive.
       is BridgeType.TypeParameter -> forwardCirTypeParameterCleanup(this, name, name)
       // Only a minted bridge handle is disposed: a Kotlin-backed wrapper's `_handle` belongs to
@@ -919,7 +956,6 @@ internal object ForwardCirPropertyProjection {
       is BridgeType.Enum,
       is BridgeType.ObjectHandle,
       is BridgeType.BoundInterface,
-      is BridgeType.ValueClass,
       is BridgeType.Nullable,
       is BridgeType.Callback,
       is BridgeType.AsyncCallback,
@@ -961,6 +997,10 @@ internal object ForwardCirPropertyProjection {
       is BridgeType.ObjectHandle ->
         if (this is BridgeType.Nullable) "$name?._handle ?? NugetKotlinHandle.Null"
         else "$name._handle"
+      // ADR-242: the transient instance [handleStep] minted.
+      is BridgeType.DataValue ->
+        if (this is BridgeType.Nullable) "${name}Handle ?? NugetKotlinHandle.Null"
+        else "${name}Handle!"
       // ADR-236: the wrapper's conversion hands back the lambda a getter's delegate is bound to, or
       // mints a Kotlin lambda over any other delegate.
       is BridgeType.ReturnedLambda -> {
@@ -1012,6 +1052,10 @@ internal object ForwardCirPropertyProjection {
           is BridgeType.ObjectHandle ->
             if (nullable) "$name.HasValue ? $unwrapped._handle : NugetKotlinHandle.Null"
             else "$unwrapped._handle"
+          // ADR-242: the transient instance [handleStep] minted from the struct.
+          is BridgeType.DataValue ->
+            if (nullable) "${name.valueLocal()} ?? NugetKotlinHandle.Null"
+            else "${name.valueLocal()}!"
 
           BridgeType.String -> if (nullable) "$name.HasValue ? $unwrapped : null" else unwrapped
 
@@ -1066,7 +1110,7 @@ internal object ForwardCirPropertyProjection {
   private fun BridgeType.wireType(): ForwardAbiWireType = when (val type = unwrapNullable()) {
     BridgeType.Unit -> ForwardAbiWireType.VOID
     BridgeType.Char -> ForwardAbiWireType.CHAR16
-    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface,
+    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface,
     is BridgeType.Collection, BridgeType.ByteArray,
     is BridgeType.TypeParameter, is BridgeType.ReturnedLambda -> ForwardAbiWireType.POINTER
 
@@ -1129,3 +1173,6 @@ private fun CirProperty.narrowedIf(narrows: Boolean, plan: ForwardPropertyPlan):
   val narrowed: String = plan.narrowedType()?.takeIf { narrows } ?: return this
   return copy(type = narrowed)
 }
+
+/** ADR-242: the minted-handle local of a value-class-over-value setter value. */
+private fun String.valueLocal(): String = replace(".", "") + "Handle"

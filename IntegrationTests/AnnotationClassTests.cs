@@ -38,7 +38,7 @@ public class AnnotationClassTests
         // The usage half: `@Tagged("plaything")` on Toy must cost Toy nothing. The forward
         // pipeline reads no annotation but kotlin.native.CName, so the primary constructor and
         // both properties bind exactly as before.
-        using var toy = new Toy("Catnip Banana", "Green");
+        var toy = new Toy("Catnip Banana", "Green");
 
         Assert.Equal("Catnip Banana", toy.Name);
         Assert.Equal("Green", toy.Color);
@@ -49,9 +49,9 @@ public class AnnotationClassTests
     {
         // The generated members an annotation-driven regression would take out first: copy,
         // equals, hashCode, toString. Oreo hoards the banana; Mylo settles for the identical one.
-        using var oreos = new Toy("Catnip Banana", "Green");
-        using var mylos = oreos.Copy("Catnip Banana", "Green");
-        using var recoloured = oreos.Copy("Catnip Banana", "Blue");
+        var oreos = new Toy("Catnip Banana", "Green");
+        var mylos = oreos.Copy("Catnip Banana", "Green");
+        var recoloured = oreos.Copy("Catnip Banana", "Blue");
 
         Assert.True(oreos.Equals(mylos));
         Assert.Equal(oreos.GetHashCode(), mylos.GetHashCode());

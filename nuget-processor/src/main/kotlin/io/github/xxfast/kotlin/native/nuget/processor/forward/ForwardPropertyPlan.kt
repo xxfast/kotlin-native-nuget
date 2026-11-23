@@ -84,7 +84,7 @@ internal fun BridgeType.hasValueFanOutInner(): BridgeType? {
     BridgeType.String,
     is BridgeType.Throwable,
     BridgeType.Uuid,
-    is BridgeType.ObjectHandle,
+    is BridgeType.ObjectHandle, is BridgeType.DataValue,
     is BridgeType.Interface,
     is BridgeType.BoundInterface,
     BridgeType.ByteArray,
@@ -127,7 +127,7 @@ internal fun BridgeType.isNullableValueTypeReceiver(): Boolean {
     BridgeType.Unit,
     BridgeType.String,
     is BridgeType.Throwable,
-    is BridgeType.ObjectHandle,
+    is BridgeType.ObjectHandle, is BridgeType.DataValue,
     is BridgeType.Interface,
     is BridgeType.BoundInterface,
     BridgeType.ByteArray,
@@ -291,6 +291,7 @@ internal data class ForwardPropertyPlan(
     when (type) {
       BridgeType.Unit, BridgeType.Char, BridgeType.String, BridgeType.Instant, BridgeType.Duration,
       is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,
+      is BridgeType.DataValue,
       is BridgeType.Interface, is BridgeType.Collection,
         // ADR-151: valid at a property, getter and setter alike, over the collection handle wire.
       BridgeType.ByteArray -> Unit

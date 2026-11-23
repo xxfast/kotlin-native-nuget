@@ -49,6 +49,9 @@ internal object ForwardCirPlanProjection {
       // the positional record constructor it delegates to.
       result is BridgeType.ObjectHandle ->
         result.handleReconstruction("CreateChecked$nativeSuffix($paramNames)")
+      // ADR-242: a value underlying reads its components off the fresh handle and releases it.
+      result is BridgeType.DataValue ->
+        result.handle.handleReconstruction("CreateChecked$nativeSuffix($paramNames)")
       else -> "CreateChecked$nativeSuffix($paramNames)"
     }
     val nativeCall: ForwardNativeCall = plan.nativeExports.single()
@@ -125,6 +128,9 @@ internal object ForwardCirPlanProjection {
       ),
       boxParameter = boxParameter.csharpName,
       boxArguments = box.callArgument(boxParameter),
+      // ADR-242: a value underlying is minted for the box export and released after it.
+      boxBody =
+        if (type.underlying is BridgeType.DataValue) box.wireBoxBody("Native_NugetBox") else null,
       unboxResult = if (hasValue) {
         "new ${type.csharpType}(nativeResult ? " +
             "${type.underlying.hasValueSlotRead(requireNotNull(unboxValueOut).name)} : null)"
@@ -190,12 +196,14 @@ internal object ForwardCirPlanProjection {
     val prelude: List<ForwardCirHandleStep> =
       parameters.mapNotNull { parameter -> parameter.optionalPrelude() } +
         parameters.unwrapped().zip(parameters).mapNotNull { (parameter, declared) ->
-          bytesPrelude(parameter)
+          dataValuePrelude(parameter)
+            ?: bytesPrelude(parameter)
             ?: collectionPrelude(parameter, named = declared.csharpName)
             ?: interfacePrelude(parameter)
         }
     val cleanup: List<String> = parameters.unwrapped().mapNotNull { parameter ->
-      bytesCleanup(parameter) ?: collectionCleanup(parameter) ?: interfaceCleanup(parameter)
+      dataValueCleanup(parameter) ?: bytesCleanup(parameter) ?: collectionCleanup(parameter) ?:
+        interfaceCleanup(parameter)
     }
     val arguments: String = (parameters.flatMap { parameter -> inputArguments(parameter) } +
       "out IntPtr error").joinToString(", ")
@@ -464,6 +472,8 @@ internal object ForwardCirPlanProjection {
       )
       is BridgeType.ObjectHandle ->
         ValueClassMemberBody(type, "IntPtr", result.handleReconstruction(call))
+      is BridgeType.DataValue ->
+        ValueClassMemberBody(type, "IntPtr", result.handle.handleReconstruction(call))
       // ADR-239: a delegate bound to the wrapper that owns the returned lambda handle.
       is BridgeType.ReturnedLambda -> ValueClassMemberBody(
         result.forwardPublicCsharpType(), "IntPtr", result.lambdaDelegateRead(call),
@@ -488,6 +498,7 @@ internal object ForwardCirPlanProjection {
           BridgeType.Uuid ->
             held(present + "global::System.Guid.Parse(Marshal.PtrToStringUTF8(nativeResult)!)")
           is BridgeType.ObjectHandle -> held(present + inner.handleReconstruction())
+          is BridgeType.DataValue -> held(present + inner.handle.handleReconstruction())
           is BridgeType.ReturnedLambda -> held(present + inner.lambdaDelegateRead("nativeResult"))
             .copy(returnType = "${inner.forwardPublicCsharpType()}?")
           is BridgeType.Interface ->
@@ -585,7 +596,8 @@ internal object ForwardCirPlanProjection {
     val prelude: List<ForwardCirHandleStep> =
       inputs.mapNotNull { parameter -> parameter.optionalPrelude() } +
           inputs.unwrapped().zip(inputs).mapNotNull { (parameter, declared) ->
-            plan.bytesPrelude(parameter)
+            dataValuePrelude(parameter)
+              ?: plan.bytesPrelude(parameter)
               ?: plan.collectionPrelude(parameter, named = declared.csharpName)
               ?: plan.interfacePrelude(parameter)
               ?: plan.boundInterfacePrelude(parameter)
@@ -594,7 +606,8 @@ internal object ForwardCirPlanProjection {
           }
     val cleanup: List<String> =
       inputs.unwrapped().mapNotNull {
-        plan.bytesCleanup(it) ?: plan.collectionCleanup(it) ?: plan.interfaceCleanup(it)
+        dataValueCleanup(it) ?: plan.bytesCleanup(it) ?: plan.collectionCleanup(it)
+          ?: plan.interfaceCleanup(it)
           ?: plan.typeParameterCleanup(it)
           ?: asyncCleanup(it)
       }
@@ -985,7 +998,7 @@ internal object ForwardCirPlanProjection {
       is BridgeType.Throwable,
       BridgeType.Uuid,
       is BridgeType.Enum,
-      is BridgeType.ObjectHandle,
+      is BridgeType.ObjectHandle, is BridgeType.DataValue,
       is BridgeType.Interface,
       is BridgeType.BoundInterface,
       is BridgeType.ValueClass,
@@ -1163,7 +1176,7 @@ internal object ForwardCirPlanProjection {
     is BridgeType.Throwable,
     BridgeType.Uuid,
     is BridgeType.Enum,
-    is BridgeType.ObjectHandle,
+    is BridgeType.ObjectHandle, is BridgeType.DataValue,
     is BridgeType.Interface,
     is BridgeType.BoundInterface,
     is BridgeType.ValueClass,
@@ -1212,6 +1225,8 @@ internal object ForwardCirPlanProjection {
       // ADR-103: TimeSpan has one tick domain, so the plain `.Ticks` is unambiguous.
       BridgeType.Duration -> listOf("${parameter.csharpName}.Ticks")
       is BridgeType.ObjectHandle -> listOf("${parameter.csharpName}._handle")
+      // ADR-242: the transient instance [dataValuePrelude] minted; [dataValueCleanup] releases it.
+      is BridgeType.DataValue -> listOf("${parameter.csharpLocal}Handle!")
       // ADR-147: the box [typeParameterPrelude] minted; the `finally` disposes it when owned.
       is BridgeType.TypeParameter -> listOf("${parameter.csharpLocal}Box")
       // ADR-040 sub-decision B: an interface-typed parameter's public static type is `IFoo`, which
@@ -1257,6 +1272,8 @@ internal object ForwardCirPlanProjection {
           when (type.underlying) {
             is BridgeType.Enum -> "(int)$unwrapped"
             is BridgeType.ObjectHandle -> "$unwrapped._handle"
+            // ADR-242: the transient instance [dataValuePrelude] minted from the struct.
+            is BridgeType.DataValue -> "${parameter.csharpLocal}Handle!.DangerousGetHandle()"
             BridgeType.Unit,
             is BridgeType.Primitive,
             BridgeType.Char,
@@ -1294,6 +1311,8 @@ internal object ForwardCirPlanProjection {
           listOf(managedExceptionTextCs(parameter.csharpName, nullable = true))
         is BridgeType.ObjectHandle ->
           listOf("${parameter.csharpName}?._handle ?? NugetKotlinHandle.Null")
+        is BridgeType.DataValue ->
+          listOf("${parameter.csharpLocal}Handle ?? NugetKotlinHandle.Null")
         is BridgeType.Interface -> listOf("${parameter.csharpLocal}Handle")
         // ADR-083/147: `Wrap<T>` already maps a null to `IntPtr.Zero`, so `T?` needs no guard.
         is BridgeType.TypeParameter -> listOf("${parameter.csharpLocal}Box")
@@ -1348,7 +1367,9 @@ internal object ForwardCirPlanProjection {
             val name: String = parameter.csharpName
             val present: String = inner.underlyingCs("$name.Value", named)
             listOf(
-              if (inner.underlying is BridgeType.ObjectHandle) {
+              if (inner.underlying is BridgeType.DataValue) {
+                "${parameter.csharpLocal}Handle?.DangerousGetHandle() ?? IntPtr.Zero"
+              } else if (inner.underlying is BridgeType.ObjectHandle) {
                 "$name.HasValue ? $present._handle : NugetKotlinHandle.Null"
               } else {
                 "$name.HasValue ? $present : null"
@@ -1400,7 +1421,7 @@ internal object ForwardCirPlanProjection {
       is BridgeType.Throwable,
       BridgeType.Uuid,
       is BridgeType.Enum,
-      is BridgeType.ObjectHandle,
+      is BridgeType.ObjectHandle, is BridgeType.DataValue,
       is BridgeType.Interface,
       is BridgeType.BoundInterface,
       is BridgeType.ValueClass,
@@ -1475,6 +1496,41 @@ internal object ForwardCirPlanProjection {
   private fun ForwardCallablePlan.callbackCleanup(parameter: ForwardPublicParameter): String? {
     if (parameter.type !is BridgeType.Callback) return null
     return forwardCallbackCleanup(parameter.csharpLocal)
+  }
+
+  /**
+   * ADR-242: a value parameter mints a transient Kotlin instance from its components for the call,
+   * the Kotlin half reading it exactly as it reads any handle. [dataValueCleanup] releases it.
+   */
+  private fun dataValuePrelude(parameter: ForwardPublicParameter): ForwardCirHandleStep? {
+    val nullable: Boolean = parameter.type is BridgeType.Nullable
+    val name: String = parameter.csharpName
+    val local: String = parameter.csharpLocal
+    val inner: BridgeType = parameter.type.unwrapNullable()
+    val minted: String = when {
+      inner is BridgeType.DataValue -> if (nullable) "$name?.NugetMint()" else "$name.NugetMint()"
+      // A value class over a value: the struct holds the C# value, minted from its underlying.
+      inner.isValueClassOverDataValue() -> {
+        val valueClass = inner as BridgeType.ValueClass
+        if (nullable) {
+          "$name.HasValue ? ${valueClass.underlyingCs("$name.Value", name)}.NugetMint() : null"
+        } else {
+          "${valueClass.underlyingCs(name, name)}.NugetMint()"
+        }
+      }
+      else -> return null
+    }
+    return ForwardCirHandleStep(
+      flat = "NugetKotlinHandle? ${local}Handle = $minted;",
+      declarations = listOf("NugetKotlinHandle? ${local}Handle = null;"),
+      statement = "${local}Handle = $minted;",
+    )
+  }
+
+  private fun dataValueCleanup(parameter: ForwardPublicParameter): String? {
+    val inner: BridgeType = parameter.type.unwrapNullable()
+    if (inner !is BridgeType.DataValue && !inner.isValueClassOverDataValue()) return null
+    return "${parameter.csharpLocal}Handle?.Dispose();"
   }
 
   private fun ForwardCallablePlan.bytesPrelude(
@@ -1715,7 +1771,8 @@ internal object ForwardCirPlanProjection {
       parameters.mapNotNull { parameter -> callbackNullGuard(parameter) } +
           parameters.mapNotNull { parameter -> parameter.optionalPrelude() } +
           parameters.unwrapped().zip(parameters).mapNotNull { (parameter, declared) ->
-            bytesPrelude(parameter)
+            dataValuePrelude(parameter)
+              ?: bytesPrelude(parameter)
               ?: collectionPrelude(parameter, named = declared.csharpName)
               ?: interfacePrelude(parameter)
               ?: boundInterfacePrelude(parameter)
@@ -1725,7 +1782,8 @@ internal object ForwardCirPlanProjection {
           }
     val cleanup: List<String> =
       parameters.unwrapped().mapNotNull { parameter ->
-        bytesCleanup(parameter)
+        dataValueCleanup(parameter)
+          ?: bytesCleanup(parameter)
           ?: collectionCleanup(parameter)
           ?: interfaceCleanup(parameter)
           ?: typeParameterCleanup(parameter)
@@ -1753,6 +1811,14 @@ internal object ForwardCirPlanProjection {
         nativeReturnType = "IntPtr",
         body = checkedPointerBody(
           nativeName, callArguments, exit.returning(result.handleReconstruction()), prelude,
+          cleanup, exit,
+        ),
+      )
+      is BridgeType.DataValue -> CirResultProjection(
+        returnType = result.handle.csharpType(),
+        nativeReturnType = "IntPtr",
+        body = checkedPointerBody(
+          nativeName, callArguments, exit.returning(result.handle.handleReconstruction()), prelude,
           cleanup, exit,
         ),
       )
@@ -1937,6 +2003,20 @@ internal object ForwardCirPlanProjection {
             nativeName,
             callArguments,
             exit.returning("nativeResult == IntPtr.Zero ? null : ${type.handleReconstruction()}"),
+            prelude,
+            cleanup,
+            exit,
+          ),
+        )
+        is BridgeType.DataValue -> CirResultProjection(
+          returnType = "${type.handle.csharpType()}?",
+          nativeReturnType = "IntPtr",
+          body = checkedPointerBody(
+            nativeName,
+            callArguments,
+            exit.returning(
+              "nativeResult == IntPtr.Zero ? null : ${type.handle.handleReconstruction()}",
+            ),
             prelude,
             cleanup,
             exit,
@@ -2225,7 +2305,8 @@ internal object ForwardCirPlanProjection {
    * ordinal, "IntPtr" for String/ObjectHandle).
    */
   private fun valueClassUnderlyingWireCs(underlying: BridgeType): String = when (underlying) {
-    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.TypeParameter -> "IntPtr"
+    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.DataValue,
+    is BridgeType.TypeParameter -> "IntPtr"
     // ADR-220: an own `T?` inside a generic value class, the same null-pointer box wire.
     is BridgeType.Nullable ->
       // ADR-228: and a nullable String underlying (`Nick(val name: String?)`), null in-band.
@@ -2269,6 +2350,7 @@ internal object ForwardCirPlanProjection {
       BridgeType.String -> "Marshal.PtrToStringUTF8($wireValue)!"
       is BridgeType.Enum -> "(${underlying.csharpType})$wireValue"
       is BridgeType.ObjectHandle -> underlying.handleReconstruction(wireValue)
+      is BridgeType.DataValue -> underlying.handle.handleReconstruction(wireValue)
       is BridgeType.Primitive -> wireValue
       // ADR-234: a `Char` result is `char`; a `Char` valueOut is the `ushort` code unit.
       BridgeType.Char -> "(char)$wireValue"
@@ -2584,7 +2666,7 @@ internal object ForwardCirPlanProjection {
   private fun BridgeType.isCSharpReferenceType(): Boolean = when (this) {
     is BridgeType.Nullable -> type.isCSharpReferenceType()
     // ADR-151: `byte[]` is a C# array, a reference type, so `ByteArray?` renders `byte[]?`.
-    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface,
+    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface,
     is BridgeType.BoundInterface, is BridgeType.Collection, BridgeType.ByteArray,
     // ADR-201: `System.Exception` is a class.
     is BridgeType.Throwable,
@@ -2822,3 +2904,7 @@ internal fun BridgeType.hasValueSlotRead(slot: String): String =
  */
 internal fun ForwardPublicSignature.narrowsMemberReturn(): Boolean =
   overridesNothing && !isOverride && !isVirtual && !isAbstract
+
+/** ADR-242: a value class whose underlying is a C# value, minted per call like the value itself. */
+internal fun BridgeType.isValueClassOverDataValue(): Boolean =
+  this is BridgeType.ValueClass && underlying is BridgeType.DataValue

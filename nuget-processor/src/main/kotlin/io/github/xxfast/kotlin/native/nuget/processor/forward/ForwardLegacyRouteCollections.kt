@@ -89,6 +89,12 @@ internal sealed interface ForwardLegacyParameterShape {
     val widened: Boolean = false,
     /** ADR-164 rule 2: a defaulted nullable handle, `Optional<T?>` behind an `IsSet` slot. */
     val optional: Boolean = false,
+    /**
+     * ADR-242: a C# value, which holds no handle. C# mints one through `NugetMarshal.Wrap<T>`
+     * for the call and releases it once the extern returns: Kotlin reads it into a local before
+     * the launch ([legacyPrelude]). A defaulted value stays required, as an interface does.
+     */
+    val value: Boolean = false,
   ) : ForwardLegacyParameterShape
 
   /**
@@ -268,7 +274,7 @@ internal fun BridgeType.ValueClass.hasErasedCrossing(): Boolean = underlying.isE
 
 private fun BridgeType.isErasedUnderlying(): Boolean =
   this == BridgeType.String || this is BridgeType.Primitive || this is BridgeType.Enum ||
-      this is BridgeType.ObjectHandle ||
+      this is BridgeType.ObjectHandle || this is BridgeType.DataValue ||
       // ADR-234: `Char`, on the `char` box.
       this == BridgeType.Char ||
       // ADR-228: a generic value class's own `T`, crossing on the bare-`T` box.
@@ -360,6 +366,13 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
     classified is BridgeType.ObjectHandle -> ForwardLegacyParameterShape.Handle(classified)
     classified is BridgeType.Nullable && classified.type is BridgeType.ObjectHandle ->
       ForwardLegacyParameterShape.Handle(classified.type, nullable = true)
+    // ADR-242: a value crosses on its handle's wire, minted by C# for the call.
+    classified is BridgeType.DataValue ->
+      ForwardLegacyParameterShape.Handle(classified.handle, value = true)
+    classified is BridgeType.Nullable && classified.type is BridgeType.DataValue ->
+      ForwardLegacyParameterShape.Handle(
+        (classified.type as BridgeType.DataValue).handle, nullable = true, value = true,
+      )
     classified is BridgeType.Enum -> ForwardLegacyParameterShape.Enum(classified)
     (classified.unwrapNullable() as? BridgeType.Throwable)?.acceptsManagedException == true ->
       ForwardLegacyParameterShape.ManagedException(nullable = classified is BridgeType.Nullable)
@@ -411,7 +424,7 @@ internal fun legacyWireShape(classified: BridgeType): ForwardLegacyParameterShap
     BridgeType.String,
     is BridgeType.Throwable,
     is BridgeType.Enum,
-    is BridgeType.ObjectHandle,
+    is BridgeType.ObjectHandle, is BridgeType.DataValue,
     is BridgeType.Collection,
     is BridgeType.Nullable,
     is BridgeType.Callback,
@@ -432,7 +445,7 @@ internal fun legacyWireShape(classified: BridgeType): ForwardLegacyParameterShap
 private fun BridgeType.isLegacyWireUnderlying(): Boolean = when (this) {
   is BridgeType.Primitive, BridgeType.String, is BridgeType.Enum, BridgeType.Instant,
   BridgeType.Duration, BridgeType.Uuid, BridgeType.ByteArray, is BridgeType.Interface,
-  is BridgeType.ObjectHandle -> true
+  is BridgeType.ObjectHandle, is BridgeType.DataValue -> true
   is BridgeType.Collection -> isLegacyMarshallableInput()
   is BridgeType.Nullable -> type.isLegacyWireUnderlying() && type !is BridgeType.Nullable
   BridgeType.Unit,
@@ -537,7 +550,7 @@ internal fun BridgeType.readThroughTrampoline(host: KSFunctionDeclaration): Brid
     is BridgeType.Throwable,
     BridgeType.Uuid,
     is BridgeType.Enum,
-    is BridgeType.ObjectHandle,
+    is BridgeType.ObjectHandle, is BridgeType.DataValue,
     is BridgeType.Interface,
     is BridgeType.BoundInterface,
     is BridgeType.ValueClass,
@@ -568,7 +581,7 @@ internal fun BridgeType.readThroughTrampoline(host: KSFunctionDeclaration): Brid
     is BridgeType.Throwable,
     BridgeType.Uuid,
     is BridgeType.Enum,
-    is BridgeType.ObjectHandle,
+    is BridgeType.ObjectHandle, is BridgeType.DataValue,
     is BridgeType.Interface,
     is BridgeType.BoundInterface,
     is BridgeType.ValueClass,
@@ -601,7 +614,7 @@ internal fun BridgeType.asyncTypeParameterNames(): Set<String> {
     is BridgeType.Throwable,
     BridgeType.Uuid,
     is BridgeType.Enum,
-    is BridgeType.ObjectHandle,
+    is BridgeType.ObjectHandle, is BridgeType.DataValue,
     is BridgeType.Interface,
     is BridgeType.BoundInterface,
     is BridgeType.ValueClass,
@@ -753,7 +766,9 @@ private fun legacyWidenedIndices(
 ): List<Int> = shapes.indices.filter { index ->
   defaults.getOrElse(index) { false } && when (val shape = shapes[index]) {
     ForwardLegacyParameterShape.Plain, is ForwardLegacyParameterShape.Enum,
-    is ForwardLegacyParameterShape.NullableScalar, is ForwardLegacyParameterShape.Handle -> true
+    is ForwardLegacyParameterShape.NullableScalar -> true
+    // ADR-242: a defaulted value stays required; its minted handle has no unset encoding.
+    is ForwardLegacyParameterShape.Handle -> !shape.value
     // Only a nullable one: the `IsSet` slot rides the nullable pointer slot.
     is ForwardLegacyParameterShape.Marshalled -> shape.nullable
     // ADR-214: a defaulted `T` stays required; its box has no unset encoding.
@@ -1248,6 +1263,11 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
     (expanded.arguments.isEmpty() || !expanded.isGenericSealedReference())
   ) {
     return ForwardLegacyReturnShape.Handle(classified, expanded.isMarkedNullable)
+  }
+  // ADR-242: a value reads back through its handle constructor, which copies the components
+  // and releases the handle, so the legacy reconstruction is the handle's own.
+  if (classified is BridgeType.DataValue) {
+    return ForwardLegacyReturnShape.Handle(classified.handle, expanded.isMarkedNullable)
   }
   if (classified is BridgeType.Enum) {
     return ForwardLegacyReturnShape.Enum(classified, expanded.isMarkedNullable)
@@ -1912,7 +1932,8 @@ internal class ForwardLegacyNames(
   val handleLocals: List<String?> = parameters.mapIndexed { index, name ->
     // ADR-232: an interface is wrapped the same way, into a handle that may be minted.
     val boxed: Boolean = shapes[index] is ForwardLegacyParameterShape.Boxed ||
-      shapes[index] is ForwardLegacyParameterShape.Interface
+      shapes[index] is ForwardLegacyParameterShape.Interface ||
+      (shapes[index] as? ForwardLegacyParameterShape.Handle)?.value == true
     // ADR-240: a bytes, collection or interface wire is minted into a local as well.
     val minted: Boolean = (shapes[index] as? ForwardLegacyParameterShape.Wire)?.mintsHandle == true
     val marshalled: Boolean = csharp &&
@@ -1928,7 +1949,8 @@ internal class ForwardLegacyNames(
     val wire = shapes[index] as? ForwardLegacyParameterShape.Wire
     val bridged: Boolean = wire?.bridgesInterface == true
     val wrapped: Boolean = shapes[index] is ForwardLegacyParameterShape.Boxed ||
-      shapes[index] is ForwardLegacyParameterShape.Interface || bridged
+      shapes[index] is ForwardLegacyParameterShape.Interface || bridged ||
+      (shapes[index] as? ForwardLegacyParameterShape.Handle)?.value == true
     if (csharp && wrapped) mint("${name}Owned") else null
   }
 
@@ -2618,7 +2640,7 @@ internal fun BridgeType.interfaceBridgeWire(): InterfaceBridgeWire = when (this)
   is BridgeType.Primitive ->
     if (kind == PrimitiveKind.BOOLEAN) InterfaceBridgeWire.BOOL else InterfaceBridgeWire.BY_VALUE
   is BridgeType.Enum -> InterfaceBridgeWire.ORDINAL
-  BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface ->
+  BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.DataValue, is BridgeType.Interface ->
     InterfaceBridgeWire.HANDLE
   is BridgeType.Throwable -> InterfaceBridgeWire.ENVELOPE
   BridgeType.Unit,
@@ -2738,7 +2760,7 @@ internal fun legacyWireValueBox(value: String, planned: BridgeType): String = wh
   is BridgeType.Enum -> "$value.ordinal"
   is BridgeType.Collection -> collectionResultProjection(value, planned)
   is BridgeType.Primitive, BridgeType.String, BridgeType.ByteArray, is BridgeType.Interface,
-  is BridgeType.ObjectHandle -> value
+  is BridgeType.ObjectHandle, is BridgeType.DataValue -> value
   BridgeType.Unit,
   BridgeType.Char,
   is BridgeType.Throwable,
@@ -2776,6 +2798,7 @@ internal fun legacyWireValueRead(handle: String, planned: BridgeType): String = 
   is BridgeType.Interface ->
     ForwardLegacyReturnShape.Interface(planned, nullable = false).legacyInterfaceRead(handle)
   is BridgeType.ObjectHandle -> "new ${planned.constructedType()}($handle, out _)"
+  is BridgeType.DataValue -> "new ${planned.handle.constructedType()}($handle, out _)"
   is BridgeType.Enum -> "(${planned.csharpType})NugetMarshal.FromHandle<int>($handle)"
   is BridgeType.Primitive, BridgeType.String ->
     "NugetMarshal.FromHandle<${planned.forwardPublicCsharpType()}>($handle)"

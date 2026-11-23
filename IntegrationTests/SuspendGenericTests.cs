@@ -47,12 +47,13 @@ public class SuspendGenericTests
     }
 
     [Fact]
-    public async Task FetchLaterAsync_WrapperArgument_ComesBackAsTheSameKotlinObject()
+    public async Task FetchLaterAsync_ValueArgument_RoundTripsEqual()
     {
-        using var toy = new Toy("Oreo's Biscuit Ball", "Black");
+        var toy = new Toy("Oreo's Biscuit Ball", "Black");
 
-        using Toy back = await SuspendGenericSample.FetchLaterAsync(toy);
+        Toy back = await SuspendGenericSample.FetchLaterAsync(toy);
 
+        Assert.Equal(toy, back);
         Assert.Equal("Oreo's Biscuit Ball", back.Name);
         Assert.Equal("Black", back.Color);
     }
@@ -88,7 +89,7 @@ public class SuspendGenericTests
     {
         Assert.Equal("4: Int", await SuspendGenericSample.DescribeLaterAsync(4));
         Assert.Equal("Oreo: String", await SuspendGenericSample.DescribeLaterAsync("Oreo"));
-        using var toy = new Toy("Mylo's Milo Mouse", "Brown");
+        var toy = new Toy("Mylo's Milo Mouse", "Brown");
         Assert.Equal(
             "Toy(name=Mylo's Milo Mouse, color=Brown): Toy",
             await SuspendGenericSample.DescribeLaterAsync(toy));
@@ -100,9 +101,9 @@ public class SuspendGenericTests
         // Mylo always goes for the second bowl.
         Assert.Equal(9, await SuspendGenericSample.PickLaterAsync(7, 9));
         Assert.Equal("b", await SuspendGenericSample.PickLaterAsync("a", "b"));
-        using var oreoToy = new Toy("Oreo's Biscuit Ball", "Black");
-        using var myloToy = new Toy("Mylo's Milo Mouse", "Brown");
-        using Toy picked = await SuspendGenericSample.PickLaterAsync(oreoToy, myloToy);
+        var oreoToy = new Toy("Oreo's Biscuit Ball", "Black");
+        var myloToy = new Toy("Mylo's Milo Mouse", "Brown");
+        Toy picked = await SuspendGenericSample.PickLaterAsync(oreoToy, myloToy);
         Assert.Equal("Mylo's Milo Mouse", picked.Name);
     }
 
@@ -163,7 +164,7 @@ public class SuspendGenericTests
     {
         using var cts = new CancellationTokenSource();
         cts.Cancel();
-        using var toy = new Toy("Oreo's Biscuit Ball", "Black");
+        var toy = new Toy("Oreo's Biscuit Ball", "Black");
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => SuspendGenericSample.HoldLaterAsync(toy, cts.Token));
@@ -178,12 +179,12 @@ public class SuspendGenericTests
             new[] { "Mylo", "Oreo" },
             await SuspendGenericSample.ShuffleLaterAsync(new List<string> { "Oreo", "Mylo" }));
 
-        using var oreoToy = new Toy("Oreo's Biscuit Ball", "Black");
-        using var myloToy = new Toy("Mylo's Milo Mouse", "Brown");
+        var oreoToy = new Toy("Oreo's Biscuit Ball", "Black");
+        var myloToy = new Toy("Mylo's Milo Mouse", "Brown");
         IReadOnlyList<Toy> shuffled = await SuspendGenericSample.ShuffleLaterAsync(new[] { oreoToy, myloToy });
         Assert.Equal(2, shuffled.Count);
-        using Toy first = shuffled[0];
-        using Toy second = shuffled[1];
+        Toy first = shuffled[0];
+        Toy second = shuffled[1];
         Assert.Equal("Mylo's Milo Mouse", first.Name);
         Assert.Equal("Oreo's Biscuit Ball", second.Name);
     }
@@ -215,12 +216,12 @@ public class SuspendGenericTests
     public async Task Courier_FerryAsync_RoundTripsEveryKind()
     {
         await using var courier = new Courier();
-        using var toy = new Toy("Mylo's Milo Mouse", "Brown");
+        var toy = new Toy("Mylo's Milo Mouse", "Brown");
         using var box = new CardboardBox("Oreo");
 
         Assert.Equal(4, await courier.FerryAsync(4));
         Assert.Equal("Mylo", await courier.FerryAsync("Mylo"));
-        using Toy back = await courier.FerryAsync(toy);
+        Toy back = await courier.FerryAsync(toy);
         Assert.Equal("Mylo's Milo Mouse", back.Name);
         Assert.Same(box, await courier.FerryAsync<ISnoozer>(box));
     }
@@ -247,11 +248,73 @@ public class SuspendGenericTests
     public async Task Porch_LeaveAsync_RoundTripsEveryKind()
     {
         await using var porch = new Delivery.Porch("welcome mat");
-        using var toy = new Toy("Oreo's Biscuit Ball", "Black");
+        var toy = new Toy("Oreo's Biscuit Ball", "Black");
 
         Assert.Equal(9, await porch.LeaveAsync(9));
         Assert.Equal("Oreo", await porch.LeaveAsync("Oreo"));
-        using Toy back = await porch.LeaveAsync(toy);
+        Toy back = await porch.LeaveAsync(toy);
         Assert.Equal("Oreo's Biscuit Ball", back.Name);
+    }
+
+    // ADR-242 made `Toy` a value, so the `Toy` cases above no longer carry a handle through `T`.
+    // These keep the handle path (a borrowed wrapper in, a fresh owned wrapper out) exercised on
+    // each route with an ordinary class.
+    [Fact]
+    public async Task FetchLaterAsync_HandleArgument_ComesBackAsTheSameKotlinObject()
+    {
+        using var oreo = new Cat("Oreo", 9);
+
+        using Cat back = await SuspendGenericSample.FetchLaterAsync(oreo);
+
+        Assert.Equal("Oreo", back.Name);
+        Assert.Equal(9, back.Lives);
+    }
+
+    [Fact]
+    public async Task PickLaterAsync_HandleArguments_ReturnsSecond()
+    {
+        using var oreo = new Cat("Oreo", 9);
+        using var mylo = new Cat("Mylo", 7);
+
+        using Cat picked = await SuspendGenericSample.PickLaterAsync(oreo, mylo);
+
+        Assert.Equal("Mylo", picked.Name);
+    }
+
+    [Fact]
+    public async Task ShuffleLaterAsync_HandleElements_ReturnsReversed()
+    {
+        using var oreo = new Cat("Oreo", 9);
+        using var mylo = new Cat("Mylo", 7);
+
+        IReadOnlyList<Cat> shuffled = await SuspendGenericSample.ShuffleLaterAsync(new[] { oreo, mylo });
+
+        Assert.Equal(2, shuffled.Count);
+        using Cat first = shuffled[0];
+        using Cat second = shuffled[1];
+        Assert.Equal("Mylo", first.Name);
+        Assert.Equal("Oreo", second.Name);
+    }
+
+    [Fact]
+    public async Task Courier_FerryAsync_HandleArgument_RoundTrips()
+    {
+        await using var courier = new Courier();
+        using var mylo = new Cat("Mylo", 7);
+
+        using Cat back = await courier.FerryAsync(mylo);
+
+        Assert.Equal("Mylo", back.Name);
+    }
+
+    [Fact]
+    public async Task Porch_LeaveAsync_HandleArgument_RoundTrips()
+    {
+        await using var porch = new Delivery.Porch("welcome mat");
+        using var oreo = new Cat("Oreo", 9);
+
+        using Cat back = await porch.LeaveAsync(oreo);
+
+        Assert.Equal("Oreo", back.Name);
     }
 }
