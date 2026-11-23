@@ -3,7 +3,9 @@
 A Kotlin `data class` becomes a regular C# `class`, not a `record class`. Its `Equals`,
 `GetHashCode`, `ToString`, and `Copy` behave exactly as Kotlin's `data class` does. Kotlin's own
 `componentN()` destructuring functions are never exported, including on a `Flow`/`StateFlow`-typed
-constructor parameter.
+constructor parameter. A data class that extends `Throwable` is the exception: it keeps `Equals` and
+`GetHashCode`, but its `ToString()` is the Kotlin trace form, see
+[Your own exception classes](exceptions.md#exported-exception-members).
 
 For this declaration in `Toy.kt`:
 

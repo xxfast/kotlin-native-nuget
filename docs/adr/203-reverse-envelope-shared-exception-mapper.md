@@ -4,6 +4,8 @@
 
 Accepted
 
+Narrowed by [ADR-241](241-exported-kotlin-exception-types.md): the reverse envelope classifies with the row-only `nugetRowType`, because `nugetMappedType` now also returns exported-class keys.
+
 Amends [ADR-177](177-exception-mapping-by-class-hierarchy.md) ("Reverse envelope", "Scope of the IO
 row") and [ADR-087](087-kotlin-slot-exceptions.md) (the duplicated switch); closes the exclusion in
 [ADR-202](202-runtime-route-exception-mapping.md). Folds in the Tooling item "forward `BuildMapped`

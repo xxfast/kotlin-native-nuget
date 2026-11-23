@@ -334,7 +334,9 @@ at that crossing yet.</p>
 <p>On the C# side of that call the exception is mapped exactly as for a forward call, by the table in
 <a href="exceptions.md#catching-a-specific-exception-type">Exceptions</a>: a Kotlin subclass of a
 mapped type, a <code>NullPointerException</code> and a <code>kotlinx.io.IOException</code> arrive as
-their mapped types, and only an unmapped exception is a bare <code>KotlinException</code>. With no
+their mapped types, and only an unmapped exception is a bare <code>KotlinException</code>. An
+exported exception class thrown there maps by that table too, not to its own
+<a href="exceptions.md#exported-exception-classes">generated type</a>. With no
 Kotlin message, <code>Message</code> is the Kotlin class name.</p>
 </note>
 

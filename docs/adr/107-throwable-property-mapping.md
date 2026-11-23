@@ -3,6 +3,8 @@
 ## Status
 Accepted
 
+Amended by [ADR-241](241-exported-kotlin-exception-types.md): an exported exception class (decision 3) now binds as a C# exception type.
+
 Extended by [ADR-201](201-throwable-beyond-the-property-getter.md): return, collection-component,
 module-local-subclass and parameter positions bind there, and it supersedes decision 4 below.
 

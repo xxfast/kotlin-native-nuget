@@ -413,6 +413,20 @@ have built their handles. `LeakTests/LiveHandleTests.cs` row 8d-nullstring,
 `NullString_RefusedAfterAHandleWasBuilt_ReturnsToBaseline`, refuses one after a `List<string>`
 argument was built, and one inside a half-filled `List<string>`; both return to baseline.
 
+A thrown [exported exception class](exceptions.md#exported-exception-disposal) owns one handle, and
+an exported cause under another exception owns its own. `Dispose()` releases it, and a dropped one is
+released by the finalizer; disposing an outer exception does not dispose its `InnerException`.
+`LeakTests/LiveHandleTests.cs` pins each shape and returns to baseline:
+`ExportedException_ThrownAndDropped_ReturnsToBaseline`,
+`ExportedException_ThrownAndDisposed_ReturnsToBaseline`,
+`ExportedException_ConstructedFromCSharpAndDisposed_ReturnsToBaseline` (one built in C#),
+`ExportedCause_ThrownAndDropped_ReturnsToBaseline`, `ExportedCause_ThrownAndDisposed_ReturnsToBaseline`,
+`ExportedException_ThrownOnTheAsyncRoutesAndDropped_ReturnsToBaseline`,
+`ExportedException_RemainingSyncRoutes_ThrownAndDisposed_ReturnToBaseline` and
+`ExportedException_ValueAndErasedPositions_ReturnToBaseline`.
+`LeakTests/CollectabilityTests.cs`'s `ExportedException_ThrownOnTheAsyncRouteAndDropped_IsCollectedOnBothSides`
+asserts a dropped exception from an async route is collected on both sides.
+
 For a [cancellation-token-taking async call](instance-members.md#async-cancellation), this count
 only proves the pending-continuation and `Task` handles came back to baseline: the bridge-owned
 `CancellationTokenSource` is a plain .NET `GCHandle`, not one of the Kotlin `StableRef`s

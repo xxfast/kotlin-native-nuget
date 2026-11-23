@@ -1,7 +1,15 @@
 # ADR-241: Forward, an exported Kotlin exception class binds as a C# exception type: the handle class IS the exception, classified with `is` on the Kotlin side
 
 ## Status
-Proposed
+Accepted
+
+2026-11-23: verified. One green `scripts/verify.sh --plugin` run plus the full processor suite
+(2325 tests) pass, and the shipped behaviour covers the issue's four requirements (a generated type
+per exported `Throwable` subclass mirroring the hierarchy, on every error-building route, an
+unexported subclass caught as its nearest exported ancestor, `KotlinType`, `KotlinStackTrace` and the
+cause chain unchanged). The one deviation from the issue's text, a row-derived class deriving from its
+`Kotlin*Exception` instead of `KotlinException`, was decided by the human at the gate (Q1). Where the
+implementation showed a mechanism claim below to be wrong, the claim carries a bracketed correction.
 
 Amends [ADR-107](107-throwable-property-mapping.md) decision 3 (an exported exception class stays a
 plain handle class) and [ADR-201](201-throwable-beyond-the-property-getter.md) ("An exported
@@ -41,7 +49,7 @@ Constraints read in source:
    solved the same problem for optional rows: every generated site passes `::nugetMappedType`, and
    the module installs that same function into its own statically linked runtime copy at every mint
    site of a runtime-owned route (`NugetRuntime.kt:715-737`, `ExceptionMappingExports.kt:20-31`,
-   verified by reading). So **whatever `nugetMappedType` returns is what every forward route
+   verified by reading) [corrected on acceptance: two mint sites were missed, a callable returning a suspend lambda and an interface-bridge factory whose slot hands C# a suspend lambda; both now install it]. So **whatever `nugetMappedType` returns is what every forward route
    classifies with**, runtime-side sites included (verified by reading the ~30 emitters:
    `grep -rn "::nugetMappedType" nuget-processor/src/main`).
 3. **Every C# error route goes through one per-library function.** `NugetErrorNative.BuildException`
@@ -52,8 +60,8 @@ Constraints read in source:
    is the reverse shim's `NugetKotlinErrors.Build` (`NugetGenerateShimsTask.kt:3106`), fed by the
    plugin-generated `nugetKotlinError` which also passes `::nugetMappedType`
    (`NugetGenerateBindingsTask.kt:5263-5275`, verified by reading).
-4. **`KotlinException`'s only constructor is `internal`** (`KotlinException.cs:16`), and the eleven
-   mapped types are `public sealed` (e.g. `KotlinInvalidOperationException.cs:3`). A generated
+4. **`KotlinException`'s only constructor is `internal`** (`KotlinException.cs:16`), and the nine
+   mapped types [corrected on acceptance: nine, not eleven] are `public sealed` (e.g. `KotlinInvalidOperationException.cs:3`). A generated
    type in a consumer package cannot derive from either today. **Verified (spike S1):** a class in a
    second assembly deriving from a class whose only ctor is `internal` fails with `CS1729:
    'KotlinException' does not contain a constructor that takes 2 arguments`.
@@ -83,7 +91,9 @@ Pros: one C# type per Kotlin class, the shape ObjC export and Kotlin/JS already 
 collision; members (`NotFound.Key`) bind on a thrown instance because it holds a live handle, so the
 issue's out-of-scope properties come for free rather than needing a second design; no runtime
 signature change, no new classifier parameter at ~30 sites, the runtime-side routes covered by the
-ADR-202 install that already exists. Cons: a thrown exception now owns a `NugetKotlinHandle`
+ADR-202 install that already exists [corrected on acceptance: two families were not covered, an
+ordinary callable returning a suspend lambda and an interface-bridge factory whose slot hands C# a
+suspend lambda (or a hot flow, inferred); both now install `nugetMappedType`]. Cons: a thrown exception now owns a `NugetKotlinHandle`
 (released by the SafeHandle finalizer when the consumer never disposes it, a new leak row);
 `mappedType` stops meaning "a table row" on the forward wire; the shared contract must open
 `KotlinException` and the mapped types to subclassing.
@@ -111,7 +121,7 @@ classifier through `buildError`, `launchForCSharp`, `collectForCSharp` and `nuge
 Pros: `mappedType` keeps meaning "a row"; the reverse envelope could carry both. Cons: changes the
 runtime's public Kotlin signatures and every emitter (~15 files, ~30 sites) for information
 constraint 6 says is statically derivable. A valid fallback if the human prefers the wire to stay
-row-only (open question Q3).
+row-only (Q3, decided at the gate: fold).
 
 ### 5. An integer type id instead of the FQN key
 
@@ -188,7 +198,7 @@ caught IOE tier1.FinalError
   (`KotlinInvalidOperationException`), so ADR-177's `catch (InvalidOperationException)` keeps firing
   (constraint 5). Chosen statically by the processor from KSP supertypes and `KOTLIN_EXCEPTION_TYPES`
   order (constraint 6). This deviates from the issue's literal "deriving from `KotlinException`"; see
-  open question Q1.
+  Q1, decided at the gate (see "Decided at the gate").
 
 An exported class whose superclass is itself exported derives from that class's C# type, as today
 (`CirClassRenderer.kt:252-254`).
@@ -209,10 +219,12 @@ internal fun nugetRowType(t: Throwable): String? = /* the body nugetMappedType h
 ```
 
 The keys are emitted by the processor from KSP qualified names, and the C# switch arms are emitted
-by the same run, so they cannot disagree (verified by construction: one generator writes both). No
+by the same run. [Corrected on acceptance: "cannot disagree (verified by construction)" was false in
+the first implementation. The sealed root had a key and no arm, and `object` arms had no key. Both
+now come off one list, and a missing backing fails the build.] No
 runtime `qualifiedName` is read for the key. `KotlinType` stays `t::class.qualifiedName`
 (`NugetRuntime.kt:639`), unchanged. Every existing `::nugetMappedType` site, and through the ADR-202
-install every runtime-owned forward route, classifies exported classes with no further change
+install every runtime-owned forward route, classifies exported classes with no further change [two route families needed an install of their own, see Alternative 1]
 (constraint 2, verified by reading). The reverse envelope (`NugetGenerateBindingsTask.kt:5263-5275`)
 switches to `::nugetRowType`, because its C# half calls `CreateMapped` directly, which does not know
 library keys and would silently drop the row (constraint 3).
@@ -255,9 +267,12 @@ private static Exception? MapExported(IntPtr errorPtr, int index, string kotlinT
 The handle is minted before `NugetMarshal.Dispose(errorPtr)` releases the envelope. An abstract
 exported class (or a sealed base) has no arm: Kotlin cannot throw an instance whose nearest exported
 class is abstract unless an unexported concrete subclass exists, so an abstract arm constructs the
-generated private concrete backing the class already has for value positions (inferred: ADR-216's
-`backingName` covers abstract classes; the implementing agent must confirm the abstract and sealed
-renderers both provide one).
+generated private concrete backing the class already has for value positions. [Corrected on
+acceptance: an abstract arm's backing is `Locked.Backing_`, renamed so it does not hide the root's
+`Backing`, and the sealed root gets an internal `Backing`. The inference that this was ADR-216's
+generics `backingName` is superseded.] `MapExported` passes the snapshot it already read and the
+cause chain it already built to an internal snapshot constructor, as the sketch above shows. [The
+first implementation re-read a second envelope per node and orphaned deeper exported causes; fixed.]
 
 ### Members on exception types
 
@@ -265,16 +280,21 @@ renderers both provide one).
 - A member overriding a `Throwable` member (`message`, `cause`) is not rendered: `Exception.Message`
   and `InnerException` already carry it.
 - A bound member whose C# name collides with an `Exception` member (`Data`, `Source`, `HelpLink`,
-  `HResult`, `StackTrace`, `TargetSite`) is a named skip in v1 (open question Q4).
+  `HResult`, `StackTrace`, `TargetSite`) is a named skip in v1 (Q4, decided at the gate).
 - A data-class exception keeps `Equals`/`GetHashCode` but not the `ToString` override
   (`CirClassRenderer.kt:921`): `KotlinException.ToString` carries the Kotlin trace.
 
 ### Shared contract (`Kotlin.Native.Interop`)
 
-`KotlinException` gains a `protected` ctor `(string kotlinType, string message, string
-kotlinStackTrace, Exception? innerException)`. Each mapped `Kotlin*` type is unsealed and gains the
-same `protected` ctor. Additive to the public surface (unsealing a class is not a breaking change to
-callers, inferred from .NET's breaking-change rules); `ContractTests` grows a subclassing check.
+`KotlinException`'s constructor `(string kotlinType, string message, string kotlinStackTrace,
+Exception? innerException)` becomes `protected internal` (it was `internal`). Each of the nine mapped
+`Kotlin*` types is unsealed and keeps its single public constructor and BCL base. [Corrected on
+acceptance: the draft said `protected`, and that the mapped types "gain" a `protected` constructor.
+They already had public ones.] Additive to the public surface; `ContractTests` grows a subclassing
+check, and the `MultiPackageTests/CoexistenceTests.cs` pin that the mapped types are sealed is updated.
+No contract version change is needed: [ADR-178](178-multi-package-coexistence.md) makes the contract
+additive within a compatible major and ships it at the plugin version, so a package generated by the
+next plugin requires the next contract.
 
 ### Inferred claims, not verified
 
@@ -297,18 +317,44 @@ callers, inferred from .NET's breaking-change rules); `ContractTests` grows a su
   `CNameExports.kt` (no K/N spike run this session; it is the same `is` ADR-177 generates against
   klib classes).
 
+### Verification on acceptance (2026-11-23)
+
+- Verified: Kotlin/Native compiles `is` against the module's own nested class, and `MapExported` is
+  NativeAOT-safe (`packNuget` and the AOT suites are green).
+- Verified: `t::class.qualifiedName` of a nested class is dot-separated (`KotlinType` assertions on the
+  nested arms), and an undisposed thrown exception releases its handle on the finalizer (the
+  `ExportedException_ThrownAndDropped_ReturnsToBaseline` row and its siblings).
+- Still reasoning only: the prior art above, and depth ordering yielding the nearest exported
+  ancestor (the Tier 1 and integration tests exercise it, but nothing proves it for every shape).
+
+Further corrections the implementation forced:
+
+- Erased writes: `Wrap<T>` checked `Exception` before `INugetHandle`, so an exported exception passed
+  into a generic `T` lost its Kotlin identity. It is handle-first now.
+- C#-side construction is supported. The public constructor chains through a static factory, so
+  `new StoreException.NotFound("tuna")` reports the Kotlin message and its own `KotlinType`. Only
+  throwing such an instance into Kotlin stays deferred.
+- A nested `@throws StoreException.NotFound` did not resolve before: `resolveThrownType` now also
+  tries a dotted name package-qualified.
+- Generic `Throwable` subclasses are unreachable: Kotlin forbids type parameters on them.
+- A bound member whose C# name hides an `Exception` member is skipped with
+  `SKIPPED_EXCEPTION_MEMBER_COLLISION`: `Data`, `Source`, `HelpLink`, `HResult`, `StackTrace`,
+  `TargetSite`, `InnerException`, `GetBaseException`, `GetObjectData`, `GetType`. `Message`, `Cause` and
+  `GetLocalizedMessage` are not rendered and not reported, since `Exception` carries them. `ToString`,
+  `Equals` and `GetHashCode` stay on the data-class route.
+
 ## Consequences
 
 - **Breaking for consumers.** An exported exception class's C# type gains an exception base; a
   consumer that caught one as `KotlinException` still does (no-row case), but its `Message`,
   `InnerException` and `ToString` change meaning on a value read, and a data-class exception's
   `ToString` stops being the Kotlin `toString()`. A thrown exported exception is no longer a bare
-  `KotlinException` instance.
-- One runtime export, one per-module function (`nugetRowType`), one contract ctor per exception
-  class, and a new leak surface (thrown exceptions own a handle).
+  `KotlinException` instance. The nine mapped `Kotlin*Exception` types are no longer sealed.
+- One runtime export, one per-module function (`nugetRowType`), a widened contract constructor with
+  unsealed mapped types, and a new leak surface (thrown exceptions own a handle).
 - `ForwardKdoc`'s ADR-150 `@throws T` cref names the generated type when `T` is exported.
 - **Deferred**, each a ROADMAP line: the reverse envelope mapping to generated types (Kotlin slot
-  throwing an exported exception into C#); C#-side construction and `throw` of a generated type into
+  throwing an exported exception into C#); `throw` of a C#-built generated type into
   Kotlin (today a `Throwable` parameter receives a `NugetManagedException`, ADR-201); exceptions
   exported by a dependency library mapped in the consuming library; renaming instead of skipping
   `Exception`-member collisions.
@@ -323,3 +369,18 @@ P.cs(2,75): error CS1729: 'KotlinException' does not contain a constructor that 
 ```
 
 S2: the program in "Consumer API", output quoted there.
+
+### Decided at the gate (2026-11-09, human)
+
+- Q1 (the C# base of a root exported class that IS-A a row): the matched mapped `Kotlin*` type when
+  the Kotlin class extends a mapped stdlib exception, otherwise `KotlinException`. This keeps
+  ADR-177's `catch (InvalidOperationException)` and deviates from the issue's literal "deriving from
+  `KotlinException`".
+- Q2 (unify or a second type): unify. The exported handle class is the C# exception type, so its
+  members still bind.
+- Q3 (fold the exported key into `mappedType`, or a separate `exportedType` wire field): fold, with a
+  row-only `nugetRowType` for the reverse envelope.
+- Q4 (members colliding with an `Exception` member): a named skip, renaming deferred.
+- Q5 (a data-class exception's `ToString`): keep `KotlinException.ToString`, which carries the
+  Kotlin trace; `Equals` and `GetHashCode` stay.
+- Q6 (an unexported subclass of an abstract or sealed exported base): a private concrete backing.

@@ -47,8 +47,9 @@ of one**, so `class KennelFullException : IllegalStateException()` is caught as
 
 The first matching row wins, so `NumberFormatException` is a `FormatException` and not an
 `ArgumentException`, and a `CancellationException` is an `OperationCanceledException` and not an
-`InvalidOperationException`. Anything else, including `IndexOutOfBoundsException` and a user-defined
-exception that extends none of these, arrives as the shared `KotlinException`.
+`InvalidOperationException`. Anything else, including `IndexOutOfBoundsException` and an unexported
+exception that extends none of these, arrives as the shared `KotlinException`. An exception class you
+export gets its own C# type instead, see [Your own exception classes](#exported-exception-classes).
 
 The exception to the table is a cancelled C# callback that escapes Kotlin uncaught: it reaches C# as
 the original `OperationCanceledException` type, see
@@ -184,6 +185,90 @@ var mid = (InvalidOperationException)ex.InnerException!;      // KotlinInvalidOp
 var root = (KotlinException)mid.InnerException!;               // RuntimeException isn't mapped
 ```
 
+## Your own exception classes {id="exported-exception-classes"}
+
+An exported `Throwable` subclass becomes a C# exception type that mirrors your Kotlin hierarchy, so
+you can catch it by type and read its members. It applies on every route that can throw: members,
+statics, constructors, property accessors, `suspend` functions, `Flow` collection and `Result`
+failures. There is nothing to configure.
+
+```kotlin
+sealed class StoreException(message: String) : Exception(message) {
+  class Unauthorized : StoreException("Oreo is not signed in to the treat cupboard")
+  data class NotFound(val key: String) : StoreException("no $key in the cupboard")
+}
+
+class StaleCache(message: String) : IllegalStateException(message)
+
+class TreatStore {
+  fun fetch(key: String): String = throw StoreException.NotFound(key)
+  fun stale(): Unit = throw StaleCache("the kibble cache is stale")
+}
+```
+
+```C#
+using var store = new TreatStore();
+try
+{
+    store.Fetch("oreo-biscuit");
+}
+catch (StoreException.NotFound e)      // most derived first
+{
+    using (e) Console.WriteLine(e.Key);   // "oreo-biscuit"
+}
+catch (StoreException e)               // Unauthorized, and any other arm
+{
+    e.Dispose();
+}
+
+try { store.Stale(); }
+catch (InvalidOperationException) { }  // StaleCache still fires this
+```
+
+The C# type derives from `KotlinException`. When the Kotlin class extends a mapped exception from
+[the table above](#catching-a-specific-exception-type), it derives from that row's `Kotlin*Exception`
+instead, so `StaleCache` is still an `InvalidOperationException` and is an `IKotlinException`, not a
+`KotlinException`. `KotlinType`, `KotlinStackTrace` and `ToString()` behave as for any other Kotlin
+exception.
+
+A subclass you do not export is caught as its nearest exported ancestor, and `KotlinType` still names
+the real class. When that ancestor is abstract or a sealed root, the thrown object is a private
+subclass of it, so catch the abstract type rather than asserting an exact one.
+
+### Members {id="exported-exception-members"}
+
+Members bind like those of any exported class, and a thrown instance can read them (`e.Key`).
+`Exception` already carries `message` and `cause` as `Message` and `InnerException`, so those are not
+bound again. An exported cause arrives as its own type in `InnerException`. A data class exception
+keeps `Equals` and `GetHashCode`, but `ToString()` is the Kotlin trace form, not the data class
+`toString()`.
+
+A member whose C# name would hide a `System.Exception` member (`Data`, `Source`, `HelpLink`,
+`HResult`, `StackTrace`, `TargetSite`, `InnerException`, `GetBaseException`, `GetObjectData`,
+`GetType`) is left out with the warning `SKIPPED_EXCEPTION_MEMBER_COLLISION`. Rename the Kotlin member,
+or give it a `@CSharpName`, to bind it.
+
+### Disposal {id="exported-exception-disposal"}
+
+A thrown exported exception owns a Kotlin object, unlike a mapped one. Call `Dispose()` when you are
+done with it, or leave it to the finalizer. `Dispose()` on an outer exception does not dispose its
+`InnerException`; dispose an exported cause yourself. An exported exception that Kotlin returns as a
+value (`fun lastMiss(): StoreException`) is the same type and needs the same `Dispose()`.
+
+```C#
+using StoreException miss = store.LastMiss();   // a NotFound, not thrown
+```
+
+You can also build one in C#. `new StoreException.NotFound("tuna")` has the Kotlin message and its own
+`KotlinType`. Throwing it into Kotlin is not supported: see
+[Passing an exception to Kotlin](#passing-an-exception-to-kotlin).
+
+### Limits {id="exported-exception-limits"}
+
+- An exception that a Kotlin implementation of a C# interface throws to C# maps by the table above
+  only, not to your exported type (see [The bridgeable subset](bridgeable-subset.md)).
+- A class exported by a dependency library is not mapped in the consuming library's bindings.
+
 ## Where this applies
 
 The same error channel carries a thrown exception out of a property getter or setter, a primary,
@@ -243,9 +328,10 @@ IReadOnlyList<Exception?> timeline = log.Timeline();
 ```
 
 Each read builds a new `Exception`, so compare `Message` and type, not references. There is nothing
-to dispose. A class in your module that extends `Exception` but is not exported binds the same way:
-it arrives mapped through its nearest mapped base, with `KotlinType` naming the class. An exported
-exception class stays an ordinary exported class instead.
+to dispose, except for an exported exception class, which arrives as its own type and is disposed
+like any [exported exception](#exported-exception-disposal). A class in your module that extends
+`Exception` but is not exported binds the same way: it arrives mapped through its nearest mapped
+base, with `KotlinType` naming the class.
 
 The async and callback positions read the same way:
 
@@ -311,7 +397,8 @@ private sealed class Sink : IMishapSink
 the C# type's full name and message: no <code>InnerException</code> chain, no stack trace, and
 Kotlin <code>is IllegalArgumentException</code> is false for a passed <code>ArgumentException</code>.
 An exception that came from Kotlin and is passed back is not the original object either; Kotlin
-sees a new one named after the C# type. This holds at every input position. Do not rely on Kotlin
+sees a new one named after the C# type. The one exception is an exported exception class passed to a
+parameter declared as that class: Kotlin gets the original. This holds at every input position. Do not rely on Kotlin
 code branching on the exception's class.</p>
 </warning>
 
@@ -335,8 +422,9 @@ using var failure = new Issue56Failure("Mylo knocked the water bowl over", null,
 A declaration with one of these shapes is left out of the generated C# with a build warning that
 names it:
 
-- an input declared narrower than `RuntimeException`, such as `IllegalStateException` or your own
-  exception class, at any of the positions above; declare it `Exception` to bind it. A C# class
+- an input declared narrower than `RuntimeException`, such as `IllegalStateException`, at any of
+  the positions above; declare it `Exception` to bind it. An exported exception class of your own
+  binds as itself instead. A C# class
   cannot implement an interface whose method result is declared that narrow; Kotlin
   implementations of it are unaffected
 - a `Set<Throwable>` or a `Map` with `Throwable` keys, as a parameter or a result. Each crossing
