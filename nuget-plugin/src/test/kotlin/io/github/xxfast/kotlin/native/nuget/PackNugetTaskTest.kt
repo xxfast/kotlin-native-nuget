@@ -33,6 +33,7 @@ class PackNugetTaskTest {
     task.packageDescription.set("Test description")
     task.nativeLibDirs.set(emptyMap())
     task.outputDir.set(outputDir)
+    task.runtimesOutputDir.set(Files.createTempDirectory("runtimes-out").toFile())
   }
 
   @Test

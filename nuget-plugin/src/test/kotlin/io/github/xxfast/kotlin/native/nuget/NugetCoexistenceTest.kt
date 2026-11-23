@@ -99,6 +99,7 @@ class NugetCoexistenceTest {
     task.dependencyVersions.set(emptyMap())
     task.nativeLibDirs.set(emptyMap())
     task.outputDir.set(output)
+    task.runtimesOutputDir.set(Files.createTempDirectory("runtimes-out").toFile())
     if (nativeFiles.isNotEmpty()) {
       val root = Files.createTempDirectory("coexist-native").toFile()
       val native = if (prebuilt) File(root, "win-x64/native") else root

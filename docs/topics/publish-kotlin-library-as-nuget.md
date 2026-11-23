@@ -196,12 +196,12 @@ the target environment.
 
 No single host can link every RID: a macOS host links `macosArm64` and cross-compiles `mingwX64`,
 but a Windows host can only link `mingwX64`, and neither can link the other's Apple- or
-Windows-only targets. `prebuiltRuntimes` merges another host's already-linked `runtimes/` output
-into this host's own pack, so one host still produces one publishable package instead of each CI
-leg shipping a package that only covers its own platform.
+Windows-only targets. `prebuiltRuntimes` merges another host's already-linked runtimes into this
+host's own pack, so one host still produces one publishable package instead of each CI leg
+shipping a package that only covers its own platform.
 
-A typical two-host flow: the Windows leg runs `packNuget` and uploads its staged `runtimes/`
-folder as a CI artifact, then the macOS leg downloads that artifact into a local directory and
+A typical two-host flow: the Windows leg runs `packNuget` and uploads `build/nuget-runtimes`
+as a CI artifact, then the macOS leg downloads that artifact into a separate local directory and
 points at it before running its own `packNuget`:
 
 ```kotlin
@@ -217,8 +217,7 @@ nuget {
 }
 ```
 
-The resulting package carries both native libraries and producer contract sidecars for each RID.
-`packNuget` checks that all targets agree on the native contract and generated C# API before it
+The resulting package carries both native libraries. `packNuget` checks that all targets agree on the native contract and generated C# API before it
 writes the package. If a target differs, packing reports the affected RIDs and ABI or C# token
 differences; align the declarations or publish those targets separately. Comparison is
 conservative: comments and whitespace outside literals are ignored, but generated declaration
@@ -228,19 +227,18 @@ be rejected.
 ```
 MyCatLib.1.0.0.nupkg
 ├── runtimes/osx-arm64/native/libkn_mycatlib.dylib   (locally linked)
-├── runtimes/osx-arm64/ForwardAbi.json
-├── runtimes/osx-arm64/Interop.cs
 ├── runtimes/win-x64/native/kn_mycatlib.dll          (prebuilt)
-├── runtimes/win-x64/ForwardAbi.json
-├── runtimes/win-x64/Interop.cs
 ├── contentFiles/cs/<tfm>/*.cs
 ├── build/MyCatLib.targets
 └── MyCatLib.nuspec
 ```
 
-Upload and download the complete staged `runtimes/` tree, including the two sidecars beside each
-RID's `native/` directory. Binary-only prebuilt runtimes from older plugin versions must be rebuilt
-by their original producer. See [The nuget {} DSL](nuget-dsl.md) for the full validation rules and
+Each `packNuget` run also writes `build/nuget-runtimes`, holding every RID in that pack
+(local and prebuilt) as `<rid>/native/<lib>` plus the `ForwardAbi.json` and `Interop.cs` contract
+files that `packNuget` compares. These files stay out of the `.nupkg`. Upload this tree, not the
+staged `runtimes/` folder, and download it to a directory other than `build/nuget-runtimes`.
+Hosts can chain: a host's tree includes the RIDs it received. Binary-only prebuilt runtimes from
+older plugin versions must be rebuilt by their original producer. See [The nuget {} DSL](nuget-dsl.md) for the full validation rules and
 [ADR-093](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/093-multi-rid-package-inputs.md)
 for the design rationale.
 

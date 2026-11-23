@@ -293,3 +293,11 @@ directory, instead of silently dropping it, matching the `nativeLibDirs` fail-fa
 (`kspKotlin<Target>` for the forward `Interop.cs`, `nugetGenerateShims` for the reverse shims). An
 existing directory with no `.cs` files stays legal. Verified: four `PackNugetTaskTest` cases and
 both real fixtures still pack.
+
+## Amendment 2026-11-23: upload path and layout (#618)
+
+The upload path `build/nuget/<id>.<version>/runtimes` and the "byte-for-byte the staged
+`runtimes/` tree" claim above no longer hold. `packNuget` writes a separate
+`build/nuget-runtimes` tree, which is the artifact to upload and the layout
+`prebuiltRuntimes` reads. See the 2026-11-23 amendment in
+[ADR-189](189-cross-target-package-contract.md).

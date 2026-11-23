@@ -5,6 +5,7 @@ import java.io.File
 import java.nio.file.Files
 import java.util.zip.ZipFile
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
@@ -27,6 +28,7 @@ class NugetMultiRidTest {
     task.nativeLibDirs.set(emptyMap())
     task.dependencyVersions.set(emptyMap())
     task.outputDir.set(outputDir)
+    task.runtimesOutputDir.set(Files.createTempDirectory("runtimes-out").toFile())
   }
 
   private fun nativeDir(name: String, libName: String): File {
@@ -237,5 +239,114 @@ class NugetMultiRidTest {
     val native = File(outputDir, "TestLibrary.1.0.0/runtimes/win-x64/native")
     assertTrue(File(native, "kn_testlibrary.dll").exists())
     assertTrue(!File(native, "test.pdb").exists(), "debug symbols must not be packed")
+  }
+
+  private fun nupkgEntries(outputDir: File): List<String> =
+    ZipFile(File(outputDir, "TestLibrary.1.0.0.nupkg")).use { zip ->
+      zip.entries().toList().map { it.name }
+    }
+
+  // #618: one local and one prebuilt RID, the mix that used to put both producers' contract
+  // sidecars into the published package.
+  private fun packLocalAndPrebuilt(outputDir: File): PackNugetTask {
+    val task: PackNugetTask = newTask()
+    configureCommon(task, outputDir)
+    val local: File = nativeDir("local", "libkn_testlibrary.dylib")
+    File(local, "libold.dylib").writeText("leftover from an old baseName")
+    task.nativeLibDirs.set(mapOf("osx-arm64" to local.path))
+    task.localContractDirs.set(mapOf("osx-arm64" to local.path))
+    task.prebuiltRuntimesDir.set(prebuiltTree("win-x64", "kn_testlibrary.dll"))
+    return task
+  }
+
+  private fun assertTransferable(tree: File, rid: String, lib: String) {
+    assertEquals(
+      listOf(lib),
+      File(tree, "$rid/native").listFiles()?.map { it.name }.orEmpty(),
+      "$rid/native must hold exactly the primary library in $tree",
+    )
+    assertTrue(File(tree, "$rid/ForwardAbi.json").isFile, "$rid/ForwardAbi.json missing in $tree")
+    assertTrue(File(tree, "$rid/Interop.cs").isFile, "$rid/Interop.cs missing in $tree")
+  }
+
+  @Test
+  fun `the nupkg ships only native libraries under runtimes`() {
+    val outputDir: File = Files.createTempDirectory("pack-out").toFile()
+
+    packLocalAndPrebuilt(outputDir).pack()
+
+    val entries: List<String> = nupkgEntries(outputDir)
+    val runtimeNative = Regex("runtimes/[^/]+/native/[^/]+")
+    val nonNative: List<String> =
+      entries.filter { it.startsWith("runtimes/") && !runtimeNative.matches(it) }
+    assertTrue(nonNative.isEmpty(), "runtimes/ must hold only <rid>/native/, found $nonNative")
+    val manifests: List<String> = entries.filter { it.substringAfterLast('/') == "ForwardAbi.json" }
+    assertTrue(manifests.isEmpty(), "the nupkg must not ship ForwardAbi.json, found $manifests")
+    val sources: List<String> = entries
+      .filter { it.substringAfterLast('/') == "Interop.cs" && !it.startsWith("contentFiles/") }
+    assertTrue(sources.isEmpty(), "Interop.cs belongs only under contentFiles/, found $sources")
+    val shipsMac: Boolean = entries.contains("runtimes/osx-arm64/native/libkn_testlibrary.dylib")
+    val shipsWindows: Boolean = entries.contains("runtimes/win-x64/native/kn_testlibrary.dll")
+    assertTrue(shipsMac && shipsWindows, "both RIDs must still ship their native library: $entries")
+  }
+
+  @Test
+  fun `pack writes a transferable prebuilt runtimes tree for every producer`() {
+    val outputDir: File = Files.createTempDirectory("pack-out").toFile()
+
+    val task: PackNugetTask = packLocalAndPrebuilt(outputDir)
+    task.pack()
+
+    val tree = task.runtimesOutputDir.get().asFile
+    assertTrue(!tree.canonicalPath.startsWith(outputDir.canonicalPath), "the tree must not be under outputDir")
+    assertTransferable(tree, "osx-arm64", "libkn_testlibrary.dylib")
+    assertTransferable(tree, "win-x64", "kn_testlibrary.dll")
+  }
+
+  @Test
+  fun `a second host chains the first host's prebuilt runtimes tree`() {
+    val firstOut: File = Files.createTempDirectory("pack-out-a").toFile()
+    val first: PackNugetTask = packLocalAndPrebuilt(firstOut)
+    first.pack()
+    val firstTree = first.runtimesOutputDir.get().asFile
+    assertTransferable(firstTree, "osx-arm64", "libkn_testlibrary.dylib")
+    assertTransferable(firstTree, "win-x64", "kn_testlibrary.dll")
+
+    val second: PackNugetTask = newTask()
+    val secondOut: File = Files.createTempDirectory("pack-out-b").toFile()
+    configureCommon(second, secondOut)
+    val local: File = nativeDir("local-b", "kn_testlibrary.dll")
+    second.nativeLibDirs.set(mapOf("win-arm64" to local.path))
+    second.localContractDirs.set(mapOf("win-arm64" to local.path))
+    second.prebuiltRuntimesDir.set(firstTree)
+
+    second.pack()
+
+    val secondTree = second.runtimesOutputDir.get().asFile
+    assertEquals(
+      listOf("osx-arm64", "win-arm64", "win-x64"),
+      secondTree.listFiles()?.map { it.name }?.sorted(),
+    )
+    assertTransferable(secondTree, "osx-arm64", "libkn_testlibrary.dylib")
+    assertTransferable(secondTree, "win-arm64", "kn_testlibrary.dll")
+    assertTransferable(secondTree, "win-x64", "kn_testlibrary.dll")
+    val sidecars: List<String> = nupkgEntries(secondOut)
+      .filter { it.startsWith("runtimes/") }
+      .filter { it.endsWith("/ForwardAbi.json") || it.endsWith("/Interop.cs") }
+    assertTrue(sidecars.isEmpty(), "the chained nupkg must not ship sidecars, found $sidecars")
+  }
+
+  @Test
+  fun `a rid dropped from a later pack does not linger in the prebuilt runtimes tree`() {
+    val outputDir: File = Files.createTempDirectory("pack-out").toFile()
+    val task: PackNugetTask = packLocalAndPrebuilt(outputDir)
+    task.pack()
+    val tree = task.runtimesOutputDir.get().asFile
+    assertTrue(File(tree, "win-x64").isDirectory, "the first pack must write win-x64 to $tree")
+
+    task.prebuiltRuntimesDir.unset()
+    task.pack()
+
+    assertEquals(listOf("osx-arm64"), tree.listFiles()?.map { it.name })
   }
 }

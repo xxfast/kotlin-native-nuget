@@ -25,7 +25,8 @@ internal fun forwardPackageProducers(
   val dirs = prebuilt.listFiles()?.filter { it.isDirectory }?.sortedBy { it.name }.orEmpty()
   require(dirs.isNotEmpty()) {
     "prebuiltRuntimes directory $prebuilt has no RID subdirectory. " +
-      "Expected <rid>/native/ and producer contract sidecars."
+      "Expected <rid>/native/<lib>, <rid>/ForwardAbi.json and <rid>/Interop.cs, as written to " +
+      "build/$RUNTIMES_OUTPUT_DIR by another host's ${NugetTaskNames.PACK}."
   }
   dirs.forEach { dir ->
     require(dir.name !in locals) {
@@ -44,7 +45,9 @@ internal fun validateForwardPackageContracts(producers: List<ForwardPackageProdu
       require(file.isFile) {
         "[nuget] RID '${producer.rid}' is missing producer contract ${file.absolutePath}. " +
           "Rebuild the original producer with the updated plugin and transfer the complete " +
-          "runtimes tree with ForwardAbi.json and Interop.cs."
+          "build/$RUNTIMES_OUTPUT_DIR tree written by the producing host's " +
+          "${NugetTaskNames.PACK}, with ForwardAbi.json and Interop.cs beside each native/. " +
+          "The staged package's runtimes/ folder no longer carries them."
       }
     }
     val json = try { Json.parseToJsonElement(manifest.readText()) } catch (error: SerializationException) {
