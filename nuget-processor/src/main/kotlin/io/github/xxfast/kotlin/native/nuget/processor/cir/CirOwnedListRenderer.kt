@@ -48,11 +48,8 @@ internal fun StringBuilder.renderKotlinList() {
     "            if (element is null || !Holds(element)) " +
       "throw new ArgumentException(\"Not an element of this list.\", nameof(element));",
   )
-  // A struct element (a value class) is a fresh box on every comparison, so it cannot be named by
-  // reference; it holds nothing the release below reaches either.
-  appendLine("            if (!typeof(T).IsValueType)")
   appendLine(
-    "                (_kept ??= new global::System.Collections.Generic.HashSet<object>(" +
+    "            (_kept ??= new global::System.Collections.Generic.HashSet<object>(" +
       "global::System.Collections.Generic.ReferenceEqualityComparer.Instance)).Add(element);",
   )
   appendLine("            return element;")
@@ -73,8 +70,6 @@ internal fun StringBuilder.renderKotlinList() {
   appendLine()
   appendLine("        private bool Holds(T element)")
   appendLine("        {")
-  appendLine("            if (typeof(T).IsValueType)")
-  appendLine("                return global::System.Linq.Enumerable.Contains(Items, element);")
   appendLine("            foreach (T item in Items)")
   appendLine("                if (ReferenceEquals(item, element)) return true;")
   appendLine("            return false;")
