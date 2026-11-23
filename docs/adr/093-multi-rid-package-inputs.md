@@ -298,6 +298,6 @@ both real fixtures still pack.
 
 The upload path `build/nuget/<id>.<version>/runtimes` and the "byte-for-byte the staged
 `runtimes/` tree" claim above no longer hold. `packNuget` writes a separate
-`build/nuget/prebuilt-runtimes` tree, which is the artifact to upload and the layout
+`build/nuget-runtimes` tree, which is the artifact to upload and the layout
 `prebuiltRuntimes` reads. See the 2026-11-23 amendment in
 [ADR-189](189-cross-target-package-contract.md).

@@ -178,17 +178,19 @@ two-host flow uploaded that staged `runtimes/` folder. Both parts are superseded
   The package no longer ships the contract files, so the Consequences bullet about `Interop.cs`
   being duplicated per RID in package sidecars no longer applies; `Interop.cs` appears once, in
   contentFiles.
-- `packNuget` instead writes a version-independent tree at `build/nuget/prebuilt-runtimes/` with
+- `packNuget` instead writes a version-independent tree at `build/nuget-runtimes/` with
   `<rid>/native/<lib>`, `<rid>/ForwardAbi.json` and `<rid>/Interop.cs` for every producer of the
   pack, local and prebuilt. This tree is exactly what `prebuiltRuntimes` reads, so hosts can chain
   (A's tree feeds B, B's tree feeds C). It is rewritten from scratch on every pack.
+  It is a sibling of `build/nuget/`, not inside it, because the tree also carries the writing
+  host's local RIDs and `build/nuget/` is the package output and a local feed.
 - The contract check is unchanged: it runs before any output is written and fails on a missing or
   differing contract. Feeding the old staged `runtimes/` folder fails with a missing producer
-  contract error that names `build/nuget/prebuilt-runtimes`.
-- `prebuiltRuntimes` pointing at or inside `build/nuget/prebuilt-runtimes` fails fast, since the
+  contract error that names `build/nuget-runtimes`.
+- `prebuiltRuntimes` pointing at or inside `build/nuget-runtimes` fails fast, since the
   tree is rewritten on every run.
 
-**Breaking (CI, source).** Two-host pipelines upload `build/nuget/prebuilt-runtimes` instead of
+**Breaking (CI, source).** Two-host pipelines upload `build/nuget-runtimes` instead of
 `build/nuget/<id>.<version>/runtimes`, and download it to a directory other than the output tree.
 Packages built before this change still carry the sidecars; the consumer-visible package contents
 are otherwise unchanged apart from their absence.

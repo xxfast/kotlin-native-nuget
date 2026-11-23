@@ -200,7 +200,7 @@ Windows-only targets. `prebuiltRuntimes` merges another host's already-linked ru
 host's own pack, so one host still produces one publishable package instead of each CI leg
 shipping a package that only covers its own platform.
 
-A typical two-host flow: the Windows leg runs `packNuget` and uploads `build/nuget/prebuilt-runtimes`
+A typical two-host flow: the Windows leg runs `packNuget` and uploads `build/nuget-runtimes`
 as a CI artifact, then the macOS leg downloads that artifact into a separate local directory and
 points at it before running its own `packNuget`:
 
@@ -233,10 +233,10 @@ MyCatLib.1.0.0.nupkg
 └── MyCatLib.nuspec
 ```
 
-Each `packNuget` run also writes `build/nuget/prebuilt-runtimes`, holding every RID in that pack
+Each `packNuget` run also writes `build/nuget-runtimes`, holding every RID in that pack
 (local and prebuilt) as `<rid>/native/<lib>` plus the `ForwardAbi.json` and `Interop.cs` contract
 files that `packNuget` compares. These files stay out of the `.nupkg`. Upload this tree, not the
-staged `runtimes/` folder, and download it to a directory other than `build/nuget/prebuilt-runtimes`.
+staged `runtimes/` folder, and download it to a directory other than `build/nuget-runtimes`.
 Hosts can chain: a host's tree includes the RIDs it received. Binary-only prebuilt runtimes from
 older plugin versions must be rebuilt by their original producer. See [The nuget {} DSL](nuget-dsl.md) for the full validation rules and
 [ADR-093](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/093-multi-rid-package-inputs.md)
