@@ -48,9 +48,9 @@ enum class Mood(val displayName: String, val isCuddly: Boolean) {
   var nickname: String = displayName
 
   /**
-   * A class-typed enum member: every read mints a fresh [Toy] handle the C# caller owns and must
-   * dispose. The old enum route exported the raw Kotlin object as an `IntPtr`; the plan hands back
-   * the owned `Toy` wrapper (pinned by `LeakTests`).
+   * A class-typed enum member: every read returns a fresh [Toy] as a C# value (ADR-242), with no
+   * handle and nothing to dispose. The old enum route exported the raw Kotlin object as an `IntPtr`;
+   * the plan hands back a `Toy` the caller just uses (pinned by `LeakTests`).
    */
   val favouriteToy: Toy
     get() = Toy(displayName, if (isCuddly) "cream" else "black")

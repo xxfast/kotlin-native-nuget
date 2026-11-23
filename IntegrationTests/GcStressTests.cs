@@ -71,10 +71,16 @@ public class GcStressTests
     public Task ShortLivedArgument_HandleParameterUnderGcPressure_NeverUsesAFreedHandle() =>
         Hammer(() => Assert.Equal(12, new Newsroom().NapMinutes(new Nap.Deep(minutes: 12))));
 
-    // Generated `Equals` reads `other._handle` raw; `other` is unreferenced after that read.
+    // Generated `Equals` reads `other._handle` raw; `other` is unreferenced after that read. `Toy`
+    // is a value now (ADR-242), so this uses `AdoptionRecord`, which stays a handle (class-typed
+    // component plus a `var`). Both records share one `Kitten` so Kotlin's data `equals` is true.
     [Fact]
-    public Task ShortLivedOther_EqualsUnderGcPressure_NeverUsesAFreedHandle() =>
-        Hammer(() => Assert.True(new Toy("Mouse", "Gray").Equals(new Toy("Mouse", "Gray"))));
+    public Task ShortLivedOther_EqualsUnderGcPressure_NeverUsesAFreedHandle()
+    {
+        using var oreo = new TestLibrary.Adoption.Kitten("Oreo");
+        return Hammer(() => Assert.True(
+            new TestLibrary.Adoption.AdoptionRecord(oreo, 3).Equals(new TestLibrary.Adoption.AdoptionRecord(oreo, 3))));
+    }
 
     // `NugetMarshal.Wrap` reads each element's `INugetHandle.Handle` raw before the `Add`, and the
     // list itself is unreferenced once `CreateList` has walked it. `Radii` reads every element back

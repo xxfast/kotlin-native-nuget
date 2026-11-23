@@ -47,12 +47,13 @@ public class SuspendGenericTests
     }
 
     [Fact]
-    public async Task FetchLaterAsync_WrapperArgument_ComesBackAsTheSameKotlinObject()
+    public async Task FetchLaterAsync_ValueArgument_RoundTripsEqual()
     {
         var toy = new Toy("Oreo's Biscuit Ball", "Black");
 
         Toy back = await SuspendGenericSample.FetchLaterAsync(toy);
 
+        Assert.Equal(toy, back);
         Assert.Equal("Oreo's Biscuit Ball", back.Name);
         Assert.Equal("Black", back.Color);
     }
