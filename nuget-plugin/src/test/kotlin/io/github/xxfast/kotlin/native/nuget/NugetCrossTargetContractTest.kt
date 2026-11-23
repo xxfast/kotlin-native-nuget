@@ -93,6 +93,18 @@ class NugetCrossTargetContractTest {
     assertTrue(!File(task.outputDir.get().asFile, "prebuilt-runtimes").exists())
   }
 
+  @Test fun `prebuilt input inside the transferable output tree fails before deleting it`() {
+    val task = pack()
+    val tree = File(task.outputDir.get().asFile, PREBUILT_RUNTIMES_DIR)
+    task.prebuiltRuntimesDir.get().asFile.copyRecursively(tree)
+    task.prebuiltRuntimesDir.set(File(tree, "."))
+    val error = assertFailsWith<IllegalArgumentException> { task.pack() }
+    assertTrue(error.message.orEmpty().contains(PREBUILT_RUNTIMES_DIR), error.message)
+    assertTrue(error.message.orEmpty().contains("separate directory"), error.message)
+    assertTrue(File(tree, "win-x64/native/kn_testlibrary.dll").isFile)
+    assertTrue(File(tree, "win-arm64/ForwardAbi.json").isFile)
+  }
+
   @Test fun `missing producer contract names the transferable tree to upload`() {
     val task = pack()
     File(task.prebuiltRuntimesDir.get().asFile, "win-arm64/Interop.cs").delete()

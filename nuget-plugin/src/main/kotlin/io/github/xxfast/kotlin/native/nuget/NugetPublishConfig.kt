@@ -27,9 +27,10 @@ public abstract class NugetPublishConfig @Inject constructor(objects: ObjectFact
   // Only consulted when snapshot is true.
   public abstract val versionPropsFile: RegularFileProperty
 
-  // ADR-093: a directory of native libraries built on another host, laid out exactly like the
-  // runtimes/ tree packNuget stages: <dir>/<rid>/native/ holding dll, dylib or so files. Merged
-  // into this host's own linked output so one pack produces one multi-RID package.
+  // ADR-093 / ADR-189: a directory of native libraries built on another host, laid out exactly
+  // like the build/nuget/prebuilt-runtimes tree that host's packNuget writes: <dir>/<rid>/native/
+  // holding the dll, dylib or so file, with ForwardAbi.json and Interop.cs beside native/. Merged
+  // into this host's own linked output so one pack produces one multi-RID package (#618).
   public abstract val prebuiltRuntimes: DirectoryProperty
 
   // ADR-154 §6: opt-in. Every skip whose reason is a dependency-scope refusal the author can act
